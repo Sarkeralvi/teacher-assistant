@@ -1,0 +1,170 @@
+# INITIAL TASK BACKLOG
+
+TASK-ID: TA-W1-001
+Title: Create project operating system documents
+Owner: Hermes
+Priority: P0
+Dependencies: None
+Files affected: PROJECT_CONSTITUTION.md, ARCHITECTURE.md, BRAIN_ADAPTER_SPEC.md, GRADING_ENGINE_SPEC.md, DEVELOPMENT_PROTOCOL.md, WEEK_1_EXECUTION_MAP.md, BACKLOG.md
+Goal: Establish the rules, boundaries, and first-week execution plan before coding.
+Implementation notes: Docs only. No production code.
+Acceptance criteria: Required documents exist and include requested sections.
+Tests required: Manual document completeness review.
+Risks: Overdesign or vague rules.
+Status: Done
+
+TASK-ID: TA-W1-002
+Title: Lock initial tech stack
+Owner: Human
+Priority: P0
+Dependencies: TA-W1-001
+Files affected: TECH_STACK_DECISION.md, ARCHITECTURE.md, BRAIN_ADAPTER_SPEC.md, GRADING_ENGINE_SPEC.md, DEVELOPMENT_PROTOCOL.md
+Goal: Lock frontend, backend, database, worker, storage, AI, document processing, export, dev, and testing stack.
+Implementation notes: Human provided exact stack. Hermes documented it and aligned architecture/spec/protocol docs.
+Acceptance criteria: `TECH_STACK_DECISION.md` exists and architecture/spec/protocol docs reflect the locked stack.
+Tests required: Manual document consistency review.
+Risks: Introducing unapproved dependency later.
+Status: Done
+
+TASK-ID: TA-W1-002A
+Title: Convert development protocol to Hermes-only builder model
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-002
+Files affected: DEVELOPMENT_PROTOCOL.md, DAY_1_SCAFFOLD_PLAN.md, BACKLOG.md
+Goal: Remove separate VS Code/Codex worker model and define Hermes as planner + coder + tester + reviewer.
+Implementation notes: Docs only. No production code.
+Acceptance criteria: Protocol and scaffold plan assign implementation/control to Hermes only; backlog owners updated.
+Tests required: Search docs for obsolete VS Code/Codex worker ownership references.
+Risks: Hidden stale ownership references may confuse execution.
+Status: Done
+
+TASK-ID: TA-W1-003
+Title: Create initial repository scaffold
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-002, TA-W1-002A, DAY_1_SCAFFOLD_PLAN.md
+Files affected: README.md, Makefile, docker-compose.yml, .env.example, .gitignore, apps/**, packages/**, data/**, docs/**, BACKLOG.md
+Goal: Create a clean monorepo scaffold for Next.js frontend, FastAPI backend, root packages, PostgreSQL, Redis, local storage directories, and baseline health/boundary tests.
+Implementation notes: Follow `DAY_1_SCAFFOLD_PLAN.md` plus latest Human scope exactly. No product feature logic. No real LLM provider integration. Hermes must run commands/tests before marking done.
+Acceptance criteria: Repo structure matches plan/latest scope; docker-compose has frontend/backend/postgres/redis; backend and frontend dependencies match locked stack; health endpoint exists; Brain Adapter/storage/grading directories exist as boundaries only; no LLM SDK outside Brain Adapter; required commands run and pass or failures are documented exactly.
+Tests required: `cd apps/api && pytest -q`; `make test`; `make lint`; `make up`; `make health`; `make down`.
+Risks: Scaffold tool may add unwanted dependencies or feature code; Docker may be unavailable.
+Status: Done
+
+TASK-ID: TA-W1-004
+Title: Add lint, format, and test baseline
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-003
+Files affected: pyproject.toml, frontend lint config, Makefile, tests, BACKLOG.md
+Goal: Make quality checks executable from day one.
+Implementation notes: May be partially bundled with TA-W1-003 but must be reported separately. One documented command should run all checks.
+Acceptance criteria: Clean baseline with backend pytest smoke test, ruff check, and frontend lint pass.
+Tests required: `make test` and `make lint`.
+Risks: Tooling churn.
+Status: Pending
+
+TASK-ID: TA-W1-005
+Title: Draft domain data model
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-001, TA-W1-002
+Files affected: docs/DATA_MODEL.md, BACKLOG.md
+Goal: Define entities and relationships for course, assessment, rubric, submission, grading suggestion, final grade, audit event.
+Implementation notes: Keep suggestion and final grade separate. Align with SQLAlchemy 2.x and PostgreSQL without writing migrations yet.
+Acceptance criteria: Data model supports auditability and teacher approval.
+Tests required: Manual architecture review.
+Risks: Missing audit fields.
+Status: Pending
+
+TASK-ID: TA-W1-006
+Title: Implement Brain Adapter contracts with fake provider
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-003, TA-W1-004, TA-W1-005
+Files affected: apps/api/app/modules/brain_adapter/**, apps/api/tests/**, BACKLOG.md
+Goal: Create provider-independent adapter interface and fake provider for tests.
+Implementation notes: No real external LLM API. Validate structured output with Pydantic.
+Acceptance criteria: Domain modules can call adapter without provider SDKs.
+Tests required: Valid output, invalid output, retry/failure behavior tests.
+Risks: Provider details leak into domain modules.
+Status: Pending
+
+TASK-ID: TA-W1-007
+Title: Implement rubric schema validation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-005
+Files affected: apps/api/app/modules/rubrics/**, apps/api/tests/**, BACKLOG.md
+Goal: Validate rubric totals, criteria, levels, and immutable version references.
+Implementation notes: Start with pure domain tests using Pydantic schemas.
+Acceptance criteria: Invalid rubrics fail with clear errors.
+Tests required: Unit tests for valid/invalid rubrics.
+Risks: Rubric ambiguity affects grading quality.
+Status: Pending
+
+TASK-ID: TA-W1-008
+Title: Implement Grading Engine contract with fake Brain Adapter
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-006, TA-W1-007
+Files affected: apps/api/app/modules/grading/**, apps/api/tests/**, BACKLOG.md
+Goal: Produce grading suggestions, confidence, warnings, and audit references without finalizing grades.
+Implementation notes: Use deterministic fixtures. No real model calls.
+Acceptance criteria: Suggestion output matches schema and cannot be exported as final grade.
+Tests required: Fixture tests for scoring, low confidence, schema failure.
+Risks: Suggestion/final-grade boundary may blur.
+Status: Pending
+
+TASK-ID: TA-W1-009
+Title: Design teacher review and final approval flow
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-005, TA-W1-008
+Files affected: docs/REVIEW_APPROVAL_FLOW.md, BACKLOG.md
+Goal: Define how teachers inspect, edit, approve, and audit final grades.
+Implementation notes: Include UX states and backend state transitions.
+Acceptance criteria: Final grade requires explicit teacher action.
+Tests required: Manual architecture review.
+Risks: Accidental auto-approval.
+Status: Pending
+
+TASK-ID: TA-W1-010
+Title: Define Excel export contract
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W1-009
+Files affected: docs/EXPORT_SPEC.md, BACKLOG.md
+Goal: Specify export columns, source records, and restrictions.
+Implementation notes: Export final grades only, not raw suggestions. Implementation later uses openpyxl.
+Acceptance criteria: Export contract is deterministic and auditable.
+Tests required: Manual review.
+Risks: Exporting unapproved suggestions.
+Status: Pending
+
+TASK-ID: TA-W1-011
+Title: Create audit event examples and policy
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-005
+Files affected: docs/AUDIT_POLICY.md, BACKLOG.md
+Goal: Define append-only audit events for AI calls, teacher review, grade approval, exports.
+Implementation notes: Include correlation IDs and prompt/model policy references.
+Acceptance criteria: Every grade-affecting action has an audit event.
+Tests required: Manual review.
+Risks: Weak traceability.
+Status: Pending
+
+TASK-ID: TA-W1-012
+Title: Week 1 architecture review and week 2 planning
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W1-002 through TA-W1-011
+Files affected: docs/WEEK_1_REVIEW.md, docs/WEEK_2_PLAN.md, BACKLOG.md
+Goal: Verify boundaries, risks, and next implementation sequence.
+Implementation notes: Include human decision list.
+Acceptance criteria: Week 2 tasks are sequenced and realistic.
+Tests required: All implemented tests pass before review.
+Risks: Moving to features before foundation is stable.
+Status: Pending

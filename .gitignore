@@ -1,0 +1,38 @@
+# env
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+npm-debug.log*
+
+# Local data
+/data/uploads/*
+/data/artifacts/*
+/data/exports/*
+!/data/uploads/.gitkeep
+!/data/artifacts/.gitkeep
+!/data/exports/.gitkeep
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
