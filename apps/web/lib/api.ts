@@ -88,6 +88,57 @@ export type AnswerRegion = {
   updated_at: string;
 };
 
+export type GradeSuggestion = {
+  id: number;
+  grading_job_id: number;
+  answer_region_id: number;
+  question_id: number;
+  model_provider: string;
+  model_name: string;
+  prompt_version: string;
+  raw_response_json: {
+    rubric_breakdown?: Array<{
+      criterion_id: string;
+      criterion: string;
+      max_marks: string | number;
+      awarded_marks: string | number;
+      reason: string;
+      evidence: string | null;
+      confidence: string | number;
+    }>;
+    review_flags?: string[];
+    [key: string]: unknown;
+  };
+  score: string | number | null;
+  max_score: string | number;
+  confidence: string | number | null;
+  needs_review: boolean;
+  feedback: string | null;
+  cost_estimate: string | number | null;
+  created_at: string;
+};
+
+export type FinalGrade = {
+  id: number;
+  answer_region_id: number;
+  teacher_id: number;
+  suggestion_id: number | null;
+  final_score: string | number;
+  teacher_comment: string | null;
+  approval_status: "approved" | "edited" | "rejected" | string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ReviewQueueItem = {
+  answer_region: AnswerRegion;
+  submission: { id: number; student_identifier: string; student_name: string | null };
+  question: { id: number; question_no: string; question_text: string; total_marks: string | number };
+  latest_grade_suggestion: GradeSuggestion | null;
+  final_grade: FinalGrade | null;
+  review_status: "ungraded" | "suggested" | "finalized";
+};
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -242,4 +293,34 @@ export function listAssessmentAnswerRegions(assessmentId: number, questionId?: n
 
 export function getAnswerRegionImageUrl(answerRegionId: number) {
   return `${API_BASE_URL}/answer-regions/${answerRegionId}/image`;
+}
+
+
+export function gradeAnswerRegion(answerRegionId: number) {
+  return apiRequest<{ job: unknown; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {
+    method: "POST",
+  });
+}
+
+export function finalizeGradeSuggestion(
+  gradeSuggestionId: number,
+  payload: {
+    teacher_id: number;
+    final_score: string | number;
+    teacher_comment?: string | null;
+    approval_status: "approved" | "edited" | "rejected";
+  },
+) {
+  return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/finalize`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getAnswerRegionFinalGrade(answerRegionId: number) {
+  return apiRequest<FinalGrade>(`/answer-regions/${answerRegionId}/final-grade`);
+}
+
+export function getAssessmentReviewQueue(assessmentId: number) {
+  return apiRequest<ReviewQueueItem[]>(`/assessments/${assessmentId}/review-queue`);
 }

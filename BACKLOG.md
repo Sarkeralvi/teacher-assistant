@@ -157,17 +157,17 @@ Risks: Frontend mock-grading UI intentionally deferred; current task validates b
 Status: Done
 
 TASK-ID: TA-W1-010
-Title: Define Excel export contract
+Title: Teacher review and final grade workflow
 Owner: Hermes
-Priority: P1
-Dependencies: TA-W1-009
-Files affected: docs/EXPORT_SPEC.md, BACKLOG.md
-Goal: Specify export columns, source records, and restrictions.
-Implementation notes: Export final grades only, not raw suggestions. Implementation later uses openpyxl.
-Acceptance criteria: Export contract is deterministic and auditable.
-Tests required: Manual review.
-Risks: Exporting unapproved suggestions.
-Status: Pending
+Priority: P0
+Dependencies: TA-W1-008, TA-W1-009
+Files affected: apps/api/app/api/routes/final_grades.py, apps/api/app/services/final_grade_service.py, apps/api/app/schemas.py, apps/api/app/models.py, apps/api/alembic/versions/**, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/api/tests/**, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Implement AnswerRegion → Mock GradeSuggestion → Teacher review → FinalGrade workflow without real LLM/OCR/auth.
+Implementation notes: Added FinalGrade finalize/read endpoints, assessment review queue, explicit teacher_id validation, final_score bounds validation, current-final-grade upsert behavior per AnswerRegion, centralized frontend API calls, and functional assessment-detail review UI with MOCK label, rubric breakdown, final score/comment, and approve/edit/reject actions.
+Acceptance criteria: GradeSuggestion can be finalized into FinalGrade; invalid score/teacher/suggestion cases fail clearly; review queue reports ungraded/suggested/finalized states; browser workflow supports mock grading review and persists final grade after refresh.
+Tests required: Focused final-grade/review API tests, frontend workflow static checks, full backend suite, lint/typecheck, frontend build, Docker health checks, and manual API smoke for upload → answer region → mock grade → final grade.
+Risks: No real auth yet; teacher_id is explicit dev input. No audit-event persistence yet.
+Status: Done
 
 TASK-ID: TA-W1-011
 Title: Create audit event examples and policy

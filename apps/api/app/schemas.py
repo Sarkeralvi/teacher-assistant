@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -280,3 +280,44 @@ class GradeSuggestionRead(ORMBase):
 class GradeAnswerRegionResponse(BaseModel):
     job: GradingJobRead
     suggestion: GradeSuggestionRead
+
+
+class FinalGradeCreate(BaseModel):
+    teacher_id: int
+    final_score: Decimal = Field(ge=0)
+    teacher_comment: str | None = None
+    approval_status: Literal["approved", "edited", "rejected"]
+
+
+class FinalGradeRead(ORMBase):
+    id: int
+    answer_region_id: int
+    teacher_id: int
+    suggestion_id: int | None
+    final_score: Decimal
+    teacher_comment: str | None
+    approval_status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReviewQueueSubmission(BaseModel):
+    id: int
+    student_identifier: str
+    student_name: str | None
+
+
+class ReviewQueueQuestion(BaseModel):
+    id: int
+    question_no: str
+    question_text: str
+    total_marks: Decimal
+
+
+class ReviewQueueItem(BaseModel):
+    answer_region: AnswerRegionRead
+    submission: ReviewQueueSubmission
+    question: ReviewQueueQuestion
+    latest_grade_suggestion: GradeSuggestionRead | None
+    final_grade: FinalGradeRead | None
+    review_status: Literal["ungraded", "suggested", "finalized"]

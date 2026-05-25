@@ -7,24 +7,36 @@ import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from ".
 import {
   createAnswerRegion,
   createQuestion,
+  finalizeGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
+  getAssessmentReviewQueue,
   getSubmissionPageImageUrl,
+  gradeAnswerRegion,
   listAssessmentAnswerRegions,
   listQuestions,
   listSubmissions,
   uploadSubmission,
   type AnswerRegion,
   type Assessment,
+  type FinalGrade,
   type Question,
+  type ReviewQueueItem,
   type Submission,
 } from "../lib/api";
+
+type FinalizeDraft = {
+  teacherId: string;
+  finalScore: string;
+  teacherComment: string;
+};
 
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [questionNo, setQuestionNo] = useState("");
   const [questionText, setQuestionText] = useState("");
   const [modelAnswer, setModelAnswer] = useState("");
@@ -38,10 +50,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionY, setRegionY] = useState("0");
   const [regionWidth, setRegionWidth] = useState("100");
   const [regionHeight, setRegionHeight] = useState("100");
+  const [finalizeDrafts, setFinalizeDrafts] = useState<Record<number, FinalizeDraft>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [creatingRegion, setCreatingRegion] = useState(false);
+  const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
+  const [finalizingRegionId, setFinalizingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const pages = submissions.flatMap((submission) => submission.pages);
@@ -50,16 +65,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, questionData, submissionData, answerRegionData] = await Promise.all([
-        getAssessment(assessmentId),
-        listQuestions(assessmentId),
-        listSubmissions(assessmentId),
-        listAssessmentAnswerRegions(assessmentId),
-      ]);
+      const [assessmentData, questionData, submissionData, answerRegionData, reviewQueueData] =
+        await Promise.all([
+          getAssessment(assessmentId),
+          listQuestions(assessmentId),
+          listSubmissions(assessmentId),
+          listAssessmentAnswerRegions(assessmentId),
+          getAssessmentReviewQueue(assessmentId),
+        ]);
       setAssessment(assessmentData);
       setQuestions(questionData);
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
+      setReviewQueue(reviewQueueData);
+      setFinalizeDrafts((current) => mergeFinalizeDrafts(current, reviewQueueData));
       if (!selectedPageId && submissionData[0]?.pages[0]) {
         setSelectedPageId(String(submissionData[0].pages[0].id));
       }
@@ -149,6 +168,52 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleMockGrade(answerRegionId: number) {
+    setGradingRegionId(answerRegionId);
+    setError(null);
+    try {
+      await gradeAnswerRegion(answerRegionId);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create mock grade suggestion");
+    } finally {
+      setGradingRegionId(null);
+    }
+  }
+
+  async function handleFinalize(item: ReviewQueueItem, approvalStatus: "approved" | "edited" | "rejected") {
+    if (!item.latest_grade_suggestion) {
+      setError("Create a mock grade suggestion before finalizing");
+      return;
+    }
+    const draft = finalizeDrafts[item.answer_region.id] ?? defaultFinalizeDraft(item);
+    setFinalizingRegionId(item.answer_region.id);
+    setError(null);
+    try {
+      await finalizeGradeSuggestion(item.latest_grade_suggestion.id, {
+        teacher_id: Number(draft.teacherId),
+        final_score: draft.finalScore,
+        teacher_comment: draft.teacherComment || null,
+        approval_status: approvalStatus,
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to finalize grade");
+    } finally {
+      setFinalizingRegionId(null);
+    }
+  }
+
+  function updateFinalizeDraft(answerRegionId: number, patch: Partial<FinalizeDraft>) {
+    setFinalizeDrafts((current) => ({
+      ...current,
+      [answerRegionId]: {
+        ...(current[answerRegionId] ?? { teacherId: "1", finalScore: "0.00", teacherComment: "" }),
+        ...patch,
+      },
+    }));
+  }
+
   return (
     <div className="space-y-6">
       {loading ? <LoadingState /> : null}
@@ -199,7 +264,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
           <h2 className="text-xl font-semibold">Answer regions</h2>
-          <p className="text-sm text-slate-400">Manually map a question to a rectangular crop on an uploaded page. No OCR or grading is run.</p>
+          <p className="text-sm text-slate-400">Manually map a question to a rectangular crop on an uploaded page. No OCR or automatic detection is run.</p>
         </div>
         <label className="grid gap-2 text-sm">
           Select page
@@ -247,6 +312,28 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </div>
       </form>
 
+      <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Teacher review queue</h2>
+          <p className="text-sm text-amber-200">MOCK grading only. Teacher review is required before any FinalGrade is created.</p>
+        </div>
+        {!loading && reviewQueue.length === 0 ? <EmptyState message="No mapped answer regions to review yet." /> : null}
+        <div className="grid gap-4">
+          {reviewQueue.map((item) => (
+            <ReviewQueueCard
+              key={item.answer_region.id}
+              item={item}
+              draft={finalizeDrafts[item.answer_region.id] ?? defaultFinalizeDraft(item)}
+              grading={gradingRegionId === item.answer_region.id}
+              finalizing={finalizingRegionId === item.answer_region.id}
+              onMockGrade={() => void handleMockGrade(item.answer_region.id)}
+              onDraftChange={(patch) => updateFinalizeDraft(item.answer_region.id, patch)}
+              onFinalize={(status) => void handleFinalize(item, status)}
+            />
+          ))}
+        </div>
+      </section>
+
       <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Questions</h2>
         <input className={inputClass} placeholder="Question number" value={questionNo} onChange={(event) => setQuestionNo(event.target.value)} required />
@@ -270,4 +357,105 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </div>
     </div>
   );
+}
+
+function ReviewQueueCard({
+  item,
+  draft,
+  grading,
+  finalizing,
+  onMockGrade,
+  onDraftChange,
+  onFinalize,
+}: Readonly<{
+  item: ReviewQueueItem;
+  draft: FinalizeDraft;
+  grading: boolean;
+  finalizing: boolean;
+  onMockGrade: () => void;
+  onDraftChange: (patch: Partial<FinalizeDraft>) => void;
+  onFinalize: (status: "approved" | "edited" | "rejected") => void;
+}>) {
+  const suggestion = item.latest_grade_suggestion;
+  const finalGrade: FinalGrade | null = item.final_grade;
+  const rubricBreakdown = suggestion?.raw_response_json.rubric_breakdown ?? [];
+  return (
+    <article className="grid gap-4 rounded border border-slate-700 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Submission {item.submission.student_identifier} · Question {item.question.question_no}</h3>
+          <p className="text-sm text-slate-400">Review status: {item.review_status}</p>
+        </div>
+        <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
+          Open cropped answer image
+        </a>
+      </div>
+      <img className="max-h-72 rounded border border-slate-800 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Cropped answer region ${item.answer_region.id}`} />
+
+      {!suggestion ? (
+        <button className={buttonClass} type="button" disabled={grading} onClick={onMockGrade}>
+          {grading ? "Creating MOCK suggestion..." : "Mock Grade"}
+        </button>
+      ) : (
+        <div className="grid gap-3 rounded border border-amber-800 bg-amber-950/20 p-3">
+          <p className="font-semibold text-amber-200">MOCK suggestion — not real grading</p>
+          <p className="text-sm">Score: {suggestion.score} / {suggestion.max_score}</p>
+          <p className="text-sm">Confidence: {suggestion.confidence} · needs_review: {String(suggestion.needs_review)}</p>
+          <p className="text-sm">Feedback: {suggestion.feedback}</p>
+          <p className="text-sm">Flags: {(suggestion.raw_response_json.review_flags ?? []).join(", ")}</p>
+          <div>
+            <p className="text-sm font-medium">Rubric breakdown</p>
+            <div className="mt-2 grid gap-2">
+              {rubricBreakdown.map((criterion) => (
+                <div key={criterion.criterion_id} className="rounded border border-slate-800 p-2 text-sm">
+                  <p>{criterion.criterion}: {criterion.awarded_marks} / {criterion.max_marks}</p>
+                  <p className="text-slate-400">{criterion.reason}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {suggestion ? (
+        <div className="grid gap-3 rounded border border-slate-800 p-3">
+          <p className="font-semibold">FinalGrade review</p>
+          {finalGrade ? (
+            <p className="text-sm text-emerald-300">Current final grade: {finalGrade.final_score} · {finalGrade.approval_status}</p>
+          ) : null}
+          <div className="grid gap-2 md:grid-cols-3">
+            <input className={inputClass} aria-label="Teacher ID" placeholder="teacher_id" value={draft.teacherId} onChange={(event) => onDraftChange({ teacherId: event.target.value })} />
+            <input className={inputClass} aria-label="Final score" placeholder="Final score" value={draft.finalScore} onChange={(event) => onDraftChange({ finalScore: event.target.value })} />
+            <input className={inputClass} aria-label="Teacher comment" placeholder="Teacher comment" value={draft.teacherComment} onChange={(event) => onDraftChange({ teacherComment: event.target.value })} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className={buttonClass} type="button" disabled={finalizing} onClick={() => onFinalize("approved")}>Finalize as approved</button>
+            <button className={buttonClass} type="button" disabled={finalizing} onClick={() => onFinalize("edited")}>Finalize as edited</button>
+            <button className={buttonClass} type="button" disabled={finalizing} onClick={() => onFinalize("rejected")}>Finalize as rejected</button>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function defaultFinalizeDraft(item: ReviewQueueItem): FinalizeDraft {
+  return {
+    teacherId: "1",
+    finalScore: String(item.final_grade?.final_score ?? item.latest_grade_suggestion?.score ?? "0.00"),
+    teacherComment: item.final_grade?.teacher_comment ?? "",
+  };
+}
+
+function mergeFinalizeDrafts(
+  current: Record<number, FinalizeDraft>,
+  items: ReviewQueueItem[],
+): Record<number, FinalizeDraft> {
+  const next = { ...current };
+  for (const item of items) {
+    if (!next[item.answer_region.id]) {
+      next[item.answer_region.id] = defaultFinalizeDraft(item);
+    }
+  }
+  return next;
 }

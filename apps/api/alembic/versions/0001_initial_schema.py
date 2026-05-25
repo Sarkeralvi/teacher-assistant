@@ -205,7 +205,7 @@ def upgrade() -> None:
         timestamp_column("created_at"),
         timestamp_column("updated_at"),
         sa.CheckConstraint(
-            "approval_status in ('pending', 'approved', 'rejected')",
+            "approval_status in ('pending', 'approved', 'edited', 'rejected')",
             name="ck_final_grades_approval_status",
         ),
         sa.ForeignKeyConstraint(["answer_region_id"], ["answer_regions.id"], ondelete="CASCADE"),

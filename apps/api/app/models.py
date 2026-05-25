@@ -244,7 +244,7 @@ class FinalGrade(TimestampMixin, Base):
     __tablename__ = "final_grades"
     __table_args__ = (
         CheckConstraint(
-            "approval_status in ('pending', 'approved', 'rejected')",
+            "approval_status in ('pending', 'approved', 'edited', 'rejected')",
             name="ck_final_grades_approval_status",
         ),
         Index("ix_final_grades_answer_region_id", "answer_region_id"),

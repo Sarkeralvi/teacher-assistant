@@ -48,6 +48,13 @@ for (const symbol of [
   "listSubmissionAnswerRegions",
   "listAssessmentAnswerRegions",
   "getAnswerRegionImageUrl",
+  "gradeAnswerRegion",
+  "finalizeGradeSuggestion",
+  "getAnswerRegionFinalGrade",
+  "getAssessmentReviewQueue",
+  "GradeSuggestion",
+  "FinalGrade",
+  "ReviewQueueItem",
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -71,6 +78,15 @@ for (const text of [
   "Crop coordinates",
   "Create answer region",
   "Cropped image",
+  "Teacher review queue",
+  "Mock Grade",
+  "MOCK suggestion",
+  "Rubric breakdown",
+  "Final score",
+  "Teacher comment",
+  "Finalize as approved",
+  "Finalize as edited",
+  "Finalize as rejected",
 ]) {
   if (!assessmentDetail.includes(text)) {
     throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);

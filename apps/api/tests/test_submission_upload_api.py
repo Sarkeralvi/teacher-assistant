@@ -15,6 +15,7 @@ from app.models import (
     AnswerRegion,
     Assessment,
     Course,
+    FinalGrade,
     GradeSuggestion,
     GradingJob,
     Question,
@@ -25,6 +26,7 @@ from app.models import (
 )
 
 CLEANUP_MODELS = (
+    FinalGrade,
     GradeSuggestion,
     GradingJob,
     AnswerRegion,
