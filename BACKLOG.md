@@ -79,17 +79,17 @@ Risks: Delete behavior remains conservative; deeper cascade/soft-delete policy c
 Status: Done
 
 TASK-ID: TA-W1-006
-Title: Implement Brain Adapter contracts with fake provider
+Title: Frontend core workflow UI
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-003, TA-W1-004, TA-W1-005
-Files affected: apps/api/app/modules/brain_adapter/**, apps/api/tests/**, BACKLOG.md
-Goal: Create provider-independent adapter interface and fake provider for tests.
-Implementation notes: No real external LLM API. Validate structured output with Pydantic.
-Acceptance criteria: Domain modules can call adapter without provider SDKs.
-Tests required: Valid output, invalid output, retry/failure behavior tests.
-Risks: Provider details leak into domain modules.
-Status: Pending
+Files affected: apps/web/app/**, apps/web/components/**, apps/web/lib/api.ts, apps/web/tests/**, BACKLOG.md
+Goal: Implement the first usable browser workflow for Teacher/User placeholder → Course → Assessment → Question → Rubric.
+Implementation notes: Adds a centralized frontend API client, dashboard/navigation shell, users/dev teacher setup, course list/create/detail, assessment list/create/detail, question list/create/detail, and rubric JSON create/list UI. No auth, uploads, grading, student portal, Brain Adapter, or LLM calls.
+Acceptance criteria: Frontend pages load, API base URL is centralized/env-backed, create/list workflow works from browser-facing routes, records persist after refresh, backend tests and frontend typecheck/lint pass.
+Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; `make test`; `make lint`; frontend static workflow check; curl/manual workflow smoke; `make down`.
+Risks: UI is intentionally minimal; richer validation and styling remain future work.
+Status: Done
 
 TASK-ID: TA-W1-007
 Title: Implement rubric schema validation
