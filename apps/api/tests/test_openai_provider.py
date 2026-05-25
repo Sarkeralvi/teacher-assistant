@@ -162,6 +162,91 @@ def test_openai_provider_mocked_response_validates_to_grade_suggestion() -> None
     assert headers["Authorization"] == "Bearer sk-test-secret"
 
 
+def test_openai_provider_without_image_input_does_not_include_image_payload() -> None:
+    client = FakeOpenAIClient(valid_openai_payload())
+    provider = OpenAICompatibleProvider(
+        api_key="sk-test-secret",
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        client=client,
+    )
+
+    result = provider.grade(
+        task_name="answer_region_grading",
+        model_policy=ModelPolicy.REAL_GRADING,
+        messages=build_grading_prompt(
+            question_text="Explain the concept.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/region.png",
+            image_input_enabled=False,
+        ),
+        question_text="Explain the concept.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/region.png",
+        prompt_version=get_prompt_version(ModelPolicy.REAL_GRADING),
+        image_data_url=None,
+    )
+
+    request_json = client.requests[0]["json"]
+    assert "data:image" not in str(request_json)
+    assert "image_input_disabled" in result.review_flags
+
+
+def test_openai_provider_with_image_input_includes_data_url_payload() -> None:
+    client = FakeOpenAIClient(valid_openai_payload())
+    provider = OpenAICompatibleProvider(
+        api_key="sk-test-secret",
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        client=client,
+    )
+
+    result = provider.grade(
+        task_name="answer_region_grading",
+        model_policy=ModelPolicy.REAL_GRADING,
+        messages=build_grading_prompt(
+            question_text="Explain the concept.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/region.png",
+            image_input_enabled=True,
+        ),
+        question_text="Explain the concept.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/region.png",
+        prompt_version=get_prompt_version(ModelPolicy.REAL_GRADING),
+        image_data_url="data:image/png;base64,ZmFrZS1wbmc=",
+    )
+
+    request_json = client.requests[0]["json"]
+    assert "data:image/png;base64,ZmFrZS1wbmc=" in str(request_json)
+    assert "image_input_used" in result.review_flags
+    assert result.needs_review is True
+
+
+def test_adapter_image_enabled_missing_path_fails_safely(tmp_path) -> None:
+    adapter = BrainAdapter(
+        OpenAICompatibleProvider(
+            api_key="sk-test-secret",
+            model_name="gpt-test",
+            client=FakeOpenAIClient(valid_openai_payload()),
+        ),
+        image_input_enabled=True,
+        storage_root=tmp_path,
+    )
+
+    with pytest.raises(
+        RuntimeError, match="Image input enabled but cropped answer image is missing"
+    ):
+        adapter.grade_answer_region(
+            question_text="Explain the concept.",
+            question_total_marks=Decimal("10.00"),
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/missing.png",
+        )
+
+
 def test_openai_provider_rejects_invalid_structured_output() -> None:
     client = FakeOpenAIClient(
         {"choices": [{"message": {"content": '{"score": 999, "max_score": 10}'}}]}

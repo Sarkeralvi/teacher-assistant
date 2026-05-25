@@ -21,16 +21,18 @@ class GradingService:
         region = self._get_region(answer_region_id)
         rubric = self._get_active_rubric(region.question_id)
         image_path = self.storage.resolve_relative(region.image_path)
-        if not image_path.is_file():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Answer region image is missing",
-            )
 
         job = GradingJob(answer_region_id=region.id, status="running")
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
+
+        if not image_path.is_file():
+            self._mark_job_failed(job.id, "Answer region image is missing")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Answer region image is missing",
+            )
 
         try:
             output = self.adapter.grade_answer_region(
@@ -75,6 +77,14 @@ class GradingService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Brain provider failed: {sanitized_error}",
             ) from exc
+
+    def _mark_job_failed(self, job_id: int, error: str) -> None:
+        job = self.db.get(GradingJob, job_id)
+        if job is not None:
+            job.status = "failed"
+            job.error = sanitize_provider_error(error)
+            job.completed_at = datetime.now(UTC)
+            self.db.commit()
 
     def _get_region(self, answer_region_id: int) -> AnswerRegion:
         statement = (

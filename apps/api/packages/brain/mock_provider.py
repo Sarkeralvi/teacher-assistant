@@ -20,7 +20,8 @@ class MockBrainProvider(BrainProvider):
         prompt_version: str,
         task_name: str = "answer_region_grading",
         model_policy: object | None = None,
-        messages: list[dict[str, str]] | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        image_data_url: str | None = None,
     ) -> GradeSuggestionOutput:
         criteria = rubric_json.get("criteria", [])
         breakdown = [

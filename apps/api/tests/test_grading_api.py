@@ -234,3 +234,74 @@ def test_grade_answer_region_marks_job_failed_on_provider_error(
     assert job.status == "failed"
     assert job.error is not None
     assert "sk-secret-value" not in job.error
+
+def test_grade_answer_region_with_mocked_openai_image_input_creates_suggestion(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from packages.brain.openai_provider import OpenAICompatibleProvider
+    from tests.test_openai_provider import FakeOpenAIClient, valid_openai_payload
+
+    requests: list[dict[str, object]] = []
+
+    class CapturingClient(FakeOpenAIClient):
+        def post(self, url: str, **kwargs: object):
+            response = super().post(url, **kwargs)
+            requests.extend(self.requests)
+            return response
+
+    def provider_factory(**kwargs: object) -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(
+            **kwargs,
+            client=CapturingClient(valid_openai_payload()),
+        )
+
+    monkeypatch.setenv("BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-test")
+    monkeypatch.setenv("OPENAI_IMAGE_INPUT_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr("packages.brain.adapter.OpenAICompatibleProvider", provider_factory)
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    response = client.post(f"/answer-regions/{region['id']}/grade")
+
+    assert response.status_code == 201
+    suggestion = response.json()["suggestion"]
+    assert suggestion["model_provider"] == "openai"
+    raw = suggestion["raw_response_json"]
+    assert "image_input_used" in raw["review_flags"]
+    assert "data:image" not in str(raw)
+    assert requests
+    assert "data:image/png;base64," in str(requests[0]["json"])
+    db_session.expire_all()
+    stored = db_session.scalars(select(GradeSuggestion)).one()
+    assert "data:image" not in str(stored.raw_response_json)
+
+
+def test_grade_answer_region_missing_image_fails_before_provider_call(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
+    monkeypatch.setenv("OPENAI_IMAGE_INPUT_ENABLED", "true")
+    get_settings.cache_clear()
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    answer_region = db_session.get(AnswerRegion, region["id"])
+    assert answer_region is not None
+    Path(tmp_path / "storage" / answer_region.image_path).unlink()
+
+    response = client.post(f"/answer-regions/{region['id']}/grade")
+
+    assert response.status_code == 400
+    assert "image is missing" in response.text
+    db_session.expire_all()
+    job = db_session.scalars(select(GradingJob)).one()
+    assert job.status == "failed"
+    assert job.error == "Answer region image is missing"
+

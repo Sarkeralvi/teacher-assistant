@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="", alias="OPENAI_MODEL")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+    openai_image_input_enabled: bool = Field(
+        default=False, alias="OPENAI_IMAGE_INPUT_ENABLED"
+    )
     openai_timeout_seconds: float = Field(default=30.0, alias="OPENAI_TIMEOUT_SECONDS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 

@@ -37,7 +37,8 @@ class OpenAICompatibleProvider(BrainProvider):
         prompt_version: str,
         task_name: str = "answer_region_grading",
         model_policy: ModelPolicy = ModelPolicy.REAL_GRADING,
-        messages: list[dict[str, str]] | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        image_data_url: str | None = None,
     ) -> GradeSuggestionOutput:
         del question_text, question_total_marks, answer_image_path, task_name, model_policy
         try:
@@ -46,7 +47,7 @@ class OpenAICompatibleProvider(BrainProvider):
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={
                     "model": self.model_name,
-                    "messages": messages or [],
+                    "messages": self._with_optional_image(messages or [], image_data_url),
                     "temperature": 0,
                     "response_format": {"type": "json_object"},
                 },
@@ -62,8 +63,11 @@ class OpenAICompatibleProvider(BrainProvider):
         raw_output["prompt_version"] = prompt_version
         raw_output["needs_review"] = True
         review_flags = list(raw_output.get("review_flags") or [])
-        if "teacher_review_required" not in review_flags:
-            review_flags.append("teacher_review_required")
+        self._append_flag(review_flags, "teacher_review_required")
+        self._append_flag(
+            review_flags,
+            "image_input_used" if image_data_url else "image_input_disabled",
+        )
         raw_output["review_flags"] = review_flags
         raw_output["cost_estimate"] = self._estimate_cost(payload)
         try:
@@ -71,9 +75,56 @@ class OpenAICompatibleProvider(BrainProvider):
         except ValidationError:
             raise
 
+    def _with_optional_image(
+        self, messages: list[dict[str, Any]], image_data_url: str | None
+    ) -> list[dict[str, Any]]:
+        if not image_data_url:
+            return messages
+        if not messages:
+            return [self._vision_user_message("", image_data_url)]
+        prepared = [dict(message) for message in messages]
+        last_user_index = next(
+            (
+                index
+                for index in range(len(prepared) - 1, -1, -1)
+                if prepared[index].get("role") == "user"
+            ),
+            None,
+        )
+        if last_user_index is None:
+            prepared.append(self._vision_user_message("", image_data_url))
+            return prepared
+        user_message = prepared[last_user_index]
+        content = user_message.get("content", "")
+        text = content if isinstance(content, str) else json.dumps(content)
+        user_message["content"] = [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": image_data_url}},
+        ]
+        prepared[last_user_index] = user_message
+        return prepared
+
+    def _vision_user_message(self, text: str, image_data_url: str) -> dict[str, Any]:
+        return {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        }
+
+    def _append_flag(self, review_flags: list[str], flag: str) -> None:
+        if flag not in review_flags:
+            review_flags.append(flag)
+
     def _sanitize_error(self, message: str) -> str:
         sanitized = message.replace(self.api_key, "[REDACTED]") if self.api_key else message
-        return re.sub(r"sk-[A-Za-z0-9_\-]+", "[REDACTED]", sanitized)
+        sanitized = re.sub(r"sk-[A-Za-z0-9_\-]+", "[REDACTED]", sanitized)
+        return re.sub(
+            r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+",
+            "[IMAGE_DATA_REDACTED]",
+            sanitized,
+        )
 
     def _extract_content(self, payload: dict[str, Any]) -> str:
         choices = payload.get("choices")

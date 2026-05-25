@@ -183,14 +183,14 @@ Risks: Text-only real provider cannot honestly grade handwritten/image-only answ
 Status: Done
 
 TASK-ID: TA-W1-012
-Title: Week 1 architecture review and week 2 planning
+Title: OpenAI vision input support for cropped answer images
 Owner: Hermes
-Priority: P1
-Dependencies: TA-W1-002 through TA-W1-011
-Files affected: docs/WEEK_1_REVIEW.md, docs/WEEK_2_PLAN.md, BACKLOG.md
-Goal: Verify boundaries, risks, and next implementation sequence.
-Implementation notes: Include human decision list.
-Acceptance criteria: Week 2 tasks are sequenced and realistic.
-Tests required: All implemented tests pass before review.
-Risks: Moving to features before foundation is stable.
-Status: Pending
+Priority: P0
+Dependencies: TA-W1-011, TA-W1-011A
+Files affected: apps/api/packages/brain/**, apps/api/app/core/config.py, apps/api/tests/test_openai_provider.py, apps/api/tests/test_grading_api.py, .env.example, docs/BRAIN_ADAPTER.md, BACKLOG.md
+Goal: Add optional cropped answer-region image input for the OpenAI-compatible Brain Adapter provider while preserving mock default, structured output validation, and teacher review.
+Implementation notes: OPENAI_IMAGE_INPUT_ENABLED defaults false. When true with BRAIN_PROVIDER=openai, Brain Adapter safely resolves the existing cropped PNG/JPEG under local storage, encodes it as a base64 data URL, and includes it in the OpenAI-compatible chat-completions user message. Mock provider ignores image input. Text-only mode remains available and honest. Image base64 is not persisted in GradeSuggestion raw_response_json.
+Acceptance criteria: Image payload is included only when OpenAI image input is enabled; disabled mode sends no image data; missing/invalid image fails safely; provider output remains a GradeSuggestion with needs_review=true and teacher_review_required; no direct LLM imports outside packages/brain; no real API calls in tests.
+Tests required: Focused OpenAI image-provider tests, focused grading API image tests, no-direct-LLM-import test, full backend suite, lint/typecheck, Docker health checks, frontend build.
+Risks: Real handwritten grading quality remains unvalidated until a separately approved manual smoke with a real API key.
+Status: Done
