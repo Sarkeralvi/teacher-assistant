@@ -1,0 +1,9 @@
+node_modules
+.next
+.next-*
+next-cache
+out
+dist
+build
+*.tsbuildinfo
+npm-debug.log*

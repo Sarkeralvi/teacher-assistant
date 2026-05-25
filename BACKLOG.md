@@ -91,6 +91,19 @@ Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`
 Risks: UI is intentionally minimal; richer validation and styling remain future work.
 Status: Done
 
+TASK-ID: TA-W1-006C
+Title: Frontend Docker artifact permission hygiene
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-006
+Files affected: docker-compose.yml, apps/web/.dockerignore, BACKLOG.md
+Goal: Fix frontend Docker/dev setup so Docker does not leave root-owned generated frontend artifacts that break local builds.
+Implementation notes: Frontend container now runs as the host developer UID/GID defaults and keeps node_modules in a Docker volume. Docker build context ignores generated frontend artifacts. Existing root-owned .next/next-cache artifacts were cleaned.
+Acceptance criteria: `make up`, `make health`, `curl -fsS http://localhost:3000`, Docker frontend build, local frontend build/typecheck, `make lint`, `make down`, and final git status checks pass without root-owned frontend artifacts.
+Tests required: Inspect ownership; inspect docker-compose frontend service; run Docker and local frontend build/typecheck/lint checks.
+Risks: ESLint flat-config warning remains from existing scaffold, but Next build exits successfully.
+Status: Done
+
 TASK-ID: TA-W1-007
 Title: Implement rubric schema validation
 Owner: Hermes
