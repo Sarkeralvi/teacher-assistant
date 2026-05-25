@@ -248,3 +248,35 @@ class AnswerRegionRead(ORMBase):
     image_path: str
     created_at: datetime
     updated_at: datetime
+
+
+class GradingJobRead(ORMBase):
+    id: int
+    answer_region_id: int
+    status: str
+    error: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class GradeSuggestionRead(ORMBase):
+    id: int
+    grading_job_id: int
+    answer_region_id: int
+    question_id: int
+    model_provider: str
+    model_name: str
+    prompt_version: str
+    raw_response_json: dict[str, Any]
+    score: Decimal | None
+    max_score: Decimal
+    confidence: Decimal | None
+    needs_review: bool
+    feedback: str | None
+    cost_estimate: Decimal | None
+    created_at: datetime
+
+
+class GradeAnswerRegionResponse(BaseModel):
+    job: GradingJobRead
+    suggestion: GradeSuggestionRead

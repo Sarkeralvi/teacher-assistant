@@ -144,17 +144,17 @@ Risks: Coordinate entry is manual/numeric only until a later visual crop UI is a
 Status: Done
 
 TASK-ID: TA-W1-009
-Title: Design teacher review and final approval flow
+Title: Brain Adapter v1 and mock grading contract
 Owner: Hermes
 Priority: P0
-Dependencies: TA-W1-005, TA-W1-008
-Files affected: docs/REVIEW_APPROVAL_FLOW.md, BACKLOG.md
-Goal: Define how teachers inspect, edit, approve, and audit final grades.
-Implementation notes: Include UX states and backend state transitions.
-Acceptance criteria: Final grade requires explicit teacher action.
-Tests required: Manual architecture review.
-Risks: Accidental auto-approval.
-Status: Pending
+Dependencies: TA-W1-007A, TA-W1-008
+Files affected: apps/api/packages/brain/**, apps/api/app/services/grading_service.py, apps/api/app/api/routes/grading.py, apps/api/app/schemas.py, apps/api/app/main.py, apps/api/tests/**, apps/api/pyproject.toml, BACKLOG.md
+Goal: Prove the structured AI-grading contract through a Brain Adapter mock provider without real external LLM calls.
+Implementation notes: Added provider base, mock provider, model policy, prompt registry, cost placeholder, structured output validation, grading service, and read/create grading endpoints. Mock output is explicitly provider/model labeled as mock, confidence 0, needs_review true, score 0, and teacher-review flagged.
+Acceptance criteria: POST grading from an AnswerRegion creates a succeeded GradingJob and schema-valid GradeSuggestion; missing region returns 404; missing active rubric returns 400; suggestions/jobs are readable; no direct external LLM imports exist outside packages/brain.
+Tests required: Focused Brain Adapter contract tests, focused grading API tests, full backend suite, lint/typecheck, Docker health curls.
+Risks: Frontend mock-grading UI intentionally deferred; current task validates backend contract only.
+Status: Done
 
 TASK-ID: TA-W1-010
 Title: Define Excel export contract

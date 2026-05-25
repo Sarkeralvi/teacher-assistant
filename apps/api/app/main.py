@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes.answer_regions import router as answer_regions_router
 from app.api.routes.assessments import router as assessments_router
 from app.api.routes.courses import router as courses_router
+from app.api.routes.grading import router as grading_router
 from app.api.routes.health import router as health_router
 from app.api.routes.questions import router as questions_router
 from app.api.routes.rubrics import router as rubrics_router
@@ -33,3 +34,4 @@ app.include_router(questions_router)
 app.include_router(rubrics_router)
 app.include_router(submissions_router)
 app.include_router(answer_regions_router)
+app.include_router(grading_router)
