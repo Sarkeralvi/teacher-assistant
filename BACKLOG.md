@@ -53,17 +53,17 @@ Risks: Scaffold tool may add unwanted dependencies or feature code; Docker may b
 Status: Done
 
 TASK-ID: TA-W1-004
-Title: Add lint, format, and test baseline
+Title: Backend core data model and database migrations
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-003
-Files affected: pyproject.toml, frontend lint config, Makefile, tests, BACKLOG.md
-Goal: Make quality checks executable from day one.
-Implementation notes: May be partially bundled with TA-W1-003 but must be reported separately. One documented command should run all checks.
-Acceptance criteria: Clean baseline with backend pytest smoke test, ruff check, and frontend lint pass.
-Tests required: `make test` and `make lint`.
-Risks: Tooling churn.
-Status: Pending
+Files affected: apps/api/app/models.py, apps/api/app/db/**, apps/api/alembic/**, apps/api/tests/**, BACKLOG.md
+Goal: Implement the backend database foundation for Teacher Assistant using SQLAlchemy 2.x and Alembic.
+Implementation notes: Includes typed SQLAlchemy models, PostgreSQL-friendly JSONB/Numeric fields, relationships, indexes, and initial Alembic migration. No API CRUD endpoints, auth logic, grading logic, upload pipeline, or LLM/Brain Adapter calls.
+Acceptance criteria: Initial schema migration applies reproducibly against Docker PostgreSQL; required tables, relationships, indexes, JSONB/Numeric fields, and import/migration tests exist; Docker health, tests, and lint pass.
+Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; table verification via PostgreSQL; `make test`; `make lint`; `make down`.
+Risks: Early schema may need evolution after product workflows are refined.
+Status: Done
 
 TASK-ID: TA-W1-005
 Title: Draft domain data model
