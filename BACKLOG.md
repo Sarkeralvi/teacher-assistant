@@ -66,17 +66,17 @@ Risks: Early schema may need evolution after product workflows are refined.
 Status: Done
 
 TASK-ID: TA-W1-005
-Title: Draft domain data model
+Title: Backend CRUD APIs for core academic workflow
 Owner: Hermes
 Priority: P0
-Dependencies: TA-W1-001, TA-W1-002
-Files affected: docs/DATA_MODEL.md, BACKLOG.md
-Goal: Define entities and relationships for course, assessment, rubric, submission, grading suggestion, final grade, audit event.
-Implementation notes: Keep suggestion and final grade separate. Align with SQLAlchemy 2.x and PostgreSQL without writing migrations yet.
-Acceptance criteria: Data model supports auditability and teacher approval.
-Tests required: Manual architecture review.
-Risks: Missing audit fields.
-Status: Pending
+Dependencies: TA-W1-003, TA-W1-004
+Files affected: apps/api/app/main.py, apps/api/app/api/routes/**, apps/api/app/schemas.py, apps/api/tests/test_academic_crud_api.py, BACKLOG.md
+Goal: Implement minimal backend CRUD APIs for Teacher/User placeholder → Course → Assessment → Question → Rubric.
+Implementation notes: Adds FastAPI route modules, database session dependency usage, Pydantic create/update/read schemas, relationship validation, Decimal-compatible mark fields, password_hash-safe user responses, and app-level one-active-rubric enforcement. No auth, login, uploads, grading, LLM calls, or frontend UI.
+Acceptance criteria: Required CRUD endpoints exist; invalid parent relationships return 404; rubric_json must be a JSON object; user responses do not expose password_hash; tests and lint pass against the Docker PostgreSQL stack.
+Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; `make test`; `make lint`; optional curl smoke if service is running; `make down`.
+Risks: Delete behavior remains conservative; deeper cascade/soft-delete policy can be refined later.
+Status: Done
 
 TASK-ID: TA-W1-006
 Title: Implement Brain Adapter contracts with fake provider
