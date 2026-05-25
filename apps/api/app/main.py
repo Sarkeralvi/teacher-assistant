@@ -6,6 +6,7 @@ from app.api.routes.courses import router as courses_router
 from app.api.routes.health import router as health_router
 from app.api.routes.questions import router as questions_router
 from app.api.routes.rubrics import router as rubrics_router
+from app.api.routes.submissions import router as submissions_router
 from app.api.routes.users import router as users_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -29,3 +30,4 @@ app.include_router(courses_router)
 app.include_router(assessments_router)
 app.include_router(questions_router)
 app.include_router(rubrics_router)
+app.include_router(submissions_router)

@@ -41,6 +41,9 @@ for (const symbol of [
   "getQuestion",
   "createRubric",
   "listRubrics",
+  "uploadSubmission",
+  "listSubmissions",
+  "getSubmissionPageImageUrl",
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -50,6 +53,13 @@ for (const symbol of [
 const dashboard = readFileSync(join(root, "app/dashboard/page.tsx"), "utf8");
 if (!dashboard.includes("Users / teacher setup") || !dashboard.includes("Courses")) {
   throw new Error("Dashboard must link to users and courses workflow pages");
+}
+
+const assessmentDetail = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
+for (const text of ["Upload submission", "student_identifier", "Submissions", "Pages"]) {
+  if (!assessmentDetail.includes(text)) {
+    throw new Error(`Assessment detail must include submission upload UI marker: ${text}`);
+  }
 }
 
 console.log("frontend workflow static checks passed");

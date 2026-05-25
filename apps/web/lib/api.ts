@@ -53,16 +53,39 @@ export type Rubric = {
   updated_at: string;
 };
 
+export type SubmissionPage = {
+  id: number;
+  submission_id: number;
+  page_no: number;
+  image_path: string;
+  quality_score: string | number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Submission = {
+  id: number;
+  assessment_id: number;
+  student_identifier: string;
+  student_name: string | null;
+  status: string;
+  pages: SubmissionPage[];
+  created_at: string;
+  updated_at: string;
+};
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
+  formData?: FormData;
 };
 
 async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const hasJsonBody = options.body !== undefined;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: options.method ?? "GET",
-    headers: options.body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    headers: hasJsonBody ? { "Content-Type": "application/json" } : undefined,
+    body: hasJsonBody ? JSON.stringify(options.body) : options.formData,
     cache: "no-store",
   });
 
@@ -160,4 +183,28 @@ export function createRubric(questionId: number, payload: RubricCreate) {
 
 export function listRubrics(questionId: number) {
   return apiRequest<Rubric[]>(`/questions/${questionId}/rubrics`);
+}
+
+export function uploadSubmission(
+  assessmentId: number,
+  payload: { student_identifier: string; student_name?: string; file: File },
+) {
+  const formData = new FormData();
+  formData.append("student_identifier", payload.student_identifier);
+  if (payload.student_name) {
+    formData.append("student_name", payload.student_name);
+  }
+  formData.append("file", payload.file);
+  return apiRequest<Submission>(`/assessments/${assessmentId}/submissions/upload`, {
+    method: "POST",
+    formData,
+  });
+}
+
+export function listSubmissions(assessmentId: number) {
+  return apiRequest<Submission[]>(`/assessments/${assessmentId}/submissions`);
+}
+
+export function getSubmissionPageImageUrl(pageId: number) {
+  return `${API_BASE_URL}/submission-pages/${pageId}/image`;
 }

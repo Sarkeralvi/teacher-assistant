@@ -121,3 +121,24 @@ class RubricRead(ORMBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class SubmissionPageRead(ORMBase):
+    id: int
+    submission_id: int
+    page_no: int
+    image_path: str
+    quality_score: Decimal | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SubmissionRead(ORMBase):
+    id: int
+    assessment_id: int
+    student_identifier: str
+    student_name: str | None
+    status: str
+    pages: list[SubmissionPageRead]
+    created_at: datetime
+    updated_at: datetime

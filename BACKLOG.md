@@ -105,6 +105,19 @@ Risks: ESLint flat-config warning remains from existing scaffold, but Next build
 Status: Done
 
 TASK-ID: TA-W1-007
+Title: Submission upload and PDF/image storage foundation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-006, TA-W1-006C
+Files affected: apps/api/app/core/config.py, apps/api/app/main.py, apps/api/app/schemas.py, apps/api/app/api/routes/submissions.py, apps/api/app/services/storage.py, apps/api/app/services/submission_processing.py, apps/api/tests/test_submission_upload_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Implement the foundation for uploading scanned answer files for an assessment and storing generated submission page metadata.
+Implementation notes: Adds a local filesystem storage adapter, upload/artifact directory configuration, PDF/PNG/JPG/JPEG validation, original upload storage, PyMuPDF PDF-to-page-image extraction, image normalization to one page, submission listing/detail APIs, safe page-image serving, and assessment-detail upload/list UI. No grading, OCR, answer-region detection, auth, student portal, LLM, or Brain Adapter calls.
+Acceptance criteria: Image upload to a valid assessment creates a Submission and exactly one SubmissionPage; PDF upload creates a Submission and one or more SubmissionPage records; invalid assessment IDs return 404; unsupported file types return 415; stored DB paths are relative and safely resolved; uploaded/generated runtime files stay ignored by git; frontend can upload, list submissions, and link page images from the assessment detail page.
+Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; backend upload tests for image/PDF/invalid assessment/unsupported types/page serving; `make test`; `make lint`; manual API upload smoke for image and PDF; `curl -fsS http://localhost:8000/health`; `curl -fsS http://localhost:3000`; Docker frontend build; `make down`; final git status review.
+Risks: Local storage is intentionally minimal and adapter-backed for later S3/MinIO; quality scoring remains nullable placeholder; richer previews and upload size limits can be refined later.
+Status: Done
+
+TASK-ID: TA-W1-007A
 Title: Implement rubric schema validation
 Owner: Hermes
 Priority: P0
@@ -121,7 +134,7 @@ TASK-ID: TA-W1-008
 Title: Implement Grading Engine contract with fake Brain Adapter
 Owner: Hermes
 Priority: P0
-Dependencies: TA-W1-006, TA-W1-007
+Dependencies: TA-W1-006, TA-W1-007A
 Files affected: apps/api/app/modules/grading/**, apps/api/tests/**, BACKLOG.md
 Goal: Produce grading suggestions, confidence, warnings, and audit references without finalizing grades.
 Implementation notes: Use deterministic fixtures. No real model calls.
