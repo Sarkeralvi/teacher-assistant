@@ -80,6 +80,20 @@ def create_question(client: TestClient, assessment_id: int) -> dict[str, object]
     return response.json()
 
 
+def valid_rubric_json() -> dict[str, object]:
+    return {
+        "total_marks": 5,
+        "criteria": [
+            {
+                "id": "full-credit",
+                "name": "Full credit",
+                "description": "Complete answer",
+                "max_marks": 5,
+            }
+        ],
+    }
+
+
 def test_create_user_response_excludes_password_hash(client: TestClient) -> None:
     user = create_user(client)
 
@@ -132,9 +146,15 @@ def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient)
     assert Decimal(question["total_marks"]) == Decimal("5.00")
 
     rubric_json = {
+        "total_marks": 5,
         "criteria": [
-            {"name": "Derivative", "marks": "5.00", "description": "Correct derivative"}
-        ]
+            {
+                "id": "derivative",
+                "name": "Derivative",
+                "description": "Correct derivative",
+                "max_marks": 5,
+            }
+        ],
     }
     rubric_response = client.post(
         f"/questions/{question['id']}/rubrics",
@@ -171,7 +191,20 @@ def test_missing_parent_and_resource_404s(client: TestClient) -> None:
 
     rubric_response = client.post(
         "/questions/999999/rubrics",
-        json={"version": 1, "rubric_json": {"criteria": []}},
+        json={
+            "version": 1,
+            "rubric_json": {
+                "total_marks": 5,
+                "criteria": [
+                    {
+                        "id": "full-credit",
+                        "name": "Full credit",
+                        "description": "Complete answer",
+                        "max_marks": 5,
+                    }
+                ],
+            },
+        },
     )
     assert rubric_response.status_code == 404
 
@@ -190,12 +223,12 @@ def test_reject_non_object_rubric_json_and_second_active_rubric(client: TestClie
 
     first_active = client.post(
         f"/questions/{question['id']}/rubrics",
-        json={"version": 1, "rubric_json": {"criteria": []}, "is_active": True},
+        json={"version": 1, "rubric_json": valid_rubric_json(), "is_active": True},
     )
     assert first_active.status_code == 201
 
     second_active = client.post(
         f"/questions/{question['id']}/rubrics",
-        json={"version": 2, "rubric_json": {"criteria": []}, "is_active": True},
+        json={"version": 2, "rubric_json": valid_rubric_json(), "is_active": True},
     )
     assert second_active.status_code == 409

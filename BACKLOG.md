@@ -118,17 +118,17 @@ Risks: Local storage is intentionally minimal and adapter-backed for later S3/Mi
 Status: Done
 
 TASK-ID: TA-W1-007A
-Title: Implement rubric schema validation
+Title: Rubric schema validation and rubric editor hardening
 Owner: Hermes
 Priority: P0
-Dependencies: TA-W1-005
-Files affected: apps/api/app/modules/rubrics/**, apps/api/tests/**, BACKLOG.md
-Goal: Validate rubric totals, criteria, levels, and immutable version references.
-Implementation notes: Start with pure domain tests using Pydantic schemas.
-Acceptance criteria: Invalid rubrics fail with clear errors.
-Tests required: Unit tests for valid/invalid rubrics.
-Risks: Rubric ambiguity affects grading quality.
-Status: Pending
+Dependencies: TA-W1-005, TA-W1-006, TA-W1-007
+Files affected: apps/api/app/schemas.py, apps/api/app/api/routes/rubrics.py, apps/api/tests/**, apps/web/components/QuestionDetailClient.tsx, apps/web/tests/**, BACKLOG.md
+Goal: Enforce strict rubric schema v1 before grading work starts and provide a simple criteria editor instead of raw JSON-only entry.
+Implementation notes: Added Pydantic RubricCriterionSchema/RubricJsonSchema validation, question total-mark matching, active-rubric conflict preservation, and frontend criteria editor with raw preview.
+Acceptance criteria: Valid rubrics save; malformed rubrics fail with displayable backend errors; inactive rubrics remain allowed while a question already has an active rubric.
+Tests required: Focused backend schema validation tests, full backend suite, lint/typecheck, frontend build, manual rubric workflow smoke.
+Risks: ESLint flat-config warning remains from existing scaffold during Next build, but build exits successfully.
+Status: Done
 
 TASK-ID: TA-W1-008
 Title: Implement Grading Engine contract with fake Brain Adapter

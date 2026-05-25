@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class ORMBase(BaseModel):
@@ -99,6 +99,90 @@ class QuestionRead(ORMBase):
     total_marks: Decimal
     created_at: datetime
     updated_at: datetime
+
+
+class RubricCriterionSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    max_marks: Decimal
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_criterion_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            raise ValueError("Each criterion must be an object")
+        for field_name in ("id", "name", "description", "max_marks"):
+            if field_name not in data:
+                raise ValueError(f"criterion.{field_name} is required")
+        return data
+
+    @field_validator("max_marks")
+    @classmethod
+    def max_marks_must_be_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("criterion.max_marks must be positive")
+        return value
+
+
+class RubricJsonSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_marks: Decimal
+    criteria: list[RubricCriterionSchema]
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_rubric_fields_and_reject_ambiguous_shape(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            raise ValueError("rubric_json must be an object")
+        if "total_marks" not in data:
+            raise ValueError("total_marks is required")
+        if "criteria" not in data:
+            raise ValueError("criteria is required")
+        extra_fields = set(data) - {"total_marks", "criteria"}
+        if extra_fields:
+            extra_list = ", ".join(sorted(extra_fields))
+            raise ValueError(
+                f"rubric_json may only include total_marks and criteria; remove: {extra_list}"
+            )
+        return data
+
+    @field_validator("total_marks")
+    @classmethod
+    def total_marks_must_be_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("rubric_json.total_marks must be positive")
+        return value
+
+    @field_validator("criteria")
+    @classmethod
+    def criteria_must_be_non_empty(
+        cls, value: list[RubricCriterionSchema]
+    ) -> list[RubricCriterionSchema]:
+        if not value:
+            raise ValueError("criteria must be a non-empty array")
+        ids = [criterion.id for criterion in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("criterion.id must be unique within the rubric")
+        return value
+
+    @model_validator(mode="after")
+    def criteria_sum_must_equal_total_marks(self) -> "RubricJsonSchema":
+        marks_sum = sum((criterion.max_marks for criterion in self.criteria), Decimal("0"))
+        if marks_sum != self.total_marks:
+            raise ValueError("Sum of criterion.max_marks must equal rubric_json.total_marks")
+        return self
+
+
+def validate_rubric_json_schema(rubric_json: Any) -> RubricJsonSchema:
+    try:
+        return RubricJsonSchema.model_validate(rubric_json)
+    except ValidationError as exc:
+        messages = [str(error["msg"]).removeprefix("Value error, ") for error in exc.errors()]
+        raise ValueError("; ".join(messages)) from exc
 
 
 class RubricCreate(BaseModel):

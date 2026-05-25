@@ -62,4 +62,21 @@ for (const text of ["Upload submission", "student_identifier", "Submissions", "P
   }
 }
 
+const questionDetail = readFileSync(join(root, "components/QuestionDetailClient.tsx"), "utf8");
+for (const text of [
+  "Total marks",
+  "Add criterion",
+  "Remove criterion",
+  "Criterion ID",
+  "Criterion name",
+  "Criterion description",
+  "Criterion max marks",
+  "Criteria marks sum",
+  "Raw JSON preview",
+]) {
+  if (!questionDetail.includes(text)) {
+    throw new Error(`Question detail must include rubric editor UI marker: ${text}`);
+  }
+}
+
 console.log("frontend workflow static checks passed");

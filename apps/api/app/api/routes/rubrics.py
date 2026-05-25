@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import Question, Rubric
-from app.schemas import RubricCreate, RubricRead, RubricUpdate
+from app.schemas import RubricCreate, RubricRead, RubricUpdate, validate_rubric_json_schema
 
 DbSession = Annotated[Session, Depends(get_db)]
 
@@ -42,13 +42,26 @@ def ensure_no_other_active_rubric(
         )
 
 
+def validate_rubric_or_422(rubric_json: dict[str, object], question: Question) -> None:
+    try:
+        rubric_schema = validate_rubric_json_schema(rubric_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if rubric_schema.total_marks != question.total_marks:
+        raise HTTPException(
+            status_code=422,
+            detail="rubric_json.total_marks must match question.total_marks",
+        )
+
+
 @router.post(
     "/questions/{question_id}/rubrics",
     response_model=RubricRead,
     status_code=status.HTTP_201_CREATED,
 )
 def create_rubric(question_id: int, payload: RubricCreate, db: DbSession) -> Rubric:
-    get_question_or_404(question_id, db)
+    question = get_question_or_404(question_id, db)
+    validate_rubric_or_422(payload.rubric_json, question)
     if payload.is_active:
         ensure_no_other_active_rubric(db, question_id)
     rubric = Rubric(question_id=question_id, **payload.model_dump())
@@ -74,6 +87,8 @@ def get_rubric(rubric_id: int, db: DbSession) -> Rubric:
 def update_rubric(rubric_id: int, payload: RubricUpdate, db: DbSession) -> Rubric:
     rubric = get_rubric_or_404(rubric_id, db)
     updates = payload.model_dump(exclude_unset=True)
+    if "rubric_json" in updates:
+        validate_rubric_or_422(updates["rubric_json"], rubric.question)
     if updates.get("is_active") is True:
         ensure_no_other_active_rubric(db, rubric.question_id, rubric.id)
     for field, value in updates.items():
