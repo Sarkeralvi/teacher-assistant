@@ -226,3 +226,25 @@ class SubmissionRead(ORMBase):
     pages: list[SubmissionPageRead]
     created_at: datetime
     updated_at: datetime
+
+
+class AnswerRegionCreate(BaseModel):
+    question_id: int
+    x: Decimal = Field(ge=Decimal("0"))
+    y: Decimal = Field(ge=Decimal("0"))
+    width: Decimal = Field(gt=Decimal("0"))
+    height: Decimal = Field(gt=Decimal("0"))
+
+
+class AnswerRegionRead(ORMBase):
+    id: int
+    submission_id: int
+    question_id: int
+    page_id: int
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    image_path: str
+    created_at: datetime
+    updated_at: datetime

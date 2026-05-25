@@ -64,3 +64,9 @@ class LocalStorage:
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"page_{page_no:04d}.png"
         return StoredFile(target, self.relative_to_root(target))
+
+    def answer_region_image_path(self, submission_id: int) -> StoredFile:
+        target_dir = self.artifacts_dir / "answer_regions" / f"submission_{submission_id}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"region_{uuid4().hex}.png"
+        return StoredFile(target, self.relative_to_root(target))

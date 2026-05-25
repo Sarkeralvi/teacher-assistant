@@ -44,6 +44,10 @@ for (const symbol of [
   "uploadSubmission",
   "listSubmissions",
   "getSubmissionPageImageUrl",
+  "createAnswerRegion",
+  "listSubmissionAnswerRegions",
+  "listAssessmentAnswerRegions",
+  "getAnswerRegionImageUrl",
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -56,9 +60,20 @@ if (!dashboard.includes("Users / teacher setup") || !dashboard.includes("Courses
 }
 
 const assessmentDetail = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
-for (const text of ["Upload submission", "student_identifier", "Submissions", "Pages"]) {
+for (const text of [
+  "Upload submission",
+  "student_identifier",
+  "Submissions",
+  "Pages",
+  "Answer regions",
+  "Select page",
+  "Select question",
+  "Crop coordinates",
+  "Create answer region",
+  "Cropped image",
+]) {
   if (!assessmentDetail.includes(text)) {
-    throw new Error(`Assessment detail must include submission upload UI marker: ${text}`);
+    throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);
   }
 }
 

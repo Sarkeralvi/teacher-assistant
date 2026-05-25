@@ -131,17 +131,17 @@ Risks: ESLint flat-config warning remains from existing scaffold during Next bui
 Status: Done
 
 TASK-ID: TA-W1-008
-Title: Implement Grading Engine contract with fake Brain Adapter
+Title: Manual answer-region mapping and crop storage
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-006, TA-W1-007A
-Files affected: apps/api/app/modules/grading/**, apps/api/tests/**, BACKLOG.md
-Goal: Produce grading suggestions, confidence, warnings, and audit references without finalizing grades.
-Implementation notes: Use deterministic fixtures. No real model calls.
-Acceptance criteria: Suggestion output matches schema and cannot be exported as final grade.
-Tests required: Fixture tests for scoring, low confidence, schema failure.
-Risks: Suggestion/final-grade boundary may blur.
-Status: Pending
+Files affected: apps/api/app/api/routes/answer_regions.py, apps/api/app/services/answer_region_processing.py, apps/api/app/services/storage.py, apps/api/app/schemas.py, apps/api/app/main.py, apps/api/tests/**, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/**, BACKLOG.md
+Goal: Allow teachers to manually map a question to a rectangular crop on an uploaded submission page and store/serve the cropped answer image.
+Implementation notes: Added answer-region create/list/detail/image/delete APIs, safe root-guarded crop storage, crop bounds validation, assessment/question consistency validation, frontend coordinate-entry workflow, and deterministic API/static tests. No grading, OCR, answer detection, LLM, or Brain Adapter calls.
+Acceptance criteria: Valid answer regions persist with relative crop image paths; invalid pages/questions/coordinates fail; crop image is served as PNG; frontend exposes upload-to-region workflow.
+Tests required: Focused backend answer-region API tests, full backend suite, lint/typecheck, frontend build, health curls, manual API crop smoke.
+Risks: Coordinate entry is manual/numeric only until a later visual crop UI is assigned.
+Status: Done
 
 TASK-ID: TA-W1-009
 Title: Design teacher review and final approval flow

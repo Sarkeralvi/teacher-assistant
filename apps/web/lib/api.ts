@@ -74,6 +74,20 @@ export type Submission = {
   updated_at: string;
 };
 
+export type AnswerRegion = {
+  id: number;
+  submission_id: number;
+  question_id: number;
+  page_id: number;
+  x: string | number;
+  y: string | number;
+  width: string | number;
+  height: string | number;
+  image_path: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -119,6 +133,7 @@ export type QuestionCreate = Pick<Question, "question_no" | "question_text" | "t
   model_answer?: string | null;
 };
 export type RubricCreate = Pick<Rubric, "version" | "rubric_json"> & { is_active?: boolean };
+export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height">;
 
 export function createUser(payload: UserCreate) {
   return apiRequest<User>("/users", { method: "POST", body: payload });
@@ -207,4 +222,24 @@ export function listSubmissions(assessmentId: number) {
 
 export function getSubmissionPageImageUrl(pageId: number) {
   return `${API_BASE_URL}/submission-pages/${pageId}/image`;
+}
+
+export function createAnswerRegion(pageId: number, payload: AnswerRegionCreate) {
+  return apiRequest<AnswerRegion>(`/submission-pages/${pageId}/answer-regions`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function listSubmissionAnswerRegions(submissionId: number) {
+  return apiRequest<AnswerRegion[]>(`/submissions/${submissionId}/answer-regions`);
+}
+
+export function listAssessmentAnswerRegions(assessmentId: number, questionId?: number) {
+  const query = questionId ? `?question_id=${questionId}` : "";
+  return apiRequest<AnswerRegion[]>(`/assessments/${assessmentId}/answer-regions${query}`);
+}
+
+export function getAnswerRegionImageUrl(answerRegionId: number) {
+  return `${API_BASE_URL}/answer-regions/${answerRegionId}/image`;
 }

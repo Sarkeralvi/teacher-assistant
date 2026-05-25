@@ -8,19 +8,39 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import Assessment, Course, Question, Rubric, User
+from app.models import (
+    AnswerRegion,
+    Assessment,
+    Course,
+    Question,
+    Rubric,
+    Submission,
+    SubmissionPage,
+    User,
+)
+
+CLEANUP_MODELS = (
+    AnswerRegion,
+    SubmissionPage,
+    Submission,
+    Rubric,
+    Question,
+    Assessment,
+    Course,
+    User,
+)
 
 
 @pytest.fixture()
 def db_session() -> Iterator[Session]:
     db = SessionLocal()
     try:
-        for model in (Rubric, Question, Assessment, Course, User):
+        for model in CLEANUP_MODELS:
             db.execute(delete(model))
         db.commit()
         yield db
     finally:
-        for model in (Rubric, Question, Assessment, Course, User):
+        for model in CLEANUP_MODELS:
             db.execute(delete(model))
         db.commit()
         db.close()
