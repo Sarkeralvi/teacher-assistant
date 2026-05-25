@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class ModelPolicy(StrEnum):
     MOCK_GRADING = "mock_grading"
+    REAL_GRADING = "real_grading"
 
 
 class RubricBreakdownItem(BaseModel):

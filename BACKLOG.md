@@ -170,17 +170,17 @@ Risks: No real auth yet; teacher_id is explicit dev input. No audit-event persis
 Status: Done
 
 TASK-ID: TA-W1-011
-Title: Create audit event examples and policy
+Title: Real LLM provider integration behind Brain Adapter
 Owner: Hermes
 Priority: P0
-Dependencies: TA-W1-005
-Files affected: docs/AUDIT_POLICY.md, BACKLOG.md
-Goal: Define append-only audit events for AI calls, teacher review, grade approval, exports.
-Implementation notes: Include correlation IDs and prompt/model policy references.
-Acceptance criteria: Every grade-affecting action has an audit event.
-Tests required: Manual review.
-Risks: Weak traceability.
-Status: Pending
+Dependencies: TA-W1-009, TA-W1-010
+Files affected: apps/api/packages/brain/**, apps/api/app/core/config.py, apps/api/app/services/grading_service.py, apps/api/tests/test_openai_provider.py, apps/api/tests/test_grading_api.py, .env.example, docs/BRAIN_ADAPTER.md, BACKLOG.md
+Goal: Add one OpenAI-compatible provider behind the Brain Adapter while preserving mock default, structured output validation, teacher review, safe errors, and no direct LLM calls outside packages/brain.
+Implementation notes: Mock remains default and works without keys. BRAIN_PROVIDER=openai requires OPENAI_API_KEY. OPENAI_MODEL and OPENAI_BASE_URL are optional. OpenAI-compatible v1 is text-only; image transmission is deferred and the prompt forbids claiming handwriting/image understanding. Provider errors are sanitized before API response/GradingJob storage.
+Acceptance criteria: OpenAI-compatible provider exists only under packages/brain; real provider output validates into GradeSuggestionOutput; invalid/provider-error paths fail safely and mark jobs failed; no API keys are committed or logged; teacher review remains required.
+Tests required: Focused OpenAI provider/config tests, grading provider-failure API test, no-direct-LLM-import test, full backend suite, lint/typecheck, Docker health checks.
+Risks: Text-only real provider cannot honestly grade handwritten/image-only answers until image input is implemented.
+Status: Done
 
 TASK-ID: TA-W1-012
 Title: Week 1 architecture review and week 2 planning

@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any
 
-from packages.brain.schemas import GradeSuggestionOutput
+from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
 
 class BrainProvider(ABC):
@@ -18,5 +18,8 @@ class BrainProvider(ABC):
         rubric_json: dict[str, Any],
         answer_image_path: str,
         prompt_version: str,
+        task_name: str = "answer_region_grading",
+        model_policy: ModelPolicy = ModelPolicy.MOCK_GRADING,
+        messages: list[dict[str, str]] | None = None,
     ) -> GradeSuggestionOutput:
         """Return a validated structured grading suggestion."""

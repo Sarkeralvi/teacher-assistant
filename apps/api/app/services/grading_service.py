@@ -5,16 +5,17 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import get_settings
 from app.models import AnswerRegion, GradeSuggestion, GradingJob, Rubric
 from app.services.storage import LocalStorage
-from packages.brain.adapter import BrainAdapter
+from packages.brain.adapter import BrainAdapter, sanitize_provider_error
 
 
 class GradingService:
     def __init__(self, db: Session, storage: LocalStorage | None = None) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
-        self.adapter = BrainAdapter()
+        self.adapter = BrainAdapter.from_settings(get_settings())
 
     def grade_answer_region(self, answer_region_id: int) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
@@ -63,13 +64,17 @@ class GradingService:
             return job, suggestion
         except Exception as exc:
             self.db.rollback()
+            sanitized_error = sanitize_provider_error(str(exc))
             job = self.db.get(GradingJob, job.id)
             if job is not None:
                 job.status = "failed"
-                job.error = str(exc)
+                job.error = sanitized_error
                 job.completed_at = datetime.now(UTC)
                 self.db.commit()
-            raise
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Brain provider failed: {sanitized_error}",
+            ) from exc
 
     def _get_region(self, answer_region_id: int) -> AnswerRegion:
         statement = (

@@ -17,8 +17,12 @@ class Settings(BaseSettings):
     local_storage_root: str = Field(default="/data", alias="LOCAL_STORAGE_ROOT")
     uploads_dir: str = Field(default="/data/uploads", alias="UPLOADS_DIR")
     artifacts_dir: str = Field(default="/data/artifacts", alias="ARTIFACTS_DIR")
-    brain_provider: str = Field(default="fake", alias="BRAIN_PROVIDER")
+    brain_provider: str = Field(default="mock", alias="BRAIN_PROVIDER")
     brain_allow_real_providers: bool = Field(default=False, alias="BRAIN_ALLOW_REAL_PROVIDERS")
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="", alias="OPENAI_MODEL")
+    openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+    openai_timeout_seconds: float = Field(default=30.0, alias="OPENAI_TIMEOUT_SECONDS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

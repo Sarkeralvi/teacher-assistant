@@ -205,3 +205,32 @@ def test_grade_suggestion_and_job_read_endpoints(client: TestClient, tmp_path: P
     job_response = client.get(f"/grading-jobs/{created['job']['id']}")
     assert job_response.status_code == 200
     assert job_response.json()["status"] == "succeeded"
+
+def test_grade_answer_region_marks_job_failed_on_provider_error(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingAdapter:
+        def grade_answer_region(self, **_: object) -> object:
+            raise RuntimeError("provider failed with key sk-secret-value")
+
+    class FailingBrainAdapterFactory:
+        @classmethod
+        def from_settings(cls, settings: object) -> FailingAdapter:
+            return FailingAdapter()
+
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    monkeypatch.setattr("app.services.grading_service.BrainAdapter", FailingBrainAdapterFactory)
+
+    response = client.post(f"/answer-regions/{region['id']}/grade")
+
+    assert response.status_code == 502
+    assert "provider failed" in response.text
+    assert "sk-secret-value" not in response.text
+    db_session.expire_all()
+    job = db_session.scalars(select(GradingJob)).one()
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "sk-secret-value" not in job.error
