@@ -102,9 +102,12 @@ def make_provider(
 
 def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() -> None:
     calls: list[list[str]] = []
+    inputs: list[str | None] = []
 
     def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
         calls.append(cmd)
+        input_value = kwargs.get("input")
+        inputs.append(input_value if isinstance(input_value, str) else None)
         if cmd == ["codex", "--version"]:
             return FakeCompletedProcess(stdout="codex-cli 0.128.0")
         if cmd == ["codex", "exec", "--help"]:
@@ -136,6 +139,8 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "--json" in exec_cmd
     assert "--image" not in exec_cmd
     assert "--dangerously-bypass-approvals-and-sandbox" not in exec_cmd
+    assert inputs[-1] is not None
+    assert "You are producing a grade suggestion for TA Agent." in inputs[-1]
     assert result.model_provider == "codex_cli"
     assert result.model_name == "codex-cli"
     assert result.prompt_version == "codex_cli_grading_v1"

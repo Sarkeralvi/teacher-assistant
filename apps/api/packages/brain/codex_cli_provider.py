@@ -93,7 +93,6 @@ class CodexCliProvider(BrainProvider):
             )
             command = self._build_command(
                 output_file=output_file,
-                prompt=prompt,
                 answer_image_path=answer_image_path,
             )
             try:
@@ -102,6 +101,7 @@ class CodexCliProvider(BrainProvider):
                     cwd=self.workdir,
                     capture_output=True,
                     text=True,
+                    input=prompt,
                     timeout=self.timeout_seconds,
                     check=False,
                 )
@@ -174,9 +174,7 @@ class CodexCliProvider(BrainProvider):
             raise CodexCliProviderError(f"{label} failed: {detail[:_MAX_CAPTURE_CHARS]}")
         return completed.stdout or completed.stderr or ""
 
-    def _build_command(
-        self, *, output_file: Path, prompt: str, answer_image_path: str
-    ) -> list[str]:
+    def _build_command(self, *, output_file: Path, answer_image_path: str) -> list[str]:
         command = [
             self.command,
             "exec",
@@ -198,7 +196,6 @@ class CodexCliProvider(BrainProvider):
                     "Codex CLI image input is not supported by this installed version."
                 )
             command.extend([image_flag, answer_image_path])
-        command.append(prompt)
         return command
 
     def _supported_image_flag(self) -> str | None:

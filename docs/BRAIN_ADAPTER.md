@@ -49,11 +49,10 @@ codex exec \
   --cd /home/newton/teacher-assistant \
   --sandbox read-only \
   --output-last-message <temp_output_file> \
-  --json \
-  "<grading prompt>"
+  --json
 ```
 
-`--json` is only included when supported and is not authoritative. The provider reads `<temp_output_file>`, expects exact JSON, validates it with the existing `GradeSuggestionOutput` schema, forces `needs_review=true`, and persists through the existing grading service.
+The grading prompt is sent via stdin. `--json` is only included when supported and is not authoritative. The provider reads `<temp_output_file>`, expects exact JSON, validates it with the existing `GradeSuggestionOutput` schema, forces `needs_review=true`, and persists through the existing grading service.
 
 ## Codex CLI preflight
 
