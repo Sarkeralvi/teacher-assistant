@@ -1,8 +1,10 @@
 from collections.abc import Iterator
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from PIL import Image
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -151,6 +153,22 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
         "region": region,
         "suggestion": suggestion,
     }
+
+
+def create_extra_region_and_suggestion(
+    client: TestClient, data: dict[str, object], *, x: int
+) -> dict[str, object]:
+    submission = data["submission"]
+    question = data["question"]
+    page = submission["pages"][0]
+    region_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": x, "y": 2, "width": 20, "height": 25},
+    )
+    assert region_response.status_code == 201
+    grade_response = client.post(f"/answer-regions/{region_response.json()['id']}/grade")
+    assert grade_response.status_code == 201
+    return {"region": region_response.json(), "suggestion": grade_response.json()["suggestion"]}
 
 
 def test_approve_grade_suggestion_creates_final_grade(client: TestClient, tmp_path: Path) -> None:
@@ -333,3 +351,125 @@ def test_teacher_review_action_writes_audit_log(
     assert len(logs) == 1
     assert logs[0].actor_id == data["teacher"]["id"]
     assert logs[0].entity_type == "final_grade"
+
+
+def test_assessment_summary_returns_review_counts(client: TestClient, tmp_path: Path) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    second = create_extra_region_and_suggestion(client, data, x=30)
+    third = create_extra_region_and_suggestion(client, data, x=60)
+    page_id = data["submission"]["pages"][0]["id"]
+    pending_region = client.post(
+        f"/submission-pages/{page_id}/answer-regions",
+        json={"question_id": data["question"]["id"], "x": 70, "y": 2, "width": 20, "height": 25},
+    )
+    assert pending_region.status_code == 201
+    assert client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        json={"teacher_id": data["teacher"]["id"]},
+    ).status_code == 201
+    assert client.post(
+        f"/grade-suggestions/{second['suggestion']['id']}/edit",
+        json={"teacher_id": data["teacher"]["id"], "final_score": "3.00"},
+    ).status_code == 201
+    assert client.post(
+        f"/grade-suggestions/{third['suggestion']['id']}/reject",
+        json={"teacher_id": data["teacher"]["id"], "teacher_comment": "Reject"},
+    ).status_code == 201
+
+    response = client.get(f"/assessments/{data['assessment']['id']}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["assessment_id"] == data["assessment"]["id"]
+    assert payload["course_id"] == data["assessment"]["course_id"]
+    assert payload["total_submissions"] == 1
+    assert payload["total_answer_regions"] == 4
+    assert payload["total_grade_suggestions"] == 3
+    assert payload["total_final_grades"] == 3
+    assert payload["approved_count"] == 1
+    assert payload["edited_count"] == 1
+    assert payload["rejected_count"] == 1
+    assert payload["pending_review_count"] == 1
+    assert payload["average_final_score"] == "1.00"
+    assert payload["max_possible_score"] == "20.00"
+    assert "generated_at" in payload
+
+
+def test_export_xlsx_contains_headers_rows_and_safe_fields(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    second = create_extra_region_and_suggestion(client, data, x=30)
+    third = create_extra_region_and_suggestion(client, data, x=60)
+    assert client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        json={"teacher_id": data["teacher"]["id"], "teacher_comment": "Approved"},
+    ).status_code == 201
+    assert client.post(
+        f"/grade-suggestions/{second['suggestion']['id']}/edit",
+        json={"teacher_id": data["teacher"]["id"], "final_score": "3.00"},
+    ).status_code == 201
+    assert client.post(
+        f"/grade-suggestions/{third['suggestion']['id']}/reject",
+        json={"teacher_id": data["teacher"]["id"], "teacher_comment": "Rejected"},
+    ).status_code == 201
+
+    response = client.get(f"/assessments/{data['assessment']['id']}/export/final-grades.xlsx")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook.active
+    rows = list(sheet.iter_rows(values_only=True))
+    headers = list(rows[0])
+    assert headers == [
+        "assessment_id",
+        "course_id",
+        "submission_id",
+        "student_identifier",
+        "student_name",
+        "question_id",
+        "question_no",
+        "answer_region_id",
+        "grade_suggestion_id",
+        "final_grade_id",
+        "ai_score",
+        "ai_max_score",
+        "ai_confidence",
+        "ai_needs_review",
+        "final_score",
+        "approval_status",
+        "teacher_comment",
+        "reviewed_at",
+        "feedback_to_student",
+    ]
+    exported_text = " ".join(str(cell) for row in rows for cell in row if cell is not None)
+    assert "approved" in exported_text
+    assert "edited" in exported_text
+    assert "rejected" in exported_text
+    assert "raw_response_json" not in exported_text
+    assert "password_hash" not in exported_text
+
+
+def test_export_xlsx_includes_pending_region_with_blank_final_grade(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+
+    response = client.get(f"/assessments/{data['assessment']['id']}/export/final-grades.xlsx")
+
+    assert response.status_code == 200
+    rows = list(load_workbook(BytesIO(response.content)).active.iter_rows(values_only=True))
+    assert len(rows) == 2
+    row = dict(zip(rows[0], rows[1], strict=True))
+    assert row["answer_region_id"] == data["region"]["id"]
+    assert row["grade_suggestion_id"] == data["suggestion"]["id"]
+    assert row["final_grade_id"] is None
+    assert row["approval_status"] is None
+
+
+def test_summary_and_export_missing_assessment_returns_404(client: TestClient) -> None:
+    assert client.get("/assessments/999999/summary").status_code == 404
+    assert client.get("/assessments/999999/export/final-grades.xlsx").status_code == 404

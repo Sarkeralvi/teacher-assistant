@@ -57,6 +57,9 @@ for (const symbol of [
   "finalizeGradeSuggestion",
   "getAnswerRegionFinalGrade",
   "getAssessmentReviewQueue",
+  "getAssessmentSummary",
+  "getAssessmentFinalGradesExportUrl",
+  "AssessmentSummary",
   "GradeSuggestion",
   "FinalGrade",
   "ReviewQueueItem",
@@ -114,9 +117,15 @@ for (const text of [
   "Approve AI suggestion",
   "Edit score and save final grade",
   "Reject suggestion",
+  "Assessment summary",
+  "Reviewed",
+  "Pending review",
+  "Export final grades (.xlsx)",
   "approveGradeSuggestion",
   "editGradeSuggestion",
   "rejectGradeSuggestion",
+  "getAssessmentSummary",
+  "getAssessmentFinalGradesExportUrl",
 ]) {
   if (!assessmentReview.includes(text)) {
     throw new Error(`Assessment review page must include teacher-review UI marker: ${text}`);

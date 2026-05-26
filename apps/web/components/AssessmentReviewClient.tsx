@@ -9,9 +9,12 @@ import {
   editGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
+  getAssessmentFinalGradesExportUrl,
   getAssessmentReviewQueue,
+  getAssessmentSummary,
   rejectGradeSuggestion,
   type Assessment,
+  type AssessmentSummary,
   type FinalGrade,
   type ReviewQueueItem,
 } from "../lib/api";
@@ -24,6 +27,7 @@ type ReviewDraft = {
 
 export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
+  const [summary, setSummary] = useState<AssessmentSummary | null>(null);
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
   const [loading, setLoading] = useState(true);
@@ -34,12 +38,14 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, queueData] = await Promise.all([
+      const [assessmentData, queueData, summaryData] = await Promise.all([
         getAssessment(assessmentId),
         getAssessmentReviewQueue(assessmentId),
+        getAssessmentSummary(assessmentId),
       ]);
       setAssessment(assessmentData);
       setItems(queueData);
+      setSummary(summaryData);
       setDrafts((current) => mergeDrafts(current, queueData));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load teacher review queue");
@@ -143,7 +149,14 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
             {assessment.title} · {assessment.total_marks} marks · {assessment.status}
           </p>
         ) : null}
+        <div className="mt-4 flex flex-wrap gap-3">
+          <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
+            Export final grades (.xlsx)
+          </a>
+        </div>
       </section>
+
+      {summary ? <SummaryPanel summary={summary} /> : null}
 
       {!loading && items.length === 0 ? <EmptyState message="No answer regions are ready for review." /> : null}
       <div className="grid gap-4">
@@ -160,6 +173,33 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function SummaryPanel({ summary }: Readonly<{ summary: AssessmentSummary }>) {
+  return (
+    <section className="rounded border border-slate-800 bg-slate-900 p-5">
+      <h2 className="text-xl font-semibold">Assessment summary</h2>
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <SummaryMetric label="Submissions" value={summary.total_submissions} />
+        <SummaryMetric label="Answer regions" value={summary.total_answer_regions} />
+        <SummaryMetric label="Reviewed" value={summary.total_final_grades} />
+        <SummaryMetric label="Pending review" value={summary.pending_review_count} />
+        <SummaryMetric label="Approved" value={summary.approved_count} />
+        <SummaryMetric label="Edited" value={summary.edited_count} />
+        <SummaryMetric label="Rejected" value={summary.rejected_count} />
+        <SummaryMetric label="Average final score" value={summary.average_final_score ?? "—"} />
+      </div>
+    </section>
+  );
+}
+
+function SummaryMetric({ label, value }: Readonly<{ label: string; value: string | number }>) {
+  return (
+    <div className="rounded border border-slate-800 p-3">
+      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 text-2xl font-semibold">{value}</p>
     </div>
   );
 }

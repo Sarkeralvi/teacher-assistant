@@ -1,10 +1,23 @@
+from datetime import UTC, datetime
+from decimal import Decimal
+from io import BytesIO
 
 from fastapi import HTTPException, status
+from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import AnswerRegion, Assessment, AuditLog, FinalGrade, GradeSuggestion, User
+from app.models import (
+    AnswerRegion,
+    Assessment,
+    AuditLog,
+    FinalGrade,
+    GradeSuggestion,
+    Submission,
+    User,
+)
 from app.schemas import (
+    AssessmentSummaryRead,
     FinalGradeCreate,
     ReviewQueueItem,
     ReviewQueueQuestion,
@@ -207,6 +220,123 @@ class FinalGradeService:
                 )
             )
         return items
+
+    def get_assessment_summary(self, assessment_id: int) -> AssessmentSummaryRead:
+        assessment = self._get_assessment(assessment_id)
+        items = self.get_review_queue(assessment_id)
+        final_grades = [item.final_grade for item in items if item.final_grade is not None]
+        final_scores = [final_grade.final_score for final_grade in final_grades]
+        total_submissions = len(
+            self.db.scalars(
+                select(Submission.id).where(Submission.assessment_id == assessment_id)
+            ).all()
+        )
+        total_grade_suggestions = len(
+            self.db.scalars(
+                select(GradeSuggestion.id)
+                .join(AnswerRegion, GradeSuggestion.answer_region_id == AnswerRegion.id)
+                .join(Submission, AnswerRegion.submission_id == Submission.id)
+                .where(Submission.assessment_id == assessment_id)
+            ).all()
+        )
+        average_final_score = None
+        if final_scores:
+            average_final_score = (sum(final_scores, Decimal("0")) / len(final_scores)).quantize(
+                Decimal("0.01")
+            )
+        max_possible_score = None
+        if items:
+            max_possible_score = sum(
+                (item.question.total_marks for item in items), Decimal("0")
+            ).quantize(Decimal("0.01"))
+
+        return AssessmentSummaryRead(
+            assessment_id=assessment.id,
+            course_id=assessment.course_id,
+            total_submissions=total_submissions,
+            total_answer_regions=len(items),
+            total_grade_suggestions=total_grade_suggestions,
+            total_final_grades=len(final_grades),
+            approved_count=sum(
+                1 for final_grade in final_grades if final_grade.approval_status == "approved"
+            ),
+            edited_count=sum(
+                1 for final_grade in final_grades if final_grade.approval_status == "edited"
+            ),
+            rejected_count=sum(
+                1 for final_grade in final_grades if final_grade.approval_status == "rejected"
+            ),
+            pending_review_count=sum(1 for item in items if item.final_grade is None),
+            average_final_score=average_final_score,
+            max_possible_score=max_possible_score,
+            generated_at=datetime.now(UTC),
+        )
+
+    def build_final_grades_workbook(self, assessment_id: int) -> bytes:
+        assessment = self._get_assessment(assessment_id)
+        items = self.get_review_queue(assessment_id)
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Final Grades"
+        headers = [
+            "assessment_id",
+            "course_id",
+            "submission_id",
+            "student_identifier",
+            "student_name",
+            "question_id",
+            "question_no",
+            "answer_region_id",
+            "grade_suggestion_id",
+            "final_grade_id",
+            "ai_score",
+            "ai_max_score",
+            "ai_confidence",
+            "ai_needs_review",
+            "final_score",
+            "approval_status",
+            "teacher_comment",
+            "reviewed_at",
+            "feedback_to_student",
+        ]
+        sheet.append(headers)
+        for item in items:
+            suggestion = item.latest_grade_suggestion
+            final_grade = item.final_grade
+            sheet.append(
+                [
+                    assessment.id,
+                    assessment.course_id,
+                    item.submission.id,
+                    item.submission.student_identifier,
+                    item.submission.student_name,
+                    item.question.id,
+                    item.question.question_no,
+                    item.answer_region.id,
+                    suggestion.id if suggestion else None,
+                    final_grade.id if final_grade else None,
+                    suggestion.score if suggestion else None,
+                    suggestion.max_score if suggestion else None,
+                    suggestion.confidence if suggestion else None,
+                    suggestion.needs_review if suggestion else None,
+                    final_grade.final_score if final_grade else None,
+                    final_grade.approval_status if final_grade else None,
+                    final_grade.teacher_comment if final_grade else None,
+                    final_grade.updated_at.isoformat() if final_grade else None,
+                    suggestion.feedback if suggestion else None,
+                ]
+            )
+        buffer = BytesIO()
+        workbook.save(buffer)
+        return buffer.getvalue()
+
+    def _get_assessment(self, assessment_id: int) -> Assessment:
+        assessment = self.db.get(Assessment, assessment_id)
+        if assessment is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found"
+            )
+        return assessment
 
     @staticmethod
     def _review_status(

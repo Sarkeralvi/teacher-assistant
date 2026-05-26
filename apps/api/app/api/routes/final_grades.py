@@ -2,11 +2,13 @@ from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import FinalGrade
 from app.schemas import (
+    AssessmentSummaryRead,
     FinalGradeApprove,
     FinalGradeCreate,
     FinalGradeEdit,
@@ -97,3 +99,19 @@ def get_answer_region_final_grade(answer_region_id: int, db: DbSession) -> Final
 @router.get("/assessments/{assessment_id}/review-queue", response_model=list[ReviewQueueItem])
 def get_assessment_review_queue(assessment_id: int, db: DbSession) -> Sequence[ReviewQueueItem]:
     return FinalGradeService(db).get_review_queue(assessment_id)
+
+
+@router.get("/assessments/{assessment_id}/summary", response_model=AssessmentSummaryRead)
+def get_assessment_summary(assessment_id: int, db: DbSession) -> AssessmentSummaryRead:
+    return FinalGradeService(db).get_assessment_summary(assessment_id)
+
+
+@router.get("/assessments/{assessment_id}/export/final-grades.xlsx")
+def export_assessment_final_grades_xlsx(assessment_id: int, db: DbSession) -> StreamingResponse:
+    content = FinalGradeService(db).build_final_grades_workbook(assessment_id)
+    filename = f"assessment-{assessment_id}-final-grades.xlsx"
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

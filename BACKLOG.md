@@ -260,3 +260,16 @@ Acceptance criteria: Review queue exposes answer regions with submission/questio
 Tests required: Focused backend review tests; frontend static workflow test; `make test`; `make lint`; frontend build; backend/frontend health curls; `make down`; clean git status.
 Risks: Auth is still a dev placeholder, so teacher_id is provided by client input until real auth lands; FinalGrade currently stores only current state, while audit logs preserve action history.
 Status: Done
+
+TASK-ID: TA-W1-018
+Title: Result export and assessment summary
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-017
+Files affected: apps/api/app/api/routes/final_grades.py, apps/api/app/schemas.py, apps/api/app/services/final_grade_service.py, apps/api/tests/test_final_grade_review_api.py, apps/web/lib/api.ts, apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Let teachers view assessment-level review progress and download final-grade results as a safe Excel workbook.
+Implementation notes: Adds assessment summary and dynamic XLSX final-grade export endpoints using existing openpyxl dependency. Export includes pending answer regions with blank final-grade columns, latest AI suggestion fields, reviewed final-grade state, and student feedback. It excludes password_hash, raw_response_json, secrets, and provider internals. Frontend review page shows summary counts and an XLSX download link through the central API client. No CSV, student portal, payment, real auth, batch real grading, or TA-W1-019 work.
+Acceptance criteria: Summary returns correct counts; XLSX endpoint returns correct content type, headers, approved/edited/rejected rows, pending rows, and safe field set; missing assessment returns 404; frontend exposes summary and export controls; tests/lint/build/manual export smoke pass.
+Tests required: Focused backend export/review tests; frontend static workflow test; `make test`; `make lint`; frontend build; backend/frontend health curls; `make down`; clean git status.
+Risks: Auth remains dev-mode; export is current-state only with action history preserved in AuditLog; CSV export intentionally deferred.
+Status: Done

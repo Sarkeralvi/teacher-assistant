@@ -139,6 +139,22 @@ export type ReviewQueueItem = {
   review_status: "ungraded" | "suggested" | "finalized";
 };
 
+export type AssessmentSummary = {
+  assessment_id: number;
+  course_id: number;
+  total_submissions: number;
+  total_answer_regions: number;
+  total_grade_suggestions: number;
+  total_final_grades: number;
+  approved_count: number;
+  edited_count: number;
+  rejected_count: number;
+  pending_review_count: number;
+  average_final_score: string | number | null;
+  max_possible_score: string | number | null;
+  generated_at: string;
+};
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -351,4 +367,12 @@ export function getAnswerRegionFinalGrade(answerRegionId: number) {
 
 export function getAssessmentReviewQueue(assessmentId: number) {
   return apiRequest<ReviewQueueItem[]>(`/assessments/${assessmentId}/review-queue`);
+}
+
+export function getAssessmentSummary(assessmentId: number) {
+  return apiRequest<AssessmentSummary>(`/assessments/${assessmentId}/summary`);
+}
+
+export function getAssessmentFinalGradesExportUrl(assessmentId: number) {
+  return `${API_BASE_URL}/assessments/${assessmentId}/export/final-grades.xlsx`;
 }

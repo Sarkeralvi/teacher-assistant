@@ -337,3 +337,19 @@ class ReviewQueueItem(BaseModel):
     latest_grade_suggestion: GradeSuggestionRead | None
     final_grade: FinalGradeRead | None
     review_status: Literal["ungraded", "suggested", "finalized"]
+
+
+class AssessmentSummaryRead(BaseModel):
+    assessment_id: int
+    course_id: int
+    total_submissions: int
+    total_answer_regions: int
+    total_grade_suggestions: int
+    total_final_grades: int
+    approved_count: int
+    edited_count: int
+    rejected_count: int
+    pending_review_count: int
+    average_final_score: Decimal | None
+    max_possible_score: Decimal | None
+    generated_at: datetime
