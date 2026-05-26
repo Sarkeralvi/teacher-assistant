@@ -289,6 +289,22 @@ class FinalGradeCreate(BaseModel):
     approval_status: Literal["approved", "edited", "rejected"]
 
 
+class FinalGradeApprove(BaseModel):
+    teacher_id: int
+    teacher_comment: str | None = None
+
+
+class FinalGradeEdit(BaseModel):
+    teacher_id: int
+    final_score: Decimal = Field(ge=0)
+    teacher_comment: str | None = None
+
+
+class FinalGradeReject(BaseModel):
+    teacher_id: int
+    teacher_comment: str | None = None
+
+
 class FinalGradeRead(ORMBase):
     id: int
     answer_region_id: int

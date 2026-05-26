@@ -234,3 +234,29 @@ Acceptance criteria: Harness can load selected answer-region cases, call the exi
 Tests required: Focused evaluation tests; `make test`; `make lint`; Docker migration/health checks; frontend build; `make down`; final clean git status.
 Risks: Metrics quality depends on human-curated reference cases; real provider mode must remain small and explicitly approved.
 Status: Done
+
+TASK-ID: TA-W1-016
+Title: First controlled real grading evaluation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-015
+Files affected: Temporary ignored dataset/artifacts only; no committed code changes.
+Goal: Run the first tiny controlled real-provider grading evaluation through the harness.
+Implementation notes: Used one synthetic non-student fixture case, explicit Codex provider enablement, and max real cases guard. Produced ignored JSON/Markdown evaluation artifacts under /tmp. No production batch grading and no final-grade updates.
+Acceptance criteria: Real-provider harness run completes on 1 controlled case, reports metrics and per-case result, then test/lint/Docker checks pass.
+Tests required: `make test`; `make lint`; Docker health; `make down`; clean git status.
+Risks: One synthetic case validates pipeline only and does not establish grading accuracy.
+Status: Done
+
+TASK-ID: TA-W1-017
+Title: Teacher review and final grade approval workflow
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-013, TA-W1-014, TA-W1-015, TA-W1-016
+Files affected: apps/api/app/api/routes/final_grades.py, apps/api/app/schemas.py, apps/api/app/services/final_grade_service.py, apps/api/tests/test_final_grade_review_api.py, apps/web/lib/api.ts, apps/web/components/AssessmentReviewClient.tsx, apps/web/app/assessments/[assessmentId]/review/page.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Convert AI GradeSuggestions into teacher-controlled FinalGrade records through approve, edit, or reject review actions.
+Implementation notes: Adds explicit approve/edit/reject endpoints, keeps legacy finalize endpoint, upserts one current FinalGrade per answer region, writes audit logs for teacher review actions, validates score bounds, and adds a simple assessment review route/UI using the central API client. No Excel export, student portal, batch grading, or real grading call added.
+Acceptance criteria: Review queue exposes answer regions with submission/question/image/latest suggestion/final grade/status; teacher can approve, edit, or reject suggestions into FinalGrade records; duplicate current FinalGrade rows are avoided; frontend review page supports the workflow; tests/lint/build/manual smoke pass.
+Tests required: Focused backend review tests; frontend static workflow test; `make test`; `make lint`; frontend build; backend/frontend health curls; `make down`; clean git status.
+Risks: Auth is still a dev placeholder, so teacher_id is provided by client input until real auth lands; FinalGrade currently stores only current state, while audit logs preserve action history.
+Status: Done

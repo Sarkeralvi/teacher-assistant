@@ -13,6 +13,7 @@ from app.main import app
 from app.models import (
     AnswerRegion,
     Assessment,
+    AuditLog,
     Course,
     FinalGrade,
     GradeSuggestion,
@@ -25,6 +26,7 @@ from app.models import (
 )
 
 CLEANUP_MODELS = (
+    AuditLog,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
@@ -151,16 +153,14 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     }
 
 
-def test_finalize_grade_suggestion_creates_final_grade(client: TestClient, tmp_path: Path) -> None:
+def test_approve_grade_suggestion_creates_final_grade(client: TestClient, tmp_path: Path) -> None:
     data = create_region_and_suggestion(client, tmp_path)
 
     response = client.post(
-        f"/grade-suggestions/{data['suggestion']['id']}/finalize",
+        f"/grade-suggestions/{data['suggestion']['id']}/approve",
         json={
             "teacher_id": data["teacher"]["id"],
-            "final_score": "4.00",
-            "teacher_comment": "Accepted with minor adjustment.",
-            "approval_status": "edited",
+            "teacher_comment": "Approved after review.",
         },
     )
 
@@ -169,10 +169,51 @@ def test_finalize_grade_suggestion_creates_final_grade(client: TestClient, tmp_p
     assert payload["answer_region_id"] == data["region"]["id"]
     assert payload["suggestion_id"] == data["suggestion"]["id"]
     assert payload["teacher_id"] == data["teacher"]["id"]
+    assert payload["final_score"] == data["suggestion"]["score"]
+    assert payload["approval_status"] == "approved"
+    assert payload["teacher_comment"] == "Approved after review."
+    assert "password_hash" not in payload
+
+
+def test_edit_grade_suggestion_creates_final_grade_with_teacher_score(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+
+    response = client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/edit",
+        json={
+            "teacher_id": data["teacher"]["id"],
+            "final_score": "4.00",
+            "teacher_comment": "Adjusted after inspecting work.",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
     assert payload["final_score"] == "4.00"
     assert payload["approval_status"] == "edited"
-    assert payload["teacher_comment"] == "Accepted with minor adjustment."
-    assert "password_hash" not in payload
+    assert payload["teacher_comment"] == "Adjusted after inspecting work."
+
+
+def test_reject_grade_suggestion_creates_rejected_final_grade(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+
+    response = client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/reject",
+        json={
+            "teacher_id": data["teacher"]["id"],
+            "teacher_comment": "Suggestion is not usable.",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["final_score"] == "0.00"
+    assert payload["approval_status"] == "rejected"
+    assert payload["teacher_comment"] == "Suggestion is not usable."
 
 
 def test_finalize_validation_failures(client: TestClient, tmp_path: Path) -> None:
@@ -180,29 +221,24 @@ def test_finalize_validation_failures(client: TestClient, tmp_path: Path) -> Non
     suggestion_id = data["suggestion"]["id"]
 
     too_high = client.post(
-        f"/grade-suggestions/{suggestion_id}/finalize",
+        f"/grade-suggestions/{suggestion_id}/edit",
         json={
             "teacher_id": data["teacher"]["id"],
             "final_score": "6.00",
-            "approval_status": "edited",
         },
     )
     assert too_high.status_code == 422
     assert "max_score" in too_high.text
 
     missing_teacher = client.post(
-        f"/grade-suggestions/{suggestion_id}/finalize",
-        json={"teacher_id": 999999, "final_score": "3.00", "approval_status": "approved"},
+        f"/grade-suggestions/{suggestion_id}/approve",
+        json={"teacher_id": 999999},
     )
     assert missing_teacher.status_code == 404
 
     missing_suggestion = client.post(
-        "/grade-suggestions/999999/finalize",
-        json={
-            "teacher_id": data["teacher"]["id"],
-            "final_score": "3.00",
-            "approval_status": "approved",
-        },
+        "/grade-suggestions/999999/approve",
+        json={"teacher_id": data["teacher"]["id"]},
     )
     assert missing_suggestion.status_code == 404
 
@@ -225,12 +261,8 @@ def test_get_final_grade_and_review_queue_states(client: TestClient, tmp_path: P
     assert not_found.status_code == 404
 
     finalize = client.post(
-        f"/grade-suggestions/{data['suggestion']['id']}/finalize",
-        json={
-            "teacher_id": data["teacher"]["id"],
-            "final_score": "0.00",
-            "approval_status": "approved",
-        },
+        f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        json={"teacher_id": data["teacher"]["id"]},
     )
     assert finalize.status_code == 201
 
@@ -262,28 +294,42 @@ def test_review_queue_includes_ungraded_regions(client: TestClient, tmp_path: Pa
     assert by_region[second_region.json()["id"]]["review_status"] == "ungraded"
 
 
-def test_finalize_replaces_existing_current_final_grade(client: TestClient, tmp_path: Path) -> None:
+def test_teacher_actions_replace_existing_current_final_grade(
+    client: TestClient, tmp_path: Path
+) -> None:
     data = create_region_and_suggestion(client, tmp_path)
     suggestion_id = data["suggestion"]["id"]
     first = client.post(
-        f"/grade-suggestions/{suggestion_id}/finalize",
-        json={
-            "teacher_id": data["teacher"]["id"],
-            "final_score": "2.00",
-            "approval_status": "approved",
-        },
+        f"/grade-suggestions/{suggestion_id}/approve",
+        json={"teacher_id": data["teacher"]["id"]},
     )
     assert first.status_code == 201
 
     second = client.post(
-        f"/grade-suggestions/{suggestion_id}/finalize",
+        f"/grade-suggestions/{suggestion_id}/edit",
         json={
             "teacher_id": data["teacher"]["id"],
             "final_score": "3.00",
-            "approval_status": "edited",
         },
     )
 
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
     assert second.json()["final_score"] == "3.00"
+
+
+def test_teacher_review_action_writes_audit_log(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+
+    response = client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        json={"teacher_id": data["teacher"]["id"]},
+    )
+
+    assert response.status_code == 201
+    logs = db_session.query(AuditLog).filter(AuditLog.event_type == "final_grade.approved").all()
+    assert len(logs) == 1
+    assert logs[0].actor_id == data["teacher"]["id"]
+    assert logs[0].entity_type == "final_grade"

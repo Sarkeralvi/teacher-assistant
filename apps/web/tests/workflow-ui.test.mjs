@@ -10,12 +10,14 @@ const requiredFiles = [
   "components/CoursesClient.tsx",
   "components/CourseDetailClient.tsx",
   "components/AssessmentDetailClient.tsx",
+  "components/AssessmentReviewClient.tsx",
   "components/QuestionDetailClient.tsx",
   "app/dashboard/page.tsx",
   "app/users/page.tsx",
   "app/courses/page.tsx",
   "app/courses/[courseId]/page.tsx",
   "app/assessments/[assessmentId]/page.tsx",
+  "app/assessments/[assessmentId]/review/page.tsx",
   "app/questions/[questionId]/page.tsx",
 ];
 
@@ -49,6 +51,9 @@ for (const symbol of [
   "listAssessmentAnswerRegions",
   "getAnswerRegionImageUrl",
   "gradeAnswerRegion",
+  "approveGradeSuggestion",
+  "editGradeSuggestion",
+  "rejectGradeSuggestion",
   "finalizeGradeSuggestion",
   "getAnswerRegionFinalGrade",
   "getAssessmentReviewQueue",
@@ -90,6 +95,31 @@ for (const text of [
 ]) {
   if (!assessmentDetail.includes(text)) {
     throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);
+  }
+}
+
+const assessmentReview = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
+for (const text of [
+  "Teacher review and final grade approval",
+  "AI GradeSuggestions are suggestions only",
+  "answer region image",
+  "Question text",
+  "student_identifier",
+  "AI suggested score",
+  "confidence",
+  "needs_review",
+  "Rubric breakdown",
+  "feedback",
+  "Current FinalGrade",
+  "Approve AI suggestion",
+  "Edit score and save final grade",
+  "Reject suggestion",
+  "approveGradeSuggestion",
+  "editGradeSuggestion",
+  "rejectGradeSuggestion",
+]) {
+  if (!assessmentReview.includes(text)) {
+    throw new Error(`Assessment review page must include teacher-review UI marker: ${text}`);
   }
 }
 

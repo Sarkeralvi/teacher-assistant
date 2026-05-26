@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import AnswerRegion, Assessment, FinalGrade, GradeSuggestion, User
+from app.models import AnswerRegion, Assessment, AuditLog, FinalGrade, GradeSuggestion, User
 from app.schemas import (
     FinalGradeCreate,
     ReviewQueueItem,
@@ -19,11 +19,77 @@ class FinalGradeService:
     def finalize_suggestion(
         self, suggestion_id: int, payload: FinalGradeCreate
     ) -> tuple[FinalGrade, bool]:
+        return self._save_final_grade(
+            suggestion_id=suggestion_id,
+            teacher_id=payload.teacher_id,
+            final_score=payload.final_score,
+            approval_status=payload.approval_status,
+            teacher_comment=payload.teacher_comment,
+        )
+
+    def approve_suggestion(
+        self, suggestion_id: int, teacher_id: int, teacher_comment: str | None = None
+    ) -> tuple[FinalGrade, bool]:
+        suggestion = self._get_suggestion(suggestion_id)
+        if suggestion.score is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Cannot approve a suggestion without a score",
+            )
+        return self._save_final_grade(
+            suggestion_id=suggestion_id,
+            teacher_id=teacher_id,
+            final_score=suggestion.score,
+            approval_status="approved",
+            teacher_comment=teacher_comment,
+            suggestion=suggestion,
+        )
+
+    def edit_suggestion(
+        self,
+        suggestion_id: int,
+        teacher_id: int,
+        final_score,
+        teacher_comment: str | None = None,
+    ) -> tuple[FinalGrade, bool]:
+        return self._save_final_grade(
+            suggestion_id=suggestion_id,
+            teacher_id=teacher_id,
+            final_score=final_score,
+            approval_status="edited",
+            teacher_comment=teacher_comment,
+        )
+
+    def reject_suggestion(
+        self, suggestion_id: int, teacher_id: int, teacher_comment: str | None = None
+    ) -> tuple[FinalGrade, bool]:
+        return self._save_final_grade(
+            suggestion_id=suggestion_id,
+            teacher_id=teacher_id,
+            final_score=0,
+            approval_status="rejected",
+            teacher_comment=teacher_comment,
+        )
+
+    def _get_suggestion(self, suggestion_id: int) -> GradeSuggestion:
         suggestion = self.db.get(GradeSuggestion, suggestion_id)
         if suggestion is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Grade suggestion not found"
             )
+        return suggestion
+
+    def _save_final_grade(
+        self,
+        *,
+        suggestion_id: int,
+        teacher_id: int,
+        final_score,
+        approval_status: str,
+        teacher_comment: str | None,
+        suggestion: GradeSuggestion | None = None,
+    ) -> tuple[FinalGrade, bool]:
+        suggestion = suggestion or self._get_suggestion(suggestion_id)
         region = self.db.get(AnswerRegion, suggestion.answer_region_id)
         if region is None:
             raise HTTPException(
@@ -34,10 +100,10 @@ class FinalGradeService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Grade suggestion does not match answer region question",
             )
-        teacher = self.db.get(User, payload.teacher_id)
+        teacher = self.db.get(User, teacher_id)
         if teacher is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
-        if payload.final_score > suggestion.max_score:
+        if final_score > suggestion.max_score:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="final_score cannot exceed suggestion max_score",
@@ -48,12 +114,29 @@ class FinalGradeService:
         ).first()
         created = existing is None
         final_grade = existing or FinalGrade(answer_region_id=region.id)
-        final_grade.teacher_id = payload.teacher_id
+        final_grade.teacher_id = teacher_id
         final_grade.suggestion_id = suggestion.id
-        final_grade.final_score = payload.final_score
-        final_grade.teacher_comment = payload.teacher_comment
-        final_grade.approval_status = payload.approval_status
+        final_grade.final_score = final_score
+        final_grade.teacher_comment = teacher_comment
+        final_grade.approval_status = approval_status
         self.db.add(final_grade)
+        self.db.flush()
+        self.db.add(
+            AuditLog(
+                actor_type="teacher",
+                actor_id=teacher_id,
+                event_type=f"final_grade.{approval_status}",
+                entity_type="final_grade",
+                entity_id=final_grade.id,
+                payload_json={
+                    "answer_region_id": region.id,
+                    "suggestion_id": suggestion.id,
+                    "final_score": str(final_grade.final_score),
+                    "approval_status": approval_status,
+                    "upsert_created": created,
+                },
+            )
+        )
         self.db.commit()
         self.db.refresh(final_grade)
         return final_grade, created

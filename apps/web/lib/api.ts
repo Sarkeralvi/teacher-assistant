@@ -302,19 +302,47 @@ export function gradeAnswerRegion(answerRegionId: number) {
   });
 }
 
-export function finalizeGradeSuggestion(
-  gradeSuggestionId: number,
-  payload: {
-    teacher_id: number;
-    final_score: string | number;
-    teacher_comment?: string | null;
-    approval_status: "approved" | "edited" | "rejected";
-  },
-) {
-  return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/finalize`, {
+export type FinalGradeActionPayload = {
+  teacher_id: number;
+  teacher_comment?: string | null;
+};
+
+export type FinalGradeEditPayload = FinalGradeActionPayload & {
+  final_score: string | number;
+};
+
+export function approveGradeSuggestion(gradeSuggestionId: number, payload: FinalGradeActionPayload) {
+  return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/approve`, {
     method: "POST",
     body: payload,
   });
+}
+
+export function editGradeSuggestion(gradeSuggestionId: number, payload: FinalGradeEditPayload) {
+  return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/edit`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function rejectGradeSuggestion(gradeSuggestionId: number, payload: FinalGradeActionPayload) {
+  return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/reject`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function finalizeGradeSuggestion(
+  gradeSuggestionId: number,
+  payload: FinalGradeEditPayload & { approval_status: "approved" | "edited" | "rejected" },
+) {
+  if (payload.approval_status === "approved") {
+    return approveGradeSuggestion(gradeSuggestionId, payload);
+  }
+  if (payload.approval_status === "rejected") {
+    return rejectGradeSuggestion(gradeSuggestionId, payload);
+  }
+  return editGradeSuggestion(gradeSuggestionId, payload);
 }
 
 export function getAnswerRegionFinalGrade(answerRegionId: number) {

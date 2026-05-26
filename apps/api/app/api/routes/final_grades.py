@@ -6,7 +6,14 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import FinalGrade
-from app.schemas import FinalGradeCreate, FinalGradeRead, ReviewQueueItem
+from app.schemas import (
+    FinalGradeApprove,
+    FinalGradeCreate,
+    FinalGradeEdit,
+    FinalGradeRead,
+    FinalGradeReject,
+    ReviewQueueItem,
+)
 from app.services.final_grade_service import FinalGradeService
 
 router = APIRouter(tags=["review"])
@@ -22,6 +29,61 @@ def finalize_grade_suggestion(
     grade_suggestion_id: int, payload: FinalGradeCreate, response: Response, db: DbSession
 ) -> FinalGrade:
     final_grade, created = FinalGradeService(db).finalize_suggestion(grade_suggestion_id, payload)
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return final_grade
+
+
+@router.post(
+    "/grade-suggestions/{grade_suggestion_id}/approve",
+    response_model=FinalGradeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def approve_grade_suggestion(
+    grade_suggestion_id: int, payload: FinalGradeApprove, response: Response, db: DbSession
+) -> FinalGrade:
+    final_grade, created = FinalGradeService(db).approve_suggestion(
+        grade_suggestion_id,
+        teacher_id=payload.teacher_id,
+        teacher_comment=payload.teacher_comment,
+    )
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return final_grade
+
+
+@router.post(
+    "/grade-suggestions/{grade_suggestion_id}/edit",
+    response_model=FinalGradeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def edit_grade_suggestion(
+    grade_suggestion_id: int, payload: FinalGradeEdit, response: Response, db: DbSession
+) -> FinalGrade:
+    final_grade, created = FinalGradeService(db).edit_suggestion(
+        grade_suggestion_id,
+        teacher_id=payload.teacher_id,
+        final_score=payload.final_score,
+        teacher_comment=payload.teacher_comment,
+    )
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return final_grade
+
+
+@router.post(
+    "/grade-suggestions/{grade_suggestion_id}/reject",
+    response_model=FinalGradeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def reject_grade_suggestion(
+    grade_suggestion_id: int, payload: FinalGradeReject, response: Response, db: DbSession
+) -> FinalGrade:
+    final_grade, created = FinalGradeService(db).reject_suggestion(
+        grade_suggestion_id,
+        teacher_id=payload.teacher_id,
+        teacher_comment=payload.teacher_comment,
+    )
     if not created:
         response.status_code = status.HTTP_200_OK
     return final_grade
