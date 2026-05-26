@@ -273,3 +273,29 @@ Acceptance criteria: Summary returns correct counts; XLSX endpoint returns corre
 Tests required: Focused backend export/review tests; frontend static workflow test; `make test`; `make lint`; frontend build; backend/frontend health curls; `make down`; clean git status.
 Risks: Auth remains dev-mode; export is current-state only with action history preserved in AuditLog; CSV export intentionally deferred.
 Status: Done
+
+TASK-ID: TA-W1-019
+Title: End-to-end teacher workflow validation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-018
+Files affected: Temporary ignored runtime data only; no committed code changes.
+Goal: Validate the teacher workflow end to end after result export and assessment summary work.
+Implementation notes: Ran a mixed API + health-check workflow using synthetic non-student data only, mock provider, zero real Codex calls, and exactly one grading call during validation. Verified upload, page/image serving, answer-region crop, mock GradeSuggestion persistence, review queue suggested/finalized states, FinalGrade approval, assessment summary, safe XLSX export, tests, lint, frontend build, health checks, and clean git status. No code changes were required.
+Acceptance criteria: Workflow completes with created synthetic records; export includes one reviewed row and no forbidden raw provider JSON/password fields; required tests/lint/build/health checks pass; known Next dev cache issue after build is resolved by frontend restart and recorded.
+Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; mixed API workflow smoke; `make test`; `make lint`; frontend build; frontend health retry after restart if needed; `make down`; clean git status.
+Risks: Single synthetic validation proves pipeline integration only, not grading quality or production auth behavior.
+Status: Done
+
+TASK-ID: TA-W1-019A
+Title: Record end-to-end validation checkpoint
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-019
+Files affected: BACKLOG.md, docs/VALIDATION_LOG.md
+Goal: Record the successful TA-W1-019 validation in project history without changing product code.
+Implementation notes: Documentation/backlog-only checkpoint. Records baseline commit, workflow shape, synthetic IDs, review states, summary/export results, verification commands, known Next dev cache restart issue, and that no code changes or validation commit were generated during TA-W1-019 itself.
+Acceptance criteria: BACKLOG marks TA-W1-019 done; docs/VALIDATION_LOG.md contains the TA-W1-019 checkpoint; no product code changes are made; requested tests/lint pass; checkpoint commit is created.
+Tests required: `git status --short`; `make test`; `make lint`; `git status --short`.
+Risks: Documentation may drift if future validation runs are not appended.
+Status: Done
