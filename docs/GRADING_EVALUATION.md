@@ -1,0 +1,70 @@
+# Grading Evaluation Harness
+
+TA-W1-015 adds a small backend-only harness for measuring grading behavior before trusting AI grading suggestions.
+
+## Dataset format
+
+Use JSONL for small hand-curated cases. Each line is one case:
+
+```json
+{"case_id":"case_001","answer_region_id":277,"question_id":429,"rubric_id":283,"expected_score":"5.00","max_score":"5.00","teacher_notes":"Correct answer with full working."}
+```
+
+The same objects may also be stored as a JSON array or under a top-level `cases` key.
+
+Fields:
+
+- `case_id`: stable human-readable case identifier.
+- `answer_region_id`: existing cropped answer region to grade.
+- `question_id`: expected question for the answer region.
+- `rubric_id`: active rubric expected for the question.
+- `expected_score`: teacher/reference score.
+- `max_score`: maximum score for the case; must match active rubric total marks.
+- `teacher_notes`: optional reference notes for later analysis.
+
+## Running mock evaluation
+
+Default mode is safe mock provider:
+
+```bash
+cd apps/api
+python -m packages.evaluation.grading_evaluation /path/to/cases.jsonl --provider mock
+```
+
+## Running real Codex evaluation
+
+Real provider runs are blocked unless explicitly enabled and capped:
+
+```bash
+cd apps/api
+TA_EVAL_ALLOW_REAL_PROVIDER=true \
+python -m packages.evaluation.grading_evaluation /path/to/cases.jsonl \
+  --provider codex_cli \
+  --allow-real-provider \
+  --max-real-cases 1
+```
+
+Do not use this on production/bulk data. Current hard guard defaults to max 5 real cases, and TA-W1-015 policy allows at most one real case unless separately approved.
+
+## Metrics
+
+The harness writes JSON and Markdown artifacts under:
+
+```text
+data/exports/grading_evals/
+```
+
+Implemented metrics:
+
+- `exact_match_rate`
+- `within_1_mark_rate`
+- `mean_absolute_error`
+- `false_confident_error_count`
+- `average_confidence`
+- `needs_review_rate`
+
+False-confident errors are cases where:
+
+```text
+confidence >= 0.8 and absolute_error > 1
+```

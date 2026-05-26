@@ -207,3 +207,30 @@ Acceptance criteria: Codex CLI provider requires local `codex` command but not `
 Tests required: Focused Codex CLI provider tests with mocked subprocess, focused grading API tests with mocked Codex provider, existing mock/OpenAI tests, no-direct-external-LLM-import scan, full backend suite, lint/typecheck, Docker health checks, frontend build.
 Risks: Codex CLI image grading is default-off and only allowed when actual CLI image flag support is detected; real Codex grading smoke intentionally deferred to a separate task.
 Status: Done
+
+
+TASK-ID: TA-W1-014
+Title: Real Codex grading smoke test
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-013, TA-W1-013A
+Files affected: No code files; used existing Brain Adapter/Codex CLI provider path and runtime data under ignored storage.
+Goal: Run exactly one controlled real Codex grading call through the existing Brain Adapter path and persist a GradeSuggestion.
+Implementation notes: Verified Codex auth, Docker services, migrations, health, one answer region fixture, active rubric, cropped image, image input, structured output validation, GradeSuggestion persistence, and GradingJob success. No code changes were required.
+Acceptance criteria: One real Codex grading call succeeds through GradingService -> BrainAdapter -> CodexCliProvider; saved output includes provider/model/prompt version, raw JSON, score/max/confidence/needs_review, rubric breakdown, and succeeded job status.
+Tests required: `make test`; `make lint`; backend/frontend health curls; `make down`; final clean git status.
+Risks: Single smoke proves path viability only, not grading quality.
+Status: Done
+
+TASK-ID: TA-W1-015
+Title: Real grading evaluation harness
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-014
+Files affected: apps/api/packages/evaluation/**, apps/api/tests/test_grading_evaluation.py, docs/GRADING_EVALUATION.md, BACKLOG.md
+Goal: Measure grading behavior against teacher/reference scores before trusting AI grading output.
+Implementation notes: Adds a documented JSON/JSONL evaluation case format, backend evaluation runner, explicit real-provider guard, hard max real-case guard, metric calculation, and ignored JSON/Markdown artifacts under data/exports/grading_evals. No teacher review UI, final grade updates, Excel export, or production batch grading.
+Acceptance criteria: Harness can load selected answer-region cases, call the existing grading service/provider path, persist GradeSuggestion records, compare AI score to expected score, calculate metrics, flag false-confident errors, and write ignored evaluation artifacts.
+Tests required: Focused evaluation tests; `make test`; `make lint`; Docker migration/health checks; frontend build; `make down`; final clean git status.
+Risks: Metrics quality depends on human-curated reference cases; real provider mode must remain small and explicitly approved.
+Status: Done
