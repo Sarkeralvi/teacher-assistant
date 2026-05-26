@@ -1,9 +1,11 @@
 import re
 import time
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from app.core.config import Settings
+from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.image_input import build_image_data_url
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.openai_provider import OpenAICompatibleProvider
@@ -57,6 +59,29 @@ class BrainAdapter:
                 image_input_enabled=settings.openai_image_input_enabled,
                 storage_root=settings.local_storage_root,
             )
+        if provider_name == "codex_cli":
+            if settings.codex_cli_approval_policy.strip().lower() != "never":
+                raise BrainProviderConfigurationError(
+                    "CODEX_CLI_APPROVAL_POLICY must be never for BRAIN_PROVIDER=codex_cli"
+                )
+            if settings.codex_cli_sandbox.strip() == "danger-full-access":
+                raise BrainProviderConfigurationError(
+                    "CODEX_CLI_SANDBOX=danger-full-access is not allowed"
+                )
+            return cls(
+                CodexCliProvider(
+                    command=settings.codex_cli_command,
+                    model_name=settings.codex_cli_model,
+                    timeout_seconds=settings.codex_cli_timeout_seconds,
+                    sandbox=settings.codex_cli_sandbox,
+                    use_json=settings.codex_cli_use_json,
+                    output_last_message=settings.codex_cli_output_last_message,
+                    image_input_enabled=settings.codex_cli_image_input_enabled,
+                    workdir=settings.codex_cli_workdir,
+                ),
+                image_input_enabled=settings.codex_cli_image_input_enabled,
+                storage_root=settings.local_storage_root,
+            )
         raise BrainProviderConfigurationError(f"Unsupported BRAIN_PROVIDER: {provider_name}")
 
     def grade_answer_region(
@@ -70,11 +95,12 @@ class BrainAdapter:
     ) -> GradeSuggestionOutput:
         resolved_policy = policy or (
             ModelPolicy.REAL_GRADING
-            if self.provider.provider_name == "openai"
+            if self.provider.provider_name in {"openai", "codex_cli"}
             else ModelPolicy.MOCK_GRADING
         )
         should_send_image = (
-            self.provider.provider_name == "openai" and self.image_input_enabled
+            self.provider.provider_name in {"openai", "codex_cli"}
+            and self.image_input_enabled
         )
         prompt_version = get_prompt_version(resolved_policy)
         messages = build_grading_prompt(
@@ -84,18 +110,21 @@ class BrainAdapter:
             image_input_enabled=should_send_image,
         )
         image_data_url = None
-        if should_send_image:
+        provider_answer_image_path = answer_image_path
+        if should_send_image and self.provider.provider_name == "openai":
             image_data_url = build_image_data_url(
                 image_path=answer_image_path,
                 storage_root=self.storage_root,
             )
+        elif should_send_image and self.provider.provider_name == "codex_cli":
+            provider_answer_image_path = str(Path(self.storage_root) / answer_image_path)
         start = time.perf_counter()
         try:
             output = self.provider.grade(
                 question_text=question_text,
                 question_total_marks=question_total_marks,
                 rubric_json=rubric_json,
-                answer_image_path=answer_image_path,
+                answer_image_path=provider_answer_image_path,
                 prompt_version=prompt_version,
                 task_name="answer_region_grading",
                 model_policy=resolved_policy,

@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 
 CLEANUP_MODELS = (
     FinalGrade,
@@ -304,4 +306,154 @@ def test_grade_answer_region_missing_image_fails_before_provider_call(
     job = db_session.scalars(select(GradingJob)).one()
     assert job.status == "failed"
     assert job.error == "Answer region image is missing"
+
+
+def codex_api_output() -> GradeSuggestionOutput:
+    return GradeSuggestionOutput(
+        score=Decimal("3.00"),
+        max_score=Decimal("5.00"),
+        confidence=Decimal("0.25"),
+        needs_review=True,
+        rubric_breakdown=[
+            RubricBreakdownItem(
+                criterion_id="concept",
+                criterion="Core concept",
+                max_marks=Decimal("3.00"),
+                awarded_marks=Decimal("2.00"),
+                reason="Partial conceptual match in text-only context.",
+                evidence=None,
+                confidence=Decimal("0.25"),
+            ),
+            RubricBreakdownItem(
+                criterion_id="clarity",
+                criterion="Clarity",
+                max_marks=Decimal("2.00"),
+                awarded_marks=Decimal("1.00"),
+                reason="Limited clarity in text-only context.",
+                evidence=None,
+                confidence=Decimal("0.25"),
+            ),
+        ],
+        detected_answer_summary="Codex CLI mocked text-only suggestion.",
+        major_errors=["Needs teacher review"],
+        feedback_to_student="Add clearer explanation.",
+        review_flags=[
+            "teacher_review_required",
+            "codex_cli_provider",
+            "image_input_disabled",
+        ],
+        model_provider="codex_cli",
+        model_name="codex-cli",
+        prompt_version="codex_cli_grading_v1",
+        cost_estimate=Decimal("0"),
+    )
+
+
+def test_grade_answer_region_with_codex_cli_mocked_subprocess_creates_suggestion(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCodexCliProvider:
+        provider_name = "codex_cli"
+        model_name = "codex-cli"
+
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def grade(self, **kwargs: object) -> GradeSuggestionOutput:
+            assert kwargs["image_data_url"] is None
+            assert kwargs["answer_image_path"]
+            return codex_api_output()
+
+    monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    get_settings.cache_clear()
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    response = client.post(f"/answer-regions/{region['id']}/grade")
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["job"]["status"] == "succeeded"
+    suggestion = payload["suggestion"]
+    assert suggestion["model_provider"] == "codex_cli"
+    assert suggestion["model_name"] == "codex-cli"
+    assert suggestion["needs_review"] is True
+    assert suggestion["raw_response_json"]["prompt_version"] == "codex_cli_grading_v1"
+    db_session.expire_all()
+    stored = db_session.scalars(select(GradeSuggestion)).one()
+    assert stored.model_provider == "codex_cli"
+
+
+def test_grade_answer_region_codex_cli_subprocess_failure_marks_job_failed(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingCodexCliProvider:
+        provider_name = "codex_cli"
+        model_name = "codex-cli"
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def grade(self, **kwargs: object) -> GradeSuggestionOutput:
+            raise RuntimeError("Codex CLI exited with status 2: failed with sk-secret-value")
+
+    monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    get_settings.cache_clear()
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FailingCodexCliProvider)
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    response = client.post(f"/answer-regions/{region['id']}/grade")
+
+    assert response.status_code == 502
+    assert "Codex CLI exited with status 2" in response.text
+    assert "sk-secret-value" not in response.text
+    db_session.expire_all()
+    job = db_session.scalars(select(GradingJob)).one()
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "sk-secret-value" not in job.error
+
+
+def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_failed(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ImageUnsupportedCodexCliProvider:
+        provider_name = "codex_cli"
+        model_name = "codex-cli"
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def grade(self, **kwargs: object) -> GradeSuggestionOutput:
+            raise RuntimeError(
+                "Codex CLI image input is not supported by this installed version."
+            )
+
+    monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    monkeypatch.setenv("CODEX_CLI_IMAGE_INPUT_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "packages.brain.adapter.CodexCliProvider", ImageUnsupportedCodexCliProvider
+    )
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    response = client.post(f"/answer-regions/{region['id']}/grade")
+
+    assert response.status_code == 502
+    assert "image input is not supported" in response.text
+    db_session.expire_all()
+    job = db_session.scalars(select(GradingJob)).one()
+    assert job.status == "failed"
+    assert job.error is not None
+    assert "image input is not supported" in job.error
 

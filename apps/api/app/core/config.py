@@ -26,6 +26,25 @@ class Settings(BaseSettings):
         default=False, alias="OPENAI_IMAGE_INPUT_ENABLED"
     )
     openai_timeout_seconds: float = Field(default=30.0, alias="OPENAI_TIMEOUT_SECONDS")
+    codex_cli_command: str = Field(default="codex", alias="CODEX_CLI_COMMAND")
+    codex_cli_model: str = Field(default="", alias="CODEX_CLI_MODEL")
+    codex_cli_timeout_seconds: float = Field(
+        default=300.0, alias="CODEX_CLI_TIMEOUT_SECONDS"
+    )
+    codex_cli_sandbox: str = Field(default="read-only", alias="CODEX_CLI_SANDBOX")
+    codex_cli_approval_policy: str = Field(
+        default="never", alias="CODEX_CLI_APPROVAL_POLICY"
+    )
+    codex_cli_use_json: bool = Field(default=True, alias="CODEX_CLI_USE_JSON")
+    codex_cli_output_last_message: bool = Field(
+        default=True, alias="CODEX_CLI_OUTPUT_LAST_MESSAGE"
+    )
+    codex_cli_image_input_enabled: bool = Field(
+        default=False, alias="CODEX_CLI_IMAGE_INPUT_ENABLED"
+    )
+    codex_cli_workdir: str = Field(
+        default="/home/newton/teacher-assistant", alias="CODEX_CLI_WORKDIR"
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
