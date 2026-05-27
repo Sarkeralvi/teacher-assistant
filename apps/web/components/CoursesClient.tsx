@@ -5,10 +5,12 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import { createCourse, listCourses, type Course } from "../lib/api";
+import { type DemoTeacher } from "../lib/demoTeacher";
+import { DemoTeacherSelector } from "./DemoTeacherSelector";
 
 export function CoursesClient() {
   const [courses, setCourses] = useState<Course[]>([]);
-  const [teacherId, setTeacherId] = useState("");
+  const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [code, setCode] = useState("");
   const [title, setTitle] = useState("");
   const [department, setDepartment] = useState("");
@@ -35,11 +37,15 @@ export function CoursesClient() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedTeacher) {
+      setError("Select a demo teacher first.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
       await createCourse({
-        teacher_id: Number(teacherId),
+        teacher_id: selectedTeacher.id,
         code,
         title,
         department: department || null,
@@ -63,7 +69,9 @@ export function CoursesClient() {
       </div>
 
       <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5 md:grid-cols-2">
-        <input className={inputClass} placeholder="teacher_id" type="number" value={teacherId} onChange={(event) => setTeacherId(event.target.value)} required />
+        <div className="md:col-span-2">
+          <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
+        </div>
         <input className={inputClass} placeholder="Course code" value={code} onChange={(event) => setCode(event.target.value)} required />
         <input className={inputClass} placeholder="Course title" value={title} onChange={(event) => setTitle(event.target.value)} required />
         <input className={inputClass} placeholder="Department" value={department} onChange={(event) => setDepartment(event.target.value)} />

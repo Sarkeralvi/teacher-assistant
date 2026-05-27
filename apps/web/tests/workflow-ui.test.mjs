@@ -59,6 +59,7 @@ for (const symbol of [
   "getAssessmentReviewQueue",
   "getAssessmentSummary",
   "getAssessmentFinalGradesExportUrl",
+  "deleteSubmission",
   "AssessmentSummary",
   "GradeSuggestion",
   "FinalGrade",
@@ -74,7 +75,9 @@ if (!dashboard.includes("Users / teacher setup") || !dashboard.includes("Courses
   throw new Error("Dashboard must link to users and courses workflow pages");
 }
 
+const demoTeacherSelector = readFileSync(join(root, "components/DemoTeacherSelector.tsx"), "utf8");
 const assessmentDetail = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
+const assessmentDetailUi = assessmentDetail + demoTeacherSelector;
 for (const text of [
   "Upload submission",
   "student_identifier",
@@ -95,13 +98,18 @@ for (const text of [
   "Finalize as approved",
   "Finalize as edited",
   "Finalize as rejected",
+  "Select a demo teacher first.",
+  "Current demo teacher",
+  "Delete this submission? This is for demo cleanup only.",
+  "Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.",
 ]) {
-  if (!assessmentDetail.includes(text)) {
+  if (!assessmentDetailUi.includes(text)) {
     throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);
   }
 }
 
 const assessmentReview = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
+const assessmentReviewUi = assessmentReview + demoTeacherSelector;
 for (const text of [
   "Teacher review and final grade approval",
   "AI GradeSuggestions are suggestions only",
@@ -126,8 +134,11 @@ for (const text of [
   "rejectGradeSuggestion",
   "getAssessmentSummary",
   "getAssessmentFinalGradesExportUrl",
+  "Select a demo teacher first.",
+  "Current demo teacher",
+  "Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.",
 ]) {
-  if (!assessmentReview.includes(text)) {
+  if (!assessmentReviewUi.includes(text)) {
     throw new Error(`Assessment review page must include teacher-review UI marker: ${text}`);
   }
 }
@@ -147,6 +158,24 @@ for (const text of [
   if (!questionDetail.includes(text)) {
     throw new Error(`Question detail must include rubric editor UI marker: ${text}`);
   }
+}
+
+const usersClient = readFileSync(join(root, "components/UsersClient.tsx"), "utf8") + demoTeacherSelector;
+for (const text of ["Set as current demo teacher", "Current demo teacher", "localStorage"]) {
+  if (!usersClient.includes(text)) {
+    throw new Error(`Users page must include demo teacher selector marker: ${text}`);
+  }
+}
+
+const coursesClient = readFileSync(join(root, "components/CoursesClient.tsx"), "utf8") + demoTeacherSelector;
+for (const text of ["Select a demo teacher first.", "Current demo teacher"]) {
+  if (!coursesClient.includes(text)) {
+    throw new Error(`Courses page must use selected demo teacher marker: ${text}`);
+  }
+}
+
+if (/fetch\([^)]*(openai|codex|llm|chat\/completions)/i.test(assessmentDetail + assessmentReview)) {
+  throw new Error("Frontend must not make direct LLM/Codex provider calls");
 }
 
 console.log("frontend workflow static checks passed");

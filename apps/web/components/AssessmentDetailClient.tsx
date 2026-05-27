@@ -7,6 +7,7 @@ import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from ".
 import {
   createAnswerRegion,
   createQuestion,
+  deleteSubmission,
   finalizeGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
@@ -24,9 +25,10 @@ import {
   type ReviewQueueItem,
   type Submission,
 } from "../lib/api";
+import { type DemoTeacher } from "../lib/demoTeacher";
+import { DemoTeacherSelector } from "./DemoTeacherSelector";
 
 type FinalizeDraft = {
-  teacherId: string;
   finalScore: string;
   teacherComment: string;
 };
@@ -51,6 +53,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionWidth, setRegionWidth] = useState("100");
   const [regionHeight, setRegionHeight] = useState("100");
   const [finalizeDrafts, setFinalizeDrafts] = useState<Record<number, FinalizeDraft>>({});
+  const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -181,9 +184,26 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleDeleteSubmission(submissionId: number) {
+    if (!window.confirm("Delete this submission? This is for demo cleanup only.")) {
+      return;
+    }
+    setError(null);
+    try {
+      await deleteSubmission(assessmentId, submissionId);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete submission");
+    }
+  }
+
   async function handleFinalize(item: ReviewQueueItem, approvalStatus: "approved" | "edited" | "rejected") {
     if (!item.latest_grade_suggestion) {
       setError("Create a mock grade suggestion before finalizing");
+      return;
+    }
+    if (!selectedTeacher) {
+      setError("Select a demo teacher first.");
       return;
     }
     const draft = finalizeDrafts[item.answer_region.id] ?? defaultFinalizeDraft(item);
@@ -191,7 +211,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setError(null);
     try {
       await finalizeGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: Number(draft.teacherId),
+        teacher_id: selectedTeacher.id,
         final_score: draft.finalScore,
         teacher_comment: draft.teacherComment || null,
         approval_status: approvalStatus,
@@ -208,7 +228,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setFinalizeDrafts((current) => ({
       ...current,
       [answerRegionId]: {
-        ...(current[answerRegionId] ?? { teacherId: "1", finalScore: "0.00", teacherComment: "" }),
+        ...(current[answerRegionId] ?? { finalScore: "0.00", teacherComment: "" }),
         ...patch,
       },
     }));
@@ -225,6 +245,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p className="mt-2 text-slate-400">{assessment.assessment_type} · {assessment.total_marks} marks · {assessment.status}</p>
         </section>
       ) : null}
+
+      <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
 
       <form onSubmit={handleUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
@@ -247,6 +269,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             <article key={submission.id} className="rounded border border-slate-800 p-4">
               <h3 className="font-semibold">Submission #{submission.id} · {submission.student_identifier}</h3>
               <p className="text-sm text-slate-400">{submission.student_name || "Unnamed student"} · {submission.status}</p>
+              <button
+                className="mt-3 rounded border border-red-800 px-3 py-2 text-sm text-red-200 hover:border-red-600"
+                type="button"
+                onClick={() => void handleDeleteSubmission(submission.id)}
+              >
+                Delete submission
+              </button>
               <p className="mt-2 text-sm font-medium">Pages</p>
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 {submission.pages.map((page) => (
@@ -316,6 +345,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <h2 className="text-xl font-semibold">Teacher review queue</h2>
           <p className="text-sm text-amber-200">MOCK grading only. Teacher review is required before any FinalGrade is created.</p>
+          <p className="text-sm text-slate-300">Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.</p>
+          {!selectedTeacher ? <p className="text-sm text-amber-200">Select a demo teacher first.</p> : null}
         </div>
         {!loading && reviewQueue.length === 0 ? <EmptyState message="No mapped answer regions to review yet." /> : null}
         <div className="grid gap-4">
@@ -423,8 +454,7 @@ function ReviewQueueCard({
           {finalGrade ? (
             <p className="text-sm text-emerald-300">Current final grade: {finalGrade.final_score} · {finalGrade.approval_status}</p>
           ) : null}
-          <div className="grid gap-2 md:grid-cols-3">
-            <input className={inputClass} aria-label="Teacher ID" placeholder="teacher_id" value={draft.teacherId} onChange={(event) => onDraftChange({ teacherId: event.target.value })} />
+          <div className="grid gap-2 md:grid-cols-2">
             <input className={inputClass} aria-label="Final score" placeholder="Final score" value={draft.finalScore} onChange={(event) => onDraftChange({ finalScore: event.target.value })} />
             <input className={inputClass} aria-label="Teacher comment" placeholder="Teacher comment" value={draft.teacherComment} onChange={(event) => onDraftChange({ teacherComment: event.target.value })} />
           </div>
@@ -441,7 +471,6 @@ function ReviewQueueCard({
 
 function defaultFinalizeDraft(item: ReviewQueueItem): FinalizeDraft {
   return {
-    teacherId: "1",
     finalScore: String(item.final_grade?.final_score ?? item.latest_grade_suggestion?.score ?? "0.00"),
     teacherComment: item.final_grade?.teacher_comment ?? "",
   };

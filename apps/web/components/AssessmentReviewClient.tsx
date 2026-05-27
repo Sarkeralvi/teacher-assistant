@@ -18,9 +18,10 @@ import {
   type FinalGrade,
   type ReviewQueueItem,
 } from "../lib/api";
+import { type DemoTeacher } from "../lib/demoTeacher";
+import { DemoTeacherSelector } from "./DemoTeacherSelector";
 
 type ReviewDraft = {
-  teacherId: string;
   finalScore: string;
   teacherComment: string;
 };
@@ -30,6 +31,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   const [summary, setSummary] = useState<AssessmentSummary | null>(null);
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
+  const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +64,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     setDrafts((current) => ({
       ...current,
       [answerRegionId]: {
-        ...(current[answerRegionId] ?? { teacherId: "1", finalScore: "0.00", teacherComment: "" }),
+        ...(current[answerRegionId] ?? { finalScore: "0.00", teacherComment: "" }),
         ...patch,
       },
     }));
@@ -73,12 +75,16 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError("No AI GradeSuggestion is available to approve");
       return;
     }
+    if (!selectedTeacher) {
+      setError("Select a demo teacher first.");
+      return;
+    }
     const draft = drafts[item.answer_region.id] ?? defaultDraft(item);
     setSavingRegionId(item.answer_region.id);
     setError(null);
     try {
       await approveGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: Number(draft.teacherId),
+        teacher_id: selectedTeacher.id,
         teacher_comment: draft.teacherComment || null,
       });
       await load();
@@ -94,12 +100,16 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError("No AI GradeSuggestion is available to edit");
       return;
     }
+    if (!selectedTeacher) {
+      setError("Select a demo teacher first.");
+      return;
+    }
     const draft = drafts[item.answer_region.id] ?? defaultDraft(item);
     setSavingRegionId(item.answer_region.id);
     setError(null);
     try {
       await editGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: Number(draft.teacherId),
+        teacher_id: selectedTeacher.id,
         final_score: draft.finalScore,
         teacher_comment: draft.teacherComment || null,
       });
@@ -116,12 +126,16 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError("No AI GradeSuggestion is available to reject");
       return;
     }
+    if (!selectedTeacher) {
+      setError("Select a demo teacher first.");
+      return;
+    }
     const draft = drafts[item.answer_region.id] ?? defaultDraft(item);
     setSavingRegionId(item.answer_region.id);
     setError(null);
     try {
       await rejectGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: Number(draft.teacherId),
+        teacher_id: selectedTeacher.id,
         teacher_comment: draft.teacherComment || null,
       });
       await load();
@@ -144,6 +158,9 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         <p className="mt-2 text-sm text-amber-200">
           AI GradeSuggestions are suggestions only. Teacher review is required before any FinalGrade is used.
         </p>
+        <p className="mt-2 text-sm text-slate-300">
+          Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.
+        </p>
         {assessment ? (
           <p className="mt-2 text-slate-400">
             {assessment.title} · {assessment.total_marks} marks · {assessment.status}
@@ -155,6 +172,9 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           </a>
         </div>
       </section>
+
+      <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
+      {!selectedTeacher ? <p className="rounded border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">Select a demo teacher first.</p> : null}
 
       {summary ? <SummaryPanel summary={summary} /> : null}
 
@@ -274,8 +294,7 @@ function ReviewCard({
       {suggestion ? (
         <section className="grid gap-3 rounded border border-slate-700 p-3">
           <h3 className="font-semibold">Teacher final grade action</h3>
-          <div className="grid gap-2 md:grid-cols-3">
-            <input className={inputClass} aria-label="Teacher ID" placeholder="teacher_id" value={draft.teacherId} onChange={(event) => onDraftChange({ teacherId: event.target.value })} />
+          <div className="grid gap-2 md:grid-cols-2">
             <input className={inputClass} aria-label="Final score" placeholder="Final score" value={draft.finalScore} onChange={(event) => onDraftChange({ finalScore: event.target.value })} />
             <input className={inputClass} aria-label="Teacher comment" placeholder="Teacher comment" value={draft.teacherComment} onChange={(event) => onDraftChange({ teacherComment: event.target.value })} />
           </div>
@@ -292,7 +311,6 @@ function ReviewCard({
 
 function defaultDraft(item: ReviewQueueItem): ReviewDraft {
   return {
-    teacherId: "1",
     finalScore: String(item.final_grade?.final_score ?? item.latest_grade_suggestion?.score ?? "0.00"),
     teacherComment: item.final_grade?.teacher_comment ?? "",
   };

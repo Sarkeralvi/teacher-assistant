@@ -338,3 +338,16 @@ Acceptance criteria: Browser demo is clearer; mock/provider safety is visible; r
 Tests required: Frontend workflow checks, `make test`, `make lint`, frontend build, and clean git status.
 Risks: UI polish could accidentally expand into feature work; keep scope tight and mock-provider-only.
 Status: Pending
+
+TASK-ID: TA-W1-022A
+Title: Fix demo teacher selection and submission cleanup UX
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-022
+Files affected: apps/api/app/api/routes/submissions.py, apps/api/app/services/storage.py, apps/api/tests/test_submission_upload_api.py, apps/web/components/DemoTeacherSelector.tsx, apps/web/lib/demoTeacher.ts, apps/web/lib/api.ts, apps/web/components/UsersClient.tsx, apps/web/components/CoursesClient.tsx, apps/web/components/AssessmentDetailClient.tsx, apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Improve demo usability by selecting a current demo teacher, using that teacher automatically for course creation and review actions, allowing safe cleanup of wrong submissions, and clarifying that browser demo grading stays mock-provider-only.
+Implementation notes: Added localStorage-backed current demo teacher selection on Users, Courses, Assessment, and Review screens. Removed raw teacher_id entry from course creation and final-grade actions. Added assessment-scoped DELETE for submissions with safe related-row cleanup and best-effort storage cleanup that ignores unsafe stored paths. Added frontend delete button with confirmation. Added Codex/mock safety note in assessment and review UI.
+Acceptance criteria: Teacher selection is visible and persistent; missing teacher shows “Select a demo teacher first.”; approve/edit/reject use selected teacher_id automatically; submission delete is assessment-scoped and refreshes the list; mock grading remains browser-demo default; Codex CLI integration is described but not enabled in UI.
+Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; focused backend tests; frontend static tests; `make test`; `make lint`; frontend build; `make down`; `git status --short`.
+Risks: This is still dev-mode identity, not real auth. Submission deletion is hard-delete for demo cleanup and uses safe path handling; future production cleanup should likely move to an authenticated/authorized policy.
+Status: Done

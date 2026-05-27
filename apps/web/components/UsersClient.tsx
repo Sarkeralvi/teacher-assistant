@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import { createUser, listUsers, type User } from "../lib/api";
+import { SetDemoTeacherButton } from "./DemoTeacherSelector";
 
 export function UsersClient() {
   const [users, setUsers] = useState<User[]>([]);
@@ -34,7 +35,8 @@ export function UsersClient() {
     setSubmitting(true);
     setError(null);
     try {
-      await createUser({ name, email, role: "teacher" });
+      const created = await createUser({ name, email, role: "teacher" });
+      window.localStorage.setItem("teacher-assistant.demoTeacherId", String(created.id));
       await loadUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create user");
@@ -77,7 +79,10 @@ export function UsersClient() {
                 <h2 className="text-lg font-semibold">{user.name}</h2>
                 <p className="text-sm text-slate-400">{user.email}</p>
               </div>
-              <code className="rounded bg-slate-950 px-3 py-2 text-cyan-300">teacher_id: {user.id}</code>
+              <div className="flex flex-wrap items-center gap-2">
+                <code className="rounded bg-slate-950 px-3 py-2 text-cyan-300">teacher_id: {user.id}</code>
+                {user.role === "teacher" ? <SetDemoTeacherButton user={user} onSelected={() => void loadUsers()} /> : null}
+              </div>
             </div>
           </article>
         ))}

@@ -287,6 +287,12 @@ export function listSubmissions(assessmentId: number) {
   return apiRequest<Submission[]>(`/assessments/${assessmentId}/submissions`);
 }
 
+export function deleteSubmission(assessmentId: number, submissionId: number) {
+  return apiRequest<void>(`/assessments/${assessmentId}/submissions/${submissionId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getSubmissionPageImageUrl(pageId: number) {
   return `${API_BASE_URL}/submission-pages/${pageId}/image`;
 }

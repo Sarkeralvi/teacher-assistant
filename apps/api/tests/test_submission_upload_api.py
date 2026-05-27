@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import fitz
 import pytest
@@ -70,7 +71,9 @@ def client(
 
 
 def create_assessment(client: TestClient) -> dict[str, object]:
-    user_response = client.post("/users", json={"name": "Teacher", "email": "upload@example.com"})
+    user_response = client.post(
+        "/users", json={"name": "Teacher", "email": f"upload-{uuid4().hex}@example.com"}
+    )
     assert user_response.status_code == 201
     course_response = client.post(
         "/courses",
@@ -180,3 +183,99 @@ def test_upload_validation_errors(client: TestClient, tmp_path: Path) -> None:
     assert unsupported.status_code == 415
 
     assert client.get("/submissions/999999").status_code == 404
+
+
+def test_delete_submission_removes_existing_submission_and_related_rows(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    assessment = create_assessment(client)
+    question_response = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+    )
+    assert question_response.status_code == 201
+    image_path = tmp_path / "delete-me.png"
+    make_png(image_path)
+    with image_path.open("rb") as file_obj:
+        upload_response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload",
+            data={"student_identifier": "S-DEL"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        )
+    assert upload_response.status_code == 201
+    submission = upload_response.json()
+    page_id = submission["pages"][0]["id"]
+    region_response = client.post(
+        f"/submission-pages/{page_id}/answer-regions",
+        json={
+            "question_id": question_response.json()["id"],
+            "x": 1,
+            "y": 2,
+            "width": 20,
+            "height": 20,
+        },
+    )
+    assert region_response.status_code == 201
+
+    response = client.delete(f"/assessments/{assessment['id']}/submissions/{submission['id']}")
+
+    assert response.status_code == 204
+    assert client.get(f"/submissions/{submission['id']}").status_code == 404
+    assert client.get(f"/submission-pages/{page_id}/image").status_code == 404
+    assert db_session.get(Submission, submission["id"]) is None
+    assert db_session.get(SubmissionPage, page_id) is None
+    assert db_session.get(AnswerRegion, region_response.json()["id"]) is None
+
+
+def test_delete_submission_missing_or_wrong_assessment_returns_404(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assessment = create_assessment(client)
+    other_assessment = create_assessment(client)
+    image_path = tmp_path / "wrong-assessment.png"
+    make_png(image_path)
+    with image_path.open("rb") as file_obj:
+        upload_response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload",
+            data={"student_identifier": "S-WRONG"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        )
+    assert upload_response.status_code == 201
+
+    assert client.delete(f"/assessments/{assessment['id']}/submissions/999999").status_code == 404
+    assert (
+        client.delete(
+            f"/assessments/{other_assessment['id']}/submissions/{upload_response.json()['id']}"
+        ).status_code
+        == 404
+    )
+
+
+def test_delete_submission_ignores_unsafe_stored_paths(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    assessment = create_assessment(client)
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("keep me", encoding="utf-8")
+    submission = Submission(
+        assessment_id=assessment["id"],
+        student_identifier="S-TRAVERSAL",
+        status="uploaded",
+    )
+    db_session.add(submission)
+    db_session.flush()
+    page = SubmissionPage(
+        submission_id=submission.id,
+        page_no=1,
+        image_path="../outside.txt",
+    )
+    db_session.add(page)
+    db_session.commit()
+    submission_id = submission.id
+
+    response = client.delete(f"/assessments/{assessment['id']}/submissions/{submission_id}")
+
+    assert response.status_code == 204
+    assert outside_file.read_text(encoding="utf-8") == "keep me"
+    db_session.expire_all()
+    assert db_session.get(Submission, submission_id) is None

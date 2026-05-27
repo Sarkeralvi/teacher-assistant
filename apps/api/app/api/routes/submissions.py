@@ -1,14 +1,21 @@
 from collections.abc import Sequence
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.routes.assessments import get_assessment_or_404
 from app.db.session import get_db
-from app.models import Submission, SubmissionPage
+from app.models import (
+    AnswerRegion,
+    FinalGrade,
+    GradeSuggestion,
+    GradingJob,
+    Submission,
+    SubmissionPage,
+)
 from app.schemas import SubmissionRead
 from app.services.storage import LocalStorage
 from app.services.submission_processing import classify_upload, extract_page_images
@@ -97,6 +104,47 @@ def list_assessment_submissions(assessment_id: int, db: DbSession) -> Sequence[S
     for submission in submissions:
         submission.pages.sort(key=lambda page: page.page_no)
     return submissions
+
+
+@router.delete(
+    "/assessments/{assessment_id}/submissions/{submission_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_assessment_submission(assessment_id: int, submission_id: int, db: DbSession) -> Response:
+    get_assessment_or_404(assessment_id, db)
+    statement = (
+        select(Submission)
+        .options(
+            selectinload(Submission.pages),
+            selectinload(Submission.answer_regions),
+        )
+        .where(Submission.id == submission_id, Submission.assessment_id == assessment_id)
+    )
+    submission = db.scalars(statement).first()
+    if submission is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+
+    answer_region_ids = [region.id for region in submission.answer_regions]
+    relative_paths = [page.image_path for page in submission.pages]
+    relative_paths.extend(region.image_path for region in submission.answer_regions)
+
+    if answer_region_ids:
+        grade_suggestion_ids = db.scalars(
+            select(GradeSuggestion.id).where(GradeSuggestion.answer_region_id.in_(answer_region_ids))
+        ).all()
+        db.execute(delete(FinalGrade).where(FinalGrade.answer_region_id.in_(answer_region_ids)))
+        if grade_suggestion_ids:
+            db.execute(delete(FinalGrade).where(FinalGrade.suggestion_id.in_(grade_suggestion_ids)))
+        db.execute(delete(GradeSuggestion).where(GradeSuggestion.answer_region_id.in_(answer_region_ids)))
+        db.execute(delete(GradingJob).where(GradingJob.answer_region_id.in_(answer_region_ids)))
+        db.execute(delete(AnswerRegion).where(AnswerRegion.id.in_(answer_region_ids)))
+
+    db.execute(delete(SubmissionPage).where(SubmissionPage.submission_id == submission_id))
+    db.execute(delete(Submission).where(Submission.id == submission_id))
+    db.commit()
+
+    LocalStorage().delete_submission_files(submission_id, relative_paths)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/submission-pages/{page_id}/image")
