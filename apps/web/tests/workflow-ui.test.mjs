@@ -209,6 +209,17 @@ for (const text of [
   "editGradeSuggestion(item.latest_grade_suggestion.id, {",
   "rejectGradeSuggestion(item.latest_grade_suggestion.id, {",
   "Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.",
+  "Review item overview",
+  "Status label",
+  "AI/mock score",
+  "Final score if finalized",
+  "Open cropped answer image",
+  "Quick actions",
+  "No items in this filter",
+  "Next: upload submissions → create answer regions → batch mock grade → review → export",
+  "Next item to review",
+  "Needs teacher review",
+  "Mock score",
 ]) {
   if (!assessmentReviewUi.includes(text)) {
     throw new Error(`Assessment review page must include teacher-review UI marker: ${text}`);

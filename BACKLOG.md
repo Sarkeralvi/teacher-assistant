@@ -403,3 +403,16 @@ Acceptance criteria: Batch mock grading handles multiple ungraded answer regions
 Tests required: git status; make up; alembic upgrade; make health; focused backend batch tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
 Risks: Batch runs synchronously and intentionally avoids a larger async worker system; frontend filter is client-side only; real-provider batch grading remains disabled/deferred.
 Status: Done
+
+TASK-ID: TA-W1-025
+Title: Batch review UX polish and status clarity
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-024
+Files affected: apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Improve review queue usability for multiple submissions after batch mock grading while keeping grading mock-only.
+Implementation notes: Added clearer review item overview cards with visible status labels, student/question/status/AI mock score/final score fields, cropped answer image link, next-item navigation, batch workflow helper text, clearer empty-filter state, and quick actions wording for approve/edit/reject.
+Acceptance criteria: Review queue items are easier to scan; status labels are visually/textually distinct; batch workflow helper and empty-filter message exist; export remains visible; logged-in teacher requirement remains clear; UI remains mock-only with no real Codex batch grading, student portal, payment, or advanced UI expansion.
+Tests required: git status; make up; alembic upgrade; make health; frontend static tests; make test; make lint; frontend build; make down; final git status.
+Risks: Verification remains mostly static plus manual smoke; no backend changes expected.
+Status: Done

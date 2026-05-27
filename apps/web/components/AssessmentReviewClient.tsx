@@ -216,21 +216,31 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       {batchResult ? <BatchResultPanel result={batchResult} /> : null}
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
-        <label className="grid gap-2 text-sm md:max-w-xs">
-          Review queue filter
-          <select className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as ReviewStatusFilter)}>
-            <option value="all">All statuses ({statusCounts.all})</option>
-            <option value="ungraded">ungraded ({statusCounts.ungraded})</option>
-            <option value="suggested">suggested ({statusCounts.suggested})</option>
-            <option value="finalized">finalized ({statusCounts.finalized})</option>
-            <option value="approved">approved ({statusCounts.approved})</option>
-            <option value="edited">edited ({statusCounts.edited})</option>
-            <option value="rejected">rejected ({statusCounts.rejected})</option>
-          </select>
-        </label>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <label className="grid gap-2 text-sm md:max-w-xs">
+            Review queue filter
+            <select className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as ReviewStatusFilter)}>
+              <option value="all">All statuses ({statusCounts.all})</option>
+              <option value="ungraded">ungraded ({statusCounts.ungraded})</option>
+              <option value="suggested">suggested ({statusCounts.suggested})</option>
+              <option value="finalized">finalized ({statusCounts.finalized})</option>
+              <option value="approved">approved ({statusCounts.approved})</option>
+              <option value="edited">edited ({statusCounts.edited})</option>
+              <option value="rejected">rejected ({statusCounts.rejected})</option>
+            </select>
+          </label>
+          {filteredItems[0] ? (
+            <a className={buttonClass} href={`#review-item-${filteredItems[0].answer_region.id}`}>
+              Next item to review
+            </a>
+          ) : null}
+        </div>
+        <p className="mt-3 text-sm text-slate-400">
+          Next: upload submissions → create answer regions → batch mock grade → review → export
+        </p>
       </section>
 
-      {!loading && filteredItems.length === 0 ? <EmptyState message="No answer regions match this review filter." /> : null}
+      {!loading && filteredItems.length === 0 ? <EmptyState message="No items in this filter" /> : null}
       <div className="grid gap-4">
         {filteredItems.map((item) => (
           <ReviewCard
@@ -325,19 +335,37 @@ function ReviewCard({
   const suggestion = item.latest_grade_suggestion;
   const finalGrade: FinalGrade | null = item.final_grade;
   const rubricBreakdown = suggestion?.raw_response_json.rubric_breakdown ?? [];
+  const status = getDisplayStatus(item);
+  const scoreText = suggestion ? `${suggestion.score ?? "—"} / ${suggestion.max_score}` : "—";
+  const finalScoreText = finalGrade ? String(finalGrade.final_score) : "—";
   return (
-    <article className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+    <article id={`review-item-${item.answer_region.id}`} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Review item overview</p>
+          <h2 className="mt-1 text-xl font-semibold">
             Submission {item.submission.student_identifier} · Question {item.question.question_no}
           </h2>
           <p className="text-sm text-slate-400">{item.submission.student_name || "Unnamed student"}</p>
-          <p className="text-sm text-slate-400">Review status: {item.review_status}</p>
         </div>
-        <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
-          Open answer region image
+        <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${status.className}`}>
+          Status label: {status.label}
+        </span>
+      </div>
+
+      <div className="grid gap-3 rounded border border-slate-800 p-3 text-sm md:grid-cols-5">
+        <SummaryMetric label="student_identifier" value={item.submission.student_identifier} />
+        <SummaryMetric label="question number" value={item.question.question_no} />
+        <SummaryMetric label="review status" value={status.label} />
+        <SummaryMetric label="AI/mock score" value={scoreText} />
+        <SummaryMetric label="Final score if finalized" value={finalScoreText} />
+      </div>
+
+      <div className="flex flex-wrap gap-3 text-sm">
+        <a className="text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
+          Open cropped answer image (answer region image)
         </a>
+        <span className="text-slate-400">Answer region #{item.answer_region.id}</span>
       </div>
 
       <img className="max-h-80 rounded border border-slate-700 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Answer region ${item.answer_region.id}`} />
@@ -346,8 +374,8 @@ function ReviewCard({
       {suggestion ? (
         <section className="grid gap-3 rounded border border-amber-800 bg-amber-950/20 p-3">
           <h3 className="font-semibold text-amber-200">AI suggested score — not final</h3>
-          <p className="text-sm">AI suggested score/max_score: {suggestion.score} / {suggestion.max_score}</p>
-          <p className="text-sm">confidence: {suggestion.confidence} · needs_review: {String(suggestion.needs_review)}</p>
+          <p className="text-sm">Mock score: {suggestion.score} / {suggestion.max_score}</p>
+          <p className="text-sm">confidence: {suggestion.confidence} · needs_review: {String(suggestion.needs_review)} · Needs teacher review</p>
           <p className="text-sm">feedback: {suggestion.feedback}</p>
           <p className="text-sm">review_flags: {(suggestion.raw_response_json.review_flags ?? []).join(", ")}</p>
           <div>
@@ -374,7 +402,7 @@ function ReviewCard({
 
       {suggestion ? (
         <section className="grid gap-3 rounded border border-slate-700 p-3">
-          <h3 className="font-semibold">Teacher final grade action</h3>
+          <h3 className="font-semibold">Quick actions</h3>
           <div className="grid gap-2 md:grid-cols-2">
             <input className={inputClass} aria-label="Final score" placeholder="Final score" value={draft.finalScore} onChange={(event) => onDraftChange({ finalScore: event.target.value })} />
             <input className={inputClass} aria-label="Teacher comment" placeholder="Teacher comment" value={draft.teacherComment} onChange={(event) => onDraftChange({ teacherComment: event.target.value })} />
@@ -398,6 +426,25 @@ function itemMatchesStatusFilter(item: ReviewQueueItem, statusFilter: ReviewStat
     return item.final_grade?.approval_status === statusFilter;
   }
   return item.review_status === statusFilter;
+}
+
+function getDisplayStatus(item: ReviewQueueItem) {
+  if (item.final_grade?.approval_status === "approved") {
+    return { label: "Approved", className: "border-emerald-700 bg-emerald-950/40 text-emerald-200" };
+  }
+  if (item.final_grade?.approval_status === "edited") {
+    return { label: "Edited", className: "border-blue-700 bg-blue-950/40 text-blue-200" };
+  }
+  if (item.final_grade?.approval_status === "rejected") {
+    return { label: "Rejected", className: "border-red-700 bg-red-950/40 text-red-200" };
+  }
+  if (item.review_status === "suggested") {
+    return { label: "Suggested", className: "border-amber-700 bg-amber-950/40 text-amber-200" };
+  }
+  if (item.review_status === "finalized") {
+    return { label: "Finalized", className: "border-emerald-700 bg-emerald-950/40 text-emerald-200" };
+  }
+  return { label: "Ungraded", className: "border-slate-700 bg-slate-950/40 text-slate-300" };
 }
 
 function getStatusCounts(items: ReviewQueueItem[]) {
