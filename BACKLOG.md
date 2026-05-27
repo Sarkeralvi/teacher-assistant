@@ -416,3 +416,17 @@ Acceptance criteria: Review queue items are easier to scan; status labels are vi
 Tests required: git status; make up; alembic upgrade; make health; frontend static tests; make test; make lint; frontend build; make down; final git status.
 Risks: Verification remains mostly static plus manual smoke; no backend changes expected.
 Status: Done
+
+TASK-ID: TA-W1-026
+Title: Human browser demo acceptance checklist
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-025
+Files affected: docs/HUMAN_DEMO_ACCEPTANCE_CHECKLIST.md, BACKLOG.md
+Goal: Provide a structured human-founder browser checklist for deciding whether the current app is internally demo-ready and ready for one trusted teacher.
+Implementation notes: Added a documentation-only checklist covering login/register through XLSX export, pass/fail checkboxes, screenshots to capture on failure, demo data examples, known limitations, stop conditions, and final decision prompts.
+Acceptance criteria: Checklist includes exact browser flow, pass/fail markers, failure screenshot guidance, known limitations, demo data, stop conditions, and final decision section. No product code changed, no real Codex grading run, and no TA-W1-027 work started.
+Tests required: git status; make test; make lint; final git status.
+Risks: Checklist quality still depends on a human running the browser flow and recording the result.
+Next task suggestion: If the checklist finds blockers, do TA-W1-027A: fix acceptance blockers. If it passes, do TA-W1-027B: prepare teacher pilot script.
+Status: Done
