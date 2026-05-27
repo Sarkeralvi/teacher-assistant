@@ -351,3 +351,16 @@ Acceptance criteria: Teacher selection is visible and persistent; missing teache
 Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; focused backend tests; frontend static tests; `make test`; `make lint`; frontend build; `make down`; `git status --short`.
 Risks: This is still dev-mode identity, not real auth. Submission deletion is hard-delete for demo cleanup and uses safe path handling; future production cleanup should likely move to an authenticated/authorized policy.
 Status: Done
+
+TASK-ID: TA-W1-022B
+Title: Fix submission upload file selection UX
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-022A
+Files affected: apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/workflow-ui.test.mjs, apps/api/tests/test_submission_upload_api.py, BACKLOG.md
+Goal: Fix the assessment-page upload bug where a selected JPG could still leave the UI in the “Choose a PDF or image file before uploading” state and no submission appeared.
+Implementation notes: Upload submit now falls back to the form file input if React state has not caught up, file selection clears the stale missing-file error, accepted extensions explicitly include .jpg/.jpeg, the selected file name is displayed, and the upload button is disabled until both student_identifier and file are present. Successful upload clears the form/file/error state and refreshes submissions. Added a no-question guidance note under Answer regions without blocking uploads.
+Acceptance criteria: JPG/JPEG/PNG/PDF are accepted; selecting a valid file clears the missing-file error; upload shows loading state and backend errors clearly; successful upload creates exactly one submission and shows the page link; no real Codex/auth/batch/student/payment work added.
+Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; focused JPG upload tests; frontend static tests; `make test`; `make lint`; frontend build; `make down`; `git status --short`.
+Risks: This remains a lightweight static/frontend verification rather than a browser automation test; a future Playwright/Vitest setup would give stronger coverage for DOM event timing.
+Status: Done

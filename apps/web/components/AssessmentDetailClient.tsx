@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
@@ -34,6 +34,7 @@ type FinalizeDraft = {
 };
 
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
+  const uploadFormRef = useRef<HTMLFormElement | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -63,6 +64,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [error, setError] = useState<string | null>(null);
 
   const pages = submissions.flatMap((submission) => submission.pages);
+  const selectedUploadFileName = submissionFile?.name ?? "";
 
   async function load() {
     setLoading(true);
@@ -121,9 +123,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  function handleSubmissionFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    setSubmissionFile(file);
+    if (file || error === "Choose a PDF or image file before uploading") {
+      setError(null);
+    }
+  }
+
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!submissionFile) {
+    const selectedFile =
+      submissionFile ??
+      ((new FormData(event.currentTarget).get("file") as File | null) ?? null);
+    if (!selectedFile || selectedFile.size === 0) {
       setError("Choose a PDF or image file before uploading");
       return;
     }
@@ -131,17 +144,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setError(null);
     try {
       await uploadSubmission(assessmentId, {
-        student_identifier: studentIdentifier,
-        student_name: studentName,
-        file: submissionFile,
+        student_identifier: studentIdentifier.trim(),
+        student_name: studentName.trim(),
+        file: selectedFile,
       });
       setStudentIdentifier("");
       setStudentName("");
       setSubmissionFile(null);
-      event.currentTarget.reset();
+      uploadFormRef.current?.reset();
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to upload submission");
+      setError(err instanceof Error ? `Upload failed: ${err.message}` : "Upload failed");
     } finally {
       setUploading(false);
     }
@@ -248,16 +261,26 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
 
-      <form onSubmit={handleUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+      <form ref={uploadFormRef} onSubmit={handleUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
           <h2 className="text-xl font-semibold">Upload submission</h2>
           <p className="text-sm text-slate-400">Accepts PDF, PNG, JPG, or JPEG. This only stores pages; it does not grade or OCR.</p>
         </div>
         <input className={inputClass} name="student_identifier" placeholder="student_identifier" value={studentIdentifier} onChange={(event) => setStudentIdentifier(event.target.value)} required />
         <input className={inputClass} placeholder="Student name (optional)" value={studentName} onChange={(event) => setStudentName(event.target.value)} />
-        <input className={inputClass} type="file" accept="application/pdf,image/png,image/jpeg" onChange={(event) => setSubmissionFile(event.target.files?.[0] ?? null)} required />
-        <button className={buttonClass} disabled={uploading} type="submit">
-          {uploading ? "Uploading..." : "Upload submission"}
+        <input
+          className={inputClass}
+          name="file"
+          type="file"
+          accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+          onChange={handleSubmissionFileChange}
+          required
+        />
+        {selectedUploadFileName ? (
+          <p className="text-sm text-emerald-300">Selected file: {selectedUploadFileName}</p>
+        ) : null}
+        <button className={buttonClass} disabled={uploading || !studentIdentifier.trim() || !submissionFile} type="submit">
+          {uploading ? "Uploading submission..." : "Upload submission"}
         </button>
       </form>
 
@@ -295,6 +318,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <h2 className="text-xl font-semibold">Answer regions</h2>
           <p className="text-sm text-slate-400">Manually map a question to a rectangular crop on an uploaded page. No OCR or automatic detection is run.</p>
         </div>
+        {!loading && questions.length === 0 ? (
+          <p className="text-sm text-amber-200">Create a question before mapping answer regions.</p>
+        ) : null}
         <label className="grid gap-2 text-sm">
           Select page
           <select className={inputClass} value={selectedPageId} onChange={(event) => setSelectedPageId(event.target.value)} required>

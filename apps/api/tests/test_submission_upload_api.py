@@ -92,6 +92,10 @@ def make_png(path: Path) -> None:
     Image.new("RGB", (32, 24), color="white").save(path, format="PNG")
 
 
+def make_jpeg(path: Path) -> None:
+    Image.new("RGB", (32, 24), color="white").save(path, format="JPEG")
+
+
 def make_pdf(path: Path, pages: int = 2) -> None:
     doc = fitz.open()
     for page_no in range(1, pages + 1):
@@ -138,6 +142,28 @@ def test_upload_image_creates_submission_and_one_page(client: TestClient, tmp_pa
     listed = client.get(f"/assessments/{assessment['id']}/submissions")
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()] == [submission["id"]]
+
+
+def test_upload_jpg_and_jpeg_images_create_single_page(client: TestClient, tmp_path: Path) -> None:
+    assessment = create_assessment(client)
+    for suffix, student_identifier in (("jpg", "S-JPG"), ("jpeg", "S-JPEG")):
+        image_path = tmp_path / f"answer.{suffix}"
+        make_jpeg(image_path)
+
+        with image_path.open("rb") as file_obj:
+            response = client.post(
+                f"/assessments/{assessment['id']}/submissions/upload",
+                data={"student_identifier": student_identifier},
+                files={"file": (f"answer.{suffix}", file_obj, "image/jpeg")},
+            )
+
+        assert response.status_code == 201
+        submission = response.json()
+        assert submission["student_identifier"] == student_identifier
+        assert len(submission["pages"]) == 1
+        page_response = client.get(f"/submission-pages/{submission['pages'][0]['id']}/image")
+        assert page_response.status_code == 200
+        assert page_response.headers["content-type"] == "image/png"
 
 
 def test_upload_pdf_extracts_page_images(client: TestClient, tmp_path: Path) -> None:
