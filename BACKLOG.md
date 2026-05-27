@@ -337,7 +337,7 @@ Implementation notes: Keep the work frontend/demo-focused. Improve clarity of na
 Acceptance criteria: Browser demo is clearer; mock/provider safety is visible; review/export path is easier to follow; existing tests/lint/build pass.
 Tests required: Frontend workflow checks, `make test`, `make lint`, frontend build, and clean git status.
 Risks: UI polish could accidentally expand into feature work; keep scope tight and mock-provider-only.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W1-022A
 Title: Fix demo teacher selection and submission cleanup UX
@@ -363,4 +363,30 @@ Implementation notes: Upload submit now falls back to the form file input if Rea
 Acceptance criteria: JPG/JPEG/PNG/PDF are accepted; selecting a valid file clears the missing-file error; upload shows loading state and backend errors clearly; successful upload creates exactly one submission and shows the page link; no real Codex/auth/batch/student/payment work added.
 Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; focused JPG upload tests; frontend static tests; `make test`; `make lint`; frontend build; `make down`; `git status --short`.
 Risks: This remains a lightweight static/frontend verification rather than a browser automation test; a future Playwright/Vitest setup would give stronger coverage for DOM event timing.
+Status: Done
+
+TASK-ID: TA-W1-022C
+Title: Add visible assessment export navigation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-022B
+Files affected: apps/web/components/AssessmentDetailClient.tsx, apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs
+Goal: Make the review/export path obvious from the assessment detail page.
+Implementation notes: Added Review & export final grades link, direct Download final grades (.xlsx) link, review-page summary export button, and no-final-grades helper text.
+Acceptance criteria: Assessment detail and review pages expose visible XLSX export navigation; backend export remains unchanged; no auth/student/batch/real Codex work added.
+Tests required: frontend static tests, make test, make lint, frontend build.
+Risks: Static verification only; no full browser click automation.
+Status: Done
+
+TASK-ID: TA-W1-023
+Title: Basic auth and teacher identity foundation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-022C
+Files affected: apps/api/app/api/routes/auth.py, apps/api/app/core/auth.py, apps/api/app/api/routes/courses.py, apps/api/app/api/routes/final_grades.py, apps/api/app/core/config.py, apps/api/app/main.py, apps/api/app/schemas.py, apps/api/tests/test_auth_api.py, apps/api/tests/test_final_grade_review_api.py, apps/web/app/login/page.tsx, apps/web/app/register/page.tsx, apps/web/components/AppShell.tsx, apps/web/components/CoursesClient.tsx, apps/web/components/AssessmentReviewClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, .env.example, BACKLOG.md
+Goal: Replace primary dev-mode teacher identity dependence with basic teacher register/login/session flow while keeping scope tight.
+Implementation notes: Added PBKDF2 password hashing, simple HS256 JWT token creation/validation using JWT_SECRET_KEY, /auth/register, /auth/login, /auth/me, and frontend-only compatible /auth/logout. Course creation can use authenticated teacher without teacher_id while preserving legacy dev teacher_id path. Final-grade approve/edit/reject use authenticated teacher when a bearer token is present while preserving legacy teacher_id fallback for existing tests/dev paths. Frontend adds login/register pages, localStorage dev-only token storage, current teacher header display, logout, auth-aware course creation, and auth-aware review actions.
+Acceptance criteria: Password hashes are not exposed; login/me work; course creation and review actions use logged-in teacher in the primary frontend flow; missing/invalid tokens return 401 on auth-aware paths; no student portal/OAuth/payment/batch/real Codex work added.
+Tests required: git status; make up; alembic upgrade; make health; focused auth/review tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
+Risks: Token storage is localStorage and explicitly dev-only; broad backend endpoint protection is intentionally deferred; legacy public/dev endpoints remain for compatibility.
 Status: Done

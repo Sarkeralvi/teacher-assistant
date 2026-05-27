@@ -6,11 +6,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user_optional
 from app.db.session import get_db
 from app.models import Course, User
 from app.schemas import CourseCreate, CourseRead, CourseUpdate
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUserOptional = Annotated[User | None, Depends(get_current_user_optional)]
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
@@ -21,9 +23,17 @@ def ensure_teacher_exists(db: Session, teacher_id: int) -> None:
 
 
 @router.post("", response_model=CourseRead, status_code=status.HTTP_201_CREATED)
-def create_course(payload: CourseCreate, db: DbSession) -> Course:
-    ensure_teacher_exists(db, payload.teacher_id)
-    course = Course(**payload.model_dump())
+def create_course(
+    payload: CourseCreate, db: DbSession, current_user: CurrentUserOptional
+) -> Course:
+    teacher_id = current_user.id if current_user is not None else payload.teacher_id
+    if teacher_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Login required to create a course without teacher_id",
+        )
+    ensure_teacher_exists(db, teacher_id)
+    course = Course(**payload.model_dump(exclude={"teacher_id"}), teacher_id=teacher_id)
     db.add(course)
     db.commit()
     db.refresh(course)

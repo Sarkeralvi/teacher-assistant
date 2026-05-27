@@ -24,8 +24,26 @@ class UserRead(ORMBase):
     updated_at: datetime
 
 
+class AuthRegister(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=255)
+    role: Literal["teacher", "admin"] = "teacher"
+
+
+class AuthLogin(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=255)
+
+
+class AuthToken(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserRead
+
+
 class CourseCreate(BaseModel):
-    teacher_id: int
+    teacher_id: int | None = None
     code: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=255)
     department: str | None = Field(default=None, max_length=255)
@@ -283,25 +301,25 @@ class GradeAnswerRegionResponse(BaseModel):
 
 
 class FinalGradeCreate(BaseModel):
-    teacher_id: int
+    teacher_id: int | None = None
     final_score: Decimal = Field(ge=0)
     teacher_comment: str | None = None
     approval_status: Literal["approved", "edited", "rejected"]
 
 
 class FinalGradeApprove(BaseModel):
-    teacher_id: int
+    teacher_id: int | None = None
     teacher_comment: str | None = None
 
 
 class FinalGradeEdit(BaseModel):
-    teacher_id: int
+    teacher_id: int | None = None
     final_score: Decimal = Field(ge=0)
     teacher_comment: str | None = None
 
 
 class FinalGradeReject(BaseModel):
-    teacher_id: int
+    teacher_id: int | None = None
     teacher_comment: str | None = None
 
 

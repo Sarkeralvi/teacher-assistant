@@ -1,8 +1,33 @@
-import Link from "next/link";
+"use client";
 
-import { API_BASE_URL } from "../lib/api";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+
+import { API_BASE_URL, getCurrentUser, logout, type User } from "../lib/api";
 
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  async function loadCurrentUser() {
+    try {
+      setCurrentUser(await getCurrentUser());
+    } catch {
+      setCurrentUser(null);
+    }
+  }
+
+  useEffect(() => {
+    void loadCurrentUser();
+    window.addEventListener("auth-changed", loadCurrentUser);
+    return () => window.removeEventListener("auth-changed", loadCurrentUser);
+  }, []);
+
+  async function handleLogout() {
+    await logout();
+    setCurrentUser(null);
+    window.dispatchEvent(new Event("auth-changed"));
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/80">
@@ -12,6 +37,11 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
               Teacher Assistant
             </Link>
             <p className="text-sm text-slate-400">Backend: {API_BASE_URL}</p>
+            {currentUser ? (
+              <p className="text-sm text-emerald-300">Current teacher: {currentUser.name} ({currentUser.email})</p>
+            ) : (
+              <p className="text-sm text-amber-200">No teacher logged in.</p>
+            )}
           </div>
           <nav className="flex flex-wrap gap-3 text-sm">
             <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/dashboard">
@@ -23,6 +53,17 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
             <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/courses">
               Courses
             </Link>
+            <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/login">
+              Login
+            </Link>
+            <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/register">
+              Register
+            </Link>
+            {currentUser ? (
+              <button className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" type="button" onClick={() => void handleLogout()}>
+                Logout
+              </button>
+            ) : null}
           </nav>
         </div>
       </header>

@@ -10,6 +10,29 @@ export type User = {
   updated_at: string;
 };
 
+export type AuthResponse = {
+  access_token: string;
+  token_type: "bearer" | string;
+  user: User;
+};
+
+export const AUTH_TOKEN_STORAGE_KEY = "teacherAssistantAuthToken";
+
+export function getStoredAuthToken() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+}
+
+export function setStoredAuthToken(token: string) {
+  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+}
+
+export function clearStoredAuthToken() {
+  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+}
+
 export type Course = {
   id: number;
   teacher_id: number;
@@ -159,13 +182,21 @@ type RequestOptions = {
   method?: string;
   body?: unknown;
   formData?: FormData;
+  token?: string | null;
 };
 
 async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const hasJsonBody = options.body !== undefined;
+  const headers: Record<string, string> = {};
+  if (hasJsonBody) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: options.method ?? "GET",
-    headers: hasJsonBody ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     body: hasJsonBody ? JSON.stringify(options.body) : options.formData,
     cache: "no-store",
   });
@@ -190,6 +221,8 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
 }
 
 export type UserCreate = Pick<User, "name" | "email"> & { role?: string };
+export type AuthRegister = UserCreate & { password: string };
+export type AuthLogin = Pick<User, "email"> & { password: string };
 export type CourseCreate = Pick<Course, "teacher_id" | "code" | "title"> &
   Partial<Pick<Course, "department" | "semester">>;
 export type CourseUpdate = Partial<CourseCreate>;
@@ -206,12 +239,38 @@ export function createUser(payload: UserCreate) {
   return apiRequest<User>("/users", { method: "POST", body: payload });
 }
 
+export function register(payload: AuthRegister) {
+  return apiRequest<AuthResponse>("/auth/register", { method: "POST", body: payload });
+}
+
+export function login(payload: AuthLogin) {
+  return apiRequest<AuthResponse>("/auth/login", { method: "POST", body: payload });
+}
+
+export function getCurrentUser(token = getStoredAuthToken()) {
+  return apiRequest<User>("/auth/me", { token });
+}
+
+export async function logout() {
+  const token = getStoredAuthToken();
+  clearStoredAuthToken();
+  if (token) {
+    await apiRequest<void>("/auth/logout", { method: "POST", token });
+  }
+}
+
 export function listUsers() {
   return apiRequest<User[]>("/users");
 }
 
 export function createCourse(payload: CourseCreate) {
   return apiRequest<Course>("/courses", { method: "POST", body: payload });
+}
+
+export type AuthenticatedCourseCreate = Omit<CourseCreate, "teacher_id">;
+
+export function createAuthenticatedCourse(payload: AuthenticatedCourseCreate) {
+  return apiRequest<Course>("/courses", { method: "POST", body: payload, token: getStoredAuthToken() });
 }
 
 export function listCourses() {
@@ -325,7 +384,7 @@ export function gradeAnswerRegion(answerRegionId: number) {
 }
 
 export type FinalGradeActionPayload = {
-  teacher_id: number;
+  teacher_id?: number;
   teacher_comment?: string | null;
 };
 
@@ -337,6 +396,7 @@ export function approveGradeSuggestion(gradeSuggestionId: number, payload: Final
   return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/approve`, {
     method: "POST",
     body: payload,
+    token: getStoredAuthToken(),
   });
 }
 
@@ -344,6 +404,7 @@ export function editGradeSuggestion(gradeSuggestionId: number, payload: FinalGra
   return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/edit`, {
     method: "POST",
     body: payload,
+    token: getStoredAuthToken(),
   });
 }
 
@@ -351,6 +412,7 @@ export function rejectGradeSuggestion(gradeSuggestionId: number, payload: FinalG
   return apiRequest<FinalGrade>(`/grade-suggestions/${gradeSuggestionId}/reject`, {
     method: "POST",
     body: payload,
+    token: getStoredAuthToken(),
   });
 }
 

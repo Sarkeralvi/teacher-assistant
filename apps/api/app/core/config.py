@@ -26,6 +26,8 @@ class Settings(BaseSettings):
         default=False, alias="OPENAI_IMAGE_INPUT_ENABLED"
     )
     openai_timeout_seconds: float = Field(default=30.0, alias="OPENAI_TIMEOUT_SECONDS")
+    jwt_secret_key: str = Field(default="dev-only-change-me", alias="JWT_SECRET_KEY")
+    jwt_expire_minutes: int = Field(default=480, alias="JWT_EXPIRE_MINUTES")
     codex_cli_command: str = Field(default="codex", alias="CODEX_CLI_COMMAND")
     codex_cli_model: str = Field(default="", alias="CODEX_CLI_MODEL")
     codex_cli_timeout_seconds: float = Field(

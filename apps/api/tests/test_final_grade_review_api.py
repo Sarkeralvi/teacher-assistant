@@ -171,6 +171,21 @@ def create_extra_region_and_suggestion(
     return {"region": region_response.json(), "suggestion": grade_response.json()["suggestion"]}
 
 
+def auth_header(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def register_auth_teacher(
+    client: TestClient, email: str = "review-auth@example.com"
+) -> dict[str, object]:
+    response = client.post(
+        "/auth/register",
+        json={"name": "Review Auth Teacher", "email": email, "password": "review-password"},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def test_approve_grade_suggestion_creates_final_grade(client: TestClient, tmp_path: Path) -> None:
     data = create_region_and_suggestion(client, tmp_path)
 
@@ -191,6 +206,35 @@ def test_approve_grade_suggestion_creates_final_grade(client: TestClient, tmp_pa
     assert payload["approval_status"] == "approved"
     assert payload["teacher_comment"] == "Approved after review."
     assert "password_hash" not in payload
+
+
+def test_auth_aware_review_actions_use_current_teacher_and_require_valid_token(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    auth = register_auth_teacher(client)
+    suggestion_id = data["suggestion"]["id"]
+
+    missing = client.post(
+        f"/grade-suggestions/{suggestion_id}/approve",
+        json={"teacher_comment": "No token."},
+    )
+    invalid = client.post(
+        f"/grade-suggestions/{suggestion_id}/approve",
+        headers=auth_header("bad-token"),
+        json={"teacher_comment": "Bad token."},
+    )
+    approved = client.post(
+        f"/grade-suggestions/{suggestion_id}/approve",
+        headers=auth_header(str(auth["access_token"])),
+        json={"teacher_comment": "Reviewed as logged-in teacher."},
+    )
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert approved.status_code == 201
+    assert approved.json()["teacher_id"] == auth["user"]["id"]
+    assert approved.json()["teacher_comment"] == "Reviewed as logged-in teacher."
 
 
 def test_edit_grade_suggestion_creates_final_grade_with_teacher_score(

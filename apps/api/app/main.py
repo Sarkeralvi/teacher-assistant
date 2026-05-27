@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.answer_regions import router as answer_regions_router
 from app.api.routes.assessments import router as assessments_router
+from app.api.routes.auth import router as auth_router
 from app.api.routes.courses import router as courses_router
 from app.api.routes.final_grades import router as final_grades_router
 from app.api.routes.grading import router as grading_router
@@ -28,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(courses_router)
 app.include_router(assessments_router)

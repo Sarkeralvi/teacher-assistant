@@ -18,6 +18,8 @@ const requiredFiles = [
   "app/courses/[courseId]/page.tsx",
   "app/assessments/[assessmentId]/page.tsx",
   "app/assessments/[assessmentId]/review/page.tsx",
+  "app/login/page.tsx",
+  "app/register/page.tsx",
   "app/questions/[questionId]/page.tsx",
 ];
 
@@ -60,6 +62,14 @@ for (const symbol of [
   "getAssessmentSummary",
   "getAssessmentFinalGradesExportUrl",
   "deleteSubmission",
+  "logout",
+  "getStoredAuthToken",
+  "setStoredAuthToken",
+  "getCurrentUser",
+  "login",
+  "register",
+  "Authorization",
+  "createAuthenticatedCourse",
   "AssessmentSummary",
   "GradeSuggestion",
   "FinalGrade",
@@ -67,6 +77,27 @@ for (const symbol of [
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
+  }
+}
+
+const appShell = readFileSync(join(root, "components/AppShell.tsx"), "utf8");
+for (const text of ["Current teacher", "Logout", "Login", "Register", "getCurrentUser", "logout"]) {
+  if (!appShell.includes(text)) {
+    throw new Error(`App shell must include auth navigation marker: ${text}`);
+  }
+}
+
+const loginPage = readFileSync(join(root, "app/login/page.tsx"), "utf8");
+for (const text of ["Login", "email", "password", "login(", "setStoredAuthToken", "localStorage", "dev-only"]) {
+  if (!loginPage.includes(text)) {
+    throw new Error(`Login page must include auth marker: ${text}`);
+  }
+}
+
+const registerPage = readFileSync(join(root, "app/register/page.tsx"), "utf8");
+for (const text of ["Register", "name", "email", "password", "register(", "setStoredAuthToken", "localStorage", "dev-only"]) {
+  if (!registerPage.includes(text)) {
+    throw new Error(`Register page must include auth marker: ${text}`);
   }
 }
 
@@ -150,8 +181,13 @@ for (const text of [
   "rejectGradeSuggestion",
   "getAssessmentSummary",
   "getAssessmentFinalGradesExportUrl",
-  "Select a demo teacher first.",
-  "Current demo teacher",
+  "getCurrentUser",
+  "currentUser",
+  "Login to approve or edit final grades",
+  "Logged-in teacher is used for approve/edit/reject.",
+  "approveGradeSuggestion(item.latest_grade_suggestion.id, {",
+  "editGradeSuggestion(item.latest_grade_suggestion.id, {",
+  "rejectGradeSuggestion(item.latest_grade_suggestion.id, {",
   "Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.",
 ]) {
   if (!assessmentReviewUi.includes(text)) {
@@ -184,7 +220,7 @@ for (const text of ["Set as current demo teacher", "Current demo teacher", "loca
 }
 
 const coursesClient = readFileSync(join(root, "components/CoursesClient.tsx"), "utf8") + demoTeacherSelector;
-for (const text of ["Select a demo teacher first.", "Current demo teacher"]) {
+for (const text of ["Login to create courses", "currentUser", "createAuthenticatedCourse", "No raw teacher_id is needed for logged-in teachers."]) {
   if (!coursesClient.includes(text)) {
     throw new Error(`Courses page must use selected demo teacher marker: ${text}`);
   }

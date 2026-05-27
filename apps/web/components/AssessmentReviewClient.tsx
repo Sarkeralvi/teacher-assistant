@@ -12,14 +12,14 @@ import {
   getAssessmentFinalGradesExportUrl,
   getAssessmentReviewQueue,
   getAssessmentSummary,
+  getCurrentUser,
   rejectGradeSuggestion,
   type Assessment,
   type AssessmentSummary,
   type FinalGrade,
   type ReviewQueueItem,
+  type User,
 } from "../lib/api";
-import { type DemoTeacher } from "../lib/demoTeacher";
-import { DemoTeacherSelector } from "./DemoTeacherSelector";
 
 type ReviewDraft = {
   finalScore: string;
@@ -31,7 +31,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   const [summary, setSummary] = useState<AssessmentSummary | null>(null);
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
-  const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,14 +40,16 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, queueData, summaryData] = await Promise.all([
+      const [assessmentData, queueData, summaryData, userData] = await Promise.all([
         getAssessment(assessmentId),
         getAssessmentReviewQueue(assessmentId),
         getAssessmentSummary(assessmentId),
+        getCurrentUser().catch(() => null),
       ]);
       setAssessment(assessmentData);
       setItems(queueData);
       setSummary(summaryData);
+      setCurrentUser(userData);
       setDrafts((current) => mergeDrafts(current, queueData));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load teacher review queue");
@@ -75,8 +77,8 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError("No AI GradeSuggestion is available to approve");
       return;
     }
-    if (!selectedTeacher) {
-      setError("Select a demo teacher first.");
+    if (!currentUser) {
+      setError("Login to approve or edit final grades.");
       return;
     }
     const draft = drafts[item.answer_region.id] ?? defaultDraft(item);
@@ -84,7 +86,6 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     setError(null);
     try {
       await approveGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: selectedTeacher.id,
         teacher_comment: draft.teacherComment || null,
       });
       await load();
@@ -100,8 +101,8 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError("No AI GradeSuggestion is available to edit");
       return;
     }
-    if (!selectedTeacher) {
-      setError("Select a demo teacher first.");
+    if (!currentUser) {
+      setError("Login to approve or edit final grades.");
       return;
     }
     const draft = drafts[item.answer_region.id] ?? defaultDraft(item);
@@ -109,7 +110,6 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     setError(null);
     try {
       await editGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: selectedTeacher.id,
         final_score: draft.finalScore,
         teacher_comment: draft.teacherComment || null,
       });
@@ -126,8 +126,8 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError("No AI GradeSuggestion is available to reject");
       return;
     }
-    if (!selectedTeacher) {
-      setError("Select a demo teacher first.");
+    if (!currentUser) {
+      setError("Login to approve or edit final grades.");
       return;
     }
     const draft = drafts[item.answer_region.id] ?? defaultDraft(item);
@@ -135,7 +135,6 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     setError(null);
     try {
       await rejectGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: selectedTeacher.id,
         teacher_comment: draft.teacherComment || null,
       });
       await load();
@@ -173,8 +172,15 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         </div>
       </section>
 
-      <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
-      {!selectedTeacher ? <p className="rounded border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">Select a demo teacher first.</p> : null}
+      {currentUser ? (
+        <p className="rounded border border-emerald-800 bg-emerald-950/20 p-3 text-sm text-emerald-200">
+          Logged-in teacher is used for approve/edit/reject. {currentUser.name} ({currentUser.email})
+        </p>
+      ) : (
+        <p className="rounded border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">
+          Login to approve or edit final grades. <Link className="underline" href="/login">Go to login</Link>
+        </p>
+      )}
 
       {summary ? <SummaryPanel summary={summary} assessmentId={assessmentId} /> : null}
 
