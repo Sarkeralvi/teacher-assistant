@@ -312,3 +312,29 @@ Acceptance criteria: Runbook exists; `make verify` does not start/stop Docker, r
 Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; `make frontend-health`; `make verify`; `docker compose exec -T frontend npm run build`; restart frontend and recheck health if needed; `make down`; `git status --short`.
 Risks: `make verify` requires already-running services and applied migrations; frontend health can fail immediately after production build until the frontend container is restarted.
 Status: Done
+
+TASK-ID: TA-W1-021
+Title: Week-1 checkpoint report and next-track decision
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-020
+Files affected: docs/WEEK_1_CHECKPOINT.md, BACKLOG.md
+Goal: Record the Week-1 checkpoint, completed capabilities, limitations, verified slice, known issues, verification status, next track options, and selected next track.
+Implementation notes: Documentation/checkpoint only. Selected Demo/UI polish as the next track before auth or batch grading because it improves the already-verified vertical slice with lower architectural risk and no real-provider dependency.
+Acceptance criteria: `docs/WEEK_1_CHECKPOINT.md` exists; BACKLOG marks TA-W1-021 done; TA-W1-022 is present as pending; no product code is changed; tests and lint pass.
+Tests required: `git status --short`; `make test`; `make lint`; `git status --short`.
+Risks: Checkpoint can drift if later work changes capabilities without updating docs.
+Status: Done
+
+TASK-ID: TA-W1-022
+Title: Demo UI polish for Week-1 vertical slice
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-021
+Files affected: apps/web/**, BACKLOG.md, possibly docs/DEMO_RUNBOOK.md
+Goal: Improve the existing mock-provider teacher demo flow without adding auth, real Codex grading, student portal, payment, or batch grading.
+Implementation notes: Keep the work frontend/demo-focused. Improve clarity of navigation, assessment/review screens, mock-provider safety labels, and review/export flow. Do not start real-provider grading or batch workflows.
+Acceptance criteria: Browser demo is clearer; mock/provider safety is visible; review/export path is easier to follow; existing tests/lint/build pass.
+Tests required: Frontend workflow checks, `make test`, `make lint`, frontend build, and clean git status.
+Risks: UI polish could accidentally expand into feature work; keep scope tight and mock-provider-only.
+Status: Pending
