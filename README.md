@@ -22,6 +22,8 @@ make health
 make down
 ```
 
+For a reliable local demo path and troubleshooting notes, see `docs/DEMO_RUNBOOK.md`.
+
 ## Local service URLs
 
 - Frontend: http://localhost:3000

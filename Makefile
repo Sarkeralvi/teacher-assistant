@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: test lint up down health ps frontend-health backend-test frontend-lint
+.PHONY: test lint verify up down health ps frontend-health backend-test frontend-lint
 
 test:
 	cd apps/api && python -m pytest -q
@@ -9,6 +9,12 @@ test:
 lint:
 	cd apps/api && python -m ruff check .
 	cd apps/web && npm run lint
+
+verify:
+	$(MAKE) health
+	$(MAKE) frontend-health
+	$(MAKE) test
+	$(MAKE) lint
 
 up:
 	$(COMPOSE) up -d --build

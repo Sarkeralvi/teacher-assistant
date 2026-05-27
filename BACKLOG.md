@@ -299,3 +299,16 @@ Acceptance criteria: BACKLOG marks TA-W1-019 done; docs/VALIDATION_LOG.md contai
 Tests required: `git status --short`; `make test`; `make lint`; `git status --short`.
 Risks: Documentation may drift if future validation runs are not appended.
 Status: Done
+
+TASK-ID: TA-W1-020
+Title: Demo hardening and developer workflow reliability
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-019A
+Files affected: docs/DEMO_RUNBOOK.md, Makefile, README.md, BACKLOG.md
+Goal: Make the local demo path and verification workflow clearer and safer for developer use.
+Implementation notes: Added a demo runbook covering prerequisites, startup, migrations, health checks, full teacher workflow steps, mock-provider-only warnings, XLSX export verification, shutdown, and known troubleshooting cases. Added a non-destructive `make verify` target that assumes services are already running and runs health, frontend health, tests, and lint. README points to the runbook. No smoke-e2e script was added.
+Acceptance criteria: Runbook exists; `make verify` does not start/stop Docker, reset the DB, run real Codex, or perform cleanup; required Docker, migration, health, verify, frontend build, restart-after-build health, shutdown, and final git status checks pass.
+Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; `make frontend-health`; `make verify`; `docker compose exec -T frontend npm run build`; restart frontend and recheck health if needed; `make down`; `git status --short`.
+Risks: `make verify` requires already-running services and applied migrations; frontend health can fail immediately after production build until the frontend container is restarted.
+Status: Done
