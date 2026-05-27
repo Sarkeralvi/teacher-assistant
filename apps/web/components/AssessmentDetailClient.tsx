@@ -11,6 +11,7 @@ import {
   finalizeGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
+  getAssessmentFinalGradesExportUrl,
   getAssessmentReviewQueue,
   getSubmissionPageImageUrl,
   gradeAnswerRegion,
@@ -256,6 +257,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p className="text-sm text-slate-400">Assessment #{assessment.id}</p>
           <h1 className="text-3xl font-semibold">{assessment.title}</h1>
           <p className="mt-2 text-slate-400">{assessment.assessment_type} · {assessment.total_marks} marks · {assessment.status}</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
+              Review & export final grades
+            </Link>
+            <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
+              Download final grades (.xlsx)
+            </a>
+          </div>
+          {reviewQueue.every((item) => !item.final_grade) ? (
+            <p className="mt-3 text-sm text-slate-400">Approve or edit at least one grade before export is useful.</p>
+          ) : null}
         </section>
       ) : null}
 

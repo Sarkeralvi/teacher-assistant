@@ -176,7 +176,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
       {!selectedTeacher ? <p className="rounded border border-amber-800 bg-amber-950/20 p-3 text-sm text-amber-200">Select a demo teacher first.</p> : null}
 
-      {summary ? <SummaryPanel summary={summary} /> : null}
+      {summary ? <SummaryPanel summary={summary} assessmentId={assessmentId} /> : null}
 
       {!loading && items.length === 0 ? <EmptyState message="No answer regions are ready for review." /> : null}
       <div className="grid gap-4">
@@ -197,10 +197,20 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   );
 }
 
-function SummaryPanel({ summary }: Readonly<{ summary: AssessmentSummary }>) {
+function SummaryPanel({ summary, assessmentId }: Readonly<{ summary: AssessmentSummary; assessmentId: number }>) {
   return (
     <section className="rounded border border-slate-800 bg-slate-900 p-5">
-      <h2 className="text-xl font-semibold">Assessment summary</h2>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">Assessment summary</h2>
+          {summary.total_final_grades === 0 ? (
+            <p className="mt-2 text-sm text-slate-400">Approve or edit at least one grade before export is useful.</p>
+          ) : null}
+        </div>
+        <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
+          Download final grades (.xlsx)
+        </a>
+      </div>
       <div className="mt-3 grid gap-3 md:grid-cols-4">
         <SummaryMetric label="Submissions" value={summary.total_submissions} />
         <SummaryMetric label="Answer regions" value={summary.total_answer_regions} />
