@@ -300,6 +300,16 @@ class GradeAnswerRegionResponse(BaseModel):
     suggestion: GradeSuggestionRead
 
 
+class BatchMockGradeResponse(BaseModel):
+    assessment_id: int
+    total_answer_regions: int
+    graded_count: int
+    skipped_count: int
+    failed_count: int
+    created_grade_suggestion_ids: list[int]
+    errors: list[str]
+
+
 class FinalGradeCreate(BaseModel):
     teacher_id: int | None = None
     final_score: Decimal = Field(ge=0)

@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from app.api.routes.answer_regions import get_answer_region_or_404
 from app.db.session import get_db
 from app.models import GradeSuggestion, GradingJob
-from app.schemas import GradeAnswerRegionResponse, GradeSuggestionRead, GradingJobRead
+from app.schemas import (
+    BatchMockGradeResponse,
+    GradeAnswerRegionResponse,
+    GradeSuggestionRead,
+    GradingJobRead,
+)
 from app.services.grading_service import GradingService
 
 DbSession = Annotated[Session, Depends(get_db)]
@@ -24,6 +29,17 @@ router = APIRouter(tags=["grading"])
 def grade_answer_region(answer_region_id: int, db: DbSession) -> dict[str, object]:
     job, suggestion = GradingService(db).grade_answer_region(answer_region_id)
     return {"job": job, "suggestion": suggestion}
+
+
+@router.post(
+    "/assessments/{assessment_id}/grade-all-mock",
+    response_model=BatchMockGradeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def batch_mock_grade_assessment(assessment_id: int, db: DbSession) -> dict[str, object]:
+    return GradingService(db, use_configured_adapter=False).grade_assessment_ungraded_regions_mock(
+        assessment_id
+    )
 
 
 @router.get(

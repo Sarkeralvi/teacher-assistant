@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
   approveGradeSuggestion,
+  batchMockGradeAssessment,
   editGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
@@ -16,6 +17,7 @@ import {
   rejectGradeSuggestion,
   type Assessment,
   type AssessmentSummary,
+  type BatchMockGradeResponse,
   type FinalGrade,
   type ReviewQueueItem,
   type User,
@@ -26,12 +28,17 @@ type ReviewDraft = {
   teacherComment: string;
 };
 
+type ReviewStatusFilter = "all" | "ungraded" | "suggested" | "finalized" | "approved" | "edited" | "rejected";
+
 export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [summary, setSummary] = useState<AssessmentSummary | null>(null);
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [statusFilter, setStatusFilter] = useState<ReviewStatusFilter>("all");
+  const [batchResult, setBatchResult] = useState<BatchMockGradeResponse | null>(null);
+  const [batchGrading, setBatchGrading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +69,9 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     void load();
   }, [assessmentId]);
 
+  const statusCounts = getStatusCounts(items);
+  const filteredItems = items.filter((item) => itemMatchesStatusFilter(item, statusFilter));
+
   function updateDraft(answerRegionId: number, patch: Partial<ReviewDraft>) {
     setDrafts((current) => ({
       ...current,
@@ -70,6 +80,21 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         ...patch,
       },
     }));
+  }
+
+  async function handleBatchMockGrade() {
+    setBatchGrading(true);
+    setError(null);
+    setBatchResult(null);
+    try {
+      const result = await batchMockGradeAssessment(assessmentId);
+      setBatchResult(result);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to batch mock grade ungraded answers");
+    } finally {
+      setBatchGrading(false);
+    }
   }
 
   async function handleApprove(item: ReviewQueueItem) {
@@ -169,7 +194,11 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
             Export final grades (.xlsx)
           </a>
+          <button className={buttonClass} type="button" disabled={batchGrading} onClick={() => void handleBatchMockGrade()}>
+            {batchGrading ? "Batch mock grading..." : "Batch mock grade ungraded answers"}
+          </button>
         </div>
+        <p className="mt-3 text-sm text-amber-200">Mock grading only. No real Codex calls.</p>
       </section>
 
       {currentUser ? (
@@ -184,9 +213,26 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
 
       {summary ? <SummaryPanel summary={summary} assessmentId={assessmentId} /> : null}
 
-      {!loading && items.length === 0 ? <EmptyState message="No answer regions are ready for review." /> : null}
+      {batchResult ? <BatchResultPanel result={batchResult} /> : null}
+
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <label className="grid gap-2 text-sm md:max-w-xs">
+          Review queue filter
+          <select className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as ReviewStatusFilter)}>
+            <option value="all">All statuses ({statusCounts.all})</option>
+            <option value="ungraded">ungraded ({statusCounts.ungraded})</option>
+            <option value="suggested">suggested ({statusCounts.suggested})</option>
+            <option value="finalized">finalized ({statusCounts.finalized})</option>
+            <option value="approved">approved ({statusCounts.approved})</option>
+            <option value="edited">edited ({statusCounts.edited})</option>
+            <option value="rejected">rejected ({statusCounts.rejected})</option>
+          </select>
+        </label>
+      </section>
+
+      {!loading && filteredItems.length === 0 ? <EmptyState message="No answer regions match this review filter." /> : null}
       <div className="grid gap-4">
-        {items.map((item) => (
+        {filteredItems.map((item) => (
           <ReviewCard
             key={item.answer_region.id}
             item={item}
@@ -200,6 +246,25 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         ))}
       </div>
     </div>
+  );
+}
+
+function BatchResultPanel({ result }: Readonly<{ result: BatchMockGradeResponse }>) {
+  return (
+    <section className="rounded border border-cyan-800 bg-cyan-950/20 p-5 text-sm text-cyan-100">
+      <h2 className="text-lg font-semibold">Batch mock grading result</h2>
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <SummaryMetric label="graded_count" value={result.graded_count} />
+        <SummaryMetric label="skipped_count" value={result.skipped_count} />
+        <SummaryMetric label="failed_count" value={result.failed_count} />
+        <SummaryMetric label="created suggestions" value={result.created_grade_suggestion_ids.length} />
+      </div>
+      {result.errors.length > 0 ? (
+        <ul className="mt-3 list-disc pl-5 text-red-200">
+          {result.errors.map((error) => <li key={error}>{error}</li>)}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 
@@ -322,6 +387,34 @@ function ReviewCard({
         </section>
       ) : null}
     </article>
+  );
+}
+
+function itemMatchesStatusFilter(item: ReviewQueueItem, statusFilter: ReviewStatusFilter) {
+  if (statusFilter === "all") {
+    return true;
+  }
+  if (statusFilter === "approved" || statusFilter === "edited" || statusFilter === "rejected") {
+    return item.final_grade?.approval_status === statusFilter;
+  }
+  return item.review_status === statusFilter;
+}
+
+function getStatusCounts(items: ReviewQueueItem[]) {
+  return items.reduce(
+    (counts, item) => {
+      counts.all += 1;
+      counts[item.review_status] += 1;
+      if (item.final_grade?.approval_status === "approved") {
+        counts.approved += 1;
+      } else if (item.final_grade?.approval_status === "edited") {
+        counts.edited += 1;
+      } else if (item.final_grade?.approval_status === "rejected") {
+        counts.rejected += 1;
+      }
+      return counts;
+    },
+    { all: 0, ungraded: 0, suggested: 0, finalized: 0, approved: 0, edited: 0, rejected: 0 },
   );
 }
 

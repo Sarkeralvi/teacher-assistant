@@ -111,6 +111,15 @@ export type AnswerRegion = {
   updated_at: string;
 };
 
+export type GradingJob = {
+  id: number;
+  answer_region_id: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
 export type GradeSuggestion = {
   id: number;
   grading_job_id: number;
@@ -151,6 +160,16 @@ export type FinalGrade = {
   approval_status: "approved" | "edited" | "rejected" | string;
   created_at: string;
   updated_at: string;
+};
+
+export type BatchMockGradeResponse = {
+  assessment_id: number;
+  total_answer_regions: number;
+  graded_count: number;
+  skipped_count: number;
+  failed_count: number;
+  created_grade_suggestion_ids: number[];
+  errors: string[];
 };
 
 export type ReviewQueueItem = {
@@ -378,9 +397,19 @@ export function getAnswerRegionImageUrl(answerRegionId: number) {
 
 
 export function gradeAnswerRegion(answerRegionId: number) {
-  return apiRequest<{ job: unknown; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {
+  return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {
     method: "POST",
   });
+}
+
+export function batchMockGradeAssessment(assessmentId: number) {
+  return apiRequest<BatchMockGradeResponse>(`/assessments/${assessmentId}/grade-all-mock`, {
+    method: "POST",
+  });
+}
+
+export function listGradeSuggestions(answerRegionId: number) {
+  return apiRequest<GradeSuggestion[]>(`/answer-regions/${answerRegionId}/grade-suggestions`);
 }
 
 export type FinalGradeActionPayload = {

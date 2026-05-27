@@ -390,3 +390,16 @@ Acceptance criteria: Password hashes are not exposed; login/me work; course crea
 Tests required: git status; make up; alembic upgrade; make health; focused auth/review tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
 Risks: Token storage is localStorage and explicitly dev-only; broad backend endpoint protection is intentionally deferred; legacy public/dev endpoints remain for compatibility.
 Status: Done
+
+TASK-ID: TA-W1-024
+Title: Batch mock grading and review queue improvements
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-023
+Files affected: apps/api/app/api/routes/grading.py, apps/api/app/schemas.py, apps/api/app/services/grading_service.py, apps/api/tests/test_grading_api.py, apps/web/components/AssessmentReviewClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Improve multi-answer-region workflow with assessment-level batch mock grading, clearer review queue filtering, and safer progress/status feedback.
+Implementation notes: Added POST /assessments/{assessment_id}/grade-all-mock, which validates the assessment, grades only answer regions with no existing GradeSuggestion, forces the BrainAdapter mock provider regardless of configured provider, returns graded/skipped/failed counts plus created suggestion IDs/errors, and does not create FinalGrade rows. Added review-page batch mock grading button, mock-only warning, batch result summary, status filter controls, and status counts for all/ungraded/suggested/finalized/approved/edited/rejected.
+Acceptance criteria: Batch mock grading handles multiple ungraded answer regions; existing suggested/finalized regions are skipped by default; endpoint returns 404 for missing assessment; real provider/Codex batch grading is not called or enabled; no raw_response_json is exposed in batch response; no student portal/payment/TA-W1-025 work added.
+Tests required: git status; make up; alembic upgrade; make health; focused backend batch tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
+Risks: Batch runs synchronously and intentionally avoids a larger async worker system; frontend filter is client-side only; real-provider batch grading remains disabled/deferred.
+Status: Done

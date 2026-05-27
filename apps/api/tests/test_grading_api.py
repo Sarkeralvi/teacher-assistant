@@ -146,6 +146,60 @@ def create_answer_region_with_optional_rubric(
     return region_response.json()
 
 
+def create_assessment_with_answer_regions(
+    client: TestClient, tmp_path: Path, *, region_count: int = 3
+) -> dict[str, object]:
+    email = f"batch-{len(list(tmp_path.glob('batch-*.png')))}@example.com"
+    user_response = client.post("/users", json={"name": "Batch Teacher", "email": email})
+    assert user_response.status_code == 201
+    course_response = client.post(
+        "/courses",
+        json={"teacher_id": user_response.json()["id"], "code": "BATCH101", "title": "Batch"},
+    )
+    assert course_response.status_code == 201
+    assessment_response = client.post(
+        f"/courses/{course_response.json()['id']}/assessments",
+        json={"title": "Batch Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
+    )
+    assert assessment_response.status_code == 201
+    assessment_id = assessment_response.json()["id"]
+    question_response = client.post(
+        f"/assessments/{assessment_id}/questions",
+        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+    )
+    assert question_response.status_code == 201
+    rubric_response = client.post(
+        f"/questions/{question_response.json()['id']}/rubrics",
+        json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
+    )
+    assert rubric_response.status_code == 201
+    regions = []
+    for index in range(region_count):
+        image_path = tmp_path / f"batch-{index}.png"
+        make_png(image_path)
+        with image_path.open("rb") as file_obj:
+            submission_response = client.post(
+                f"/assessments/{assessment_id}/submissions/upload",
+                data={"student_identifier": f"S-{index:03d}"},
+                files={"file": ("answer.png", file_obj, "image/png")},
+            )
+        assert submission_response.status_code == 201
+        page = submission_response.json()["pages"][0]
+        region_response = client.post(
+            f"/submission-pages/{page['id']}/answer-regions",
+            json={
+                "question_id": question_response.json()["id"],
+                "x": 1,
+                "y": 2,
+                "width": 20,
+                "height": 25,
+            },
+        )
+        assert region_response.status_code == 201
+        regions.append(region_response.json())
+    return {"assessment_id": assessment_id, "regions": regions}
+
+
 def test_grade_answer_region_creates_job_and_mock_suggestion(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
@@ -178,6 +232,44 @@ def test_grade_answer_region_creates_job_and_mock_suggestion(
     assert db_session.scalars(select(GradeSuggestion)).one().model_provider == "mock"
 
 
+
+def test_batch_mock_grading_grades_ungraded_regions_only_and_skips_existing(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = create_assessment_with_answer_regions(client, tmp_path, region_count=3)
+    assessment_id = data["assessment_id"]
+    regions = data["regions"]
+    assert isinstance(assessment_id, int)
+    assert isinstance(regions, list)
+    pregraded_region = regions[0]
+    pregraded_response = client.post(f"/answer-regions/{pregraded_region['id']}/grade")
+    assert pregraded_response.status_code == 201
+
+    monkeypatch.setenv("BRAIN_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    get_settings.cache_clear()
+    response = client.post(f"/assessments/{assessment_id}/grade-all-mock")
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["assessment_id"] == assessment_id
+    assert payload["total_answer_regions"] == 3
+    assert payload["graded_count"] == 2
+    assert payload["skipped_count"] == 1
+    assert payload["failed_count"] == 0
+    assert len(payload["created_grade_suggestion_ids"]) == 2
+    assert payload["errors"] == []
+    assert "raw_response_json" not in str(payload)
+    db_session.expire_all()
+    suggestions = db_session.scalars(select(GradeSuggestion)).all()
+    assert len(suggestions) == 3
+    assert {suggestion.model_provider for suggestion in suggestions} == {"mock"}
+    assert db_session.scalars(select(FinalGrade)).all() == []
+
+
 def test_grade_answer_region_failure_cases(client: TestClient, tmp_path: Path) -> None:
     missing_region = client.post("/answer-regions/999999/grade")
     assert missing_region.status_code == 404
@@ -188,6 +280,13 @@ def test_grade_answer_region_failure_cases(client: TestClient, tmp_path: Path) -
     no_rubric = client.post(f"/answer-regions/{no_rubric_region['id']}/grade")
     assert no_rubric.status_code == 400
     assert "active rubric" in no_rubric.text
+
+
+
+def test_batch_mock_grading_missing_assessment_returns_404(client: TestClient) -> None:
+    response = client.post("/assessments/999999/grade-all-mock")
+
+    assert response.status_code == 404
 
 
 def test_grade_suggestion_and_job_read_endpoints(client: TestClient, tmp_path: Path) -> None:
