@@ -483,3 +483,16 @@ Acceptance criteria: Mock extractor remains default; requested Codex provider is
 Tests required: git status; make up; alembic upgrade; make health; focused question import/provider tests; frontend static tests; make test; make lint; frontend build; optional one real Codex smoke if safe/auth available; make down; final git status.
 Risks: Real Codex smoke was blocked by local Codex usage limit, so the real external call path is implemented and fake-runner tested but not live-verified in this task.
 Status: Done
+
+TASK-ID: TA-W1-029B
+Title: Unblock Codex CLI question extraction smoke in isolated workdirs
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-029A
+Files affected: .env.example, apps/api/app/core/config.py, apps/api/app/services/question_import_extractor.py, apps/api/tests/test_question_import_codex_provider.py, BACKLOG.md, docs/VALIDATION_LOG.md
+Goal: Allow the Codex CLI question extraction provider to run from an isolated safe workdir without broad repository context while preserving explicit opt-in and teacher review.
+Implementation notes: Added CODEX_CLI_SKIP_GIT_REPO_CHECK, kept it default false, and added the Codex exec --skip-git-repo-check flag only when explicitly enabled. The provider still sends prompts through stdin, keeps image flag behavior unchanged, rejects danger-full-access, keeps provider errors sanitized, and does not change grading behavior or enable real extraction by default. Controlled real smoke used an isolated /tmp Codex workdir and a synthetic non-student PNG question paper.
+Acceptance criteria: Command includes --skip-git-repo-check when enabled and omits it by default; focused Codex provider and question import tests pass; full tests/lint/build pass; exactly one real Codex question extraction smoke returns draft questions requiring review; no real Question rows exist before accept; accept creates real Question rows only after confirmation.
+Tests required: git status; safe no-repo Codex OK check; make up; alembic upgrade head; make health; focused Codex provider/question import tests; frontend static tests; make test; make lint; frontend build; controlled one real Codex smoke; make down; final git status.
+Risks: Real extraction quality still needs teacher review and broader evaluation before production use; this smoke validated only one synthetic image case.
+Status: Done
