@@ -5,11 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user_optional
+from app.core.auth import get_current_user, get_current_user_optional
 from app.db.session import get_db
 from app.models import FinalGrade, User
 from app.schemas import (
     AssessmentSummaryRead,
+    BatchFinalGradeApproveRequest,
+    BatchFinalGradeApproveResponse,
     FinalGradeApprove,
     FinalGradeCreate,
     FinalGradeEdit,
@@ -22,6 +24,7 @@ from app.services.final_grade_service import FinalGradeService
 router = APIRouter(tags=["review"])
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUserOptional = Annotated[User | None, Depends(get_current_user_optional)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 def auth_teacher_id(payload_teacher_id: int | None, current_user: User | None) -> int:
@@ -124,6 +127,23 @@ def reject_grade_suggestion(
 @router.get("/answer-regions/{answer_region_id}/final-grade", response_model=FinalGradeRead)
 def get_answer_region_final_grade(answer_region_id: int, db: DbSession) -> FinalGrade:
     return FinalGradeService(db).get_final_grade_for_region(answer_region_id)
+
+
+@router.post(
+    "/assessments/{assessment_id}/final-grades/approve-selected",
+    response_model=BatchFinalGradeApproveResponse,
+)
+def approve_selected_final_grades(
+    assessment_id: int,
+    payload: BatchFinalGradeApproveRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> BatchFinalGradeApproveResponse:
+    return FinalGradeService(db).approve_selected_suggestions(
+        assessment_id=assessment_id,
+        suggestion_ids=payload.grade_suggestion_ids,
+        teacher_id=current_user.id,
+    )
 
 
 @router.get("/assessments/{assessment_id}/review-queue", response_model=list[ReviewQueueItem])

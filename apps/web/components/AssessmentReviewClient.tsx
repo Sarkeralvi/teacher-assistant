@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
   approveGradeSuggestion,
+  approveSelectedFinalGrades,
   batchMockGradeAssessment,
   editGradeSuggestion,
   getAnswerRegionImageUrl,
@@ -17,6 +18,7 @@ import {
   rejectGradeSuggestion,
   type Assessment,
   type AssessmentSummary,
+  type BatchApproveFinalGradesResponse,
   type BatchMockGradeResponse,
   type FinalGrade,
   type ReviewQueueItem,
@@ -37,8 +39,11 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [statusFilter, setStatusFilter] = useState<ReviewStatusFilter>("all");
+  const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<number[]>([]);
   const [batchResult, setBatchResult] = useState<BatchMockGradeResponse | null>(null);
+  const [batchApproveResult, setBatchApproveResult] = useState<BatchApproveFinalGradesResponse | null>(null);
   const [batchGrading, setBatchGrading] = useState(false);
+  const [batchApproving, setBatchApproving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +63,10 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setSummary(summaryData);
       setCurrentUser(userData);
       setDrafts((current) => mergeDrafts(current, queueData));
+      setSelectedSuggestionIds((current) => {
+        const approvableIds = new Set(queueData.filter(isSelectableForBatchApprove).map((item) => item.latest_grade_suggestion!.id));
+        return current.filter((id) => approvableIds.has(id));
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load teacher review queue");
     } finally {
@@ -71,6 +80,10 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
 
   const statusCounts = getStatusCounts(items);
   const filteredItems = items.filter((item) => itemMatchesStatusFilter(item, statusFilter));
+  const visibleSelectableItems = filteredItems.filter(isSelectableForBatchApprove);
+  const visibleSelectableIds = visibleSelectableItems.map((item) => item.latest_grade_suggestion!.id);
+  const selectedCount = selectedSuggestionIds.length; // selected count
+  const hasVisibleSelectableItems = visibleSelectableIds.length > 0;
 
   function updateDraft(answerRegionId: number, patch: Partial<ReviewDraft>) {
     setDrafts((current) => ({
@@ -94,6 +107,49 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Failed to batch mock grade ungraded answers");
     } finally {
       setBatchGrading(false);
+    }
+  }
+
+  function toggleSelectedSuggestion(suggestionId: number, checked: boolean) {
+    setSelectedSuggestionIds((current) => {
+      if (checked) {
+        return current.includes(suggestionId) ? current : [...current, suggestionId];
+      }
+      return current.filter((id) => id !== suggestionId);
+    });
+  }
+
+  function selectAllVisibleSuggestedItems() {
+    setSelectedSuggestionIds((current) => Array.from(new Set([...current, ...visibleSelectableIds])));
+  }
+
+  function clearSelection() {
+    setSelectedSuggestionIds([]);
+  }
+
+  async function handleApproveSelected() {
+    if (selectedSuggestionIds.length === 0) {
+      setError("Select at least one suggested item to approve.");
+      return;
+    }
+    if (!currentUser) {
+      setError("Login to approve or edit final grades.");
+      return;
+    }
+    setBatchApproving(true);
+    setBatchApproveResult(null);
+    setError(null);
+    try {
+      const result = await approveSelectedFinalGrades(assessmentId, {
+        grade_suggestion_ids: selectedSuggestionIds,
+      });
+      setBatchApproveResult(result);
+      setSelectedSuggestionIds([]);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to approve selected suggestions");
+    } finally {
+      setBatchApproving(false);
     }
   }
 
@@ -238,8 +294,29 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         <p className="mt-3 text-sm text-slate-400">
           Next: upload submissions → create answer regions → batch mock grade → review → export
         </p>
+        <div className="mt-4 grid gap-3 rounded border border-slate-800 p-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <button className={buttonClass} type="button" disabled={!hasVisibleSelectableItems} onClick={selectAllVisibleSuggestedItems}>
+              Select all visible suggested items
+            </button>
+            <button className={buttonClass} type="button" disabled={selectedCount === 0} onClick={clearSelection}>
+              Clear selection
+            </button>
+            <button className={buttonClass} type="button" disabled={batchApproving || selectedCount === 0} onClick={() => void handleApproveSelected()}>
+              {batchApproving ? "Approving selected..." : "Approve selected"}
+            </button>
+            <span className="text-slate-300">{selectedCount} selected count</span>
+          </div>
+          {!hasVisibleSelectableItems ? (
+            <p className="text-slate-400">No visible suggested items can be selected in this filter.</p>
+          ) : null}
+          {selectedCount === 0 ? (
+            <p className="text-slate-400">Select at least one suggested item to approve.</p>
+          ) : null}
+        </div>
       </section>
 
+      {batchApproveResult ? <BatchApproveResultPanel result={batchApproveResult} /> : null}
       {!loading && filteredItems.length === 0 ? <EmptyState message="No items in this filter" /> : null}
       <div className="grid gap-4">
         {filteredItems.map((item) => (
@@ -252,6 +329,12 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
             onApprove={() => void handleApprove(item)}
             onEdit={() => void handleEdit(item)}
             onReject={() => void handleReject(item)}
+            selected={Boolean(item.latest_grade_suggestion && selectedSuggestionIds.includes(item.latest_grade_suggestion.id))}
+            onSelectionChange={(checked) => {
+              if (item.latest_grade_suggestion) {
+                toggleSelectedSuggestion(item.latest_grade_suggestion.id, checked);
+              }
+            }}
           />
         ))}
       </div>
@@ -269,6 +352,26 @@ function BatchResultPanel({ result }: Readonly<{ result: BatchMockGradeResponse 
         <SummaryMetric label="failed_count" value={result.failed_count} />
         <SummaryMetric label="created suggestions" value={result.created_grade_suggestion_ids.length} />
       </div>
+      {result.errors.length > 0 ? (
+        <ul className="mt-3 list-disc pl-5 text-red-200">
+          {result.errors.map((error) => <li key={error}>{error}</li>)}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function BatchApproveResultPanel({ result }: Readonly<{ result: BatchApproveFinalGradesResponse }>) {
+  return (
+    <section className="rounded border border-emerald-800 bg-emerald-950/20 p-5 text-sm text-emerald-100">
+      <h2 className="text-lg font-semibold">Batch final-grade approval result</h2>
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <SummaryMetric label="requested_count" value={result.requested_count} />
+        <SummaryMetric label="approved_count" value={result.approved_count} />
+        <SummaryMetric label="skipped_count" value={result.skipped_count} />
+        <SummaryMetric label="failed_count" value={result.failed_count} />
+      </div>
+      <p className="mt-3 text-emerald-200">FinalGrade IDs: {result.final_grade_ids.join(", ") || "none"}</p>
       {result.errors.length > 0 ? (
         <ul className="mt-3 list-disc pl-5 text-red-200">
           {result.errors.map((error) => <li key={error}>{error}</li>)}
@@ -323,6 +426,8 @@ function ReviewCard({
   onApprove,
   onEdit,
   onReject,
+  selected,
+  onSelectionChange,
 }: Readonly<{
   item: ReviewQueueItem;
   draft: ReviewDraft;
@@ -331,6 +436,8 @@ function ReviewCard({
   onApprove: () => void;
   onEdit: () => void;
   onReject: () => void;
+  selected: boolean;
+  onSelectionChange: (checked: boolean) => void;
 }>) {
   const suggestion = item.latest_grade_suggestion;
   const finalGrade: FinalGrade | null = item.final_grade;
@@ -338,6 +445,7 @@ function ReviewCard({
   const status = getDisplayStatus(item);
   const scoreText = suggestion ? `${suggestion.score ?? "—"} / ${suggestion.max_score}` : "—";
   const finalScoreText = finalGrade ? String(finalGrade.final_score) : "—";
+  const selectable = isSelectableForBatchApprove(item);
   return (
     <article id={`review-item-${item.answer_region.id}`} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -347,6 +455,18 @@ function ReviewCard({
             Submission {item.submission.student_identifier} · Question {item.question.question_no}
           </h2>
           <p className="text-sm text-slate-400">{item.submission.student_name || "Unnamed student"}</p>
+        </div>
+        <div>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={selected}
+              disabled={!selectable}
+              onChange={(event) => onSelectionChange(event.target.checked)}
+            />
+            Select suggested item for batch approval
+          </label>
+          <p className="text-xs text-slate-500">Only suggested, not-finalized GradeSuggestion items are selectable.</p>
         </div>
         <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${status.className}`}>
           Status label: {status.label}
@@ -416,6 +536,10 @@ function ReviewCard({
       ) : null}
     </article>
   );
+}
+
+function isSelectableForBatchApprove(item: ReviewQueueItem) {
+  return Boolean(item.latest_grade_suggestion && !item.final_grade && item.review_status === "suggested");
 }
 
 function itemMatchesStatusFilter(item: ReviewQueueItem, statusFilter: ReviewStatusFilter) {

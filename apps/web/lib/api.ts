@@ -172,6 +172,15 @@ export type BatchMockGradeResponse = {
   errors: string[];
 };
 
+export type BatchApproveFinalGradesResponse = {
+  requested_count: number;
+  approved_count: number;
+  skipped_count: number;
+  failed_count: number;
+  final_grade_ids: number[];
+  errors: string[];
+};
+
 export type ReviewQueueItem = {
   answer_region: AnswerRegion;
   submission: { id: number; student_identifier: string; student_name: string | null };
@@ -405,6 +414,14 @@ export function gradeAnswerRegion(answerRegionId: number) {
 export function batchMockGradeAssessment(assessmentId: number) {
   return apiRequest<BatchMockGradeResponse>(`/assessments/${assessmentId}/grade-all-mock`, {
     method: "POST",
+  });
+}
+
+export function approveSelectedFinalGrades(assessmentId: number, payload: { grade_suggestion_ids: number[] }) {
+  return apiRequest<BatchApproveFinalGradesResponse>(`/assessments/${assessmentId}/final-grades/approve-selected`, {
+    method: "POST",
+    body: payload,
+    token: getStoredAuthToken(),
   });
 }
 

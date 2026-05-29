@@ -18,6 +18,7 @@ from app.models import (
 )
 from app.schemas import (
     AssessmentSummaryRead,
+    BatchFinalGradeApproveResponse,
     FinalGradeCreate,
     ReviewQueueItem,
     ReviewQueueQuestion,
@@ -82,6 +83,68 @@ class FinalGradeService:
             final_score=0,
             approval_status="rejected",
             teacher_comment=teacher_comment,
+        )
+
+    def approve_selected_suggestions(
+        self, *, assessment_id: int, suggestion_ids: list[int], teacher_id: int
+    ) -> BatchFinalGradeApproveResponse:
+        self._get_assessment(assessment_id)
+        teacher = self.db.get(User, teacher_id)
+        if teacher is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
+
+        final_grade_ids: list[int] = []
+        errors: list[str] = []
+        approved_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for suggestion_id in suggestion_ids:
+            suggestion = self.db.get(GradeSuggestion, suggestion_id)
+            if suggestion is None:
+                skipped_count += 1
+                errors.append(f"Grade suggestion {suggestion_id} not found")
+                continue
+            region = self.db.scalars(
+                select(AnswerRegion)
+                .join(AnswerRegion.submission)
+                .where(AnswerRegion.id == suggestion.answer_region_id)
+                .where(Submission.assessment_id == assessment_id)
+            ).first()
+            if region is None:
+                skipped_count += 1
+                errors.append(
+                    f"Grade suggestion {suggestion_id} does not belong to "
+                    f"assessment {assessment_id}"
+                )
+                continue
+            if suggestion.score is None:
+                failed_count += 1
+                errors.append(f"Grade suggestion {suggestion_id} failed: missing score")
+                continue
+            try:
+                final_grade, _created = self._save_final_grade(
+                    suggestion_id=suggestion.id,
+                    teacher_id=teacher_id,
+                    final_score=suggestion.score,
+                    approval_status="approved",
+                    teacher_comment=None,
+                    suggestion=suggestion,
+                )
+            except HTTPException as exc:
+                failed_count += 1
+                errors.append(f"Grade suggestion {suggestion_id} failed: {exc.detail}")
+                continue
+            approved_count += 1
+            final_grade_ids.append(final_grade.id)
+
+        return BatchFinalGradeApproveResponse(
+            requested_count=len(suggestion_ids),
+            approved_count=approved_count,
+            skipped_count=skipped_count,
+            failed_count=failed_count,
+            final_grade_ids=final_grade_ids,
+            errors=errors,
         )
 
     def _get_suggestion(self, suggestion_id: int) -> GradeSuggestion:

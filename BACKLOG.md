@@ -430,3 +430,16 @@ Tests required: git status; make test; make lint; final git status.
 Risks: Checklist quality still depends on a human running the browser flow and recording the result.
 Next task suggestion: If the checklist finds blockers, do TA-W1-027A: fix acceptance blockers. If it passes, do TA-W1-027B: prepare teacher pilot script.
 Status: Done
+
+TASK-ID: TA-W1-027A
+Title: Batch final-grade approval and product feedback backlog
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-026
+Files affected: apps/api/app/api/routes/final_grades.py, apps/api/app/schemas.py, apps/api/app/services/final_grade_service.py, apps/api/tests/test_final_grade_review_api.py, apps/web/components/AssessmentReviewClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md, docs/PRODUCT_ROADMAP.md
+Goal: Improve review workflow so teachers can select multiple suggested items and approve them together while keeping teacher review in control.
+Implementation notes: Added authenticated POST /assessments/{assessment_id}/final-grades/approve-selected with grade_suggestion_ids summary response, assessment scoping, current logged-in teacher identity, FinalGrade upsert behavior per answer region, and audit logging through the existing final-grade save path. Added review-queue checkboxes, select-all-visible suggested items, clear selection, selected count, approve selected action, batch approval result summary, and refresh after approval. Recorded future question-paper extraction and voice command assistant ideas in docs/PRODUCT_ROADMAP.md. No OCR/question extraction, voice command, real Codex grading, real provider batch grading, student portal, or payment work added.
+Acceptance criteria: Selected batch approval succeeds for suggested items; missing/out-of-assessment suggestions are skipped with clear summary errors; missing auth returns 401; duplicate FinalGrade rows are avoided; frontend selection works with existing filters and only suggested not-finalized items are selectable; mock-only warning and export remain visible; future feature ideas are recorded as not implemented now.
+Tests required: git status; make up; alembic upgrade; make health; focused backend batch-approve tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
+Risks: Batch approval currently approves selected latest suggestion IDs with no per-item teacher comment; future richer bulk-edit comments remain deferred.
+Status: Done

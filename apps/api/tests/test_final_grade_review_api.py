@@ -514,6 +514,107 @@ def test_export_xlsx_includes_pending_region_with_blank_final_grade(
     assert row["approval_status"] is None
 
 
+def test_batch_approve_selected_suggestions_uses_auth_teacher_and_writes_summary(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    second = create_extra_region_and_suggestion(client, data, x=30)
+    auth = register_auth_teacher(client)
+
+    response = client.post(
+        f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
+        headers=auth_header(str(auth["access_token"])),
+        json={
+            "grade_suggestion_ids": [
+                data["suggestion"]["id"],
+                second["suggestion"]["id"],
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_count"] == 2
+    assert payload["approved_count"] == 2
+    assert payload["skipped_count"] == 0
+    assert payload["failed_count"] == 0
+    assert len(payload["final_grade_ids"]) == 2
+    assert payload["errors"] == []
+    final_grades = db_session.query(FinalGrade).order_by(FinalGrade.id).all()
+    assert len(final_grades) == 2
+    assert {grade.teacher_id for grade in final_grades} == {auth["user"]["id"]}
+    assert {grade.approval_status for grade in final_grades} == {"approved"}
+    audit_count = db_session.query(AuditLog).filter(
+        AuditLog.event_type == "final_grade.approved"
+    ).count()
+    assert audit_count == 2
+    assert "raw_response_json" not in response.text
+    assert "password_hash" not in response.text
+
+
+def test_batch_approve_selected_skips_missing_and_outside_assessment_suggestions(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    outside = create_region_and_suggestion(client, tmp_path)
+    auth = register_auth_teacher(client)
+
+    response = client.post(
+        f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
+        headers=auth_header(str(auth["access_token"])),
+        json={
+            "grade_suggestion_ids": [
+                data["suggestion"]["id"],
+                outside["suggestion"]["id"],
+                999999,
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_count"] == 3
+    assert payload["approved_count"] == 1
+    assert payload["skipped_count"] == 2
+    assert payload["failed_count"] == 0
+    assert len(payload["final_grade_ids"]) == 1
+    assert any("not found" in error for error in payload["errors"])
+    assert any("does not belong to assessment" in error for error in payload["errors"])
+
+
+def test_batch_approve_selected_requires_auth_and_does_not_duplicate_final_grade(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    suggestion_id = data["suggestion"]["id"]
+    auth = register_auth_teacher(client)
+
+    missing_auth = client.post(
+        f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
+        json={"grade_suggestion_ids": [suggestion_id]},
+    )
+    assert missing_auth.status_code == 401
+
+    first = client.post(
+        f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
+        headers=auth_header(str(auth["access_token"])),
+        json={"grade_suggestion_ids": [suggestion_id]},
+    )
+    second = client.post(
+        f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
+        headers=auth_header(str(auth["access_token"])),
+        json={"grade_suggestion_ids": [suggestion_id]},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["final_grade_ids"] == second.json()["final_grade_ids"]
+    duplicate_count = db_session.query(FinalGrade).filter(
+        FinalGrade.answer_region_id == data["region"]["id"]
+    ).count()
+    assert duplicate_count == 1
+
+
 def test_summary_and_export_missing_assessment_returns_404(client: TestClient) -> None:
     assert client.get("/assessments/999999/summary").status_code == 404
     assert client.get("/assessments/999999/export/final-grades.xlsx").status_code == 404

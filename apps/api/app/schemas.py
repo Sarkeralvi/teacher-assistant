@@ -310,6 +310,19 @@ class BatchMockGradeResponse(BaseModel):
     errors: list[str]
 
 
+class BatchFinalGradeApproveRequest(BaseModel):
+    grade_suggestion_ids: list[int]
+
+
+class BatchFinalGradeApproveResponse(BaseModel):
+    requested_count: int
+    approved_count: int
+    skipped_count: int
+    failed_count: int
+    final_grade_ids: list[int]
+    errors: list[str]
+
+
 class FinalGradeCreate(BaseModel):
     teacher_id: int | None = None
     final_score: Decimal = Field(ge=0)
