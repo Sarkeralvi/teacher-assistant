@@ -509,3 +509,16 @@ Acceptance criteria: Dataset loader supports JSON and JSONL; metrics cover case 
 Tests required: git status; make up; alembic upgrade head; make health; focused question extraction eval tests; make test; make lint; frontend build; optional one synthetic real Codex eval if safe/auth available; make down; final git status.
 Risks: Evaluation metrics are simple string/marks comparisons and should be expanded with teacher-curated datasets before production trust decisions.
 Status: Done
+
+TASK-ID: TA-W1-031
+Title: Real grading quality dataset expansion
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-030
+Files affected: apps/api/packages/evaluation/grading_evaluation.py, apps/api/tests/test_grading_evaluation.py, docs/GRADING_EVALUATION.md, docs/GRADING_QUALITY_NOTES.md, BACKLOG.md
+Goal: Create a small controlled grading-quality dataset and run limited real Codex grading evaluation across correct, partial, wrong, blank, and irrelevant answers.
+Implementation notes: Added optional grading-eval case metadata for answer type and generated fixture reference, a five-case synthetic non-student dataset helper that creates PNG answer fixtures plus database records, and metric breakdowns for answer type, severe errors, over-scoring, and under-scoring. Ran mock evaluation and a capped real Codex CLI grading evaluation on five synthetic cases only. No production batch grading, browser default real grading, UI changes, question extraction, voice command, or TA-W1-032 work was added.
+Acceptance criteria: Synthetic dataset includes fully correct, partially correct, wrong, blank, and irrelevant answer cases; mock-mode tests pass; real Codex eval runs only with explicit opt-in and max-real-cases 5; generated artifacts remain under ignored `/tmp` or storage paths; summary docs record the tiny/synthetic nature and avoid accuracy overclaims.
+Tests required: git status; make up; alembic upgrade head; make health; focused grading eval tests; mock evaluation; capped real Codex eval if auth/quota available; make test; make lint; frontend build; make down; final git status.
+Risks: Dataset is tiny and synthetic; the result is a signal that the scoring path can distinguish simple cases, not evidence of classroom grading accuracy. Wrong-answer expected score/rubric calibration needs teacher curation.
+Status: Done

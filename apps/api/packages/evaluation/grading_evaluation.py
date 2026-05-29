@@ -9,12 +9,23 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import AnswerRegion, Rubric
+from app.models import (
+    AnswerRegion,
+    Assessment,
+    Course,
+    Question,
+    Rubric,
+    Submission,
+    SubmissionPage,
+    User,
+)
 from app.services.grading_service import GradingService
+from app.services.storage import LocalStorage
 from packages.brain.schemas import GradeSuggestionOutput
 
 _FALSE_CONFIDENT_THRESHOLD = Decimal("0.8")
@@ -37,6 +48,13 @@ class EvaluationCase(BaseModel):
     expected_score: Decimal = Field(ge=Decimal("0"))
     max_score: Decimal = Field(gt=Decimal("0"))
     teacher_notes: str = ""
+    answer_type: str = Field(
+        default="unknown", pattern="^(correct|partial|wrong|blank|irrelevant|unknown)$"
+    )
+    generated_fixture_reference: str | None = None
+    question_text: str = ""
+    model_answer: str = ""
+    rubric: dict[str, Any] | None = None
 
     @field_validator("expected_score")
     @classmethod
@@ -156,6 +174,172 @@ def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
     return [EvaluationCase.model_validate(item) for item in payloads]
 
 
+_SYNTHETIC_RUBRIC = {
+    "total_marks": "5.00",
+    "criteria": [
+        {
+            "id": "method",
+            "name": "Method",
+            "description": "Uses the expected method or reasoning.",
+            "max_marks": "3.00",
+        },
+        {
+            "id": "answer",
+            "name": "Final answer",
+            "description": "Provides the correct final answer and units where needed.",
+            "max_marks": "2.00",
+        },
+    ],
+}
+
+_SYNTHETIC_CASE_SPECS = [
+    ("correct", "5.00", "The area is 24 cm^2 because 6 x 4 = 24."),
+    ("partial", "3.00", "I multiply length and width but write 20 cm^2."),
+    ("wrong", "1.00", "The area is 10 cm^2 because I added 6 and 4."),
+    ("blank", "0.00", ""),
+    ("irrelevant", "0.00", "I like football and did not answer the maths question."),
+]
+
+
+def create_synthetic_grading_quality_dataset(db: Session) -> list[EvaluationCase]:
+    """Create five tiny non-student grading-quality cases and generated PNG fixtures."""
+    storage = LocalStorage()
+    teacher = User(
+        name="Synthetic Grading Teacher",
+        email=f"synthetic-grading-{datetime.now(UTC).timestamp()}@example.com",
+        password_hash="synthetic-fixture-only",
+        role="teacher",
+    )
+    db.add(teacher)
+    db.flush()
+    course = Course(
+        teacher_id=teacher.id,
+        code="SYN-GRD",
+        title="Synthetic grading quality evaluation",
+        department="Evaluation",
+        semester="synthetic",
+    )
+    db.add(course)
+    db.flush()
+    assessment = Assessment(
+        course_id=course.id,
+        title="Synthetic area quiz",
+        assessment_type="quiz",
+        total_marks=Decimal("5.00"),
+        status="ready",
+    )
+    db.add(assessment)
+    db.flush()
+    question = Question(
+        assessment_id=assessment.id,
+        question_no="1",
+        question_text="A rectangle is 6 cm long and 4 cm wide. Find its area.",
+        model_answer="Area = length x width = 6 x 4 = 24 cm^2.",
+        total_marks=Decimal("5.00"),
+    )
+    db.add(question)
+    db.flush()
+    rubric = Rubric(
+        question_id=question.id,
+        version=1,
+        rubric_json=_SYNTHETIC_RUBRIC,
+        is_active=True,
+    )
+    db.add(rubric)
+    db.flush()
+
+    cases: list[EvaluationCase] = []
+    for index, (answer_type, expected_score, answer_text) in enumerate(
+        _SYNTHETIC_CASE_SPECS, start=1
+    ):
+        submission = Submission(
+            assessment_id=assessment.id,
+            student_identifier=f"SYN-{answer_type.upper()}",
+            student_name=f"Synthetic {answer_type.title()} Answer",
+            status="ready",
+        )
+        db.add(submission)
+        db.flush()
+        page_file = storage.page_image_path(submission.id, 1)
+        region_file = storage.answer_region_image_path(submission.id)
+        _write_synthetic_answer_image(
+            page_file.absolute_path,
+            answer_type=answer_type,
+            answer_text=answer_text or "[blank answer]",
+        )
+        _write_synthetic_answer_image(
+            region_file.absolute_path,
+            answer_type=answer_type,
+            answer_text=answer_text or "[blank answer]",
+        )
+        page = SubmissionPage(
+            submission_id=submission.id,
+            page_no=1,
+            image_path=page_file.relative_path,
+            quality_score=Decimal("1.0000"),
+        )
+        db.add(page)
+        db.flush()
+        region = AnswerRegion(
+            submission_id=submission.id,
+            question_id=question.id,
+            page_id=page.id,
+            x=Decimal("0"),
+            y=Decimal("0"),
+            width=Decimal("640"),
+            height=Decimal("220"),
+            image_path=region_file.relative_path,
+        )
+        db.add(region)
+        db.flush()
+        cases.append(
+            EvaluationCase(
+                case_id=f"synthetic_grading_{index:02d}_{answer_type}",
+                answer_region_id=region.id,
+                question_id=question.id,
+                rubric_id=rubric.id,
+                expected_score=Decimal(expected_score),
+                max_score=Decimal("5.00"),
+                teacher_notes=f"Synthetic {answer_type} answer fixture; not student data.",
+                answer_type=answer_type,
+                generated_fixture_reference=region_file.relative_path,
+                question_text=question.question_text,
+                model_answer=question.model_answer or "",
+                rubric=_SYNTHETIC_RUBRIC,
+            )
+        )
+    db.commit()
+    return cases
+
+
+def _write_synthetic_answer_image(path: Path, *, answer_type: str, answer_text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (640, 220), color="white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((8, 8, 632, 212), outline="black", width=2)
+    draw.text((24, 24), f"Synthetic {answer_type} answer", fill="black")
+    y = 70
+    for line in _wrap_text(answer_text, width=72):
+        draw.text((24, y), line, fill="black")
+        y += 26
+    image.save(path, format="PNG")
+
+
+def _wrap_text(text: str, *, width: int) -> list[str]:
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        if sum(len(item) for item in current) + len(current) + len(word) > width:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return lines or [""]
+
+
 def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Decimal | int]:
     if not rows:
         return {
@@ -166,6 +350,10 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Decimal | int]:
             "false_confident_error_count": 0,
             "average_confidence": Decimal("0"),
             "needs_review_rate": Decimal("0"),
+            "severe_error_count": 0,
+            "over_score_count": 0,
+            "under_score_count": 0,
+            "by_answer_type": {},
         }
     errors = [_row_error(row) for row in rows]
     confidences = [_row_confidence(row) for row in rows]
@@ -177,6 +365,24 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Decimal | int]:
         and error > _FALSE_CONFIDENT_ERROR_MARKS
     )
     total = Decimal(len(rows))
+    by_answer_type: dict[str, dict[str, Decimal | int]] = {}
+    answer_types = sorted({_row_case(row).answer_type for row in rows})
+    for answer_type in answer_types:
+        typed_rows = [row for row in rows if _row_case(row).answer_type == answer_type]
+        typed_errors = [_row_error(row) for row in typed_rows]
+        typed_confidences = [_row_confidence(row) for row in typed_rows]
+        typed_total = Decimal(len(typed_rows))
+        by_answer_type[answer_type] = {
+            "case_count": len(typed_rows),
+            "exact_match_rate": Decimal(sum(1 for error in typed_errors if error == 0))
+            / typed_total,
+            "within_1_mark_rate": Decimal(
+                sum(1 for error in typed_errors if error <= _FALSE_CONFIDENT_ERROR_MARKS)
+            )
+            / typed_total,
+            "mean_absolute_error": sum(typed_errors, Decimal("0")) / typed_total,
+            "average_confidence": sum(typed_confidences, Decimal("0")) / typed_total,
+        }
     return {
         "case_count": len(rows),
         "exact_match_rate": Decimal(sum(1 for error in errors if error == 0)) / total,
@@ -188,6 +394,14 @@ def calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Decimal | int]:
         "false_confident_error_count": false_confident_error_count,
         "average_confidence": sum(confidences, Decimal("0")) / total,
         "needs_review_rate": Decimal(needs_review_count) / total,
+        "severe_error_count": sum(1 for error in errors if error >= Decimal("2")),
+        "over_score_count": sum(
+            1 for row in rows if _row_suggestion(row).score > _row_case(row).expected_score
+        ),
+        "under_score_count": sum(
+            1 for row in rows if _row_suggestion(row).score < _row_case(row).expected_score
+        ),
+        "by_answer_type": by_answer_type,
     }
 
 
@@ -213,6 +427,10 @@ def _serialize_case_result(row: dict[str, Any]) -> dict[str, Any]:
         "expected_score": eval_case.expected_score,
         "max_score": eval_case.max_score,
         "teacher_notes": eval_case.teacher_notes,
+        "answer_type": eval_case.answer_type,
+        "generated_fixture_reference": eval_case.generated_fixture_reference,
+        "question_text": eval_case.question_text,
+        "model_answer": eval_case.model_answer,
         "grade_suggestion_id": row.get("grade_suggestion_id"),
         "grading_job_id": row.get("grading_job_id"),
         "ai_score": suggestion.score,
@@ -227,6 +445,13 @@ def _serialize_case_result(row: dict[str, Any]) -> dict[str, Any]:
         "prompt_version": row.get("prompt_version") or suggestion.prompt_version,
         "review_flags": suggestion.review_flags,
     }
+
+
+def _row_case(row: dict[str, Any]) -> EvaluationCase:
+    eval_case = row["case"]
+    if not isinstance(eval_case, EvaluationCase):
+        raise TypeError("row case must be EvaluationCase")
+    return eval_case
 
 
 def _row_suggestion(row: dict[str, Any]) -> GradeSuggestionOutput:

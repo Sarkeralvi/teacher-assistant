@@ -21,6 +21,41 @@ Fields:
 - `expected_score`: teacher/reference score.
 - `max_score`: maximum score for the case; must match active rubric total marks.
 - `teacher_notes`: optional reference notes for later analysis.
+- `answer_type`: optional controlled-case label: `correct`, `partial`, `wrong`, `blank`, `irrelevant`, or `unknown`.
+- `generated_fixture_reference`: optional relative storage path for synthetic answer images.
+- `question_text`, `model_answer`, `rubric`: optional denormalized reference context for reports.
+
+## Tiny synthetic grading-quality dataset
+
+For grading-quality evaluation only, the harness includes a helper that creates five non-student PNG answer fixtures and matching database records:
+
+- fully correct answer
+- partially correct answer
+- wrong answer
+- blank answer
+- irrelevant answer
+
+Example dataset creation from an app shell:
+
+```bash
+cd apps/api
+python - <<'PY'
+import json
+from pathlib import Path
+from app.db.session import SessionLocal
+from packages.evaluation.grading_evaluation import create_synthetic_grading_quality_dataset, _jsonable
+
+out = Path('/tmp/ta_w1_031_grading_cases.jsonl')
+with SessionLocal() as db:
+    cases = create_synthetic_grading_quality_dataset(db)
+with out.open('w', encoding='utf-8') as handle:
+    for case in cases:
+        handle.write(json.dumps(_jsonable(case), sort_keys=True) + '\n')
+print(out)
+PY
+```
+
+Generated PNGs are stored under the ignored local storage artifact tree and should not be committed.
 
 ## Running mock evaluation
 
@@ -62,6 +97,10 @@ Implemented metrics:
 - `false_confident_error_count`
 - `average_confidence`
 - `needs_review_rate`
+- `severe_error_count` where absolute error is at least 2 marks
+- `over_score_count`
+- `under_score_count`
+- `by_answer_type` breakdown with count, exact-match rate, within-1-mark rate, mean absolute error, and average confidence
 
 False-confident errors are cases where:
 
