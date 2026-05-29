@@ -119,6 +119,50 @@ class QuestionRead(ORMBase):
     updated_at: datetime
 
 
+class DraftQuestion(BaseModel):
+    draft_id: str
+    question_no: str = Field(min_length=1, max_length=32)
+    question_text: str = Field(min_length=1)
+    model_answer: str | None = None
+    total_marks: Decimal | None = Field(default=None, gt=Decimal("0"))
+    confidence: Decimal
+    source_page: int
+    source_text_excerpt: str
+    needs_review: bool = True
+
+
+class QuestionImportJobRead(ORMBase):
+    id: int
+    assessment_id: int
+    status: str
+    original_filename: str
+    content_type: str
+    file_path: str
+    provider: str
+    draft_questions: list[DraftQuestion]
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DraftQuestionAccept(BaseModel):
+    draft_id: str
+    question_no: str = Field(min_length=1, max_length=32)
+    question_text: str = Field(min_length=1)
+    model_answer: str | None = None
+    total_marks: Decimal = Field(gt=Decimal("0"))
+
+
+class QuestionImportAcceptRequest(BaseModel):
+    draft_questions: list[DraftQuestionAccept] = Field(min_length=1)
+
+
+class QuestionImportAcceptResponse(BaseModel):
+    job_id: int
+    created_count: int
+    questions: list[QuestionRead]
+
+
 class RubricCriterionSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

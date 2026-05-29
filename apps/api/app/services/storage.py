@@ -71,6 +71,18 @@ class LocalStorage:
         target = target_dir / f"region_{uuid4().hex}.png"
         return StoredFile(target, self.relative_to_root(target))
 
+    def save_question_import(
+        self, upload: UploadFile, assessment_id: int, suffix: str
+    ) -> StoredFile:
+        safe_suffix = suffix.lower()
+        filename = f"question-paper-{uuid4().hex}{safe_suffix}"
+        target_dir = self.uploads_dir / "question_imports" / str(assessment_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
+        with target.open("wb") as output:
+            shutil.copyfileobj(upload.file, output)
+        return StoredFile(target, self.relative_to_root(target))
+
     def delete_submission_files(self, submission_id: int, relative_paths: list[str]) -> None:
         """Best-effort cleanup for one submission without allowing path traversal."""
         for relative_path in relative_paths:

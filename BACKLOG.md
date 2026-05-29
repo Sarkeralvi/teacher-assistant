@@ -457,3 +457,16 @@ Tests required: git status; make test; make lint; final git status.
 Risks: Feedback quality depends on choosing a trusted teacher and using non-sensitive demo data.
 Next decision options: TA-W1-028A: fix pilot-feedback blockers; TA-W1-028B: question paper import planning; TA-W1-028C: real grading quality evaluation dataset; TA-W1-028D: UI polish from teacher feedback.
 Status: Done
+
+TASK-ID: TA-W1-028B
+Title: Question paper import planning and prototype
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-027B
+Files affected: apps/api/app/models.py, apps/api/alembic/versions/0003_question_import_jobs.py, apps/api/app/api/routes/question_imports.py, apps/api/app/services/question_import_extractor.py, apps/api/app/services/storage.py, apps/api/app/schemas.py, apps/api/app/main.py, apps/api/tests/test_question_import_api.py, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/workflow-ui.test.mjs, docs/PRODUCT_ROADMAP.md, BACKLOG.md
+Goal: Add a safe prototype foundation for uploading question paper PDF/images, extracting draft questions, and creating real Questions only after teacher review/confirmation.
+Implementation notes: Added QuestionImportJob persistence and migration, local safe question-paper upload storage, mock deterministic extraction for simple PDF text patterns, draft question JSON schema, question import create/detail/accept endpoints, frontend upload/draft-edit/select/accept flow, and roadmap status update. The prototype keeps manual question creation available, keeps voice command deferred, and does not enable real Codex extraction or real Codex grading by default.
+Acceptance criteria: Uploading a PDF/image question paper creates an import job and draft questions; draft questions are not saved as real Questions until accepted; selected/edited drafts create normal Questions; missing assessment and unsupported file errors are handled; frontend shows draft extraction warning, draft editing, selection, and create-selected flow; no frontend direct Codex/LLM calls.
+Tests required: git status; make up; alembic upgrade; make health; focused question import tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
+Risks: Current extractor is deterministic/mock and best-effort; real OCR/document understanding and sub-question handling need later evaluation before production use.
+Status: Done

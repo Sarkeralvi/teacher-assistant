@@ -66,6 +66,38 @@ export type Question = {
   updated_at: string;
 };
 
+export type DraftQuestion = {
+  draft_id: string;
+  question_no: string;
+  question_text: string;
+  model_answer: string | null;
+  total_marks: string | number | null;
+  confidence: string | number;
+  source_page: number;
+  source_text_excerpt: string;
+  needs_review: boolean;
+};
+
+export type QuestionImportJob = {
+  id: number;
+  assessment_id: number;
+  status: string;
+  original_filename: string;
+  content_type: string;
+  file_path: string;
+  provider: string;
+  draft_questions: DraftQuestion[];
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QuestionImportAcceptResponse = {
+  job_id: number;
+  created_count: number;
+  questions: Question[];
+};
+
 export type Rubric = {
   id: number;
   question_id: number;
@@ -260,6 +292,10 @@ export type AssessmentCreate = Pick<Assessment, "title" | "assessment_type" | "t
 export type QuestionCreate = Pick<Question, "question_no" | "question_text" | "total_marks"> & {
   model_answer?: string | null;
 };
+export type DraftQuestionAccept = Pick<DraftQuestion, "draft_id" | "question_no" | "question_text"> & {
+  model_answer?: string | null;
+  total_marks: string | number;
+};
 export type RubricCreate = Pick<Rubric, "version" | "rubric_json"> & { is_active?: boolean };
 export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height">;
 
@@ -337,6 +373,26 @@ export function createQuestion(assessmentId: number, payload: QuestionCreate) {
 
 export function listQuestions(assessmentId: number) {
   return apiRequest<Question[]>(`/assessments/${assessmentId}/questions`);
+}
+
+export function importQuestionsFromPaper(assessmentId: number, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiRequest<QuestionImportJob>(`/assessments/${assessmentId}/question-imports`, {
+    method: "POST",
+    formData,
+  });
+}
+
+export function getQuestionImportJob(jobId: number) {
+  return apiRequest<QuestionImportJob>(`/question-imports/${jobId}`);
+}
+
+export function acceptQuestionImportDrafts(jobId: number, draftQuestions: DraftQuestionAccept[]) {
+  return apiRequest<QuestionImportAcceptResponse>(`/question-imports/${jobId}/accept`, {
+    method: "POST",
+    body: { draft_questions: draftQuestions },
+  });
 }
 
 export function getQuestion(questionId: number) {

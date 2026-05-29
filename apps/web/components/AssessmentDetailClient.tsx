@@ -5,6 +5,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
+  acceptQuestionImportDrafts,
   createAnswerRegion,
   createQuestion,
   deleteSubmission,
@@ -15,14 +16,17 @@ import {
   getAssessmentReviewQueue,
   getSubmissionPageImageUrl,
   gradeAnswerRegion,
+  importQuestionsFromPaper,
   listAssessmentAnswerRegions,
   listQuestions,
   listSubmissions,
   uploadSubmission,
   type AnswerRegion,
   type Assessment,
+  type DraftQuestion,
   type FinalGrade,
   type Question,
+  type QuestionImportJob,
   type ReviewQueueItem,
   type Submission,
 } from "../lib/api";
@@ -32,6 +36,14 @@ import { DemoTeacherSelector } from "./DemoTeacherSelector";
 type FinalizeDraft = {
   finalScore: string;
   teacherComment: string;
+};
+
+type DraftQuestionEdit = {
+  selected: boolean;
+  question_no: string;
+  question_text: string;
+  model_answer: string;
+  total_marks: string;
 };
 
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
@@ -48,6 +60,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [studentIdentifier, setStudentIdentifier] = useState("");
   const [studentName, setStudentName] = useState("");
   const [submissionFile, setSubmissionFile] = useState<File | null>(null);
+  const [questionImportFile, setQuestionImportFile] = useState<File | null>(null);
+  const [questionImportJob, setQuestionImportJob] = useState<QuestionImportJob | null>(null);
+  const [draftQuestionEdits, setDraftQuestionEdits] = useState<Record<string, DraftQuestionEdit>>({});
+  const [importingQuestions, setImportingQuestions] = useState(false);
+  const [acceptingQuestions, setAcceptingQuestions] = useState(false);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedQuestionId, setSelectedQuestionId] = useState("");
   const [regionX, setRegionX] = useState("0");
@@ -66,6 +83,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   const pages = submissions.flatMap((submission) => submission.pages);
   const selectedUploadFileName = submissionFile?.name ?? "";
+  const selectedQuestionImportFileName = questionImportFile?.name ?? "";
+  const draftQuestions = questionImportJob?.draft_questions ?? [];
+  const selectedDraftCount = Object.values(draftQuestionEdits).filter((draft) => draft.selected).length;
 
   async function load() {
     setLoading(true);
@@ -158,6 +178,77 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? `Upload failed: ${err.message}` : "Upload failed");
     } finally {
       setUploading(false);
+    }
+  }
+
+  function handleQuestionImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    setQuestionImportFile(file);
+    if (file || error === "Choose a question paper PDF or image before importing") {
+      setError(null);
+    }
+  }
+
+  async function handleQuestionImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const selectedFile = questionImportFile ?? ((new FormData(event.currentTarget).get("file") as File | null) ?? null);
+    if (!selectedFile || selectedFile.size === 0) {
+      setError("Choose a question paper PDF or image before importing");
+      return;
+    }
+    setImportingQuestions(true);
+    setError(null);
+    try {
+      const job = await importQuestionsFromPaper(assessmentId, selectedFile);
+      setQuestionImportJob(job);
+      setDraftQuestionEdits(createDraftQuestionEdits(job.draft_questions));
+    } catch (err) {
+      setError(err instanceof Error ? `Question import failed: ${err.message}` : "Question import failed");
+    } finally {
+      setImportingQuestions(false);
+    }
+  }
+
+  function updateDraftQuestionEdit(draftId: string, patch: Partial<DraftQuestionEdit>) {
+    setDraftQuestionEdits((current) => ({
+      ...current,
+      [draftId]: {
+        ...(current[draftId] ?? emptyDraftQuestionEdit()),
+        ...patch,
+      },
+    }));
+  }
+
+  async function handleAcceptDraftQuestions() {
+    if (!questionImportJob) {
+      setError("Import a question paper before creating selected questions");
+      return;
+    }
+    const selectedDrafts = Object.entries(draftQuestionEdits)
+      .filter(([, draft]) => draft.selected)
+      .map(([draft_id, draft]) => ({
+        draft_id,
+        question_no: draft.question_no,
+        question_text: draft.question_text,
+        model_answer: draft.model_answer.trim() || null,
+        total_marks: draft.total_marks,
+      }));
+    if (selectedDrafts.length === 0) {
+      setError("Select at least one draft question to create.");
+      return;
+    }
+    setAcceptingQuestions(true);
+    setError(null);
+    try {
+      await acceptQuestionImportDrafts(questionImportJob.id, selectedDrafts);
+      setQuestionImportJob(null);
+      setDraftQuestionEdits({});
+      setQuestionImportFile(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create selected questions");
+    } finally {
+      setAcceptingQuestions(false);
     }
   }
 
@@ -403,8 +494,65 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </div>
       </section>
 
+      <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Import questions from paper</h2>
+          <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
+          <p className="text-sm text-slate-400">Upload a question paper PDF/image to generate draft questions by question number. No real Codex extraction is enabled by default.</p>
+        </div>
+        <form onSubmit={handleQuestionImport} className="grid gap-3">
+          <label className="grid gap-2 text-sm">
+            Question paper file
+            <input
+              className={inputClass}
+              name="file"
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+              onChange={handleQuestionImportFileChange}
+            />
+          </label>
+          {selectedQuestionImportFileName ? (
+            <p className="text-sm text-emerald-300">Selected question paper file: {selectedQuestionImportFileName}</p>
+          ) : null}
+          <button className={buttonClass} disabled={importingQuestions || !questionImportFile} type="submit">
+            {importingQuestions ? "Extracting draft questions..." : "Extract draft questions"}
+          </button>
+        </form>
+        {questionImportJob ? (
+          <div className="grid gap-3 rounded border border-slate-800 p-4">
+            <p className="text-sm text-slate-300">Import job #{questionImportJob.id} · {questionImportJob.status} · provider: {questionImportJob.provider}</p>
+            <p className="text-sm text-slate-400">{selectedDraftCount} selected draft questions</p>
+            {draftQuestions.map((draft) => {
+              const edit = draftQuestionEdits[draft.draft_id] ?? draftQuestionToEdit(draft);
+              return (
+                <article key={draft.draft_id} className="grid gap-2 rounded border border-slate-700 p-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={edit.selected}
+                      onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { selected: event.target.checked })}
+                    />
+                    Select draft question {draft.question_no}
+                  </label>
+                  <input className={inputClass} aria-label="Draft question number" value={edit.question_no} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { question_no: event.target.value })} />
+                  <textarea className={inputClass} aria-label="Draft question text" value={edit.question_text} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { question_text: event.target.value })} />
+                  <input className={inputClass} aria-label="Draft total marks" value={edit.total_marks} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { total_marks: event.target.value })} />
+                  <textarea className={inputClass} aria-label="Draft model answer optional" placeholder="Model answer optional" value={edit.model_answer} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { model_answer: event.target.value })} />
+                  <p className="text-xs text-slate-400">source page {draft.source_page} · confidence {draft.confidence} · needs_review: {String(draft.needs_review)}</p>
+                  <p className="text-xs text-slate-500">Excerpt: {draft.source_text_excerpt}</p>
+                </article>
+              );
+            })}
+            <button className={buttonClass} disabled={acceptingQuestions || selectedDraftCount === 0} type="button" onClick={() => void handleAcceptDraftQuestions()}>
+              {acceptingQuestions ? "Creating selected questions..." : "Create selected questions"}
+            </button>
+          </div>
+        ) : null}
+      </section>
+
       <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Questions</h2>
+        <p className="text-sm text-slate-400">Manual question creation remains available.</p>
         <input className={inputClass} placeholder="Question number" value={questionNo} onChange={(event) => setQuestionNo(event.target.value)} required />
         <textarea className={inputClass} placeholder="Question text" value={questionText} onChange={(event) => setQuestionText(event.target.value)} required />
         <textarea className={inputClass} placeholder="Model answer (optional)" value={modelAnswer} onChange={(event) => setModelAnswer(event.target.value)} />
@@ -512,6 +660,30 @@ function defaultFinalizeDraft(item: ReviewQueueItem): FinalizeDraft {
     finalScore: String(item.final_grade?.final_score ?? item.latest_grade_suggestion?.score ?? "0.00"),
     teacherComment: item.final_grade?.teacher_comment ?? "",
   };
+}
+
+function draftQuestionToEdit(draft: DraftQuestion): DraftQuestionEdit {
+  return {
+    selected: true,
+    question_no: draft.question_no,
+    question_text: draft.question_text,
+    model_answer: draft.model_answer ?? "",
+    total_marks: String(draft.total_marks ?? "1.00"),
+  };
+}
+
+function emptyDraftQuestionEdit(): DraftQuestionEdit {
+  return {
+    selected: false,
+    question_no: "",
+    question_text: "",
+    model_answer: "",
+    total_marks: "1.00",
+  };
+}
+
+function createDraftQuestionEdits(drafts: DraftQuestion[]): Record<string, DraftQuestionEdit> {
+  return Object.fromEntries(drafts.map((draft) => [draft.draft_id, draftQuestionToEdit(draft)]));
 }
 
 function mergeFinalizeDrafts(

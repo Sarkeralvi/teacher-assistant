@@ -13,6 +13,7 @@ from app.models import (
     GradeSuggestion,
     GradingJob,
     Question,
+    QuestionImportJob,
     Rubric,
     Submission,
     SubmissionPage,
@@ -24,6 +25,7 @@ EXPECTED_TABLES = {
     "courses",
     "assessments",
     "questions",
+    "question_import_jobs",
     "rubrics",
     "submissions",
     "submission_pages",
@@ -71,6 +73,19 @@ EXPECTED_COLUMNS = {
         "question_text",
         "model_answer",
         "total_marks",
+        "created_at",
+        "updated_at",
+    },
+    "question_import_jobs": {
+        "id",
+        "assessment_id",
+        "status",
+        "original_filename",
+        "content_type",
+        "file_path",
+        "provider",
+        "draft_questions",
+        "error",
         "created_at",
         "updated_at",
     },
@@ -167,6 +182,7 @@ EXPECTED_INDEX_COLUMNS = {
     "courses": {"teacher_id"},
     "assessments": {"course_id"},
     "questions": {"assessment_id"},
+    "question_import_jobs": {"assessment_id"},
     "rubrics": {"question_id"},
     "submissions": {"assessment_id"},
     "answer_regions": {"question_id"},
@@ -181,6 +197,7 @@ def test_all_required_models_are_registered_with_expected_tables_and_columns() -
         Course,
         Assessment,
         Question,
+        QuestionImportJob,
         Rubric,
         Submission,
         SubmissionPage,
@@ -234,6 +251,7 @@ def test_numeric_and_json_fields_use_postgresql_friendly_types() -> None:
         assert isinstance(column.property.columns[0].type, Numeric)
 
     assert isinstance(Rubric.rubric_json.property.columns[0].type, JSONB)
+    assert isinstance(QuestionImportJob.draft_questions.property.columns[0].type, JSONB)
     assert isinstance(GradeSuggestion.raw_response_json.property.columns[0].type, JSONB)
     assert isinstance(AuditLog.payload_json.property.columns[0].type, JSONB)
 

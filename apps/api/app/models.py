@@ -86,6 +86,34 @@ class Assessment(TimestampMixin, Base):
     course: Mapped[Course] = relationship(back_populates="assessments")
     questions: Mapped[list[Question]] = relationship(back_populates="assessment")
     submissions: Mapped[list[Submission]] = relationship(back_populates="assessment")
+    question_import_jobs: Mapped[list[QuestionImportJob]] = relationship(
+        back_populates="assessment"
+    )
+
+
+class QuestionImportJob(TimestampMixin, Base):
+    __tablename__ = "question_import_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('uploaded', 'drafted', 'accepted', 'failed')",
+            name="ck_question_import_jobs_status",
+        ),
+        Index("ix_question_import_jobs_assessment_id", "assessment_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False, default="mock")
+    draft_questions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="question_import_jobs")
 
 
 class Question(TimestampMixin, Base):
