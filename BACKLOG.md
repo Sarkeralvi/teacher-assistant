@@ -443,3 +443,17 @@ Acceptance criteria: Selected batch approval succeeds for suggested items; missi
 Tests required: git status; make up; alembic upgrade; make health; focused backend batch-approve tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
 Risks: Batch approval currently approves selected latest suggestion IDs with no per-item teacher comment; future richer bulk-edit comments remain deferred.
 Status: Done
+
+TASK-ID: TA-W1-027B
+Title: Prepare trusted teacher pilot materials
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-027A
+Files affected: docs/TRUSTED_TEACHER_PILOT_SCRIPT.md, docs/PILOT_FEEDBACK_FORM.md, BACKLOG.md
+Goal: Prepare documentation-only materials for showing the current app to one trusted teacher and collecting structured feedback.
+Implementation notes: Added a trusted-teacher pilot script covering product positioning, current limitations, mock grading, disabled Codex CLI browser-demo explanation, and the full teacher demo flow from register/login through XLSX export. Added a pilot feedback form focused on workload reduction, usefulness, confusion, batch approval risk, review control, trust, manual answer-region acceptability, question-paper import, voice command, export needs, privacy/security concerns, minimum classroom feature set, recommendation, and willingness to pay. No product code changed, no OCR/question extraction, no voice command, no real Codex grading, and no TA-W1-028 work started.
+Acceptance criteria: Pilot script and feedback form exist with requested sections; backlog records TA-W1-027B as Done and next decision options are listed.
+Tests required: git status; make test; make lint; final git status.
+Risks: Feedback quality depends on choosing a trusted teacher and using non-sensitive demo data.
+Next decision options: TA-W1-028A: fix pilot-feedback blockers; TA-W1-028B: question paper import planning; TA-W1-028C: real grading quality evaluation dataset; TA-W1-028D: UI polish from teacher feedback.
+Status: Done
