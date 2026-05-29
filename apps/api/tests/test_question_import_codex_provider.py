@@ -37,7 +37,10 @@ def valid_codex_output() -> dict[str, object]:
     }
 
 
-HELP_TEXT = "Usage: codex exec --cd --sandbox --output-last-message --image"
+HELP_TEXT = (
+    "Usage: codex exec --cd --sandbox --output-last-message "
+    "--skip-git-repo-check --image"
+)
 
 
 def make_provider(tmp_path: Path, payload: dict[str, object] | str | None = None):
@@ -112,6 +115,48 @@ def test_codex_question_extractor_validates_fake_runner_output(tmp_path: Path) -
     assert "Return ONLY valid JSON" in str(exec_call["input"])
     assert "--image" in exec_call["cmd"]
     assert str(paper_path) in exec_call["cmd"]
+
+
+def test_codex_question_extractor_adds_skip_git_repo_check_when_enabled(
+    tmp_path: Path,
+) -> None:
+    paper_path = tmp_path / "paper.png"
+    paper_path.write_bytes(b"fake image")
+    provider, calls = make_provider(tmp_path)
+    provider.skip_git_repo_check = True
+
+    provider.extract(paper_path, "image/png")
+
+    exec_call = calls[-1]
+    assert "--skip-git-repo-check" in exec_call["cmd"]
+    assert exec_call["cwd"] == str(tmp_path)
+    assert exec_call["input"]
+
+
+def test_codex_question_extractor_omits_skip_git_repo_check_by_default(
+    tmp_path: Path,
+) -> None:
+    paper_path = tmp_path / "paper.png"
+    paper_path.write_bytes(b"fake image")
+    provider, calls = make_provider(tmp_path)
+
+    provider.extract(paper_path, "image/png")
+
+    exec_call = calls[-1]
+    assert "--skip-git-repo-check" not in exec_call["cmd"]
+
+
+def test_build_question_extractor_passes_skip_git_repo_check_setting() -> None:
+    settings = Settings(
+        QUESTION_IMPORT_PROVIDER="codex_cli_question_extractor",
+        CODEX_QUESTION_EXTRACTION_ENABLED=True,
+        CODEX_CLI_SKIP_GIT_REPO_CHECK=True,
+    )
+
+    extractor = build_question_extractor(settings=settings)
+
+    assert isinstance(extractor, CodexQuestionExtractor)
+    assert extractor.skip_git_repo_check is True
 
 
 def test_codex_question_extractor_invalid_json_fails_cleanly(tmp_path: Path) -> None:

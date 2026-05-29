@@ -158,6 +158,7 @@ class CodexQuestionExtractor:
         use_json: bool = True,
         output_last_message: bool = True,
         image_input_enabled: bool = False,
+        skip_git_repo_check: bool = False,
         workdir: str = "/home/newton/teacher-assistant",
         which: Which = shutil.which,
         runner: Runner = subprocess.run,
@@ -169,6 +170,7 @@ class CodexQuestionExtractor:
         self.use_json = use_json
         self.output_last_message = output_last_message
         self.image_input_enabled = image_input_enabled
+        self.skip_git_repo_check = skip_git_repo_check
         self.workdir = workdir or "/home/newton/teacher-assistant"
         self._which = which
         self._runner = runner
@@ -246,6 +248,10 @@ class CodexQuestionExtractor:
             raise CodexQuestionExtractionError(
                 "Codex question extractor requires --output-last-message"
             )
+        if self.skip_git_repo_check and "--skip-git-repo-check" not in help_text:
+            raise CodexQuestionExtractionError(
+                "Codex CLI exec does not support required flag --skip-git-repo-check"
+            )
         if self.image_input_enabled and not self._supported_image_flag():
             raise CodexQuestionExtractionError(
                 "Codex CLI image input is not supported by this installed version."
@@ -283,6 +289,8 @@ class CodexQuestionExtractor:
             "--output-last-message",
             str(output_file),
         ]
+        if self.skip_git_repo_check:
+            command.append("--skip-git-repo-check")
         if self.use_json and self._help_text and "--json" in self._help_text:
             command.append("--json")
         if self.model_name:
@@ -388,6 +396,7 @@ def build_question_extractor(
             use_json=resolved_settings.codex_cli_use_json,
             output_last_message=resolved_settings.codex_cli_output_last_message,
             image_input_enabled=resolved_settings.codex_cli_image_input_enabled,
+            skip_git_repo_check=resolved_settings.codex_cli_skip_git_repo_check,
             workdir=resolved_settings.codex_cli_workdir,
         )
     raise CodexQuestionExtractionError(f"Unsupported question import provider: {provider}")

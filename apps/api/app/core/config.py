@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     codex_cli_workdir: str = Field(
         default="/home/newton/teacher-assistant", alias="CODEX_CLI_WORKDIR"
     )
+    codex_cli_skip_git_repo_check: bool = Field(
+        default=False, alias="CODEX_CLI_SKIP_GIT_REPO_CHECK"
+    )
     question_import_provider: str = Field(default="mock", alias="QUESTION_IMPORT_PROVIDER")
     codex_question_extraction_enabled: bool = Field(
         default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"
