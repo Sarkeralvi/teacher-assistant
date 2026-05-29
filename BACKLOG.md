@@ -496,3 +496,16 @@ Acceptance criteria: Command includes --skip-git-repo-check when enabled and omi
 Tests required: git status; safe no-repo Codex OK check; make up; alembic upgrade head; make health; focused Codex provider/question import tests; frontend static tests; make test; make lint; frontend build; controlled one real Codex smoke; make down; final git status.
 Risks: Real extraction quality still needs teacher review and broader evaluation before production use; this smoke validated only one synthetic image case.
 Status: Done
+
+TASK-ID: TA-W1-030
+Title: Question extraction evaluation dataset
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-029B
+Files affected: apps/api/packages/evaluation/question_import_evaluation.py, apps/api/tests/test_question_import_evaluation.py, BACKLOG.md
+Goal: Build a backend-focused evaluation harness and dataset format to measure question-paper extraction quality before trusting it for real teacher use.
+Implementation notes: Added a question import evaluation module with JSON/JSONL dataset loading, expected-question schema, provider runner over the existing question import extractor abstraction, mock-safe default behavior, explicit two-step real Codex guard requiring QUESTION_IMPORT_EVAL_ALLOW_REAL_PROVIDER=true plus --allow-real-provider, max-real-cases enforcement, metrics calculation, and JSON/Markdown artifact writing under an output directory. No automatic Question creation, no real grading, no voice command, and no browser default real extraction changes were added.
+Acceptance criteria: Dataset loader supports JSON and JSONL; metrics cover case count, expected/extracted counts, question-count match rate, question-number match rate, exact text match rate, normalized text similarity average, marks match rate, needs-review rate, provider-warning count, and parse-failure count; real Codex eval is rejected unless explicitly enabled and capped; report artifacts are written; tests avoid real Codex calls.
+Tests required: git status; make up; alembic upgrade head; make health; focused question extraction eval tests; make test; make lint; frontend build; optional one synthetic real Codex eval if safe/auth available; make down; final git status.
+Risks: Evaluation metrics are simple string/marks comparisons and should be expanded with teacher-curated datasets before production trust decisions.
+Status: Done
