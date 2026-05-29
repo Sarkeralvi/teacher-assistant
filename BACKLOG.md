@@ -522,3 +522,29 @@ Acceptance criteria: Synthetic dataset includes fully correct, partially correct
 Tests required: git status; make up; alembic upgrade head; make health; focused grading eval tests; mock evaluation; capped real Codex eval if auth/quota available; make test; make lint; frontend build; make down; final git status.
 Risks: Dataset is tiny and synthetic; the result is a signal that the scoring path can distinguish simple cases, not evidence of classroom grading accuracy. Wrong-answer expected score/rubric calibration needs teacher curation.
 Status: Done
+
+TASK-ID: TA-W1-032
+Title: Teacher-curated evaluation protocol
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-031
+Files affected: docs/TEACHER_CURATED_EVAL_PROTOCOL.md, docs/EVAL_DATASET_TEMPLATE.jsonl, BACKLOG.md
+Goal: Create a safe teacher-curated evaluation protocol for collecting real grading examples and comparing AI suggestions against teacher marks.
+Implementation notes: Added documentation-only protocol covering purpose, data/privacy rules, dataset size targets, case categories, required fields, metrics, pilot go/no-go thresholds, review process, reporting format, and privacy/security notes. Added a JSONL template with three synthetic example rows: correct, partial, and wrong. No product code was changed, no real Codex grading was run, and no TA-W1-033 collection work was started.
+Acceptance criteria: Protocol includes teacher-control and privacy rules; template contains three synthetic rows; backlog marks TA-W1-032 done and records TA-W1-033 as the next recommended task.
+Tests required: git status --short; make test; make lint; git status --short.
+Risks: Protocol quality still depends on later teacher-curated case collection and strict anonymization before using real classroom artifacts.
+Status: Done
+
+TASK-ID: TA-W1-033
+Title: Collect first 20 teacher-curated grading evaluation cases
+Owner: Human/Hermes
+Priority: P0
+Dependencies: TA-W1-032
+Files affected: To be decided; likely ignored evaluation artifacts plus optional sanitized docs updates.
+Goal: Collect the first 20 teacher-curated grading evaluation cases under the TA-W1-032 protocol.
+Implementation notes: Use anonymized, synthetic, or consented examples only. Keep teacher marks as ground truth. Do not commit sensitive answer images or raw student data. Do not change production grading behavior during collection.
+Acceptance criteria: 20 cases exist with required fields, category coverage is recorded, privacy/anonymization status is documented, and no sensitive artifacts are committed.
+Tests required: Validate dataset shape; run approved evaluation only after data is reviewed; keep git status clean except approved sanitized files.
+Risks: Privacy/anonymization errors or unrepresentative cases could make the dataset unsafe or misleading.
+Status: Pending
