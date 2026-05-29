@@ -111,6 +111,7 @@ class QuestionImportJob(TimestampMixin, Base):
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     provider: Mapped[str] = mapped_column(String(128), nullable=False, default="mock")
     draft_questions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    provider_warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     assessment: Mapped[Assessment] = relationship(back_populates="question_import_jobs")

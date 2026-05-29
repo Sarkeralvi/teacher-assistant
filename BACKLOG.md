@@ -470,3 +470,16 @@ Acceptance criteria: Uploading a PDF/image question paper creates an import job 
 Tests required: git status; make up; alembic upgrade; make health; focused question import tests; frontend static tests; make test; make lint; frontend build; make down; final git status.
 Risks: Current extractor is deterministic/mock and best-effort; real OCR/document understanding and sub-question handling need later evaluation before production use.
 Status: Done
+
+TASK-ID: TA-W1-029A
+Title: Codex CLI question paper extraction provider
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-028B
+Files affected: .env.example, apps/api/app/core/config.py, apps/api/app/models.py, apps/api/app/schemas.py, apps/api/app/api/routes/question_imports.py, apps/api/app/services/question_import_extractor.py, apps/api/alembic/versions/0004_question_import_provider_warnings.py, apps/api/tests/test_question_import_codex_provider.py, apps/api/tests/test_question_import_api.py, apps/api/tests/test_migrations.py, apps/api/tests/test_models_metadata.py, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Add a controlled Codex CLI question-paper extraction provider for teacher-reviewed draft question imports while keeping mock/simple extraction as the default.
+Implementation notes: Added QUESTION_IMPORT_PROVIDER and CODEX_QUESTION_EXTRACTION_ENABLED settings, an explicit codex_cli_question_extractor provider behind a safe factory, strict Codex JSON/schema validation, provider warnings persistence, image routing through the Codex CLI image flag when enabled, sanitized provider errors, and frontend notes warning that default extraction is mock/simple and real Codex extraction must be explicitly enabled. No automatic Question creation, no grading-provider behavior changes, no voice command, and no real extraction default enablement.
+Acceptance criteria: Mock extractor remains default; requested Codex provider is rejected unless explicitly enabled; fake Codex runner output is schema-validated; invalid JSON/schema and subprocess failures fail cleanly; image uploads can route to enabled provider; drafts remain teacher-reviewed and accept endpoint remains the only path that creates real Questions.
+Tests required: git status; make up; alembic upgrade; make health; focused question import/provider tests; frontend static tests; make test; make lint; frontend build; optional one real Codex smoke if safe/auth available; make down; final git status.
+Risks: Real Codex smoke was blocked by local Codex usage limit, so the real external call path is implemented and fake-runner tested but not live-verified in this task.
+Status: Done

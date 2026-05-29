@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import Assessment, Question, QuestionImportJob
 from app.schemas import (
@@ -13,11 +14,15 @@ from app.schemas import (
     QuestionImportAcceptResponse,
     QuestionImportJobRead,
 )
-from app.services.question_import_extractor import MockQuestionExtractor
+from app.services.question_import_extractor import (
+    CodexQuestionExtractionError,
+    build_question_extractor,
+)
 from app.services.storage import LocalStorage
 
 DbSession = Annotated[Session, Depends(get_db)]
 QuestionImportFile = Annotated[UploadFile, File(...)]
+QuestionImportProvider = Annotated[str | None, Form()]
 
 router = APIRouter(tags=["question-imports"])
 
@@ -37,6 +42,7 @@ def create_question_import(
     assessment_id: int,
     db: DbSession,
     file: QuestionImportFile,
+    provider: QuestionImportProvider = None,
 ) -> QuestionImportJob:
     assessment = db.get(Assessment, assessment_id)
     if assessment is None:
@@ -50,7 +56,12 @@ def create_question_import(
 
     storage = LocalStorage()
     stored = storage.save_question_import(file, assessment_id, suffix)
-    extractor = MockQuestionExtractor()
+    try:
+        extractor = build_question_extractor(
+            settings=get_settings(), requested_provider=provider
+        )
+    except CodexQuestionExtractionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     job = QuestionImportJob(
         assessment_id=assessment_id,
         status="uploaded",
@@ -59,13 +70,23 @@ def create_question_import(
         file_path=stored.relative_path,
         provider=extractor.provider,
         draft_questions=[],
+        provider_warnings=[],
     )
     db.add(job)
     db.flush()
     try:
-        drafts = extractor.extract(stored.absolute_path, job.content_type)
-        job.draft_questions = [draft.model_dump(mode="json") for draft in drafts]
+        result = extractor.extract(stored.absolute_path, job.content_type)
+        job.draft_questions = [draft.model_dump(mode="json") for draft in result.draft_questions]
+        job.provider_warnings = result.warnings
         job.status = "drafted"
+    except CodexQuestionExtractionError as exc:
+        job.status = "failed"
+        job.error = str(exc)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:  # pragma: no cover - defensive safety path
         job.status = "failed"
         job.error = "Question extraction failed"

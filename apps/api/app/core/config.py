@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     codex_cli_workdir: str = Field(
         default="/home/newton/teacher-assistant", alias="CODEX_CLI_WORKDIR"
     )
+    question_import_provider: str = Field(default="mock", alias="QUESTION_IMPORT_PROVIDER")
+    codex_question_extraction_enabled: bool = Field(
+        default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

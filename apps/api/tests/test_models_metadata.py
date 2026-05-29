@@ -85,6 +85,7 @@ EXPECTED_COLUMNS = {
         "file_path",
         "provider",
         "draft_questions",
+        "provider_warnings",
         "error",
         "created_at",
         "updated_at",
@@ -252,6 +253,7 @@ def test_numeric_and_json_fields_use_postgresql_friendly_types() -> None:
 
     assert isinstance(Rubric.rubric_json.property.columns[0].type, JSONB)
     assert isinstance(QuestionImportJob.draft_questions.property.columns[0].type, JSONB)
+    assert isinstance(QuestionImportJob.provider_warnings.property.columns[0].type, JSONB)
     assert isinstance(GradeSuggestion.raw_response_json.property.columns[0].type, JSONB)
     assert isinstance(AuditLog.payload_json.property.columns[0].type, JSONB)
 

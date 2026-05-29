@@ -78,6 +78,8 @@ export type DraftQuestion = {
   needs_review: boolean;
 };
 
+export type QuestionImportProvider = "mock" | "codex_cli_question_extractor";
+
 export type QuestionImportJob = {
   id: number;
   assessment_id: number;
@@ -87,6 +89,7 @@ export type QuestionImportJob = {
   file_path: string;
   provider: string;
   draft_questions: DraftQuestion[];
+  provider_warnings: string[];
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -375,9 +378,14 @@ export function listQuestions(assessmentId: number) {
   return apiRequest<Question[]>(`/assessments/${assessmentId}/questions`);
 }
 
-export function importQuestionsFromPaper(assessmentId: number, file: File) {
+export function importQuestionsFromPaper(
+  assessmentId: number,
+  file: File,
+  provider: QuestionImportProvider = "mock",
+) {
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("provider", provider);
   return apiRequest<QuestionImportJob>(`/assessments/${assessmentId}/question-imports`, {
     method: "POST",
     formData,

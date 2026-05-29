@@ -241,3 +241,79 @@ def test_question_import_does_not_expose_sensitive_or_call_codex(
     assert "password_hash" not in body
     assert "raw_response_json" not in body
     assert response.json()["provider"] == "mock"
+
+
+def test_real_codex_provider_request_rejected_when_not_enabled(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assessment = create_assessment(client)
+    image_path = tmp_path / "paper.png"
+    make_png(image_path)
+
+    with image_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            data={"provider": "codex_cli_question_extractor"},
+            files={"file": ("paper.png", file_obj, "image/png")},
+        )
+
+    assert response.status_code == 403
+    assert "explicitly enabled" in response.json()["detail"]
+
+
+def test_image_upload_routed_to_enabled_codex_provider_with_warnings(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import question_imports
+    from app.schemas import DraftQuestion
+    from app.services.question_import_extractor import QuestionExtractionResult
+
+    class FakeCodexExtractor:
+        provider = "codex_cli_question_extractor"
+
+        def extract(self, file_path: Path, content_type: str) -> QuestionExtractionResult:
+            assert file_path.is_file()
+            assert content_type == "image/png"
+            return QuestionExtractionResult(
+                draft_questions=[
+                    DraftQuestion(
+                        draft_id="draft-1",
+                        question_no="1",
+                        question_text="Synthetic image question",
+                        model_answer=None,
+                        total_marks="5.00",
+                        confidence="0.90",
+                        source_page=1,
+                        source_text_excerpt="Q1. Synthetic image question [5 marks]",
+                        needs_review=True,
+                    )
+                ],
+                warnings=["fake codex warning"],
+            )
+
+    def fake_build_question_extractor(*, settings, requested_provider=None):
+        assert settings.codex_question_extraction_enabled is True
+        assert requested_provider == "codex_cli_question_extractor"
+        return FakeCodexExtractor()
+
+    monkeypatch.setenv("CODEX_QUESTION_EXTRACTION_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(question_imports, "build_question_extractor", fake_build_question_extractor)
+    assessment = create_assessment(client)
+    image_path = tmp_path / "paper.png"
+    make_png(image_path)
+
+    with image_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            data={"provider": "codex_cli_question_extractor"},
+            files={"file": ("paper.png", file_obj, "image/png")},
+        )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["provider"] == "codex_cli_question_extractor"
+    assert job["provider_warnings"] == ["fake codex warning"]
+    assert len(job["draft_questions"]) == 1
+    assert job["draft_questions"][0]["needs_review"] is True
+    assert client.get(f"/assessments/{assessment['id']}/questions").json() == []

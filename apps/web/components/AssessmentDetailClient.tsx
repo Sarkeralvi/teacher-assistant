@@ -498,6 +498,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <h2 className="text-xl font-semibold">Import questions from paper</h2>
           <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
+          <p className="text-sm text-slate-400">Default extraction is mock/simple.</p>
+          <p className="text-sm text-slate-400">Real Codex extraction must be explicitly enabled.</p>
+          <p className="text-sm text-slate-400">If real extraction is not enabled, uploaded images will not be treated as understood question papers.</p>
           <p className="text-sm text-slate-400">Upload a question paper PDF/image to generate draft questions by question number. No real Codex extraction is enabled by default.</p>
         </div>
         <form onSubmit={handleQuestionImport} className="grid gap-3">
@@ -521,6 +524,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         {questionImportJob ? (
           <div className="grid gap-3 rounded border border-slate-800 p-4">
             <p className="text-sm text-slate-300">Import job #{questionImportJob.id} · {questionImportJob.status} · provider: {questionImportJob.provider}</p>
+            {questionImportJob.provider_warnings.length > 0 ? (
+              <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
+                <p className="font-semibold">Extraction warnings</p>
+                <ul className="list-disc pl-5">
+                  {questionImportJob.provider_warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <p className="text-sm text-slate-400">{selectedDraftCount} selected draft questions</p>
             {draftQuestions.map((draft) => {
               const edit = draftQuestionEdits[draft.draft_id] ?? draftQuestionToEdit(draft);

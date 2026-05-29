@@ -140,6 +140,7 @@ class QuestionImportJobRead(ORMBase):
     file_path: str
     provider: str
     draft_questions: list[DraftQuestion]
+    provider_warnings: list[str] = Field(default_factory=list)
     error: str | None
     created_at: datetime
     updated_at: datetime
