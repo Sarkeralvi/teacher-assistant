@@ -562,3 +562,16 @@ Tests required: git status --short; JSONL validation; make test; make lint; git 
 Risks: Dataset is all full-score correct answers and supports correct-answer evaluation only; it still needs mixed-quality teacher-curated cases and matching answer images for Q9–Q20 before broader grading-quality evaluation.
 Status: Done
 
+TASK-ID: TA-W1-033C
+Title: Evaluate teacher-marked image-backed correct cases
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-033B
+Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md; ignored local artifacts under `/tmp/ta_teacher_eval_033c_storage` and `/tmp/ta_teacher_eval_033c_artifacts`
+Goal: Run a limited real Codex grading evaluation on the 8 image-backed teacher-marked correct cases and record results without overclaiming grading accuracy.
+Implementation notes: Used only Q1–Q8 from `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl`; did not use Q9–Q20 pending-image rows; ran existing grading evaluation harness with `provider_mode=codex_cli`, `allow_real_provider=true`, `max_real_cases=8`, and image input enabled. No product UI/code changed, no batch production grading run, and no raw images/crops/eval artifacts committed.
+Acceptance criteria: Report case_count, exact_match_rate, within_1_mark_rate, mean_absolute_error, false_confident_error_count, severe_error_count, over/under score counts, by-answer-type breakdown, per-case results, artifact paths, caveats, and required test/lint status.
+Tests required: git status --short; verify dataset/crops; safe Codex CLI OK check; real Codex eval capped at 8 Q1–Q8 cases; make test; make lint; git status --short.
+Risks: All evaluated cases are correct/full-score only; this does not establish accuracy on wrong, partial, blank, irrelevant, or messy teacher-marked answers.
+Status: Done
+

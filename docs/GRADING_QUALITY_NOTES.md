@@ -87,3 +87,55 @@ Validated the JSONL shape locally:
 
 This staged set is useful for checking correct-answer recognition and rubric/schema handling. It is **not** a complete grading-quality dataset because all rows are correct full-score answers. Partial, wrong, blank, irrelevant, mixed-quality, and hard real classroom cases are still needed before broader grading-quality claims.
 
+
+## TA-W1-033C — Real Codex evaluation on Q1–Q8 teacher-marked correct cases
+
+Recorded at: 2026-05-29T22:02:08 local session source PDF.
+
+### Scope
+
+- Evaluation type: limited real Codex grading evaluation on the 8 image-backed teacher-marked correct cases only.
+- Input dataset: `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl` filtered to Q1–Q8.
+- Answer crops: `/tmp/ta_teacher_eval_cases/crops/q01.png` through `q08.png`.
+- Temporary storage root: `/tmp/ta_teacher_eval_033c_storage`.
+- Evaluation artifacts:
+  - JSON: `/tmp/ta_teacher_eval_033c_artifacts/grading-eval-20260529T161405Z.json`
+  - Markdown: `/tmp/ta_teacher_eval_033c_artifacts/grading-eval-20260529T161405Z.md`
+- Provider path: existing grading evaluation harness with `provider_mode = codex_cli`, `allow_real_provider = true`, `max_real_cases = 8`, and Codex CLI image input enabled.
+- Production code/UI: not changed.
+- Production/batch grading: not run.
+- Raw images/crops/eval artifacts: not committed.
+
+### Metrics
+
+- `case_count`: 8
+- `exact_match_rate`: 1
+- `within_1_mark_rate`: 1
+- `mean_absolute_error`: 0.00
+- `false_confident_error_count`: 0
+- `severe_error_count`: 0
+- `over_score_count`: 0
+- `under_score_count`: 0
+- `needs_review_rate`: 1
+- `average_confidence`: 0.99
+- `by_answer_type.correct.case_count`: 8
+- `by_answer_type.correct.exact_match_rate`: 1
+- `by_answer_type.correct.within_1_mark_rate`: 1
+- `by_answer_type.correct.mean_absolute_error`: 0.00
+
+### Per-case result
+
+| Case | Expected | Codex score | Absolute error | Confidence | Needs review | Review flags |
+|---|---:|---:|---:|---:|---|---|
+| teacher_marked_correct_q01 | 5 | 5 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q02 | 5 | 5.0 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q03 | 5 | 5.0 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q04 | 5 | 5 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q05 | 5 | 5.0 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q06 | 5 | 5.0 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q07 | 5 | 5 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+| teacher_marked_correct_q08 | 5 | 5 | 0.00 | 0.99 | true | teacher_review_required, codex_cli_provider, image_input_used |
+
+### Interpretation
+
+This run only supports the narrow claim that the real Codex CLI grading path matched the teacher full-score labels on these 8 image-backed correct-answer cases. It does **not** prove grading accuracy on partial, wrong, blank, irrelevant, messy, or broader classroom cases. TA-W1-033 remains Partial/Pending until mixed-quality teacher-curated cases and missing Q9–Q20 images are collected.
