@@ -547,4 +547,18 @@ Implementation notes: Use anonymized, synthetic, or consented examples only. Kee
 Acceptance criteria: 20 cases exist with required fields, category coverage is recorded, privacy/anonymization status is documented, and no sensitive artifacts are committed.
 Tests required: Validate dataset shape; run approved evaluation only after data is reviewed; keep git status clean except approved sanitized files.
 Risks: Privacy/anonymization errors or unrepresentative cases could make the dataset unsafe or misleading.
-Status: Pending
+Status: Partial/Pending
+
+TASK-ID: TA-W1-033B
+Title: Stage teacher-marked answer-sheet evaluation cases
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-032, TA-W1-033
+Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md; ignored local dataset `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl`
+Goal: Stage a safe teacher-marked evaluation dataset draft from the provided anonymized marking metadata while separating image-backed cases from metadata-only pending-image cases.
+Implementation notes: Created 20 JSONL rows for Q1–Q20 under `/tmp/ta_teacher_eval_cases/`; copied Q1–Q8 answer images to ignored `/tmp/ta_teacher_eval_cases/crops/`; marked Q9–Q20 with `answer_image_path = null` and `image_status = missing_image_pending`; recorded anonymization confirmation and full-score teacher marks. No product code changed, no real Codex grading run, and no raw answer images/crops committed.
+Acceptance criteria: Q1–Q20 rows exist; expected scores do not exceed max scores; rubric marks sum to max score; answer types and anonymization status are present; Q1–Q8 image-backed paths exist locally; Q9–Q20 are marked pending image; notes document limits and remaining human data needs.
+Tests required: git status --short; JSONL validation; make test; make lint; git status --short.
+Risks: Dataset is all full-score correct answers and supports correct-answer evaluation only; it still needs mixed-quality teacher-curated cases and matching answer images for Q9–Q20 before broader grading-quality evaluation.
+Status: Done
+

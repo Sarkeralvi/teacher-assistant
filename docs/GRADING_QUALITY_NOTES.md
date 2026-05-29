@@ -50,3 +50,40 @@ Generated PNG answer fixtures were stored under ignored `data/artifacts/answer_r
 ### Interpretation
 
 This does **not** establish production grading accuracy. It only shows that, on a tiny synthetic set, the real Codex grading path can score simple correct/partial/blank/irrelevant cases as expected and stayed within one mark for the deliberately wrong case. Teacher-curated classroom samples are still required before trusting grading quality.
+
+## TA-W1-033B — Teacher-marked correct-answer evaluation cases staged
+
+Recorded at: 2026-05-29T21:21:18 local session source PDFs.
+
+### Scope
+
+- Dataset type: teacher-marked correct-answer evaluation draft from provided anonymized marking metadata.
+- Dataset path: `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl`.
+- Case count: 20 teacher-marked cases, Q1–Q20.
+- Teacher score status: all cases are full-score correct answers (`expected_score = 5`, `max_score = 5`).
+- Anonymization: teacher/founder confirmation says the answer-sheet image contains no student name, roll number, ID number, school name, address, phone number, email address, or other private identifying information.
+- Real provider grading: not run.
+- Production code: not changed.
+
+### Image-backed status
+
+- Q1–Q8: image-backed local answer crops staged under `/tmp/ta_teacher_eval_cases/crops/`.
+- Q9–Q20: metadata-only rows with `answer_image_path = null` and `image_status = missing_image_pending` because matching answer images/pages were not part of the provided instruction set.
+- Generated images/crops were not committed.
+
+### Validation
+
+Validated the JSONL shape locally:
+
+- Q1–Q20 rows exist.
+- `expected_score <= max_score` for every row.
+- Rubric criterion marks sum to `max_score` for every row.
+- `answer_type` is present for every row.
+- Anonymization confirmation is present for every row.
+- Q1–Q8 image-backed paths exist locally.
+- Q9–Q20 are marked `missing_image_pending`.
+
+### Interpretation
+
+This staged set is useful for checking correct-answer recognition and rubric/schema handling. It is **not** a complete grading-quality dataset because all rows are correct full-score answers. Partial, wrong, blank, irrelevant, mixed-quality, and hard real classroom cases are still needed before broader grading-quality claims.
+
