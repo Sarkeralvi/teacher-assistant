@@ -606,13 +606,13 @@ Title: Custom controlled grading run wizard
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-035A
-Files affected: TBD
+Files affected: apps/api/app/models.py, apps/api/app/schemas.py, apps/api/app/services/storage.py, apps/api/app/api/routes/grading_runs.py, apps/api/app/main.py, apps/api/alembic/versions/0005_grading_runs.py, apps/api/tests/test_grading_runs_api.py, apps/api/tests/test_models_metadata.py, apps/api/tests/test_migrations.py, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/web/components/CustomControlledGradingRunClient.tsx, apps/web/app/assessments/[assessmentId]/grading-run/page.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
 Goal: Implement the first workflow mode: a Custom / Controlled grading wizard that guides teachers through question, solution, rubric, script import, confirmation, controlled grading, review, and export.
-Implementation notes: Proposed next task only. Do not implement ZIP upload, answer-region auto-detection, voice command, or automatic final grading as part of this proposal.
+Implementation notes: Added a `grading_runs` table/model for `custom_controlled` runs with teacher ownership, workflow status, notes, and safe relative PDF material paths. Added authenticated grading-run API routes to create/list/read/update runs and upload question/solution/rubric PDFs. Added a frontend wizard page that starts a run, uploads materials, shows step/status state, links to existing question/rubric/script/answer-region/review/export flows, and warns that teacher confirmation is required. Did not implement ZIP upload, automatic answer-region detection, fully automated mode, semi-automated mode, voice command, automatic final grading, or default real Codex batch grading.
 Acceptance criteria: Wizard requires teacher confirmation of questions/model answers/rubrics/marking policy before grading; all AI results go to teacher review; final grades require approval; existing export remains based on finalized grades.
-Tests required: TBD during implementation planning.
-Risks: Must avoid broad automation claims; should start with existing upload/import and manual/controlled region mapping.
-Status: Pending
+Tests required: git status --short; make up; docker compose exec -T backend alembic upgrade head; make health; focused grading-run tests; frontend static tests; make test; make lint; docker compose exec -T frontend npm run build; manual smoke; make down; git status --short.
+Risks: This is a workflow organizer over existing manual/controlled grading flows. Region creation remains manual, grading reliability is unchanged, and real Codex batch grading remains default-off.
+Status: Done
 
 TASK-ID: TA-W1-036
 Title: Semi-automated question/rubric confirmation workflow

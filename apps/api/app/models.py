@@ -44,6 +44,7 @@ class User(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="teacher")
 
     courses: Mapped[list[Course]] = relationship(back_populates="teacher")
+    grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="created_by_teacher")
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="teacher")
 
 
@@ -86,9 +87,42 @@ class Assessment(TimestampMixin, Base):
     course: Mapped[Course] = relationship(back_populates="assessments")
     questions: Mapped[list[Question]] = relationship(back_populates="assessment")
     submissions: Mapped[list[Submission]] = relationship(back_populates="assessment")
+    grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="assessment")
     question_import_jobs: Mapped[list[QuestionImportJob]] = relationship(
         back_populates="assessment"
     )
+
+
+class GradingRun(TimestampMixin, Base):
+    __tablename__ = "grading_runs"
+    __table_args__ = (
+        CheckConstraint("mode in ('custom_controlled')", name="ck_grading_runs_mode"),
+        CheckConstraint(
+            "status in ("
+            "'draft', 'materials_uploaded', 'questions_ready', 'scripts_uploaded', "
+            "'regions_ready', 'grading_ready', 'review_ready', 'completed'"
+            ")",
+            name="ck_grading_runs_status",
+        ),
+        Index("ix_grading_runs_assessment_id", "assessment_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(String(64), nullable=False, default="custom_controlled")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    question_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    solution_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    rubric_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="grading_runs")
+    created_by_teacher: Mapped[User] = relationship(back_populates="grading_runs")
 
 
 class QuestionImportJob(TimestampMixin, Base):

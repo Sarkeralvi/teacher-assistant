@@ -83,6 +83,19 @@ class LocalStorage:
             shutil.copyfileobj(upload.file, output)
         return StoredFile(target, self.relative_to_root(target))
 
+    def save_grading_run_material(
+        self, upload: UploadFile, grading_run_id: int, material_type: str, suffix: str
+    ) -> StoredFile:
+        safe_suffix = suffix.lower()
+        safe_material_type = material_type.replace("_", "-")
+        filename = f"{safe_material_type}-{uuid4().hex}{safe_suffix}"
+        target_dir = self.uploads_dir / "grading_runs" / str(grading_run_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
+        with target.open("wb") as output:
+            shutil.copyfileobj(upload.file, output)
+        return StoredFile(target, self.relative_to_root(target))
+
     def delete_submission_files(self, submission_id: int, relative_paths: list[str]) -> None:
         """Best-effort cleanup for one submission without allowing path traversal."""
         for relative_path in relative_paths:

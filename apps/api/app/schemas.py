@@ -94,6 +94,41 @@ class AssessmentRead(ORMBase):
     updated_at: datetime
 
 
+GradingRunStatus = Literal[
+    "draft",
+    "materials_uploaded",
+    "questions_ready",
+    "scripts_uploaded",
+    "regions_ready",
+    "grading_ready",
+    "review_ready",
+    "completed",
+]
+
+
+class GradingRunCreate(BaseModel):
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class GradingRunUpdate(BaseModel):
+    status: GradingRunStatus | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class GradingRunRead(ORMBase):
+    id: int
+    assessment_id: int
+    created_by_teacher_id: int
+    mode: Literal["custom_controlled"]
+    status: GradingRunStatus
+    question_pdf_path: str | None
+    solution_pdf_path: str | None
+    rubric_pdf_path: str | None
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class QuestionCreate(BaseModel):
     question_no: str = Field(min_length=1, max_length=32)
     question_text: str = Field(min_length=1)

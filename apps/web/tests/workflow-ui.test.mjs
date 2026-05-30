@@ -12,12 +12,14 @@ const requiredFiles = [
   "components/AssessmentDetailClient.tsx",
   "components/AssessmentReviewClient.tsx",
   "components/QuestionDetailClient.tsx",
+  "components/CustomControlledGradingRunClient.tsx",
   "app/dashboard/page.tsx",
   "app/users/page.tsx",
   "app/courses/page.tsx",
   "app/courses/[courseId]/page.tsx",
   "app/assessments/[assessmentId]/page.tsx",
   "app/assessments/[assessmentId]/review/page.tsx",
+  "app/assessments/[assessmentId]/grading-run/page.tsx",
   "app/login/page.tsx",
   "app/register/page.tsx",
   "app/questions/[questionId]/page.tsx",
@@ -85,6 +87,12 @@ for (const symbol of [
   "GradeSuggestion",
   "FinalGrade",
   "ReviewQueueItem",
+  "GradingRun",
+  "createCustomGradingRun",
+  "listAssessmentGradingRuns",
+  "getGradingRun",
+  "updateGradingRun",
+  "uploadGradingRunMaterials",
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -169,9 +177,51 @@ for (const text of [
   "acceptQuestionImportDrafts",
   "Manual question creation remains available",
   "draftQuestionEdits",
+  "Custom Controlled Grading Run",
+  "Custom controlled mode: teacher confirmation required.",
+  "href={`/assessments/${assessmentId}/grading-run`}",
 ]) {
   if (!assessmentDetailUi.includes(text)) {
     throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);
+  }
+}
+
+
+const gradingRunPage = readFileSync(join(root, "app/assessments/[assessmentId]/grading-run/page.tsx"), "utf8");
+const gradingRunClient = readFileSync(join(root, "components/CustomControlledGradingRunClient.tsx"), "utf8");
+const gradingRunUi = gradingRunPage + gradingRunClient;
+for (const text of [
+  "Custom Controlled Grading Run",
+  "Custom controlled mode: teacher confirmation required.",
+  "Start custom controlled run",
+  "Upload/confirm materials",
+  "Question PDF",
+  "Solution/model answer PDF",
+  "Rubric PDF",
+  "Confirm or create questions/rubrics",
+  "Upload scripts",
+  "Create answer regions manually",
+  "Run mock batch grading",
+  "Review suggestions",
+  "Approve selected / export",
+  "No automatic answer-region detection",
+  "No real Codex batch grading by default",
+  "createCustomGradingRun(assessmentId",
+  "uploadGradingRunMaterials",
+  "listAssessmentGradingRuns",
+  "updateGradingRun",
+  "href={`/assessments/${assessmentId}`}",
+  "href={`/assessments/${assessmentId}/review`}",
+  "getAssessmentFinalGradesExportUrl(assessmentId)",
+]) {
+  if (!gradingRunUi.includes(text)) {
+    throw new Error(`Custom controlled grading-run UI missing marker: ${text}`);
+  }
+}
+
+for (const forbidden of ["openai", "anthropic", "gemini", "codex exec", "/grade-all-codex"]) {
+  if (gradingRunUi.toLowerCase().includes(forbidden)) {
+    throw new Error(`Custom controlled wizard must not include direct LLM/Codex marker: ${forbidden}`);
   }
 }
 

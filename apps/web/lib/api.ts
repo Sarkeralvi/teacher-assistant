@@ -101,6 +101,29 @@ export type QuestionImportAcceptResponse = {
   questions: Question[];
 };
 
+export type GradingRun = {
+  id: number;
+  assessment_id: number;
+  created_by_teacher_id: number;
+  mode: "custom_controlled" | string;
+  status: string;
+  question_pdf_path: string | null;
+  solution_pdf_path: string | null;
+  rubric_pdf_path: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GradingRunCreate = {
+  notes?: string | null;
+};
+
+export type GradingRunUpdate = {
+  status?: string;
+  notes?: string | null;
+};
+
 export type Rubric = {
   id: number;
   question_id: number;
@@ -394,6 +417,53 @@ export function importQuestionsFromPaper(
 
 export function getQuestionImportJob(jobId: number) {
   return apiRequest<QuestionImportJob>(`/question-imports/${jobId}`);
+}
+
+export function createCustomGradingRun(assessmentId: number, payload: GradingRunCreate = {}) {
+  return apiRequest<GradingRun>(`/assessments/${assessmentId}/grading-runs/custom`, {
+    method: "POST",
+    body: payload,
+    token: getStoredAuthToken(),
+  });
+}
+
+export function listAssessmentGradingRuns(assessmentId: number) {
+  return apiRequest<GradingRun[]>(`/assessments/${assessmentId}/grading-runs`, {
+    token: getStoredAuthToken(),
+  });
+}
+
+export function getGradingRun(gradingRunId: number) {
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}`, { token: getStoredAuthToken() });
+}
+
+export function updateGradingRun(gradingRunId: number, payload: GradingRunUpdate) {
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}`, {
+    method: "PATCH",
+    body: payload,
+    token: getStoredAuthToken(),
+  });
+}
+
+export function uploadGradingRunMaterials(
+  gradingRunId: number,
+  payload: { question_pdf?: File | null; solution_pdf?: File | null; rubric_pdf?: File | null },
+) {
+  const formData = new FormData();
+  if (payload.question_pdf) {
+    formData.append("question_pdf", payload.question_pdf);
+  }
+  if (payload.solution_pdf) {
+    formData.append("solution_pdf", payload.solution_pdf);
+  }
+  if (payload.rubric_pdf) {
+    formData.append("rubric_pdf", payload.rubric_pdf);
+  }
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}/materials`, {
+    method: "POST",
+    formData,
+    token: getStoredAuthToken(),
+  });
 }
 
 export function acceptQuestionImportDrafts(jobId: number, draftQuestions: DraftQuestionAccept[]) {

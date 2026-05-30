@@ -349,6 +349,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <h1 className="text-3xl font-semibold">{assessment.title}</h1>
           <p className="mt-2 text-slate-400">{assessment.assessment_type} · {assessment.total_marks} marks · {assessment.status}</p>
           <div className="mt-4 flex flex-wrap gap-3">
+            <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
+              Custom Controlled Grading Run
+            </Link>
             <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
               Review & export final grades
             </Link>
@@ -359,6 +362,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           {reviewQueue.every((item) => !item.final_grade) ? (
             <p className="mt-3 text-sm text-slate-400">Approve or edit at least one grade before export is useful.</p>
           ) : null}
+          <p className="mt-3 text-sm text-amber-200">Custom controlled mode: teacher confirmation required.</p>
         </section>
       ) : null}
 
