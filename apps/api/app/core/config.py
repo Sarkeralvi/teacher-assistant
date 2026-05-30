@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     codex_question_extraction_enabled: bool = Field(
         default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"
     )
+    codex_browser_grading_enabled: bool = Field(
+        default=False, alias="CODEX_BROWSER_GRADING_ENABLED"
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

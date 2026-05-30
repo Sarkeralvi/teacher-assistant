@@ -614,6 +614,19 @@ Tests required: git status --short; make up; docker compose exec -T backend alem
 Risks: This is a workflow organizer over existing manual/controlled grading flows. Region creation remains manual, grading reliability is unchanged, and real Codex batch grading remains default-off.
 Status: Done
 
+TASK-ID: TA-W1-035C
+Title: Browser-triggered single Codex grading smoke path
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-035B
+Files affected: apps/api/app/api/routes/grading.py, apps/api/app/core/config.py, apps/api/app/schemas.py, apps/api/app/services/grading_service.py, apps/api/tests/test_browser_codex_grading_api.py, apps/web/components/AssessmentReviewClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Add a safe dev-only browser path to run exactly one real Codex CLI grading call for one selected answer region and verify the result appears as a GradeSuggestion in teacher review.
+Implementation notes: Added guarded `POST /answer-regions/{answer_region_id}/grade-codex-dev`, requiring an authenticated teacher token and `CODEX_BROWSER_GRADING_ENABLED=true`. The endpoint constructs a Codex CLI adapter explicitly, grades only the requested answer region, returns a sanitized response without `raw_response_json`, and persists only a GradeSuggestion/GradingJob with `needs_review=true`; it never creates FinalGrade. Added review-page button text `Real Codex grade this answer` with controlled-testing warning, login gating, loading/error state, and review-queue refresh. Kept mock grading button/path unchanged and did not expose real Codex batch grading.
+Acceptance criteria: Browser UI can trigger one backend-mediated Codex CLI call for a selected answer region when explicitly enabled; disabled flag returns 403; missing auth returns 401; provider errors are sanitized; teacher review remains mandatory; no frontend direct Codex/LLM calls; no automatic final grade is created.
+Tests required: git status --short; make up; docker compose exec -T backend alembic upgrade head; make health; focused backend tests; frontend static tests; make test; make lint; docker compose exec -T frontend npm run build; manual one-call smoke if Codex auth/quota is available; make down; git status --short.
+Risks: The Docker backend image still does not include Codex CLI, so live browser use requires a dev backend runtime where `codex` is installed and `CODEX_BROWSER_GRADING_ENABLED=true`. This is a single-answer smoke path only, not production/batch real grading.
+Status: Done
+
 TASK-ID: TA-W1-036
 Title: Semi-automated question/rubric confirmation workflow
 Owner: Hermes

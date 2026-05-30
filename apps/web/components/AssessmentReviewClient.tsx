@@ -15,6 +15,7 @@ import {
   getAssessmentReviewQueue,
   getAssessmentSummary,
   getCurrentUser,
+  gradeAnswerRegionWithCodexDev,
   rejectGradeSuggestion,
   type Assessment,
   type AssessmentSummary,
@@ -44,6 +45,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   const [batchApproveResult, setBatchApproveResult] = useState<BatchApproveFinalGradesResponse | null>(null);
   const [batchGrading, setBatchGrading] = useState(false);
   const [batchApproving, setBatchApproving] = useState(false);
+  const [realCodexRegionId, setRealCodexRegionId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +127,23 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
 
   function clearSelection() {
     setSelectedSuggestionIds([]);
+  }
+
+  async function handleRealCodexGrade(item: ReviewQueueItem) {
+    if (!currentUser) {
+      setError("Login to run the controlled real Codex smoke action.");
+      return;
+    }
+    setRealCodexRegionId(item.answer_region.id);
+    setError(null);
+    try {
+      await gradeAnswerRegionWithCodexDev(item.answer_region.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run real Codex smoke grading");
+    } finally {
+      setRealCodexRegionId(null);
+    }
   }
 
   async function handleApproveSelected() {
@@ -325,10 +344,13 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
             item={item}
             draft={drafts[item.answer_region.id] ?? defaultDraft(item)}
             saving={savingRegionId === item.answer_region.id}
+            realCodexRunning={realCodexRegionId === item.answer_region.id}
+            realCodexDisabled={!currentUser}
             onDraftChange={(patch) => updateDraft(item.answer_region.id, patch)}
             onApprove={() => void handleApprove(item)}
             onEdit={() => void handleEdit(item)}
             onReject={() => void handleReject(item)}
+            onRealCodexGrade={() => void handleRealCodexGrade(item)}
             selected={Boolean(item.latest_grade_suggestion && selectedSuggestionIds.includes(item.latest_grade_suggestion.id))}
             onSelectionChange={(checked) => {
               if (item.latest_grade_suggestion) {
@@ -422,20 +444,26 @@ function ReviewCard({
   item,
   draft,
   saving,
+  realCodexRunning,
+  realCodexDisabled,
   onDraftChange,
   onApprove,
   onEdit,
   onReject,
+  onRealCodexGrade,
   selected,
   onSelectionChange,
 }: Readonly<{
   item: ReviewQueueItem;
   draft: ReviewDraft;
   saving: boolean;
+  realCodexRunning: boolean;
+  realCodexDisabled: boolean;
   onDraftChange: (patch: Partial<ReviewDraft>) => void;
   onApprove: () => void;
   onEdit: () => void;
   onReject: () => void;
+  onRealCodexGrade: () => void;
   selected: boolean;
   onSelectionChange: (checked: boolean) => void;
 }>) {
@@ -487,6 +515,15 @@ function ReviewCard({
         </a>
         <span className="text-slate-400">Answer region #{item.answer_region.id}</span>
       </div>
+
+      <section className="grid gap-2 rounded border border-red-900 bg-red-950/20 p-3 text-sm text-red-100">
+        <p>
+          Runs one real Codex CLI call through the backend. Use only for controlled testing. Teacher review required.
+        </p>
+        <button className={buttonClass} type="button" disabled={realCodexRunning || realCodexDisabled} onClick={onRealCodexGrade}>
+          {realCodexRunning ? "Running one real Codex call..." : "Real Codex grade this answer"}
+        </button>
+      </section>
 
       <img className="max-h-80 rounded border border-slate-700 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Answer region ${item.answer_region.id}`} />
       <p className="text-sm text-slate-300">Question text: {item.question.question_text}</p>

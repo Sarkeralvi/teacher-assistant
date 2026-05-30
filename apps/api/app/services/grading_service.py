@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.models import AnswerRegion, Assessment, GradeSuggestion, GradingJob, Rubric, Submission
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
+from packages.brain.codex_cli_provider import CodexCliProvider
 
 
 class GradingService:
@@ -28,6 +29,27 @@ class GradingService:
     def grade_answer_region(self, answer_region_id: int) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
         return self._grade_region(region, self.adapter)
+
+    def grade_answer_region_with_codex_cli(
+        self, answer_region_id: int
+    ) -> tuple[GradingJob, GradeSuggestion]:
+        region = self._get_region(answer_region_id)
+        settings = get_settings()
+        codex_adapter = BrainAdapter(
+            CodexCliProvider(
+                command=settings.codex_cli_command,
+                model_name=settings.codex_cli_model,
+                timeout_seconds=settings.codex_cli_timeout_seconds,
+                sandbox=settings.codex_cli_sandbox,
+                use_json=settings.codex_cli_use_json,
+                output_last_message=settings.codex_cli_output_last_message,
+                image_input_enabled=settings.codex_cli_image_input_enabled,
+                workdir=settings.codex_cli_workdir,
+            ),
+            image_input_enabled=settings.codex_cli_image_input_enabled,
+            storage_root=settings.local_storage_root,
+        )
+        return self._grade_region(region, codex_adapter)
 
     def grade_assessment_ungraded_regions_mock(self, assessment_id: int) -> dict[str, object]:
         if self.db.get(Assessment, assessment_id) is None:

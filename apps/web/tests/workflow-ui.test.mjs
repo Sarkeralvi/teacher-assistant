@@ -55,6 +55,8 @@ for (const symbol of [
   "listAssessmentAnswerRegions",
   "getAnswerRegionImageUrl",
   "gradeAnswerRegion",
+  "gradeAnswerRegionWithCodexDev",
+  "BrowserCodexGradeResponse",
   "approveGradeSuggestion",
   "editGradeSuggestion",
   "rejectGradeSuggestion",
@@ -252,6 +254,9 @@ for (const text of [
   "approveSelectedFinalGrades(assessmentId, {",
   "Batch mock grade ungraded answers",
   "Mock grading only. No real Codex calls.",
+  "Real Codex grade this answer",
+  "Runs one real Codex CLI call through the backend. Use only for controlled testing. Teacher review required.",
+  "gradeAnswerRegionWithCodexDev",
   "batchResult",
   "graded_count",
   "skipped_count",
@@ -345,3 +350,19 @@ if (/fetch\([^)]*(openai|codex|llm|chat\/completions)/i.test(assessmentDetail + 
 }
 
 console.log("frontend workflow static checks passed");
+
+const reviewClientForCodex = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
+for (const text of [
+  "Real Codex grade this answer",
+  "Runs one real Codex CLI call through the backend. Use only for controlled testing. Teacher review required.",
+  "gradeAnswerRegionWithCodexDev",
+  "realCodexRegionId",
+  "setError(err instanceof Error ? err.message : \"Failed to run real Codex smoke grading\")",
+]) {
+  if (!reviewClientForCodex.includes(text)) {
+    throw new Error(`Review UI missing browser Codex smoke marker: ${text}`);
+  }
+}
+if (reviewClientForCodex.includes("codex exec") || reviewClientForCodex.includes("CodexCliProvider")) {
+  throw new Error("Frontend must not call Codex/LLM directly");
+}

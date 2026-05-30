@@ -375,9 +375,32 @@ class GradeSuggestionRead(ORMBase):
     created_at: datetime
 
 
+class BrowserCodexGradeSuggestionRead(ORMBase):
+    id: int
+    grading_job_id: int
+    answer_region_id: int
+    question_id: int
+    model_provider: str
+    model_name: str
+    prompt_version: str
+    score: Decimal | None
+    max_score: Decimal
+    confidence: Decimal | None
+    needs_review: bool
+    feedback: str | None
+    cost_estimate: Decimal | None
+    review_flags: list[str]
+    created_at: datetime
+
+
 class GradeAnswerRegionResponse(BaseModel):
     job: GradingJobRead
     suggestion: GradeSuggestionRead
+
+
+class BrowserCodexGradeResponse(BaseModel):
+    job: GradingJobRead
+    suggestion: BrowserCodexGradeSuggestionRead
 
 
 class BatchMockGradeResponse(BaseModel):

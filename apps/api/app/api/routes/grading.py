@@ -6,10 +6,21 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.routes.answer_regions import get_answer_region_or_404
+from app.core.auth import get_current_user
+from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import GradeSuggestion, GradingJob
+from app.models import (
+    AnswerRegion,
+    Assessment,
+    Course,
+    GradeSuggestion,
+    GradingJob,
+    Submission,
+    User,
+)
 from app.schemas import (
     BatchMockGradeResponse,
+    BrowserCodexGradeResponse,
     GradeAnswerRegionResponse,
     GradeSuggestionRead,
     GradingJobRead,
@@ -17,8 +28,55 @@ from app.schemas import (
 from app.services.grading_service import GradingService
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["grading"])
+
+
+def make_browser_codex_grade_response(
+    job: GradingJob, suggestion: GradeSuggestion
+) -> dict[str, object]:
+    raw = suggestion.raw_response_json or {}
+    review_flags = raw.get("review_flags", [])
+    if not isinstance(review_flags, list):
+        review_flags = []
+    return {
+        "job": job,
+        "suggestion": {
+            "id": suggestion.id,
+            "grading_job_id": suggestion.grading_job_id,
+            "answer_region_id": suggestion.answer_region_id,
+            "question_id": suggestion.question_id,
+            "model_provider": suggestion.model_provider,
+            "model_name": suggestion.model_name,
+            "prompt_version": suggestion.prompt_version,
+            "score": suggestion.score,
+            "max_score": suggestion.max_score,
+            "confidence": suggestion.confidence,
+            "needs_review": suggestion.needs_review,
+            "feedback": suggestion.feedback,
+            "cost_estimate": suggestion.cost_estimate,
+            "review_flags": review_flags,
+            "created_at": suggestion.created_at,
+        },
+    }
+
+
+def assert_teacher_owns_answer_region(
+    answer_region_id: int, db: Session, current_user: User
+) -> AnswerRegion:
+    statement = (
+        select(AnswerRegion)
+        .join(Submission, AnswerRegion.submission_id == Submission.id)
+        .join(Assessment, Submission.assessment_id == Assessment.id)
+        .join(Course, Assessment.course_id == Course.id)
+        .where(AnswerRegion.id == answer_region_id)
+        .where(Course.teacher_id == current_user.id)
+    )
+    region = db.scalars(statement).first()
+    if region is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found")
+    return region
 
 
 @router.post(
@@ -29,6 +87,25 @@ router = APIRouter(tags=["grading"])
 def grade_answer_region(answer_region_id: int, db: DbSession) -> dict[str, object]:
     job, suggestion = GradingService(db).grade_answer_region(answer_region_id)
     return {"job": job, "suggestion": suggestion}
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/grade-codex-dev",
+    response_model=BrowserCodexGradeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def grade_answer_region_with_codex_dev(
+    answer_region_id: int, db: DbSession, current_user: CurrentUser
+) -> dict[str, object]:
+    settings = get_settings()
+    if not settings.codex_browser_grading_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CODEX_BROWSER_GRADING_ENABLED must be true for dev Codex grading",
+        )
+    assert_teacher_owns_answer_region(answer_region_id, db, current_user)
+    job, suggestion = GradingService(db).grade_answer_region_with_codex_cli(answer_region_id)
+    return make_browser_codex_grade_response(job, suggestion)
 
 
 @router.post(

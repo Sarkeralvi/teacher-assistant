@@ -230,6 +230,18 @@ export type BatchMockGradeResponse = {
   errors: string[];
 };
 
+export type BrowserCodexGradeResponse = {
+  job: {
+    id: number;
+    answer_region_id: number;
+    status: string;
+    error: string | null;
+    created_at: string;
+    completed_at: string | null;
+  };
+  suggestion: Omit<GradeSuggestion, "raw_response_json"> & { review_flags: string[] };
+};
+
 export type BatchApproveFinalGradesResponse = {
   requested_count: number;
   approved_count: number;
@@ -542,6 +554,13 @@ export function getAnswerRegionImageUrl(answerRegionId: number) {
 export function gradeAnswerRegion(answerRegionId: number) {
   return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {
     method: "POST",
+  });
+}
+
+export function gradeAnswerRegionWithCodexDev(answerRegionId: number) {
+  return apiRequest<BrowserCodexGradeResponse>(`/answer-regions/${answerRegionId}/grade-codex-dev`, {
+    method: "POST",
+    token: getStoredAuthToken(),
   });
 }
 
