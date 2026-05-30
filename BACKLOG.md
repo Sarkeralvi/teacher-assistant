@@ -588,3 +588,68 @@ Tests required: git status --short; make up; docker compose exec -T backend alem
 Risks: Smoke used manually staged broad/full-page regions and only 3 cases. The partial Script-2 case was over-scored by 2.5 marks, so this confirms pipeline operability but not grading reliability. Tighter region mapping, better question/rubric extraction, anonymization review, and more mixed teacher-marked cases remain manual.
 Status: Done
 
+TASK-ID: TA-W1-035A
+Title: Define grading workflow modes
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-034A
+Files affected: docs/GRADING_WORKFLOW_MODES.md, docs/PRODUCT_ROADMAP.md, BACKLOG.md
+Goal: Define product architecture and roadmap for Fully Automated, Semi-Automated, and Custom / Controlled grading modes before implementation.
+Implementation notes: Created a planning-only workflow-modes document covering inputs, outputs, automation level, teacher confirmation points, risk, current support, missing capabilities, recommended build order, safety rules, data model/API/UI/evaluation implications, and Tough/General/Easy marking policy design. Updated product roadmap with the three-mode sequence and kept teacher review mandatory. No product code changed, no ZIP upload or answer-region auto-detection implemented, no voice command work, and no grading run performed.
+Acceptance criteria: Documentation clearly defines all three modes; explains Custom / Controlled first, Semi-Automated second, Fully Automated last; records that fully automated grading is not proven reliable; adds next implementation proposal and future tasks.
+Tests required: git status --short; make test; make lint; git status --short.
+Risks: This is architecture/roadmap only; implementation still needs careful gates so product behavior does not accidentally auto-finalize or imply reliable full automation.
+Status: Done
+
+TASK-ID: TA-W1-035B
+Title: Custom controlled grading run wizard
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-035A
+Files affected: TBD
+Goal: Implement the first workflow mode: a Custom / Controlled grading wizard that guides teachers through question, solution, rubric, script import, confirmation, controlled grading, review, and export.
+Implementation notes: Proposed next task only. Do not implement ZIP upload, answer-region auto-detection, voice command, or automatic final grading as part of this proposal.
+Acceptance criteria: Wizard requires teacher confirmation of questions/model answers/rubrics/marking policy before grading; all AI results go to teacher review; final grades require approval; existing export remains based on finalized grades.
+Tests required: TBD during implementation planning.
+Risks: Must avoid broad automation claims; should start with existing upload/import and manual/controlled region mapping.
+Status: Pending
+
+TASK-ID: TA-W1-036
+Title: Semi-automated question/rubric confirmation workflow
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W1-035B
+Files affected: TBD
+Goal: Add a semi-automated workflow where AI drafts question discretization, model answers, and rubrics, then teacher confirmation gates batch grading.
+Implementation notes: Future task only.
+Acceptance criteria: Grading cannot start until teacher confirms/edit drafts and marking policy.
+Tests required: TBD.
+Risks: Draft quality must be evaluated before broad use.
+Status: Pending
+
+TASK-ID: TA-W1-037
+Title: Fully automated ZIP grading prototype
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W1-036, TA-W1-038
+Files affected: TBD
+Goal: Prototype highest-risk workflow using question PDF plus ZIP scripts after lower-risk workflows and quality gates exist.
+Implementation notes: Future task only. Do not claim reliability until evaluated on mixed original teacher-marked cases.
+Acceptance criteria: All AI results still require teacher review and final approval.
+Tests required: TBD.
+Risks: Highest risk because extraction, rubric drafting, script processing, answer detection, mapping, and grading errors compound.
+Status: Pending
+
+TASK-ID: TA-W1-038
+Title: Marking policy calibration
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W1-035A
+Files affected: TBD
+Goal: Calibrate and evaluate Tough, General, and Easy rubric interpretation policies across mixed teacher-marked cases.
+Implementation notes: Future task only.
+Acceptance criteria: Every grading run records policy; evaluation reports metrics by policy; teacher review remains mandatory.
+Tests required: TBD.
+Risks: Policy prompts may shift scores unpredictably without calibration.
+Status: Pending
+
