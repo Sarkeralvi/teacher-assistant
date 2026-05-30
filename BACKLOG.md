@@ -575,3 +575,16 @@ Tests required: git status --short; verify dataset/crops; safe Codex CLI OK chec
 Risks: All evaluated cases are correct/full-score only; this does not establish accuracy on wrong, partial, blank, irrelevant, or messy teacher-marked answers.
 Status: Done
 
+TASK-ID: TA-W1-034A
+Title: Original document grading evaluation preparation and limited smoke
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-033C
+Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md; ignored local inputs/artifacts under `/tmp/ta_original_doc_eval/`; local app storage under ignored `data/`.
+Goal: Determine whether the current app can grade selected answer regions from real/original documents using the existing question/rubric/answer-region/Codex evaluation pipeline.
+Implementation notes: Copied the three provided original PDFs into ignored `/tmp/ta_original_doc_eval/input/`, rendered page images/contact sheets, performed a visible privacy pass, created a controlled assessment through the app/API path, uploaded Script-1 and Script-2 through the submission upload endpoint, manually created 3 full-page answer regions only, prepared teacher-score eval cases, passed a safe no-repo Codex OK check, and ran the existing grading evaluation harness with `provider_mode=codex_cli`, `allow_real_provider=true`, image input enabled, and `max_real_cases=3`. No production batch grading, no automatic final grades, no browser default real grading, and no product code changes.
+Acceptance criteria: Original documents are inventoried; privacy/anonymization status is reported; 3–5 selected cases are staged with teacher expected scores; real Codex grading runs only if safe auth check passes; metrics/per-case results and artifact paths are recorded; required checks pass; raw PDFs/images/crops are not committed.
+Tests required: git status --short; make up; docker compose exec -T backend alembic upgrade head; make health; safe Codex CLI OK check; capped real Codex eval on 3 cases; make test; make lint; docker compose exec -T frontend npm run build; make down; git status --short.
+Risks: Smoke used manually staged broad/full-page regions and only 3 cases. The partial Script-2 case was over-scored by 2.5 marks, so this confirms pipeline operability but not grading reliability. Tighter region mapping, better question/rubric extraction, anonymization review, and more mixed teacher-marked cases remain manual.
+Status: Done
+

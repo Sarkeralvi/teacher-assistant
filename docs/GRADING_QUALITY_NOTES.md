@@ -139,3 +139,56 @@ Recorded at: 2026-05-29T22:02:08 local session source PDF.
 ### Interpretation
 
 This run only supports the narrow claim that the real Codex CLI grading path matched the teacher full-score labels on these 8 image-backed correct-answer cases. It does **not** prove grading accuracy on partial, wrong, blank, irrelevant, messy, or broader classroom cases. TA-W1-033 remains Partial/Pending until mixed-quality teacher-curated cases and missing Q9–Q20 images are collected.
+
+## TA-W1-034A — Original document grading evaluation smoke
+
+Recorded at: 2026-05-30T06:20:04Z local session source PDFs.
+
+### Scope
+
+- Evaluation type: limited original-document smoke using founder-provided real PDFs, not AI-synthetic examples.
+- Input PDFs copied to ignored `/tmp/ta_original_doc_eval/input/`:
+  - `Section-A_question_solution_and_rubric.pdf` — 13 rendered pages.
+  - `script-1.pdf` — 13 rendered pages.
+  - `Script-2.pdf` — 17 rendered pages.
+- Rendered page images and contact sheets were kept under ignored `/tmp/ta_original_doc_eval/pages/` and `/tmp/ta_original_doc_eval/artifacts/contact_sheets/`.
+- Privacy/anonymization check: contact-sheet inspection found no obvious student name, roll/ID, phone/email, or private institution details in the selected smoke pages; full production use still needs explicit anonymization review.
+- Production/batch grading: not run.
+- Final grades: not created.
+- Browser default real Codex grading: not enabled.
+- Product code/UI: not changed.
+- Raw PDFs/page images/crops/eval artifacts: not committed.
+
+### Selected smoke cases
+
+| Case | Source | Page | Question label | Expected teacher score | Codex score | Absolute error | Confidence | Needs review |
+|---|---|---:|---|---:|---:|---:|---:|---|
+| `orig_s1_p04_q2a` | `script-1.pdf` | 4 | `S1-P4-Q2(a)` | 10.00 / 10.00 | 9.25 | 0.75 | 0.84 | true |
+| `orig_s1_p05_q2b` | `script-1.pdf` | 5 | `S1-P5-Q2(b)` | 10.00 / 10.00 | 10.0 | 0.00 | 0.91 | true |
+| `orig_s2_p07_q1c` | `Script-2.pdf` | 7 | `S2-P7-Q1(c)` | 7.00 / 10.00 | 9.5 | 2.50 | 0.82 | true |
+
+### Metrics
+
+- `case_count`: 3
+- `exact_match_rate`: 0.3333333333333333333333333333
+- `within_1_mark_rate`: 0.6666666666666666666666666667
+- `mean_absolute_error`: 1.083333333333333333333333333
+- `false_confident_error_count`: 1
+- `severe_error_count`: 1
+- `over_score_count`: 1
+- `under_score_count`: 1
+- `needs_review_rate`: 1
+- `average_confidence`: 0.8566666666666666666666666667
+- `by_answer_type.correct.case_count`: 2; exact match 0.5; within 1 mark 1; MAE 0.375
+- `by_answer_type.partial.case_count`: 1; exact match 0; within 1 mark 0; MAE 2.50
+
+### Artifact paths
+
+- Stage manifest: `/tmp/ta_original_doc_eval/artifacts/original_doc_smoke_stage_manifest.json`
+- Eval dataset: `/tmp/ta_original_doc_eval/artifacts/original_doc_smoke_cases.json`
+- Real Codex eval JSON: `/tmp/ta_original_doc_eval/artifacts/grading_eval/grading-eval-20260530T061922Z.json`
+- Real Codex eval Markdown: `/tmp/ta_original_doc_eval/artifacts/grading_eval/grading-eval-20260530T061922Z.md`
+
+### Interpretation
+
+The current app can ingest the original PDFs, render real script pages, create manually controlled full-page answer regions, and run the existing Codex CLI grading evaluation path on a capped 3-case smoke set. The run also exposed a quality limitation: the partial teacher-marked case was over-scored by 2.5 marks with confidence 0.82, so teacher review remains mandatory and broader original-document grading remains manual/controlled until better question/rubric extraction, tighter region mapping, and more mixed teacher-marked cases are evaluated.
