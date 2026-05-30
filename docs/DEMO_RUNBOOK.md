@@ -48,6 +48,7 @@ Use the browser at `http://localhost:3000` and synthetic data only:
 - Default demo mode is mock-provider-only.
 - Do not run real Codex/OpenAI grading during the normal demo path.
 - Real Codex grading requires separate explicit approval, a configured local Codex CLI session, and a narrow smoke/evaluation scope.
+- The Docker backend image does not include Codex CLI. For the browser-triggered one-answer Codex smoke path, use the host-backend workflow in [`docs/CODEX_DEV_RUNTIME.md`](CODEX_DEV_RUNTIME.md).
 - Never treat AI suggestions as final grades without teacher review.
 
 ## Verification workflow

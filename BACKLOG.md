@@ -627,6 +627,19 @@ Tests required: git status --short; make up; docker compose exec -T backend alem
 Risks: The Docker backend image still does not include Codex CLI, so live browser use requires a dev backend runtime where `codex` is installed and `CODEX_BROWSER_GRADING_ENABLED=true`. This is a single-answer smoke path only, not production/batch real grading.
 Status: Done
 
+TASK-ID: TA-W1-035D
+Title: Codex-enabled dev backend runtime documentation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-035C
+Files affected: docs/CODEX_DEV_RUNTIME.md, docs/DEMO_RUNBOOK.md, Makefile, BACKLOG.md
+Goal: Document how to run a dev setup where the browser can trigger real Codex grading through a host backend without adding Codex to production Docker or enabling real grading by default.
+Implementation notes: Added a dedicated Codex dev runtime runbook that distinguishes Docker-only normal demo mode from host-backend Codex dev mode. Documented exact commands for Docker Postgres/Redis, safe no-repo Codex OK probe, host env exports, Alembic migration, host Uvicorn backend, frontend options, and one-answer browser smoke. Added low-risk Makefile helpers `codex-ok` and `backend-host-dev`; neither changes Docker images nor enables real grading by default. Linked the new runbook from the demo runbook.
+Acceptance criteria: Docs explain that Docker backend cannot see host Codex, host backend can call installed/authenticated Codex, `CODEX_BROWSER_GRADING_ENABLED=true` is required only for dev smoke, teacher review remains mandatory, no real batch grading is documented, and troubleshooting covers command-not-found, auth/quota, trusted directory, Docker visibility, and missing env flag.
+Tests required: git status --short; make test; make lint; git status --short.
+Risks: Live browser Codex use still depends on local host Codex CLI installation/auth/quota and a host backend process. This is documentation/runtime guidance only; grading reliability is unchanged.
+Status: Done
+
 TASK-ID: TA-W1-036
 Title: Semi-automated question/rubric confirmation workflow
 Owner: Hermes

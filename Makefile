@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: test lint verify up down health ps frontend-health backend-test frontend-lint
+.PHONY: test lint verify up up-infra down health ps frontend-health backend-test frontend-lint codex-ok backend-host-dev
 
 test:
 	cd apps/api && python -m pytest -q
@@ -18,6 +18,9 @@ verify:
 
 up:
 	$(COMPOSE) up -d --build
+
+up-infra:
+	$(COMPOSE) up -d postgres redis
 
 down:
 	$(COMPOSE) down
@@ -36,3 +39,26 @@ backend-test:
 
 frontend-lint:
 	cd apps/web && npm run lint
+
+codex-ok:
+	codex exec --skip-git-repo-check --cd /tmp --sandbox read-only --output-last-message /tmp/ta_codex_ok.txt 'Reply with OK only.'
+	cat /tmp/ta_codex_ok.txt
+
+backend-host-dev:
+	cd apps/api && \
+	APP_ENV=development \
+	DATABASE_URL='postgresql+psycopg://teacher_assistant:teacher_assistant_dev_password@localhost:5432/teacher_assistant' \
+	REDIS_URL='redis://localhost:6379/0' \
+	LOCAL_STORAGE_ROOT='$(CURDIR)/data' \
+	UPLOADS_DIR='$(CURDIR)/data/uploads' \
+	ARTIFACTS_DIR='$(CURDIR)/data/artifacts' \
+	BRAIN_PROVIDER=mock \
+	CODEX_BROWSER_GRADING_ENABLED=true \
+	CODEX_CLI_COMMAND=codex \
+	CODEX_CLI_SANDBOX=read-only \
+	CODEX_CLI_APPROVAL_POLICY=never \
+	CODEX_CLI_USE_JSON=true \
+	CODEX_CLI_OUTPUT_LAST_MESSAGE=true \
+	CODEX_CLI_IMAGE_INPUT_ENABLED=false \
+	CODEX_CLI_WORKDIR='$(CURDIR)' \
+	uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
