@@ -354,6 +354,17 @@ class SubmissionRead(ORMBase):
     updated_at: datetime
 
 
+class SubmissionZipUploadResponse(BaseModel):
+    assessment_id: int
+    requested_file_count: int
+    imported_count: int
+    skipped_count: int
+    failed_count: int
+    submissions_created: list[SubmissionRead]
+    errors: list[str]
+    warnings: list[str]
+
+
 class AnswerRegionCreate(BaseModel):
     question_id: int
     x: Decimal = Field(ge=Decimal("0"))

@@ -101,6 +101,17 @@ export type QuestionImportAcceptResponse = {
   questions: Question[];
 };
 
+export type SubmissionZipUploadResponse = {
+  assessment_id: number;
+  requested_file_count: number;
+  imported_count: number;
+  skipped_count: number;
+  failed_count: number;
+  submissions_created: Submission[];
+  errors: string[];
+  warnings: string[];
+};
+
 export type GradingRunWorkflowState = {
   materials_uploaded: boolean;
   materials_confirmed: boolean;
@@ -595,6 +606,31 @@ export function uploadSubmission(
     method: "POST",
     formData,
   });
+}
+
+export function uploadSubmissionZip(
+  assessmentId: number,
+  payload: {
+    file: File;
+    student_identifier_strategy?: "basename" | "sequential";
+    student_name_prefix?: string;
+  },
+) {
+  const formData = new FormData();
+  formData.append("file", payload.file);
+  if (payload.student_identifier_strategy) {
+    formData.append("student_identifier_strategy", payload.student_identifier_strategy);
+  }
+  if (payload.student_name_prefix) {
+    formData.append("student_name_prefix", payload.student_name_prefix);
+  }
+  return apiRequest<SubmissionZipUploadResponse>(
+    `/assessments/${assessmentId}/submissions/upload-zip`,
+    {
+      method: "POST",
+      formData,
+    },
+  );
 }
 
 export function listSubmissions(assessmentId: number) {

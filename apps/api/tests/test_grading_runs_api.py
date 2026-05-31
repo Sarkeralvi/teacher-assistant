@@ -501,3 +501,36 @@ def test_custom_controlled_full_v0_api_workflow_and_no_auto_finalization(
     assert export_response.headers["content-type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+def test_custom_controlled_workflow_state_counts_zip_imported_submissions(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import zipfile
+
+    teacher, token = register_teacher(client, "zip")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    run = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    image_path = tmp_path / "script.png"
+    Image.new("RGB", (160, 120), color="white").save(image_path, format="PNG")
+    zip_path = tmp_path / "scripts.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("student_001.png", image_path.read_bytes())
+        archive.writestr("student_002.png", image_path.read_bytes())
+
+    with zip_path.open("rb") as file_obj:
+        upload = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload-zip",
+            files={"file": ("scripts.zip", file_obj, "application/zip")},
+        )
+    assert upload.status_code == 201
+    assert upload.json()["imported_count"] == 2
+
+    detail = get_run(client, token, int(run["id"]))
+    workflow = detail["workflow_state"]
+    assert workflow["scripts_uploaded"] is True
+    assert workflow["submission_count"] == 2
+    assert workflow["submission_page_count"] == 2

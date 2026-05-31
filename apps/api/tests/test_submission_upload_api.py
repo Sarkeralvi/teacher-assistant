@@ -305,3 +305,152 @@ def test_delete_submission_ignores_unsafe_stored_paths(
     assert outside_file.read_text(encoding="utf-8") == "keep me"
     db_session.expire_all()
     assert db_session.get(Submission, submission_id) is None
+
+
+def make_zip(path: Path, entries: dict[str, bytes]) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+
+
+def read_png_bytes(path: Path) -> bytes:
+    return path.read_bytes()
+
+
+def test_upload_zip_creates_multiple_submissions_and_pages(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assessment = create_assessment(client)
+    png_path = tmp_path / "student_003.png"
+    jpg_path = tmp_path / "student_004.jpg"
+    pdf_path = tmp_path / "student_001.pdf"
+    make_png(png_path)
+    make_jpeg(jpg_path)
+    make_pdf(pdf_path, pages=2)
+    zip_path = tmp_path / "scripts.zip"
+    make_zip(
+        zip_path,
+        {
+            "student_001.pdf": pdf_path.read_bytes(),
+            "student_003.png": png_path.read_bytes(),
+            "student_004.jpg": jpg_path.read_bytes(),
+        },
+    )
+
+    with zip_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload-zip",
+            data={"student_identifier_strategy": "basename"},
+            files={"file": ("scripts.zip", file_obj, "application/zip")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["assessment_id"] == assessment["id"]
+    assert body["requested_file_count"] == 3
+    assert body["imported_count"] == 3
+    assert body["skipped_count"] == 0
+    assert body["failed_count"] == 0
+    assert body["errors"] == []
+    assert [item["student_identifier"] for item in body["submissions_created"]] == [
+        "student_001",
+        "student_003",
+        "student_004",
+    ]
+    assert [len(item["pages"]) for item in body["submissions_created"]] == [2, 1, 1]
+    for submission in body["submissions_created"]:
+        for page in submission["pages"]:
+            assert not page["image_path"].startswith("/")
+            assert ".." not in page["image_path"]
+            image_response = client.get(f"/submission-pages/{page['id']}/image")
+            assert image_response.status_code == 200
+            assert image_response.content.startswith(b"\x89PNG")
+
+    listed = client.get(f"/assessments/{assessment['id']}/submissions")
+    assert listed.status_code == 200
+    assert [item["student_identifier"] for item in listed.json()] == [
+        "student_001",
+        "student_003",
+        "student_004",
+    ]
+
+
+def test_upload_zip_supports_generated_sequential_identifiers(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assessment = create_assessment(client)
+    image_path = tmp_path / "answer.png"
+    make_png(image_path)
+    zip_path = tmp_path / "scripts.zip"
+    make_zip(zip_path, {"alpha.png": image_path.read_bytes(), "beta.png": image_path.read_bytes()})
+
+    with zip_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload-zip",
+            data={"student_identifier_strategy": "sequential", "student_name_prefix": "Student"},
+            files={"file": ("scripts.zip", file_obj, "application/zip")},
+        )
+
+    assert response.status_code == 201
+    submissions = response.json()["submissions_created"]
+    assert [item["student_identifier"] for item in submissions] == ["S-001", "S-002"]
+    assert [item["student_name"] for item in submissions] == ["Student 001", "Student 002"]
+
+
+def test_upload_zip_reports_unsupported_and_path_traversal_without_extracting(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assessment = create_assessment(client)
+    image_path = tmp_path / "valid.png"
+    make_png(image_path)
+    outside_marker = tmp_path / "escape.png"
+    zip_path = tmp_path / "mixed.zip"
+    make_zip(
+        zip_path,
+        {
+            "valid.png": image_path.read_bytes(),
+            "notes.txt": b"unsupported",
+            "../escape.png": b"should not extract",
+            "/abs.png": b"absolute path",
+        },
+    )
+
+    with zip_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload-zip",
+            files={"file": ("mixed.zip", file_obj, "application/zip")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["requested_file_count"] == 4
+    assert body["imported_count"] == 1
+    assert body["skipped_count"] == 1
+    assert body["failed_count"] == 2
+    assert any("Unsupported file type" in warning for warning in body["warnings"])
+    assert any("Unsafe ZIP path" in error for error in body["errors"])
+    assert not outside_marker.exists()
+
+
+def test_upload_zip_invalid_zip_and_missing_assessment_errors(
+    client: TestClient, tmp_path: Path
+) -> None:
+    invalid_zip = tmp_path / "invalid.zip"
+    invalid_zip.write_bytes(b"not a zip")
+    with invalid_zip.open("rb") as file_obj:
+        response = client.post(
+            "/assessments/999999/submissions/upload-zip",
+            files={"file": ("invalid.zip", file_obj, "application/zip")},
+        )
+    assert response.status_code == 404
+
+    assessment = create_assessment(client)
+    with invalid_zip.open("rb") as file_obj:
+        invalid = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload-zip",
+            files={"file": ("invalid.zip", file_obj, "application/zip")},
+        )
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"] == "Uploaded file is not a valid ZIP archive"

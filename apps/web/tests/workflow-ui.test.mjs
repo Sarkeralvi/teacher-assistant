@@ -48,6 +48,8 @@ for (const symbol of [
   "createRubric",
   "listRubrics",
   "uploadSubmission",
+  "uploadSubmissionZip",
+  "SubmissionZipUploadResponse",
   "listSubmissions",
   "getSubmissionPageImageUrl",
   "createAnswerRegion",
@@ -134,6 +136,14 @@ const demoTeacherSelector = readFileSync(join(root, "components/DemoTeacherSelec
 const assessmentDetail = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
 const assessmentDetailUi = assessmentDetail + demoTeacherSelector;
 for (const text of [
+  "Upload script ZIP",
+  "PDF, PNG, JPG, JPEG only.",
+  "ZIP import summary",
+  "imported_count",
+  "skipped_count",
+  "failed_count",
+  "uploadSubmissionZip",
+  "zipUploadResult",
   "Upload submission",
   "student_identifier",
   "Choose a PDF or image file before uploading",

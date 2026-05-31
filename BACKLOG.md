@@ -792,13 +792,13 @@ Title: ZIP script upload and batch submission ingestion
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W2-003
-Files affected: TBD
+Files affected: apps/api/app/api/routes/submissions.py, apps/api/app/schemas.py, apps/api/tests/test_submission_upload_api.py, apps/api/tests/test_grading_runs_api.py, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
 Goal: Add safe ZIP ingestion for multiple student scripts and create Submission/Page records without committing raw files.
-Implementation notes: Support ZIP as ingestion only; do not auto-grade or auto-map regions. Validate file types, path traversal, size/count limits, and per-file error reporting.
-Acceptance criteria: Teacher can upload a ZIP of scripts; valid PDFs/images become submissions/pages; rejected files are reported; raw uploaded content stays in storage only.
+Implementation notes: Support ZIP as ingestion only; do not auto-grade or auto-map regions. Validate file types, path traversal, size/count limits, and per-file error reporting. Uses assessment-scoped upload endpoint and existing submission/page extraction path.
+Acceptance criteria: Teacher can upload a ZIP of scripts; valid PDFs/images become submissions/pages; rejected files are reported; raw uploaded content stays in storage only; Custom Controlled workflow state counts ZIP-imported submissions.
 Tests required: backend upload tests, path traversal tests, full tests/lint/build if frontend changes.
 Risks: ZIP handling can introduce path traversal and resource exhaustion risks.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-005
 Title: Marking policy model: Tough/General/Easy

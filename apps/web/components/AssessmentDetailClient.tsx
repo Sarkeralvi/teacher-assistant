@@ -21,6 +21,7 @@ import {
   listQuestions,
   listSubmissions,
   uploadSubmission,
+  uploadSubmissionZip,
   type AnswerRegion,
   type Assessment,
   type DraftQuestion,
@@ -29,6 +30,7 @@ import {
   type QuestionImportJob,
   type ReviewQueueItem,
   type Submission,
+  type SubmissionZipUploadResponse,
 } from "../lib/api";
 import { type DemoTeacher } from "../lib/demoTeacher";
 import { DemoTeacherSelector } from "./DemoTeacherSelector";
@@ -60,6 +62,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [studentIdentifier, setStudentIdentifier] = useState("");
   const [studentName, setStudentName] = useState("");
   const [submissionFile, setSubmissionFile] = useState<File | null>(null);
+  const [zipUploadFile, setZipUploadFile] = useState<File | null>(null);
+  const [zipIdentifierStrategy, setZipIdentifierStrategy] = useState<"basename" | "sequential">("basename");
+  const [zipStudentNamePrefix, setZipStudentNamePrefix] = useState("");
+  const [zipUploadResult, setZipUploadResult] = useState<SubmissionZipUploadResponse | null>(null);
   const [questionImportFile, setQuestionImportFile] = useState<File | null>(null);
   const [questionImportJob, setQuestionImportJob] = useState<QuestionImportJob | null>(null);
   const [draftQuestionEdits, setDraftQuestionEdits] = useState<Record<string, DraftQuestionEdit>>({});
@@ -83,6 +89,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   const pages = submissions.flatMap((submission) => submission.pages);
   const selectedUploadFileName = submissionFile?.name ?? "";
+  const selectedZipUploadFileName = zipUploadFile?.name ?? "";
   const selectedQuestionImportFileName = questionImportFile?.name ?? "";
   const draftQuestions = questionImportJob?.draft_questions ?? [];
   const selectedDraftCount = Object.values(draftQuestionEdits).filter((draft) => draft.selected).length;
@@ -152,6 +159,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  function handleZipUploadFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    setZipUploadFile(file);
+    if (file || error === "Choose a ZIP file before uploading scripts") {
+      setError(null);
+    }
+  }
+
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const selectedFile =
@@ -176,6 +191,35 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       await load();
     } catch (err) {
       setError(err instanceof Error ? `Upload failed: ${err.message}` : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleZipUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const selectedFile =
+      zipUploadFile ??
+      ((new FormData(event.currentTarget).get("file") as File | null) ?? null);
+    if (!selectedFile || selectedFile.size === 0) {
+      setError("Choose a ZIP file before uploading scripts");
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    setZipUploadResult(null);
+    try {
+      const result = await uploadSubmissionZip(assessmentId, {
+        file: selectedFile,
+        student_identifier_strategy: zipIdentifierStrategy,
+        student_name_prefix: zipStudentNamePrefix.trim(),
+      });
+      setZipUploadResult(result);
+      setZipUploadFile(null);
+      await load();
+      event.currentTarget.reset();
+    } catch (err) {
+      setError(err instanceof Error ? `ZIP upload failed: ${err.message}` : "ZIP upload failed");
     } finally {
       setUploading(false);
     }
@@ -389,6 +433,38 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <button className={buttonClass} disabled={uploading || !studentIdentifier.trim() || !submissionFile} type="submit">
           {uploading ? "Uploading submission..." : "Upload submission"}
         </button>
+      </form>
+
+      <form onSubmit={handleZipUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Upload script ZIP</h2>
+          <p className="text-sm text-slate-400">PDF, PNG, JPG, JPEG only. Unsupported files are reported and skipped; no grading or answer-region detection is run.</p>
+        </div>
+        <label className="grid gap-2 text-sm">
+          Student identifier strategy
+          <select className={inputClass} value={zipIdentifierStrategy} onChange={(event) => setZipIdentifierStrategy(event.target.value as "basename" | "sequential")}>
+            <option value="basename">Use file basename</option>
+            <option value="sequential">Generated sequential IDs</option>
+          </select>
+        </label>
+        <input className={inputClass} placeholder="Student name prefix (optional)" value={zipStudentNamePrefix} onChange={(event) => setZipStudentNamePrefix(event.target.value)} />
+        <input className={inputClass} name="file" type="file" accept=".zip,application/zip,application/x-zip-compressed" onChange={handleZipUploadFileChange} />
+        {selectedZipUploadFileName ? (
+          <p className="text-sm text-emerald-300">Selected ZIP file: {selectedZipUploadFileName}</p>
+        ) : null}
+        <button className={buttonClass} disabled={uploading || !zipUploadFile} type="submit">
+          {uploading ? "Uploading script ZIP..." : "Upload script ZIP"}
+        </button>
+        {zipUploadResult ? (
+          <div className="rounded border border-slate-800 p-3 text-sm">
+            <p className="font-semibold">ZIP import summary</p>
+            <p>imported_count: {zipUploadResult.imported_count}</p>
+            <p>skipped_count: {zipUploadResult.skipped_count}</p>
+            <p>failed_count: {zipUploadResult.failed_count}</p>
+            {zipUploadResult.warnings.length > 0 ? <p>warnings: {zipUploadResult.warnings.join("; ")}</p> : null}
+            {zipUploadResult.errors.length > 0 ? <p>errors: {zipUploadResult.errors.join("; ")}</p> : null}
+          </div>
+        ) : null}
       </form>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
