@@ -826,6 +826,19 @@ Tests required: provider/prompt tests, evaluation tests, capped smoke only if ap
 Risks: Prompt policy may shift scores unpredictably without calibration.
 Status: Done
 
+TASK-ID: TA-W2-006A
+Title: Marking policy calibration smoke
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-006
+Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md
+Goal: Run a capped real Codex smoke to check whether Tough / General / Easy marking policies affect grading in the expected direction.
+Implementation notes: Ran two synthetic non-student cases across three policies for six real Codex calls total. Scores were identical across policies for both cases, so monotonic order held but no meaningful score separation was observed. Policy metadata/review flags were recorded and no FinalGrade was created.
+Acceptance criteria: Real calibration result recorded honestly; no batch grading; no auto-finalization; artifacts kept out of git.
+Tests required: make test; make lint.
+Risks: Policy prompt exists, but behavior is not meaningfully calibrated on simple rubric-separated cases.
+Status: Done
+
 TASK-ID: TA-W2-007
 Title: Semi-automated question/model/rubric confirmation flow
 Owner: Hermes

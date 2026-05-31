@@ -250,3 +250,37 @@ The same previous problematic case, `orig_s2_p07_q1c`, improved from Codex 9.5 v
 ### Interpretation
 
 This run proves real Codex CLI image input can be used by the existing grading evaluation path on selected original-script crops, and all evaluated suggestions remained review-only. Quality improved versus the earlier no-browser-image-input/problematic case, but the sample is only three manually selected/tightened crops; it does **not** prove production grading reliability, batch grading readiness, automatic answer-region detection, or fully automated grading readiness.
+
+## TA-W2-006A — Marking policy calibration smoke
+
+Recorded at: 2026-05-31T11:36:07Z.
+
+### Scope
+
+- Evaluation type: small controlled synthetic marking-policy calibration smoke.
+- Real provider: Codex CLI provider, text-only synthetic prompts, image input disabled.
+- Real Codex calls: 6 total.
+- Cases: 2 synthetic non-student cases × 3 policies (`tough`, `general`, `easy`).
+- Artifacts: ignored temporary path `/tmp/ta_w2_006a_policy_calibration/`.
+- Production/batch grading: not run.
+- Final grades: not created.
+- Product code/UI: not changed during this smoke.
+- Raw generated artifacts: not committed.
+
+### Cases and scores
+
+| Case | Tough | General | Easy | `tough <= general <= easy` |
+|---|---:|---:|---:|---|
+| Partial derivative answer missing `+2` term | 3 / 5 | 3 / 5 | 3 / 5 | yes |
+| Correct final linear-equation answer with no working | 3 / 5 | 3 / 5 | 3 / 5 | yes |
+
+### Observed behavior
+
+- The required monotonic relation held, but only because all three policies produced identical scores for both cases.
+- The policy was recorded correctly in review flags for every run: `marking_policy:tough`, `marking_policy:general`, and `marking_policy:easy`.
+- All runs kept `needs_review = true` and included `teacher_review_required`.
+- Feedback wording differed only slightly across policies. It did not materially change scoring on these two simple rubric-separated examples.
+
+### Interpretation
+
+This smoke confirms that policy metadata reaches the real Codex grading path and is recorded in outputs. It does **not** show meaningful score calibration between Tough, General, and Easy. The tested rubrics had clearly separable criteria, so Codex awarded criterion marks deterministically. Before treating policy as a reliable scoring control, use more ambiguous partial-credit cases or tighten the prompt/rubric design so policy can affect borderline evidence without changing maximum marks or teacher-review requirements.
