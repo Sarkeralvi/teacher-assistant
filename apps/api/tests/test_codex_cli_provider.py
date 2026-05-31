@@ -138,6 +138,7 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "--output-last-message" in exec_cmd
     assert "--json" in exec_cmd
     assert "--image" not in exec_cmd
+    assert "--skip-git-repo-check" not in exec_cmd
     assert "--dangerously-bypass-approvals-and-sandbox" not in exec_cmd
     assert inputs[-1] is not None
     assert "You are producing a grade suggestion for TA Agent." in inputs[-1]
@@ -148,6 +149,57 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "teacher_review_required" in result.review_flags
     assert "codex_cli_provider" in result.review_flags
     assert "image_input_disabled" in result.review_flags
+
+
+def test_codex_cli_provider_can_skip_git_repo_check_for_host_dev_mode() -> None:
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        calls.append(cmd)
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout="--cd <DIR>\n--sandbox <SANDBOX_MODE>\n--output-last-message <FILE>\n--json"
+            )
+        output_file = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_file.write_text(json.dumps(valid_codex_output()), encoding="utf-8")
+        return FakeCompletedProcess()
+
+    make_provider(runner=runner).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/region.png",
+        prompt_version="ignored",
+        messages=messages(),
+    )
+    assert "--skip-git-repo-check" not in calls[-1]
+
+    calls.clear()
+    provider = CodexCliProvider(
+        command="codex",
+        model_name="",
+        timeout_seconds=300,
+        sandbox="read-only",
+        use_json=True,
+        output_last_message=True,
+        image_input_enabled=False,
+        workdir="/home/newton/teacher-assistant",
+        skip_git_repo_check=True,
+        which=lambda command: "/usr/local/bin/codex",
+        runner=runner,
+    )
+    provider.grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/region.png",
+        prompt_version="ignored",
+        messages=messages(),
+    )
+
+    assert "--skip-git-repo-check" in calls[-1]
 
 
 def test_codex_cli_missing_command_fails_clearly() -> None:

@@ -45,6 +45,7 @@ class GradingService:
                 output_last_message=settings.codex_cli_output_last_message,
                 image_input_enabled=settings.codex_cli_image_input_enabled,
                 workdir=settings.codex_cli_workdir,
+                skip_git_repo_check=settings.codex_cli_skip_git_repo_check,
             ),
             image_input_enabled=settings.codex_cli_image_input_enabled,
             storage_root=settings.local_storage_root,

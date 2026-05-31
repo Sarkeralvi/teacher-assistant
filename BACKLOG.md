@@ -653,6 +653,19 @@ Tests required: git status --short; python -m pytest apps/api/tests/test_fronten
 Risks: This improves frontend error handling only; it does not change backend authorization policy or add new grading workflow features.
 Status: Done
 
+TASK-ID: TA-W1-036A
+Title: Browser workflow truth audit and fix
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-035E
+Files affected: Makefile, apps/api/app/api/routes/grading.py, apps/api/app/services/grading_service.py, apps/api/packages/brain/codex_cli_provider.py, apps/api/tests/test_browser_codex_grading_api.py, apps/api/tests/test_codex_cli_provider.py, apps/api/tests/test_frontend_upload_auth_static.py, apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
+Goal: Audit the real browser/API workflow and fix only the blockers preventing normal mock grading, custom controlled grading uploads, and one browser-triggered Codex grading call in documented host-backend Codex mode.
+Implementation notes: Verified the active browser runtime was Docker backend/frontend on localhost. Fixed `backend-host-dev` to use the repo virtualenv Python, enable `CODEX_CLI_SKIP_GIT_REPO_CHECK`, and use writable host storage under `/tmp/teacher-assistant-host-data` instead of Docker-owned `data/`. Passed the skip-git-repo-check setting into `CodexCliProvider`. Replaced misleading review-page copy that implied all review actions were mock-only, preserved the separate batch mock path, and made Docker/mock-only Codex unavailability explicit. Changed disabled Codex browser grading and missing Codex CLI failures to clear teacher-facing messages while keeping auth, single-answer scope, GradeSuggestion-only persistence, sanitized response, and mandatory teacher review.
+Acceptance criteria: Docker demo mock grading still works; Docker/backend-unavailable Codex path returns a clear unavailable message; custom controlled material uploads work with auth and FormData; host-backend Codex mode runs exactly one browser-equivalent `POST /answer-regions/{answer_region_id}/grade-codex-dev`; persisted suggestion uses `model_provider=codex_cli`; no FinalGrade is auto-created; frontend has no direct Codex/LLM calls.
+Tests required: pwd; git status --short; git rev-parse HEAD; git log --oneline -8; docker compose ps; host/backend health checks; focused backend/static tests; Docker mock/API smoke; make codex-ok; host-backend Codex API smoke; host custom controlled upload smoke; make test; make lint; npm run build; git diff --check; git status --short.
+Risks: Codex grading quality is still limited because image input is disabled in the current Codex CLI mode, so the real Codex smoke produced a conservative zero-score suggestion from metadata/rubric only. This task verifies operability, not grading quality or full automation.
+Status: Done
+
 TASK-ID: TA-W1-036
 Title: Semi-automated question/rubric confirmation workflow
 Owner: Hermes

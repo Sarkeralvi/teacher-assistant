@@ -258,7 +258,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           AI GradeSuggestions are suggestions only. Teacher review is required before any FinalGrade is used.
         </p>
         <p className="mt-2 text-sm text-slate-300">
-          Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.
+          Batch grading uses mock only. The per-answer Real Codex button calls the backend dev endpoint and only works when the backend is host/WSL Codex mode.
         </p>
         {assessment ? (
           <p className="mt-2 text-slate-400">
@@ -273,7 +273,10 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
             {batchGrading ? "Batch mock grading..." : "Batch mock grade ungraded answers"}
           </button>
         </div>
-        <p className="mt-3 text-sm text-amber-200">Mock grading only. No real Codex calls.</p>
+        <p className="mt-3 text-sm text-amber-200">Batch mock grading only. No real Codex batch calls.</p>
+        <p className="mt-2 text-sm text-slate-400">
+          If this app is connected to the Docker backend, Codex is unavailable because that runtime is mock-only and does not include Codex CLI.
+        </p>
       </section>
 
       {currentUser ? (
@@ -518,8 +521,9 @@ function ReviewCard({
 
       <section className="grid gap-2 rounded border border-red-900 bg-red-950/20 p-3 text-sm text-red-100">
         <p>
-          Runs one real Codex CLI call through the backend. Use only for controlled testing. Teacher review required.
+          Runs one real Codex CLI call through POST /answer-regions/{item.answer_region.id}/grade-codex-dev on the backend. Use only for controlled testing. Teacher review required.
         </p>
+        <p>Docker backend/mock-only mode cannot run this; use host-backend Codex dev mode.</p>
         <button className={buttonClass} type="button" disabled={realCodexRunning || realCodexDisabled} onClick={onRealCodexGrade}>
           {realCodexRunning ? "Running one real Codex call..." : "Real Codex grade this answer"}
         </button>

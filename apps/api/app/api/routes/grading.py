@@ -101,10 +101,24 @@ def grade_answer_region_with_codex_dev(
     if not settings.codex_browser_grading_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="CODEX_BROWSER_GRADING_ENABLED must be true for dev Codex grading",
+            detail=(
+                "Codex browser grading is unavailable in this backend runtime. "
+                "Use host-backend Codex dev mode with CODEX_BROWSER_GRADING_ENABLED=true."
+            ),
         )
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
-    job, suggestion = GradingService(db).grade_answer_region_with_codex_cli(answer_region_id)
+    try:
+        job, suggestion = GradingService(db).grade_answer_region_with_codex_cli(answer_region_id)
+    except HTTPException as exc:
+        if "codex command not found" in str(exc.detail).lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Codex CLI is not available in this backend runtime. "
+                    "Use host-backend Codex dev mode."
+                ),
+            ) from exc
+        raise
     return make_browser_codex_grade_response(job, suggestion)
 
 

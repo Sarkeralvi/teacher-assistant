@@ -65,6 +65,28 @@ def test_controlled_grading_upload_refreshes_material_state_after_success() -> N
     assert "await load();" in upload_handler
 
 
+def test_browser_codex_button_uses_dev_endpoint_not_mock_endpoint() -> None:
+    api_source = _read(WEB_API)
+    review_source = _read(
+        REPO_ROOT / "apps" / "web" / "components" / "AssessmentReviewClient.tsx"
+    )
+
+    codex_start = api_source.index("export function gradeAnswerRegionWithCodexDev")
+    codex_end = api_source.index("export function batchMockGradeAssessment")
+    codex_section = api_source[codex_start:codex_end]
+    mock_start = api_source.index("export function gradeAnswerRegion(answerRegionId")
+    mock_end = api_source.index("export function gradeAnswerRegionWithCodexDev")
+    mock_section = api_source[mock_start:mock_end]
+
+    assert "/grade-codex-dev" in codex_section
+    assert "token: getStoredAuthToken()" in codex_section
+    assert "/grade`" in mock_section
+    assert "gradeAnswerRegionWithCodexDev(item.answer_region.id)" in review_source
+    assert "batchMockGradeAssessment(assessmentId)" in review_source
+    assert "Docker backend/mock-only mode cannot run this" in review_source
+    assert "Codex is unavailable" in review_source
+
+
 def test_frontend_has_no_direct_codex_or_llm_calls() -> None:
     forbidden = ["openai", "anthropic", "gemini", "claude", "codex exec", "api.openai.com"]
     checked_suffixes = {".ts", ".tsx"}

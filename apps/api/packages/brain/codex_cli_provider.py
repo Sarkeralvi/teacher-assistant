@@ -49,6 +49,7 @@ class CodexCliProvider(BrainProvider):
         output_last_message: bool = True,
         image_input_enabled: bool = False,
         workdir: str = "/home/newton/teacher-assistant",
+        skip_git_repo_check: bool = False,
         which: Which = shutil.which,
         runner: Runner = subprocess.run,
     ) -> None:
@@ -60,6 +61,7 @@ class CodexCliProvider(BrainProvider):
         self.output_last_message = output_last_message
         self.image_input_enabled = image_input_enabled
         self.workdir = workdir or "/home/newton/teacher-assistant"
+        self.skip_git_repo_check = skip_git_repo_check
         self._which = which
         self._runner = runner
         self._help_text: str | None = None
@@ -175,16 +177,19 @@ class CodexCliProvider(BrainProvider):
         return completed.stdout or completed.stderr or ""
 
     def _build_command(self, *, output_file: Path, answer_image_path: str) -> list[str]:
-        command = [
-            self.command,
-            "exec",
-            "--cd",
-            self.workdir,
-            "--sandbox",
-            self.sandbox,
-            "--output-last-message",
-            str(output_file),
-        ]
+        command = [self.command, "exec"]
+        if self.skip_git_repo_check:
+            command.append("--skip-git-repo-check")
+        command.extend(
+            [
+                "--cd",
+                self.workdir,
+                "--sandbox",
+                self.sandbox,
+                "--output-last-message",
+                str(output_file),
+            ]
+        )
         if self.use_json and self._help_text and "--json" in self._help_text:
             command.append("--json")
         if self.model_name and self.model_name != "codex-cli":

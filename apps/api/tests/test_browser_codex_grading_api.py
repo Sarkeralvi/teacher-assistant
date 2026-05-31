@@ -148,7 +148,8 @@ def test_browser_codex_endpoint_rejects_when_env_flag_disabled(
     )
 
     assert response.status_code == 403
-    assert "CODEX_BROWSER_GRADING_ENABLED" in response.text
+    assert "Codex browser grading is unavailable" in response.text
+    assert "host-backend Codex dev mode" in response.text
 
 
 def test_browser_codex_endpoint_grades_one_region_and_never_finalizes(
@@ -192,6 +193,41 @@ def test_browser_codex_endpoint_grades_one_region_and_never_finalizes(
     assert len(FakeCodexCliProvider.calls) == 1
     db_session.expire_all()
     assert db_session.scalars(select(GradeSuggestion)).one().model_provider == "codex_cli"
+    assert db_session.scalars(select(FinalGrade)).all() == []
+
+
+def test_browser_codex_endpoint_returns_clear_error_when_cli_unavailable(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingCodexCliProvider:
+        provider_name = "codex_cli"
+        model_name = "codex-cli"
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def grade(self, **kwargs: object):
+            raise RuntimeError("codex command not found: codex")
+
+    data = create_owned_answer_region(client, tmp_path)
+    monkeypatch.setenv("CODEX_BROWSER_GRADING_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.services.grading_service.CodexCliProvider", MissingCodexCliProvider)
+
+    response = client.post(
+        f"/answer-regions/{data['region']['id']}/grade-codex-dev",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+
+    assert response.status_code == 503
+    assert "Codex CLI is not available in this backend runtime" in response.text
+    assert "Use host-backend Codex dev mode" in response.text
+    db_session.expire_all()
+    job = db_session.scalars(select(GradingJob)).one()
+    assert job.status == "failed"
     assert db_session.scalars(select(FinalGrade)).all() == []
 
 
