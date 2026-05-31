@@ -281,7 +281,14 @@ type RequestOptions = {
   body?: unknown;
   formData?: FormData;
   token?: string | null;
+  authErrorMessage?: string;
 };
+
+export const UPLOAD_AUTH_ERROR_MESSAGE = "Please log in again before uploading materials.";
+
+export function backendUnreachableMessage() {
+  return `Could not reach backend at ${API_BASE_URL}. Check backend server.`;
+}
 
 async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const hasJsonBody = options.body !== undefined;
@@ -292,14 +299,26 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
   if (options.token) {
     headers.Authorization = `Bearer ${options.token}`;
   }
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method ?? "GET",
-    headers: Object.keys(headers).length > 0 ? headers : undefined,
-    body: hasJsonBody ? JSON.stringify(options.body) : options.formData,
-    cache: "no-store",
-  });
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: options.method ?? "GET",
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      body: hasJsonBody ? JSON.stringify(options.body) : options.formData,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(backendUnreachableMessage());
+    }
+    throw error;
+  }
 
   if (!response.ok) {
+    if (response.status === 401 && options.authErrorMessage) {
+      throw new Error(options.authErrorMessage);
+    }
     let detail = `${response.status} ${response.statusText}`;
     try {
       const errorBody = (await response.json()) as { detail?: unknown };
@@ -436,17 +455,22 @@ export function createCustomGradingRun(assessmentId: number, payload: GradingRun
     method: "POST",
     body: payload,
     token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
 }
 
 export function listAssessmentGradingRuns(assessmentId: number) {
   return apiRequest<GradingRun[]>(`/assessments/${assessmentId}/grading-runs`, {
     token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
 }
 
 export function getGradingRun(gradingRunId: number) {
-  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}`, { token: getStoredAuthToken() });
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}`, {
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
 }
 
 export function updateGradingRun(gradingRunId: number, payload: GradingRunUpdate) {
@@ -454,6 +478,7 @@ export function updateGradingRun(gradingRunId: number, payload: GradingRunUpdate
     method: "PATCH",
     body: payload,
     token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
 }
 
@@ -475,6 +500,7 @@ export function uploadGradingRunMaterials(
     method: "POST",
     formData,
     token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
 }
 

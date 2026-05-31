@@ -640,6 +640,19 @@ Tests required: git status --short; make test; make lint; git status --short.
 Risks: Live browser Codex use still depends on local host Codex CLI installation/auth/quota and a host backend process. This is documentation/runtime guidance only; grading reliability is unchanged.
 Status: Done
 
+TASK-ID: TA-W1-035E
+Title: Fix controlled grading upload auth and fetch handling
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-035D
+Files affected: apps/web/components/CustomControlledGradingRunClient.tsx, apps/web/lib/api.ts, apps/api/tests/test_frontend_upload_auth_static.py, BACKLOG.md
+Goal: Fix the custom controlled grading material upload path so authenticated upload requests use the stored bearer token, failed auth shows a clear teacher-facing message, backend fetch failures are reported clearly, and the wizard refreshes material state after successful upload.
+Implementation notes: Kept backend auth unchanged. Added frontend request handling for custom auth error messages and network/Failed-to-fetch failures. Applied the controlled grading upload auth message to grading-run create/list/read/update/material upload calls, kept FormData uploads free of manual multipart Content-Type headers, and refreshed the controlled grading run state after materials upload succeeds. Added static regression tests for auth token usage, safe FormData handling, clear error messages, successful upload refresh, and no direct frontend Codex/LLM calls.
+Acceptance criteria: Controlled grading material upload sends the Authorization bearer token when available; invalid or missing auth returns a clear login-again message from 401 responses; backend-unreachable fetch failures report the configured backend URL; FormData upload does not manually set multipart Content-Type; successful material upload refreshes displayed state; backend auth is not weakened; no real Codex grading is run.
+Tests required: git status --short; python -m pytest apps/api/tests/test_frontend_upload_auth_static.py; make test; make lint; docker compose exec -T frontend npm run build if stack is running, otherwise documented frontend build command; git status --short.
+Risks: This improves frontend error handling only; it does not change backend authorization policy or add new grading workflow features.
+Status: Done
+
 TASK-ID: TA-W1-036
 Title: Semi-automated question/rubric confirmation workflow
 Owner: Hermes

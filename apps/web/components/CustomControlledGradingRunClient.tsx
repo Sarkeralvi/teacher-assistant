@@ -115,6 +115,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       setSolutionPdf(null);
       setRubricPdf(null);
       event.currentTarget.reset();
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload grading-run materials");
     } finally {
