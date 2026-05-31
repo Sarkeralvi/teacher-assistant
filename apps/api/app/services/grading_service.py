@@ -26,9 +26,11 @@ class GradingService:
             BrainAdapter.from_settings(get_settings()) if use_configured_adapter else BrainAdapter()
         )
 
-    def grade_answer_region(self, answer_region_id: int) -> tuple[GradingJob, GradeSuggestion]:
+    def grade_answer_region(
+        self, answer_region_id: int, *, marking_policy: str = "general"
+    ) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
-        return self._grade_region(region, self.adapter, marking_policy="general")
+        return self._grade_region(region, self.adapter, marking_policy=marking_policy)
 
     def grade_answer_region_with_codex_cli(
         self, answer_region_id: int
@@ -122,6 +124,7 @@ class GradingService:
                 question_total_marks=Decimal(region.question.total_marks),
                 rubric_json=rubric.rubric_json,
                 answer_image_path=region.image_path,
+                marking_policy=marking_policy,
             )
             raw_response = output.model_dump(mode="json")
             review_flags = list(raw_response.get("review_flags") or [])

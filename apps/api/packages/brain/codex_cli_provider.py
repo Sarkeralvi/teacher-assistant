@@ -78,6 +78,7 @@ class CodexCliProvider(BrainProvider):
         model_policy: ModelPolicy = ModelPolicy.REAL_GRADING,
         messages: list[dict[str, Any]] | None = None,
         image_data_url: str | None = None,
+        marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
         del prompt_version, task_name, model_policy
         use_image_input = self.image_input_enabled and bool(answer_image_path)
@@ -94,6 +95,7 @@ class CodexCliProvider(BrainProvider):
                 rubric_json=rubric_json,
                 messages=messages or [],
                 image_input_enabled=use_image_input,
+                marking_policy=marking_policy,
             )
             command = self._build_command(
                 output_file=output_file,
@@ -239,11 +241,10 @@ class CodexCliProvider(BrainProvider):
         rubric_json: dict[str, Any],
         messages: list[dict[str, Any]],
         image_input_enabled: bool,
+        marking_policy: str = "general",
     ) -> str:
         model_answer = (
-            rubric_json.get("model_answer")
-            or rubric_json.get("answer_key")
-            or "Not provided."
+            rubric_json.get("model_answer") or rubric_json.get("answer_key") or "Not provided."
         )
         if image_input_enabled:
             image_statement = (
@@ -256,6 +257,8 @@ class CodexCliProvider(BrainProvider):
                 "Do not invent visible handwriting/image content. "
                 "Include image_input_disabled in review_flags."
             )
+        policy_instruction = self._policy_instruction(marking_policy)
+        normalized_policy = self._normalize_marking_policy(marking_policy)
         rendered_messages = "\n\n".join(
             f"{message.get('role', 'unknown')}: {message.get('content', '')}"
             for message in messages
@@ -273,6 +276,10 @@ Set needs_review=true.
 Include teacher_review_required in review_flags.
 Include codex_cli_provider in review_flags.
 If image input is disabled, include image_input_disabled in review_flags.
+Use marking policy: {normalized_policy}.
+{policy_instruction}
+Include marking_policy:{normalized_policy} in review_flags.
+Do not change max_score or criterion max_marks because of marking policy.
 If you cannot evaluate the answer, set confidence=0 and needs_review=true.
 Do not invent visible handwriting/image content.
 
@@ -293,6 +300,8 @@ Image input enabled:
 {str(image_input_enabled).lower()}
 {image_statement}
 
+Marking policy: {normalized_policy}
+
 Existing prompt context:
 {rendered_messages}
 
@@ -302,6 +311,26 @@ major_errors, feedback_to_student, review_flags.
 Every rubric_breakdown item must include criterion_id, criterion, max_marks, awarded_marks,
 reason, evidence, confidence. Awarded marks must sum to score.
 """
+
+    @staticmethod
+    def _normalize_marking_policy(marking_policy: str) -> str:
+        policy = marking_policy.strip().lower()
+        return policy if policy in {"tough", "general", "easy"} else "general"
+
+    @classmethod
+    def _policy_instruction(cls, marking_policy: str) -> str:
+        normalized = cls._normalize_marking_policy(marking_policy)
+        if normalized == "tough":
+            return (
+                "Tough: strictly apply the rubric. Award marks only when evidence "
+                "clearly meets each criterion; penalize ambiguity or missing working."
+            )
+        if normalized == "easy":
+            return (
+                "Easy: use more lenient rubric interpretation and reasonable benefit "
+                "of the doubt for partial understanding, without inventing evidence."
+            )
+        return "General: apply the rubric normally using balanced teacher judgement."
 
     @staticmethod
     def _append_flag(flags: list[str], flag: str) -> None:

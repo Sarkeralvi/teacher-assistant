@@ -22,5 +22,6 @@ class BrainProvider(ABC):
         model_policy: ModelPolicy = ModelPolicy.MOCK_GRADING,
         messages: list[dict[str, Any]] | None = None,
         image_data_url: str | None = None,
+        marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
         """Return a validated structured grading suggestion."""

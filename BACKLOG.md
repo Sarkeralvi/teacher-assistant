@@ -818,13 +818,13 @@ Title: Marking policy-aware Codex grading prompt
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W2-005
-Files affected: TBD
+Files affected: apps/api/packages/brain/adapter.py, apps/api/packages/brain/codex_cli_provider.py, apps/api/packages/brain/mock_provider.py, apps/api/packages/brain/openai_provider.py, apps/api/packages/brain/prompt_registry.py, apps/api/packages/brain/provider_base.py, apps/api/packages/evaluation/grading_evaluation.py, apps/api/app/services/grading_service.py, apps/api/tests/test_brain_adapter_contract.py, apps/api/tests/test_grading_evaluation.py
 Goal: Pass marking policy into mock/Codex grading prompt metadata and evaluate Tough/General/Easy behavior.
-Implementation notes: Keep teacher review mandatory. Real provider runs must be capped and explicit. Start with tests proving policy is included and recorded; do not claim quality until evaluated.
+Implementation notes: Added explicit policy instructions for Tough/General/Easy in grading prompts, propagated marking_policy through BrainAdapter/provider interfaces, ensured Codex CLI prompts request marking_policy review flags without image-data fabrication, and added evaluation-run/report policy metadata. Real provider runs remain capped/explicit by existing evaluation guardrails.
 Acceptance criteria: Grading prompt/provider output records policy; evaluation artifacts report policy; no auto-finalization; no default real batch grading.
 Tests required: provider/prompt tests, evaluation tests, capped smoke only if approved, make test, make lint.
 Risks: Prompt policy may shift scores unpredictably without calibration.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-007
 Title: Semi-automated question/model/rubric confirmation flow

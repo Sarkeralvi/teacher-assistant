@@ -7,6 +7,23 @@ PROMPT_VERSIONS: dict[ModelPolicy, str] = {
     ModelPolicy.REAL_GRADING: "real-grading-v1",
 }
 
+MARKING_POLICY_INSTRUCTIONS: dict[str, str] = {
+    "tough": (
+        "Tough: strictly apply the rubric. Award marks only when evidence clearly "
+        "meets the criterion, penalize missing working/ambiguity, and keep confidence "
+        "low when the answer is unclear."
+    ),
+    "general": (
+        "General: apply the rubric normally using balanced teacher judgement. Award "
+        "marks for demonstrated understanding while preserving rubric boundaries."
+    ),
+    "easy": (
+        "Easy: apply the rubric more leniently. Give reasonable benefit of the doubt "
+        "for partially demonstrated understanding, but do not award marks unsupported "
+        "by evidence."
+    ),
+}
+
 
 REAL_GRADING_SYSTEM_PROMPT = """You are a grading assistant. Produce a grade suggestion only.
 Teacher final review is always required. Do not create a final grade.
@@ -25,11 +42,10 @@ def build_grading_prompt(
     rubric_json: dict[str, Any],
     answer_image_path: str,
     image_input_enabled: bool,
+    marking_policy: str = "general",
 ) -> list[dict[str, str]]:
     model_answer = (
-        rubric_json.get("model_answer")
-        or rubric_json.get("answer_key")
-        or "Not provided."
+        rubric_json.get("model_answer") or rubric_json.get("answer_key") or "Not provided."
     )
     if image_input_enabled:
         image_note = (
@@ -43,6 +59,10 @@ def build_grading_prompt(
             "Image input is disabled for this provider path. "
             "Do not claim handwriting/image understanding."
         )
+    normalized_policy = marking_policy.strip().lower()
+    policy_instruction = MARKING_POLICY_INSTRUCTIONS.get(
+        normalized_policy, MARKING_POLICY_INSTRUCTIONS["general"]
+    )
     user_prompt = f"""
 Task: answer_region_grading
 Question text:
@@ -59,6 +79,12 @@ Image evidence path label:
 
 Image instructions:
 {image_note}
+
+Marking policy: {normalized_policy}
+Policy instructions:
+{policy_instruction}
+Do not change max_score, rubric criterion max_marks, or teacher-review requirements
+because of policy. Include marking_policy:{normalized_policy} in review_flags.
 
 Return strict JSON with these fields:
 score, max_score, confidence, needs_review, rubric_breakdown, detected_answer_summary,

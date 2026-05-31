@@ -110,43 +110,51 @@ def case(
 
 
 def test_metric_calculation_counts_exact_matches() -> None:
-    metrics = calculate_metrics([
-        {"case": case("case_001"), "suggestion": suggestion(score="5.00")},
-    ])
+    metrics = calculate_metrics(
+        [
+            {"case": case("case_001"), "suggestion": suggestion(score="5.00")},
+        ]
+    )
 
     assert metrics["case_count"] == 1
     assert metrics["exact_match_rate"] == Decimal("1")
 
 
 def test_metric_calculation_counts_within_1_mark() -> None:
-    metrics = calculate_metrics([
-        {"case": case("case_001", expected="5.00"), "suggestion": suggestion(score="4.00")},
-        {"case": case("case_002", expected="5.00"), "suggestion": suggestion(score="3.50")},
-    ])
+    metrics = calculate_metrics(
+        [
+            {"case": case("case_001", expected="5.00"), "suggestion": suggestion(score="4.00")},
+            {"case": case("case_002", expected="5.00"), "suggestion": suggestion(score="3.50")},
+        ]
+    )
 
     assert metrics["within_1_mark_rate"] == Decimal("0.5")
 
 
 def test_metric_calculation_mean_absolute_error() -> None:
-    metrics = calculate_metrics([
-        {"case": case("case_001", expected="5.00"), "suggestion": suggestion(score="4.00")},
-        {"case": case("case_002", expected="5.00"), "suggestion": suggestion(score="2.00")},
-    ])
+    metrics = calculate_metrics(
+        [
+            {"case": case("case_001", expected="5.00"), "suggestion": suggestion(score="4.00")},
+            {"case": case("case_002", expected="5.00"), "suggestion": suggestion(score="2.00")},
+        ]
+    )
 
     assert metrics["mean_absolute_error"] == Decimal("2")
 
 
 def test_metric_calculation_detects_false_confident_errors() -> None:
-    metrics = calculate_metrics([
-        {
-            "case": case("case_001", expected="5.00"),
-            "suggestion": suggestion(score="3.50", confidence="0.8000"),
-        },
-        {
-            "case": case("case_002", expected="5.00"),
-            "suggestion": suggestion(score="3.50", confidence="0.7900"),
-        },
-    ])
+    metrics = calculate_metrics(
+        [
+            {
+                "case": case("case_001", expected="5.00"),
+                "suggestion": suggestion(score="3.50", confidence="0.8000"),
+            },
+            {
+                "case": case("case_002", expected="5.00"),
+                "suggestion": suggestion(score="3.50", confidence="0.7900"),
+            },
+        ]
+    )
 
     assert metrics["false_confident_error_count"] == 1
 
@@ -220,8 +228,7 @@ def test_synthetic_grading_quality_dataset_creates_five_non_student_cases(
     assert all(item.answer_region_id > 0 for item in cases)
     assert all(item.generated_fixture_reference for item in cases)
     assert all(
-        (tmp_path / "storage" / item.generated_fixture_reference).is_file()
-        for item in cases
+        (tmp_path / "storage" / item.generated_fixture_reference).is_file() for item in cases
     )
     assert {item.expected_score for item in cases} == {
         Decimal("5.00"),
@@ -253,3 +260,28 @@ def test_evaluation_output_artifact_is_written(tmp_path: Path) -> None:
     assert paths.json_path.parent == tmp_path
     assert "exact_match_rate" in paths.json_path.read_text(encoding="utf-8")
     assert "case_001" in paths.markdown_path.read_text(encoding="utf-8")
+
+
+def test_evaluation_output_artifact_reports_marking_policy(tmp_path: Path) -> None:
+    result = {
+        "run_id": "eval-policy-test",
+        "provider_mode": "mock",
+        "marking_policy": "easy",
+        "metrics": {"case_count": 1, "exact_match_rate": Decimal("1")},
+        "cases": [
+            {
+                "case_id": "case_001",
+                "expected_score": Decimal("5.00"),
+                "ai_score": Decimal("5.00"),
+                "absolute_error": Decimal("0"),
+                "marking_policy": "easy",
+            }
+        ],
+    }
+
+    paths = write_evaluation_artifacts(result, tmp_path)
+    json_text = paths.json_path.read_text(encoding="utf-8")
+    markdown_text = paths.markdown_path.read_text(encoding="utf-8")
+    assert '"marking_policy": "easy"' in json_text
+    assert "Marking policy: `easy`" in markdown_text
+    assert "policy easy" in markdown_text

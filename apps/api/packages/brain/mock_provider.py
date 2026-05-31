@@ -22,6 +22,7 @@ class MockBrainProvider(BrainProvider):
         model_policy: object | None = None,
         messages: list[dict[str, Any]] | None = None,
         image_data_url: str | None = None,
+        marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
         criteria = rubric_json.get("criteria", [])
         breakdown = [
@@ -37,6 +38,7 @@ class MockBrainProvider(BrainProvider):
             for criterion in criteria
         ]
         max_score = Decimal(str(rubric_json.get("total_marks", question_total_marks)))
+        flags = ["mock_provider", "teacher_review_required", f"marking_policy:{marking_policy}"]
         return GradeSuggestionOutput(
             score=Decimal("0"),
             max_score=max_score,
@@ -48,7 +50,7 @@ class MockBrainProvider(BrainProvider):
             ),
             major_errors=[],
             feedback_to_student="This is a mock grading suggestion for pipeline validation only.",
-            review_flags=["mock_provider", "teacher_review_required"],
+            review_flags=flags,
             model_provider=self.provider_name,
             model_name=self.model_name,
             prompt_version=prompt_version,

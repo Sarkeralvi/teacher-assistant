@@ -9,7 +9,11 @@ from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.image_input import build_image_data_url
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.openai_provider import OpenAICompatibleProvider
-from packages.brain.prompt_registry import build_grading_prompt, get_prompt_version
+from packages.brain.prompt_registry import (
+    MARKING_POLICY_INSTRUCTIONS,
+    build_grading_prompt,
+    get_prompt_version,
+)
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
@@ -92,15 +96,18 @@ class BrainAdapter:
         rubric_json: dict[str, Any],
         answer_image_path: str,
         policy: ModelPolicy | None = None,
+        marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
+        normalized_marking_policy = marking_policy.strip().lower()
+        if normalized_marking_policy not in MARKING_POLICY_INSTRUCTIONS:
+            normalized_marking_policy = "general"
         resolved_policy = policy or (
             ModelPolicy.REAL_GRADING
             if self.provider.provider_name in {"openai", "codex_cli"}
             else ModelPolicy.MOCK_GRADING
         )
         should_send_image = (
-            self.provider.provider_name in {"openai", "codex_cli"}
-            and self.image_input_enabled
+            self.provider.provider_name in {"openai", "codex_cli"} and self.image_input_enabled
         )
         prompt_version = get_prompt_version(resolved_policy)
         messages = build_grading_prompt(
@@ -108,6 +115,7 @@ class BrainAdapter:
             rubric_json=rubric_json,
             answer_image_path=answer_image_path,
             image_input_enabled=should_send_image,
+            marking_policy=normalized_marking_policy,
         )
         image_data_url = None
         provider_answer_image_path = answer_image_path
@@ -130,6 +138,7 @@ class BrainAdapter:
                 model_policy=resolved_policy,
                 messages=messages,
                 image_data_url=image_data_url,
+                marking_policy=normalized_marking_policy,
             )
         except Exception as exc:
             sanitized = sanitize_provider_error(str(exc))

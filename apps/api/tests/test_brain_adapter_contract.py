@@ -81,3 +81,47 @@ def test_mock_output_cannot_be_mistaken_for_real_grading() -> None:
         == "This is a mock grading suggestion for pipeline validation only."
     )
     assert "mock_provider" in output.review_flags
+
+
+def test_grading_prompt_includes_explicit_marking_policy_rules() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    messages = build_grading_prompt(
+        question_text="Explain photosynthesis.",
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/answer_regions/region.png",
+        image_input_enabled=False,
+        marking_policy="tough",
+    )
+
+    rendered = "\n".join(message["content"] for message in messages)
+    assert "Marking policy: tough" in rendered
+    assert "strictly apply the rubric" in rendered
+    assert "Do not change max_score" in rendered
+    assert "marking_policy:tough" in rendered
+
+
+def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> None:
+    from packages.brain.codex_cli_provider import CodexCliProvider
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    messages = build_grading_prompt(
+        question_text="Explain photosynthesis.",
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/answer_regions/region.png",
+        image_input_enabled=False,
+        marking_policy="easy",
+    )
+    prompt = CodexCliProvider()._build_prompt(
+        question_text="Explain photosynthesis.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        messages=messages,
+        image_input_enabled=False,
+        marking_policy="easy",
+    )
+
+    assert "Marking policy: easy" in prompt
+    assert "more lenient" in prompt
+    assert "marking_policy:easy" in prompt
+    assert "data:image" not in prompt

@@ -39,8 +39,16 @@ class OpenAICompatibleProvider(BrainProvider):
         model_policy: ModelPolicy = ModelPolicy.REAL_GRADING,
         messages: list[dict[str, Any]] | None = None,
         image_data_url: str | None = None,
+        marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
-        del question_text, question_total_marks, answer_image_path, task_name, model_policy
+        del (
+            question_text,
+            question_total_marks,
+            answer_image_path,
+            task_name,
+            model_policy,
+            marking_policy,
+        )
         try:
             response = self.client.post(
                 "/chat/completions",

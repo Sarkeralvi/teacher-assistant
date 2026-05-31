@@ -76,10 +76,12 @@ class GradingEvaluationRunner:
         allow_real_provider: bool = False,
         max_real_cases: int = _DEFAULT_MAX_REAL_CASES,
         output_dir: Path | None = None,
+        marking_policy: str = "general",
     ) -> None:
         self.provider_mode = provider_mode.strip().lower() or "mock"
         self.allow_real_provider = allow_real_provider
         self.max_real_cases = max_real_cases
+        self.marking_policy = self._normalize_marking_policy(marking_policy)
         self.output_dir = output_dir or (
             Path(get_settings().local_storage_root) / "exports" / "grading_evals"
         )
@@ -105,7 +107,9 @@ class GradingEvaluationRunner:
             service = GradingService(db)
             for eval_case in cases:
                 self._validate_case_records(db, eval_case)
-                job, suggestion = service.grade_answer_region(eval_case.answer_region_id)
+                job, suggestion = service.grade_answer_region(
+                    eval_case.answer_region_id, marking_policy=self.marking_policy
+                )
                 raw = suggestion.raw_response_json or {}
                 output = GradeSuggestionOutput.model_validate(raw)
                 absolute_error = abs(Decimal(suggestion.score or 0) - eval_case.expected_score)
@@ -119,12 +123,14 @@ class GradingEvaluationRunner:
                         "model_provider": suggestion.model_provider,
                         "model_name": suggestion.model_name,
                         "prompt_version": suggestion.prompt_version,
+                        "marking_policy": suggestion.marking_policy,
                     }
                 )
             result = {
                 "run_id": datetime.now(UTC).strftime("grading-eval-%Y%m%dT%H%M%SZ"),
                 "created_at": datetime.now(UTC).isoformat(),
                 "provider_mode": self.provider_mode,
+                "marking_policy": self.marking_policy,
                 "case_count": len(cases),
                 "metrics": calculate_metrics(rows),
                 "cases": [_serialize_case_result(row) for row in rows],
@@ -139,6 +145,11 @@ class GradingEvaluationRunner:
             else:
                 os.environ["BRAIN_PROVIDER"] = previous_provider
             get_settings.cache_clear()
+
+    @staticmethod
+    def _normalize_marking_policy(marking_policy: str) -> str:
+        policy = marking_policy.strip().lower()
+        return policy if policy in {"tough", "general", "easy"} else "general"
 
     @staticmethod
     def _validate_case_records(db: Session, eval_case: EvaluationCase) -> None:
@@ -443,6 +454,7 @@ def _serialize_case_result(row: dict[str, Any]) -> dict[str, Any]:
         "model_provider": row.get("model_provider") or suggestion.model_provider,
         "model_name": row.get("model_name") or suggestion.model_name,
         "prompt_version": row.get("prompt_version") or suggestion.prompt_version,
+        "marking_policy": row.get("marking_policy") or "general",
         "review_flags": suggestion.review_flags,
     }
 
@@ -493,6 +505,7 @@ def _render_markdown(result: dict[str, Any]) -> str:
         f"# Grading Evaluation: {result.get('run_id', 'unknown')}",
         "",
         f"Provider mode: `{result.get('provider_mode', 'unknown')}`",
+        f"Marking policy: `{result.get('marking_policy', 'general')}`",
         "",
         "## Metrics",
         "",
@@ -505,7 +518,7 @@ def _render_markdown(result: dict[str, Any]) -> str:
             (
                 "- `{case_id}`: expected {expected_score}, AI {ai_score}, "
                 "abs error {absolute_error}, confidence {confidence}, "
-                "needs_review {needs_review}"
+                "needs_review {needs_review}, policy {marking_policy}"
             ).format(
                 case_id=item.get("case_id", "unknown"),
                 expected_score=item.get("expected_score", "unknown"),
@@ -513,6 +526,7 @@ def _render_markdown(result: dict[str, Any]) -> str:
                 absolute_error=item.get("absolute_error", "unknown"),
                 confidence=item.get("confidence", "unknown"),
                 needs_review=item.get("needs_review", "unknown"),
+                marking_policy=item.get("marking_policy", result.get("marking_policy", "general")),
             )
         )
     lines.append("")
@@ -529,6 +543,12 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("TA_EVAL_ALLOW_REAL_PROVIDER", "").lower() == "true",
     )
     parser.add_argument("--max-real-cases", type=int, default=_DEFAULT_MAX_REAL_CASES)
+    parser.add_argument(
+        "--marking-policy",
+        default=os.environ.get("TA_EVAL_MARKING_POLICY", "general"),
+        choices=("tough", "general", "easy"),
+        help="Marking policy to pass into grading prompts.",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     return parser.parse_args()
 
@@ -543,6 +563,7 @@ def main() -> None:
         allow_real_provider=args.allow_real_provider,
         max_real_cases=args.max_real_cases,
         output_dir=args.output_dir,
+        marking_policy=args.marking_policy,
     )
     with SessionLocal() as db:
         result = runner.run(db, cases)
