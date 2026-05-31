@@ -119,6 +119,15 @@ class GradingRun(TimestampMixin, Base):
     question_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     solution_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     rubric_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    materials_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    questions_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rubrics_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     assessment: Mapped[Assessment] = relationship(back_populates="grading_runs")

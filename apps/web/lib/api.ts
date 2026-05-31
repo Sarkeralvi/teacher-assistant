@@ -101,6 +101,30 @@ export type QuestionImportAcceptResponse = {
   questions: Question[];
 };
 
+export type GradingRunWorkflowState = {
+  materials_uploaded: boolean;
+  materials_confirmed: boolean;
+  questions_confirmed: boolean;
+  rubrics_confirmed: boolean;
+  scripts_uploaded: boolean;
+  answer_regions_created: boolean;
+  grading_ready: boolean;
+  suggestions_created: boolean;
+  review_ready: boolean;
+  final_grades_created: boolean;
+  export_ready: boolean;
+  question_count: number;
+  rubric_count: number;
+  submission_count: number;
+  submission_page_count: number;
+  answer_region_count: number;
+  grade_suggestion_count: number;
+  final_grade_count: number;
+  blockers: string[];
+  next_actions: string[];
+  derived_status: string;
+};
+
 export type GradingRun = {
   id: number;
   assessment_id: number;
@@ -110,7 +134,11 @@ export type GradingRun = {
   question_pdf_path: string | null;
   solution_pdf_path: string | null;
   rubric_pdf_path: string | null;
+  materials_confirmed_at: string | null;
+  questions_confirmed_at: string | null;
+  rubrics_confirmed_at: string | null;
   notes: string | null;
+  workflow_state: GradingRunWorkflowState;
   created_at: string;
   updated_at: string;
 };
@@ -502,6 +530,33 @@ export function uploadGradingRunMaterials(
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
+}
+
+export function confirmGradingRunMaterials(gradingRunId: number) {
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}/confirm-materials`, {
+    method: "POST",
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function confirmGradingRunQuestionsRubrics(gradingRunId: number) {
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}/confirm-questions-rubrics`, {
+    method: "POST",
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function gradeGradingRunReadyRegionsMock(gradingRunId: number) {
+  return apiRequest<BatchMockGradeResponse & { workflow_state: GradingRunWorkflowState }>(
+    `/grading-runs/${gradingRunId}/grade-all-mock`,
+    {
+      method: "POST",
+      token: getStoredAuthToken(),
+      authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+    },
+  );
 }
 
 export function acceptQuestionImportDrafts(jobId: number, draftQuestions: DraftQuestionAccept[]) {

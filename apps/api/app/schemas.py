@@ -115,6 +115,30 @@ class GradingRunUpdate(BaseModel):
     notes: str | None = Field(default=None, max_length=4000)
 
 
+class GradingRunWorkflowState(BaseModel):
+    materials_uploaded: bool
+    materials_confirmed: bool
+    questions_confirmed: bool
+    rubrics_confirmed: bool
+    scripts_uploaded: bool
+    answer_regions_created: bool
+    grading_ready: bool
+    suggestions_created: bool
+    review_ready: bool
+    final_grades_created: bool
+    export_ready: bool
+    question_count: int
+    rubric_count: int
+    submission_count: int
+    submission_page_count: int
+    answer_region_count: int
+    grade_suggestion_count: int
+    final_grade_count: int
+    blockers: list[str]
+    next_actions: list[str]
+    derived_status: str
+
+
 class GradingRunRead(ORMBase):
     id: int
     assessment_id: int
@@ -124,7 +148,11 @@ class GradingRunRead(ORMBase):
     question_pdf_path: str | None
     solution_pdf_path: str | None
     rubric_pdf_path: str | None
+    materials_confirmed_at: datetime | None
+    questions_confirmed_at: datetime | None
+    rubrics_confirmed_at: datetime | None
     notes: str | None
+    workflow_state: GradingRunWorkflowState
     created_at: datetime
     updated_at: datetime
 

@@ -779,13 +779,13 @@ Title: Custom Controlled Mode full usable workflow fix
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W2-002
-Files affected: likely apps/api app models/schemas/routes/services/tests, apps/web components/lib, BACKLOG.md, docs/VALIDATION_LOG.md
+Files affected: apps/api/alembic/versions/0006_grading_run_confirmations.py, apps/api/app/models.py, apps/api/app/schemas.py, apps/api/app/api/routes/grading_runs.py, apps/api/tests/test_grading_runs_api.py, apps/web/lib/api.ts, apps/web/components/CustomControlledGradingRunClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
 Goal: Fix the smallest set of backend/frontend/status issues so Custom Controlled Mode is usable end-to-end from login to XLSX export with rough UI.
 Implementation notes: Use `docs/CUSTOM_CONTROLLED_MODE_AUDIT.md` as the source. Recommended order: (1) add derived Custom Controlled status/checklist with material/question/rubric/submission/region/suggestion/final/export readiness; (2) stop treating manual status as the source of truth; (3) turn the Custom Controlled page into a rough dashboard with blockers/counts/next actions; (4) add minimal teacher confirmation tracking for questions/rubrics without parsing solution/rubric PDFs; (5) gate UI grading actions on readiness; (6) add one full end-to-end API test from run start through export. Keep manual answer-region mapping. Do not add ZIP upload, fully automated mode, semi-automated mode, marking policy behavior, real batch Codex, answer-region auto-detection, or UX polish.
 Acceptance criteria: Teacher can login, create course/assessment, start Custom Controlled run, upload materials, confirm questions/rubrics, upload one script, create answer region, run mock grading suggestion, verify no auto-final grade, review/approve, and export XLSX; dashboard clearly shows blockers and ready states.
 Tests required: focused Custom Controlled status/workflow tests; existing grading-run/grading/review tests; make test; make lint; frontend build if relevant; mock-only manual or API smoke; git status --short.
 Risks: Scope creep into ZIP/automation/polish must be avoided; confirmation tracking must not imply AI-quality guarantees.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-004
 Title: ZIP script upload and batch submission ingestion

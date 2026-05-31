@@ -5,14 +5,18 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
+  confirmGradingRunMaterials,
+  confirmGradingRunQuestionsRubrics,
   createCustomGradingRun,
   getAssessment,
   getAssessmentFinalGradesExportUrl,
+  gradeGradingRunReadyRegionsMock,
   listAssessmentGradingRuns,
   updateGradingRun,
   uploadGradingRunMaterials,
   type Assessment,
   type GradingRun,
+  type GradingRunWorkflowState,
 } from "../lib/api";
 
 const workflowSteps = [
@@ -37,6 +41,56 @@ const statusOptions = [
   "completed",
 ];
 
+const dashboardSections: Array<{
+  key: string;
+  label: string;
+  isReady: (state: GradingRunWorkflowState) => boolean;
+  countText: (state: GradingRunWorkflowState) => string;
+}> = [
+  {
+    key: "materials",
+    label: "Materials",
+    isReady: (state) => state.materials_uploaded && state.materials_confirmed,
+    countText: (state) => `Materials confirmed: ${state.materials_confirmed ? "yes" : "no"}`,
+  },
+  {
+    key: "questions-rubrics",
+    label: "Questions/rubrics",
+    isReady: (state) => state.questions_confirmed && state.rubrics_confirmed,
+    countText: (state) => `Questions/rubrics confirmed: ${state.question_count}/${state.rubric_count}`,
+  },
+  {
+    key: "scripts",
+    label: "Scripts",
+    isReady: (state) => state.scripts_uploaded,
+    countText: (state) => `Scripts uploaded: ${state.submission_count} submissions, ${state.submission_page_count} pages`,
+  },
+  {
+    key: "regions",
+    label: "Answer regions",
+    isReady: (state) => state.answer_regions_created,
+    countText: (state) => `Answer regions created: ${state.answer_region_count}`,
+  },
+  {
+    key: "grading",
+    label: "Grading",
+    isReady: (state) => state.grading_ready,
+    countText: (state) => `Grading readiness: ${state.grading_ready ? "ready" : "blocked"}`,
+  },
+  {
+    key: "review",
+    label: "Review",
+    isReady: (state) => state.review_ready,
+    countText: (state) => `Review readiness: ${state.grade_suggestion_count} suggestions`,
+  },
+  {
+    key: "export",
+    label: "Export",
+    isReady: (state) => state.export_ready,
+    countText: (state) => `Export readiness: ${state.final_grade_count} final grades`,
+  },
+];
+
 export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [gradingRuns, setGradingRuns] = useState<GradingRun[]>([]);
@@ -49,8 +103,10 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastGradingResult, setLastGradingResult] = useState<string | null>(null);
 
   const selectedRun = gradingRuns.find((run) => run.id === selectedRunId) ?? gradingRuns[0] ?? null;
+  const workflowState = selectedRun?.workflow_state ?? null;
 
   async function load() {
     setLoading(true);
@@ -62,10 +118,10 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       ]);
       setAssessment(assessmentData);
       setGradingRuns(runData);
-      const firstRun = runData[0] ?? null;
-      setSelectedRunId((current) => current ?? firstRun?.id ?? null);
-      setStatus(firstRun?.status ?? "draft");
-      setNotes(firstRun?.notes ?? "");
+      const preferredRun = runData.find((run) => run.id === selectedRunId) ?? runData[0] ?? null;
+      setSelectedRunId(preferredRun?.id ?? null);
+      setStatus(preferredRun?.status ?? "draft");
+      setNotes(preferredRun?.notes ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load custom controlled grading run");
     } finally {
@@ -85,9 +141,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
         notes: notes || "Custom controlled mode: teacher confirmation required.",
       });
       setGradingRuns((current) => [run, ...current]);
-      setSelectedRunId(run.id);
-      setStatus(run.status);
-      setNotes(run.notes ?? "");
+      replaceRun(run);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start grading run");
     } finally {
@@ -110,7 +164,6 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
         rubric_pdf: rubricPdf,
       });
       replaceRun(updated);
-      setStatus(updated.status);
       setQuestionPdf(null);
       setSolutionPdf(null);
       setRubricPdf(null);
@@ -118,6 +171,57 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload grading-run materials");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleConfirmMaterials() {
+    if (!selectedRun) {
+      return;
+    }
+    await runAndRefresh(() => confirmGradingRunMaterials(selectedRun.id), "Failed to confirm uploaded materials");
+  }
+
+  async function handleConfirmQuestionsRubrics() {
+    if (!selectedRun) {
+      return;
+    }
+    await runAndRefresh(
+      () => confirmGradingRunQuestionsRubrics(selectedRun.id),
+      "Failed to confirm questions/rubrics",
+    );
+  }
+
+  async function handleRunGatedMockGrading() {
+    if (!selectedRun) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setLastGradingResult(null);
+    try {
+      const result = await gradeGradingRunReadyRegionsMock(selectedRun.id);
+      setLastGradingResult(
+        `Gated mock grading completed: ${result.graded_count} graded, ${result.skipped_count} skipped, ${result.failed_count} failed.`,
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run gated mock grading");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runAndRefresh(action: () => Promise<GradingRun>, fallback: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await action();
+      replaceRun(updated);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : fallback);
     } finally {
       setSaving(false);
     }
@@ -173,6 +277,47 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       </section>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-xl font-semibold">Functional V0 workflow dashboard</h2>
+        {workflowState ? (
+          <>
+            <p className="mt-2 text-sm text-slate-400">
+              Backend-derived status: {workflowState.derived_status}. Manual status note: {selectedRun?.status ?? "not started"}.
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {dashboardSections.map((section) => {
+                const ready = section.isReady(workflowState);
+                return (
+                  <article key={section.key} className={`rounded border p-3 text-sm ${ready ? "border-emerald-700 bg-emerald-950/20" : "border-amber-700 bg-amber-950/20"}`}>
+                    <p className="font-semibold">{section.label}</p>
+                    <p>{ready ? "pass" : "warning/blocker"}</p>
+                    <p className="text-slate-300">{section.countText(workflowState)}</p>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="rounded border border-slate-800 p-3">
+                <h3 className="font-semibold">Workflow blockers</h3>
+                {workflowState.blockers.length > 0 ? (
+                  <ul className="mt-2 list-disc pl-5 text-sm text-amber-100">
+                    {workflowState.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                  </ul>
+                ) : <p className="mt-2 text-sm text-emerald-200">No blockers.</p>}
+              </div>
+              <div className="rounded border border-slate-800 p-3">
+                <h3 className="font-semibold">Next actions</h3>
+                {workflowState.next_actions.length > 0 ? (
+                  <ul className="mt-2 list-disc pl-5 text-sm text-cyan-100">
+                    {workflowState.next_actions.map((action) => <li key={action}>{action}</li>)}
+                  </ul>
+                ) : <p className="mt-2 text-sm text-emerald-200">Workflow complete.</p>}
+              </div>
+            </div>
+          </>
+        ) : <EmptyState message="Start a custom controlled run to see blockers and next actions." />}
+      </section>
+
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Wizard steps</h2>
         <ol className="mt-4 grid gap-2 md:grid-cols-2">
           {workflowSteps.map((step, index) => (
@@ -201,6 +346,8 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
             <p>Question PDF: {selectedRun.question_pdf_path ?? "pending"}</p>
             <p>Solution/model answer PDF: {selectedRun.solution_pdf_path ?? "pending"}</p>
             <p>Rubric PDF: {selectedRun.rubric_pdf_path ?? "pending"}</p>
+            <p>Materials confirmed: {selectedRun.materials_confirmed_at ?? "pending"}</p>
+            <p>Questions/rubrics confirmed: {selectedRun.questions_confirmed_at && selectedRun.rubrics_confirmed_at ? "yes" : "pending"}</p>
           </div>
         ) : null}
       </section>
@@ -219,13 +366,41 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
           Rubric PDF
           <input className={inputClass} type="file" accept="application/pdf,.pdf" onChange={handleFileChange(setRubricPdf)} />
         </label>
-        <button className={buttonClass} disabled={saving || !selectedRun} type="submit">
-          Upload/confirm materials
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button className={buttonClass} disabled={saving || !selectedRun} type="submit">
+            Upload/confirm materials
+          </button>
+          <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.materials_uploaded} onClick={handleConfirmMaterials} type="button">
+            Confirm uploaded materials
+          </button>
+        </div>
       </form>
+
+      <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-xl font-semibold">Confirm or create questions/rubrics</h2>
+        <p className="text-sm text-slate-300">Create or edit canonical questions/model answers/rubrics on the assessment page, then confirm them here.</p>
+        <div className="flex flex-wrap gap-3">
+          <Link className={buttonClass} href={`/assessments/${assessmentId}`}>
+            Confirm or create questions/rubrics, upload scripts, create answer regions manually, run mock grading
+          </Link>
+          <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.materials_confirmed} onClick={handleConfirmQuestionsRubrics} type="button">
+            Confirm questions/rubrics
+          </button>
+        </div>
+      </section>
+
+      <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-xl font-semibold">Grading readiness</h2>
+        <p className="text-sm text-amber-100">Grading is blocked until readiness requirements pass.</p>
+        <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.grading_ready} onClick={handleRunGatedMockGrading} type="button">
+          Run gated mock grading
+        </button>
+        {lastGradingResult ? <p className="text-sm text-emerald-200">{lastGradingResult}</p> : null}
+      </section>
 
       <form onSubmit={handleUpdateRun} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Current status</h2>
+        <p className="text-sm text-slate-400">Manual status is a note only. Backend readiness comes from the derived checklist above.</p>
         <select className={inputClass} value={status} onChange={(event) => setStatus(event.target.value)}>
           {statusOptions.map((option) => (
             <option key={option} value={option}>{option}</option>
@@ -246,7 +421,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
         <h2 className="text-xl font-semibold">Existing workflow links</h2>
         <div className="mt-4 flex flex-wrap gap-3">
           <Link className={buttonClass} href={`/assessments/${assessmentId}`}>
-            Confirm or create questions/rubrics, upload scripts, create answer regions manually, run mock grading
+            Upload scripts and create answer regions manually
           </Link>
           <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
             Review suggestions and approve selected
@@ -256,7 +431,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
           </a>
         </div>
         <p className="mt-3 text-sm text-slate-400">
-          Run mock batch grading from the review page or use existing controlled grading actions only after teacher-confirmed materials are ready.
+          Run mock batch grading from this gated dashboard or use existing controlled grading actions only after teacher-confirmed materials are ready.
         </p>
       </section>
     </div>

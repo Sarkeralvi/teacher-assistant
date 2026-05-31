@@ -94,7 +94,10 @@ for (const symbol of [
   "listAssessmentGradingRuns",
   "getGradingRun",
   "updateGradingRun",
-  "uploadGradingRunMaterials",
+  "confirmGradingRunMaterials",
+  "confirmGradingRunQuestionsRubrics",
+  "gradeGradingRunReadyRegionsMock",
+  "GradingRunWorkflowState",
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -215,6 +218,23 @@ for (const text of [
   "href={`/assessments/${assessmentId}`}",
   "href={`/assessments/${assessmentId}/review`}",
   "getAssessmentFinalGradesExportUrl(assessmentId)",
+  "Functional V0 workflow dashboard",
+  "Workflow blockers",
+  "Next actions",
+  "Materials confirmed",
+  "Questions/rubrics confirmed",
+  "Scripts uploaded",
+  "Answer regions created",
+  "Grading readiness",
+  "Review readiness",
+  "Export readiness",
+  "Confirm uploaded materials",
+  "Confirm questions/rubrics",
+  "Run gated mock grading",
+  "Grading is blocked until readiness requirements pass.",
+  "confirmGradingRunMaterials",
+  "confirmGradingRunQuestionsRubrics",
+  "gradeGradingRunReadyRegionsMock",
 ]) {
   if (!gradingRunUi.includes(text)) {
     throw new Error(`Custom controlled grading-run UI missing marker: ${text}`);
