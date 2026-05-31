@@ -257,6 +257,67 @@ def test_codex_cli_image_disabled_does_not_attempt_image_input() -> None:
     assert "image_input_disabled" in result.review_flags
 
 
+def test_codex_cli_image_enabled_includes_supported_image_flag() -> None:
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        calls.append(cmd)
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout="--cd\n--sandbox\n--output-last-message\n--json\n-i, --image <FILE>"
+            )
+        Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
+            json.dumps(valid_codex_output()), encoding="utf-8"
+        )
+        return FakeCompletedProcess()
+
+    result = make_provider(runner=runner, image_input_enabled=True).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="/tmp/region.png",
+        prompt_version="ignored",
+        messages=messages(image_input_enabled=True),
+    )
+
+    assert "--image" in calls[-1]
+    assert calls[-1][calls[-1].index("--image") + 1] == "/tmp/region.png"
+    assert "image_input_used" in result.review_flags
+    assert "image_input_disabled" not in result.review_flags
+
+
+def test_codex_cli_image_enabled_without_image_path_omits_image_flag() -> None:
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        calls.append(cmd)
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout="--cd\n--sandbox\n--output-last-message\n--json\n--image <FILE>"
+            )
+        Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
+            json.dumps(valid_codex_output()), encoding="utf-8"
+        )
+        return FakeCompletedProcess()
+
+    result = make_provider(runner=runner, image_input_enabled=True).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="",
+        prompt_version="ignored",
+        messages=messages(image_input_enabled=True),
+    )
+
+    assert "--image" not in calls[-1]
+    assert "image_input_disabled" in result.review_flags
+    assert "image_input_used" not in result.review_flags
+
+
 def test_codex_cli_image_enabled_but_no_image_flag_support_fails_clearly() -> None:
     provider = make_provider(
         help_text="--cd <DIR>\n--sandbox <SANDBOX_MODE>\n--output-last-message <FILE>",

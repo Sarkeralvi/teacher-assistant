@@ -102,9 +102,9 @@ cd /home/newton/teacher-assistant
 export APP_ENV=development
 export DATABASE_URL='postgresql+psycopg://teacher_assistant:teacher_assistant_dev_password@localhost:5432/teacher_assistant'
 export REDIS_URL='redis://localhost:6379/0'
-export LOCAL_STORAGE_ROOT="$PWD/data"
-export UPLOADS_DIR="$PWD/data/uploads"
-export ARTIFACTS_DIR="$PWD/data/artifacts"
+export LOCAL_STORAGE_ROOT="/tmp/teacher-assistant-host-data"
+export UPLOADS_DIR="/tmp/teacher-assistant-host-data/uploads"
+export ARTIFACTS_DIR="/tmp/teacher-assistant-host-data/artifacts"
 export BRAIN_PROVIDER=mock
 export CODEX_BROWSER_GRADING_ENABLED=true
 export CODEX_CLI_COMMAND=codex
@@ -119,8 +119,31 @@ export CODEX_CLI_WORKDIR="$PWD"
 Notes:
 
 - Keep `BRAIN_PROVIDER=mock`; the browser smoke endpoint constructs the Codex CLI provider explicitly.
-- Keep `CODEX_CLI_IMAGE_INPUT_ENABLED=false` unless a separate image-input task approves it.
+- Keep `CODEX_CLI_IMAGE_INPUT_ENABLED=false` for default host-backend smoke mode. Set it to `true` only for an approved one-answer image-input smoke after confirming the installed Codex CLI supports `-i, --image <FILE>`.
 - Keep `CODEX_CLI_SANDBOX=read-only` and `CODEX_CLI_APPROVAL_POLICY=never`.
+
+### Image-input smoke mode
+
+The installed Codex CLI must advertise image support before enabling this mode:
+
+```bash
+codex exec --help | grep -E -- '--image|-i,'
+```
+
+If supported, start the host backend with image input enabled for that process only:
+
+```bash
+cd /home/newton/teacher-assistant
+CODEX_CLI_IMAGE_INPUT_ENABLED=true make backend-host-dev
+```
+
+or, when starting Uvicorn manually:
+
+```bash
+export CODEX_CLI_IMAGE_INPUT_ENABLED=true
+```
+
+When enabled and an `AnswerRegion.image_path` exists, the backend resolves the crop under `LOCAL_STORAGE_ROOT` and passes that local file path to Codex CLI using `--image`. If image input is disabled, unsupported, or no image path is available, the provider must not embed base64 image data in prompts or persisted raw responses.
 
 ### 4. Apply migrations from the host backend environment
 
@@ -189,7 +212,7 @@ make backend-host-dev
 
 `make codex-ok` runs the safe `/tmp` Codex OK probe.
 
-`make backend-host-dev` starts only the host backend. It assumes PostgreSQL/Redis are already running in Docker, migrations have been applied, and your shell environment is safe for host-backend mode. It sets host-safe defaults for database, Redis, storage, and Codex dev gating for that process.
+`make backend-host-dev` starts only the host backend. It assumes PostgreSQL/Redis are already running in Docker, migrations have been applied, and your shell environment is safe for host-backend mode. It sets host-safe defaults for database, Redis, storage, and Codex dev gating for that process. It keeps `CODEX_CLI_IMAGE_INPUT_ENABLED=false` unless the caller explicitly overrides it, for example `CODEX_CLI_IMAGE_INPUT_ENABLED=true make backend-host-dev`.
 
 ## Troubleshooting
 

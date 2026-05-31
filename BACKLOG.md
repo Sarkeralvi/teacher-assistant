@@ -692,6 +692,19 @@ Tests required: TBD.
 Risks: Draft quality must be evaluated before broad use.
 Status: Pending
 
+TASK-ID: TA-W1-037A
+Title: Enable image input for browser-triggered Codex grading smoke
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-036B
+Files affected: Makefile, apps/api/packages/brain/codex_cli_provider.py, apps/api/tests/test_codex_cli_provider.py, docs/CODEX_DEV_RUNTIME.md, docs/VALIDATION_LOG.md, BACKLOG.md
+Goal: Enable and validate image input for exactly one browser/backend Codex grading smoke so the provider can see the cropped answer image.
+Implementation notes: Confirmed installed Codex CLI `codex-cli 0.128.0` supports `-i, --image <FILE>`. Kept image input default-off, made `make backend-host-dev` allow an explicit `CODEX_CLI_IMAGE_INPUT_ENABLED=true` override, and documented host-backend image-input mode. Updated the Codex CLI provider to pass `--image <absolute crop path>` only when image input is enabled and an answer image path exists; otherwise it omits the image flag and records `image_input_disabled`. Ran one synthetic non-student browser/backend dev endpoint smoke with image input enabled: answer_region_id `2647`, grade_suggestion_id `1782`, score `5.00`, confidence `0.9900`, `needs_review=true`, review_flags `teacher_review_required`, `codex_cli_provider`, `image_input_used`; no FinalGrade was auto-created.
+Acceptance criteria: Image flag included when enabled/supported; image flag omitted when disabled or no image path exists; no real Codex calls in unit tests; host backend can opt into `CODEX_CLI_IMAGE_INPUT_ENABLED=true`; Docker/demo mode remains default-off; browser button remains single-answer only; one real synthetic smoke uses image input and still requires teacher review.
+Tests required: `codex --version`; `codex exec --help`; focused provider tests; `make up-infra`; local Alembic migration; `make codex-ok`; host backend with `CODEX_CLI_IMAGE_INPUT_ENABLED=true`; frontend readiness; one real image-input `grade-codex-dev` smoke; `make test`; `make lint`; `npm run build`; clean shutdown; final `git status --short`.
+Risks: This proves the CLI image-input path and review gate on one synthetic answer only; it is not a grading-quality evaluation, batch grading feature, auto-finalization, voice command, or TA-W1-038.
+Status: Done
+
 TASK-ID: TA-W1-037
 Title: Fully automated ZIP grading prototype
 Owner: Hermes

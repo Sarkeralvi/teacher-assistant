@@ -80,7 +80,8 @@ class CodexCliProvider(BrainProvider):
         image_data_url: str | None = None,
     ) -> GradeSuggestionOutput:
         del prompt_version, task_name, model_policy
-        self._preflight()
+        use_image_input = self.image_input_enabled and bool(answer_image_path)
+        self._preflight(require_image_input=use_image_input)
         if image_data_url:
             # Codex CLI provider never consumes base64/data URLs. Vision must
             # use a supported CLI image flag, not prompt text or persisted raw data.
@@ -92,10 +93,12 @@ class CodexCliProvider(BrainProvider):
                 question_total_marks=question_total_marks,
                 rubric_json=rubric_json,
                 messages=messages or [],
+                image_input_enabled=use_image_input,
             )
             command = self._build_command(
                 output_file=output_file,
                 answer_image_path=answer_image_path,
+                use_image_input=use_image_input,
             )
             try:
                 completed = self._runner(
@@ -129,7 +132,7 @@ class CodexCliProvider(BrainProvider):
         self._append_flag(flags, "codex_cli_provider")
         self._append_flag(
             flags,
-            "image_input_used" if self.image_input_enabled else "image_input_disabled",
+            "image_input_used" if use_image_input else "image_input_disabled",
         )
         raw_payload["review_flags"] = flags
         try:
@@ -137,7 +140,7 @@ class CodexCliProvider(BrainProvider):
         except ValidationError:
             raise
 
-    def _preflight(self) -> None:
+    def _preflight(self, *, require_image_input: bool) -> None:
         if self._which(self.command) is None:
             raise CodexCliProviderError(f"codex command not found: {self.command}")
         version = self._run_preflight_command([self.command, "--version"], "codex --version")
@@ -152,7 +155,7 @@ class CodexCliProvider(BrainProvider):
                 raise CodexCliProviderError(f"Codex CLI exec does not support required flag {flag}")
         if self.output_last_message is False:
             raise CodexCliProviderError("Codex CLI provider requires --output-last-message")
-        if self.image_input_enabled and not self._supported_image_flag():
+        if require_image_input and not self._supported_image_flag():
             raise CodexCliProviderError(
                 "Codex CLI image input is not supported by this installed version."
             )
@@ -176,7 +179,9 @@ class CodexCliProvider(BrainProvider):
             raise CodexCliProviderError(f"{label} failed: {detail[:_MAX_CAPTURE_CHARS]}")
         return completed.stdout or completed.stderr or ""
 
-    def _build_command(self, *, output_file: Path, answer_image_path: str) -> list[str]:
+    def _build_command(
+        self, *, output_file: Path, answer_image_path: str, use_image_input: bool
+    ) -> list[str]:
         command = [self.command, "exec"]
         if self.skip_git_repo_check:
             command.append("--skip-git-repo-check")
@@ -194,7 +199,7 @@ class CodexCliProvider(BrainProvider):
             command.append("--json")
         if self.model_name and self.model_name != "codex-cli":
             command.extend(["--model", self.model_name])
-        if self.image_input_enabled:
+        if use_image_input:
             image_flag = self._supported_image_flag()
             if image_flag is None:
                 raise CodexCliProviderError(
@@ -233,13 +238,14 @@ class CodexCliProvider(BrainProvider):
         question_total_marks: Decimal,
         rubric_json: dict[str, Any],
         messages: list[dict[str, Any]],
+        image_input_enabled: bool,
     ) -> str:
         model_answer = (
             rubric_json.get("model_answer")
             or rubric_json.get("answer_key")
             or "Not provided."
         )
-        if self.image_input_enabled:
+        if image_input_enabled:
             image_statement = (
                 "Image input is enabled only if a supported Codex CLI image flag is used. "
                 "Do not invent visible handwriting/image content."
@@ -284,7 +290,7 @@ Question total marks:
 {question_total_marks}
 
 Image input enabled:
-{str(self.image_input_enabled).lower()}
+{str(image_input_enabled).lower()}
 {image_statement}
 
 Existing prompt context:

@@ -61,6 +61,6 @@ backend-host-dev:
 	CODEX_CLI_APPROVAL_POLICY=never \
 	CODEX_CLI_USE_JSON=true \
 	CODEX_CLI_OUTPUT_LAST_MESSAGE=true \
-	CODEX_CLI_IMAGE_INPUT_ENABLED=false \
+	CODEX_CLI_IMAGE_INPUT_ENABLED=$${CODEX_CLI_IMAGE_INPUT_ENABLED:-false} \
 	CODEX_CLI_WORKDIR='$(CURDIR)' \
 	../../.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

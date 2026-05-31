@@ -225,3 +225,75 @@ The controlled smoke validated a simple synthetic image only. Extraction remains
 ### Known issue / observation
 
 The real Codex grading call was operationally verified, but Codex image input remains disabled in the current runtime. The provider therefore produced a conservative zero-score suggestion from available metadata/rubric context. This validation proves the controlled workflow and teacher-review/export gate, not grading quality or full automation.
+
+## TA-W1-037A — Codex image-input browser/backend smoke
+
+Date: 2026-05-31
+
+### Scope
+
+Enable and validate image input for exactly one browser/backend Codex grading smoke using synthetic/non-student data. No batch real grading, no auto-finalization, no final-grade rule change, no fully automated grading, no voice command, and no TA-W1-038 work.
+
+### Codex CLI support
+
+- Installed CLI: `codex-cli 0.128.0`
+- `codex exec --help` advertises image input: `-i, --image <FILE>...`
+- Safe auth/syntax probe: `make codex-ok` passed and returned `OK`.
+
+### Config/runtime changes
+
+- Docker/demo default remains image-input off through `.env.example` and app settings.
+- `make backend-host-dev` now preserves the safe default while allowing explicit override:
+  - default: `CODEX_CLI_IMAGE_INPUT_ENABLED=false`
+  - image smoke: `CODEX_CLI_IMAGE_INPUT_ENABLED=true make backend-host-dev`
+- Host-backend image-input instructions were added to `docs/CODEX_DEV_RUNTIME.md`.
+- Provider behavior:
+  - includes `--image <answer crop path>` only when image input is enabled and an answer image path is present;
+  - omits `--image` when image input is disabled or no image path exists;
+  - never stores or sends base64 image data through raw persisted output.
+
+### Smoke setup
+
+- Infra: `make up-infra`
+- Migrations: local Alembic upgrade against localhost Postgres
+- Backend: host `make backend-host-dev` with `CODEX_CLI_IMAGE_INPUT_ENABLED=true`
+- Frontend: host Next dev server on `localhost:3000`, readiness returned HTTP 307
+- Synthetic fixture: `/tmp/ta-w1-037a/synthetic-answer.png`
+
+### Created IDs
+
+| Item | ID |
+| --- | ---: |
+| Teacher | 4092 |
+| Course | 3669 |
+| Assessment | 3563 |
+| Question | 3078 |
+| Rubric | 2072 |
+| Submission | 2734 |
+| Submission page | 2815 |
+| Answer region | 2647 |
+| Grade suggestion | 1782 |
+
+### Smoke result
+
+- Real Codex calls through app endpoint: exactly one `POST /answer-regions/2647/grade-codex-dev`
+- `model_provider`: `codex_cli`
+- `score`: `5.00`
+- `confidence`: `0.9900`
+- `needs_review`: true
+- `review_flags`: `teacher_review_required`, `codex_cli_provider`, `image_input_used`
+- Final grade before teacher action: HTTP 404, confirming no auto-finalization
+- Review queue count: 1
+- Summary after smoke: `total_grade_suggestions=1`, `total_final_grades=0`, `pending_review_count=1`
+
+### Verification results
+
+- Focused provider tests: passed (`16 passed` including provider and image-unsupported API check)
+- `make test`: passed (`137 passed`)
+- `make lint`: passed
+- `npm run build`: passed; emitted existing non-fatal ESLint flat-config warning while exiting 0
+- Service shutdown: passed (`make down` completed; no compose services left running)
+
+### Known issue / observation
+
+This validates one synthetic image-input path and mandatory teacher review. It does not validate grading quality on real handwriting, batch grading, fully automated grading, voice command, or TA-W1-038.
