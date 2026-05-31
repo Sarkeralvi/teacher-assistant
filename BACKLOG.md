@@ -705,6 +705,19 @@ Tests required: `codex --version`; `codex exec --help`; focused provider tests; 
 Risks: This proves the CLI image-input path and review gate on one synthetic answer only; it is not a grading-quality evaluation, batch grading feature, auto-finalization, voice command, or TA-W1-038.
 Status: Done
 
+TASK-ID: TA-W1-037B
+Title: Real original-script Codex image-input grading evaluation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-037A
+Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md
+Goal: Run a capped real-original-script evaluation using Codex CLI image input on selected original answer crops and compare against teacher marks.
+Implementation notes: Re-staged original/sample inputs under ignored `/tmp/ta_original_doc_eval_image_input/`, rendered script pages, and created three manually tightened answer crops including the previous problematic `orig_s2_p07_q1c` case. Ran the existing grading evaluation path with `provider=codex_cli`, `TA_EVAL_ALLOW_REAL_PROVIDER=true`, `CODEX_CLI_IMAGE_INPUT_ENABLED=true`, and `max_real_cases=3`. All suggestions recorded `image_input_used`, `needs_review=true`, and `teacher_review_required`; verified no FinalGrade rows were created. Metrics: case_count 3, exact_match_rate 0.3333, within_1_mark_rate 1.0, mean_absolute_error 0.50, false_confident_error_count 0, severe_error_count 0, over_score_count 1, under_score_count 1, average_confidence 0.8433, needs_review_rate 1.0. The previous problematic case improved from 9.5 vs expected 7.0 to 8.0 vs expected 7.0, but remained an over-score.
+Acceptance criteria: Real image-input eval runs on at most 3–5 selected original-script crops; raw docs/crops/artifacts remain ignored; no batch production grading or auto-finalization; metrics and per-case results are recorded; teacher review remains mandatory.
+Tests required: git status --short; make up-infra; make codex-ok; capped real-provider image-input eval; focused eval tests if code changed; make test; make lint; git status --short.
+Risks: This is only a 3-case manually selected/tight-crop quality smoke. It does not prove production grading reliability, automatic answer-region detection, fully automated grading, or marking policy calibration.
+Status: Done
+
 TASK-ID: TA-W1-037
 Title: Fully automated ZIP grading prototype
 Owner: Hermes
