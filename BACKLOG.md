@@ -766,25 +766,25 @@ Title: Custom Controlled Mode completion audit
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W2-001
-Files affected: docs/VALIDATION_LOG.md, docs/FUNCTIONAL_BODY_EXECUTION_PLAN.md, BACKLOG.md, possibly audit notes only
+Files affected: docs/CUSTOM_CONTROLLED_MODE_AUDIT.md, BACKLOG.md
 Goal: Audit the current Custom Controlled flow from login through XLSX export and identify exact blockers preventing it from being the first complete usable V0 workflow.
-Implementation notes: Audit only unless a tiny documentation correction is needed. Do not implement ZIP upload, marking policy, auto-region detection, or real batch Codex. Verify current routes/UI/statuses and produce a precise fix list for TA-W2-003.
-Acceptance criteria: End-to-end Custom Controlled path is walked or blocked with exact evidence; missing pieces are categorized backend/frontend/status/data; next fixes are scoped; no raw artifacts committed.
-Tests required: git status --short; relevant smoke/check commands from audit; make test; make lint; git status --short.
-Risks: Audit may reveal workflow blockers requiring product-code changes in TA-W2-003.
-Status: Pending
+Implementation notes: Completed audit at `docs/CUSTOM_CONTROLLED_MODE_AUDIT.md`. Current status is partial: backend/API foundations exist for custom run creation, material upload, individual script upload, manual answer regions, mock grading, teacher review, selected approval, and XLSX export. Main blockers are missing derived workflow status, missing confirmation gates, material uploads not linked to canonical questions/rubrics, no run-scoped grading/export/status dashboard, manual status as source of truth, no ZIP ingestion, and no marking policy. No real Codex grading, ZIP upload, full automation, grading behavior change, or UI polish was implemented.
+Acceptance criteria: End-to-end Custom Controlled path is audited with evidence; missing pieces are categorized backend/frontend/status/data; next fixes are scoped for TA-W2-003; no raw artifacts committed.
+Tests required: git status --short; make up-infra; alembic upgrade head; focused API-equivalent audit tests; make test; make lint; git status --short.
+Risks: Audit confirms product-code changes are required in TA-W2-003 before Custom Controlled Mode is a cohesive V0 workflow.
+Status: Done
 
 TASK-ID: TA-W2-003
 Title: Custom Controlled Mode full usable workflow fix
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W2-002
-Files affected: TBD from TA-W2-002 audit
+Files affected: likely apps/api app models/schemas/routes/services/tests, apps/web components/lib, BACKLOG.md, docs/VALIDATION_LOG.md
 Goal: Fix the smallest set of backend/frontend/status issues so Custom Controlled Mode is usable end-to-end from login to XLSX export with rough UI.
-Implementation notes: Keep manual answer-region mapping. Do not add ZIP upload, fully automated mode, semi-automated mode, or real batch Codex. Reuse existing capabilities and make missing-step/status guidance clear.
-Acceptance criteria: Teacher can login, create course/assessment, start Custom Controlled run, upload materials, confirm questions/rubrics, upload scripts, create answer regions, run grading suggestion, review/approve, and export XLSX.
-Tests required: focused tests from changed files; make test; make lint; frontend build if relevant; manual smoke; git status --short.
-Risks: Scope creep into UX polish or automation must be avoided.
+Implementation notes: Use `docs/CUSTOM_CONTROLLED_MODE_AUDIT.md` as the source. Recommended order: (1) add derived Custom Controlled status/checklist with material/question/rubric/submission/region/suggestion/final/export readiness; (2) stop treating manual status as the source of truth; (3) turn the Custom Controlled page into a rough dashboard with blockers/counts/next actions; (4) add minimal teacher confirmation tracking for questions/rubrics without parsing solution/rubric PDFs; (5) gate UI grading actions on readiness; (6) add one full end-to-end API test from run start through export. Keep manual answer-region mapping. Do not add ZIP upload, fully automated mode, semi-automated mode, marking policy behavior, real batch Codex, answer-region auto-detection, or UX polish.
+Acceptance criteria: Teacher can login, create course/assessment, start Custom Controlled run, upload materials, confirm questions/rubrics, upload one script, create answer region, run mock grading suggestion, verify no auto-final grade, review/approve, and export XLSX; dashboard clearly shows blockers and ready states.
+Tests required: focused Custom Controlled status/workflow tests; existing grading-run/grading/review tests; make test; make lint; frontend build if relevant; mock-only manual or API smoke; git status --short.
+Risks: Scope creep into ZIP/automation/polish must be avoided; confirmation tracking must not imply AI-quality guarantees.
 Status: Pending
 
 TASK-ID: TA-W2-004
