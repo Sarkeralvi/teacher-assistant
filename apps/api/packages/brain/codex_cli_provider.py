@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from packages.brain.prompt_registry import MARKING_POLICY_INSTRUCTIONS
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
@@ -320,17 +321,9 @@ reason, evidence, confidence. Awarded marks must sum to score.
     @classmethod
     def _policy_instruction(cls, marking_policy: str) -> str:
         normalized = cls._normalize_marking_policy(marking_policy)
-        if normalized == "tough":
-            return (
-                "Tough: strictly apply the rubric. Award marks only when evidence "
-                "clearly meets each criterion; penalize ambiguity or missing working."
-            )
-        if normalized == "easy":
-            return (
-                "Easy: use more lenient rubric interpretation and reasonable benefit "
-                "of the doubt for partial understanding, without inventing evidence."
-            )
-        return "General: apply the rubric normally using balanced teacher judgement."
+        return MARKING_POLICY_INSTRUCTIONS.get(
+            normalized, MARKING_POLICY_INSTRUCTIONS["general"]
+        )
 
     @staticmethod
     def _append_flag(flags: list[str], flag: str) -> None:

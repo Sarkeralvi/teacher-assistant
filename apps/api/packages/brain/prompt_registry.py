@@ -9,18 +9,22 @@ PROMPT_VERSIONS: dict[ModelPolicy, str] = {
 
 MARKING_POLICY_INSTRUCTIONS: dict[str, str] = {
     "tough": (
-        "Tough: strictly apply the rubric. Award marks only when evidence clearly "
-        "meets the criterion, penalize missing working/ambiguity, and keep confidence "
-        "low when the answer is unclear."
+        "Tough marking: Strictly follow the rubric. Penalize missing reasoning even if "
+        "the final answer is correct. Penalize unsupported final answers. Penalize "
+        "ambiguous or unreadable work. Do not give benefit of doubt unless evidence is "
+        "visible. Lower confidence when required steps are missing or handwriting is "
+        "unclear."
     ),
     "general": (
-        "General: apply the rubric normally using balanced teacher judgement. Award "
-        "marks for demonstrated understanding while preserving rubric boundaries."
+        "General marking: Follow the rubric normally. Award marks for equivalent valid "
+        "methods. Penalize clear errors according to the rubric. Use balanced judgement."
     ),
     "easy": (
-        "Easy: apply the rubric more leniently. Give reasonable benefit of the doubt "
-        "for partially demonstrated understanding, but do not award marks unsupported "
-        "by evidence."
+        "Easy marking: Follow the rubric but be lenient on minor notation/presentation "
+        "issues. Accept equivalent reasoning where mathematically/semantically valid. "
+        "Give partial credit for correct ideas even if presentation is imperfect. Do not "
+        "ignore major conceptual errors. Do not award marks for unsupported work that "
+        "contradicts the answer."
     ),
 }
 

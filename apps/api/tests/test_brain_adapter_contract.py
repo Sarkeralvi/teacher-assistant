@@ -83,22 +83,58 @@ def test_mock_output_cannot_be_mistaken_for_real_grading() -> None:
     assert "mock_provider" in output.review_flags
 
 
-def test_grading_prompt_includes_explicit_marking_policy_rules() -> None:
+def test_marking_policy_prompt_text_is_distinct_for_each_policy() -> None:
     from packages.brain.prompt_registry import build_grading_prompt
 
-    messages = build_grading_prompt(
-        question_text="Explain photosynthesis.",
-        rubric_json=rubric_payload(),
-        answer_image_path="artifacts/answer_regions/region.png",
-        image_input_enabled=False,
-        marking_policy="tough",
+    tough_prompt = "\n".join(
+        message["content"]
+        for message in build_grading_prompt(
+            question_text="Explain photosynthesis.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/answer_regions/region.png",
+            image_input_enabled=False,
+            marking_policy="tough",
+        )
+    )
+    general_prompt = "\n".join(
+        message["content"]
+        for message in build_grading_prompt(
+            question_text="Explain photosynthesis.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/answer_regions/region.png",
+            image_input_enabled=False,
+            marking_policy="general",
+        )
+    )
+    easy_prompt = "\n".join(
+        message["content"]
+        for message in build_grading_prompt(
+            question_text="Explain photosynthesis.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/answer_regions/region.png",
+            image_input_enabled=False,
+            marking_policy="easy",
+        )
     )
 
-    rendered = "\n".join(message["content"] for message in messages)
-    assert "Marking policy: tough" in rendered
-    assert "strictly apply the rubric" in rendered
-    assert "Do not change max_score" in rendered
-    assert "marking_policy:tough" in rendered
+    assert "Tough marking:" in tough_prompt
+    assert "Strictly follow the rubric." in tough_prompt
+    assert "Penalize missing reasoning even if the final answer is correct." in tough_prompt
+    assert "Penalize unsupported final answers." in tough_prompt
+    assert "Penalize ambiguous or unreadable work." in tough_prompt
+    assert (
+        "Lower confidence when required steps are missing or handwriting is unclear."
+        in tough_prompt
+    )
+    assert "General marking:" in general_prompt
+    assert "Award marks for equivalent valid methods." in general_prompt
+    assert "Use balanced judgement." in general_prompt
+    assert "Easy marking:" in easy_prompt
+    assert "be lenient on minor notation/presentation issues." in easy_prompt
+    assert "Accept equivalent reasoning where mathematically/semantically valid." in easy_prompt
+    assert "Give partial credit for correct ideas even if presentation is imperfect." in easy_prompt
+    assert "Do not ignore major conceptual errors." in easy_prompt
+    assert "Do not award marks for unsupported work that contradicts the answer." in easy_prompt
 
 
 def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> None:
@@ -122,6 +158,7 @@ def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> N
     )
 
     assert "Marking policy: easy" in prompt
-    assert "more lenient" in prompt
+    assert "Easy marking:" in prompt
+    assert "Do not change max_score or criterion max_marks because of marking policy." in prompt
     assert "marking_policy:easy" in prompt
     assert "data:image" not in prompt
