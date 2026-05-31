@@ -666,6 +666,19 @@ Tests required: pwd; git status --short; git rev-parse HEAD; git log --oneline -
 Risks: Codex grading quality is still limited because image input is disabled in the current Codex CLI mode, so the real Codex smoke produced a conservative zero-score suggestion from metadata/rubric only. This task verifies operability, not grading quality or full automation.
 Status: Done
 
+TASK-ID: TA-W1-036B
+Title: Custom controlled grading run end-to-end validation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-036A
+Files affected: docs/VALIDATION_LOG.md, BACKLOG.md
+Goal: Validate the full custom controlled grading workflow end-to-end using the current app, with exactly one real Codex grading call, teacher review, and XLSX export.
+Implementation notes: Validation-only task. Used synthetic non-student fixtures because no sample PDFs were present in the repository. Started infra, passed `make codex-ok`, ran host-backend Codex dev mode plus frontend, created teacher/course/assessment/custom grading run, uploaded question/solution/rubric PDFs, refreshed the run and confirmed material paths persisted, created one question/rubric, uploaded one script image, manually created one answer region, triggered exactly one `grade-codex-dev` call, verified `model_provider=codex_cli` and `needs_review=true`, confirmed no FinalGrade before teacher action, manually edited/finalized, exported XLSX, and verified workbook safety fields.
+Acceptance criteria: Material uploads persist after refresh; one real Codex GradeSuggestion is created with teacher review required; no batch real Codex grading is run; no FinalGrade is auto-created; teacher review creates a FinalGrade; XLSX export succeeds and omits raw provider JSON/password hashes; services shut down cleanly.
+Tests required: git status --short before/after; make up-infra; make codex-ok; host backend/frontend readiness; validation smoke; make test; make lint; npm run build; service shutdown; docs-only commit.
+Risks: Codex image input is disabled, so the real Codex suggestion scored conservatively from metadata/rubric context. This validates workflow operability and review/export gates, not grading quality or TA-W1-037 automation.
+Status: Done
+
 TASK-ID: TA-W1-036
 Title: Semi-automated question/rubric confirmation workflow
 Owner: Hermes

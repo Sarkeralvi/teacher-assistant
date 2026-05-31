@@ -138,3 +138,90 @@ Running the frontend production build inside the same Docker dev container/volum
 ### Known issue / observation
 
 The controlled smoke validated a simple synthetic image only. Extraction remains a teacher-reviewed draft feature, not automatic final question creation.
+
+## TA-W1-036B — Custom controlled grading run end-to-end validation
+
+- Recorded at: 2026-05-31T12:56:02+06:00
+- Baseline commit: `fb903828b3c16c44ce5925c1f6097bc847954412`
+- Workflow type: API-equivalent validation with host backend and frontend running
+- Real Codex calls: 1 grading call through `POST /answer-regions/{answer_region_id}/grade-codex-dev`
+- Provider used for real-grade step: `codex_cli`
+- Mock grading calls during real-grade step: 0
+- Data policy: synthetic non-student PDFs/image only; no sample PDFs were present in the repository
+- Product code changes required: none
+
+### Synthetic records created
+
+| Record | ID |
+| --- | ---: |
+| Teacher | 4011 |
+| Course | 3598 |
+| Assessment | 3494 |
+| Custom grading run | 118 |
+| Question | 3024 |
+| Rubric | 2034 |
+| Submission | 2682 |
+| Submission page | 2762 |
+| Answer region | 2597 |
+| Grade suggestion | 1752 |
+| Final grade | 1236 |
+
+### Controlled workflow result
+
+- Material upload endpoint: `POST /grading-runs/118/materials`
+- Material status after refresh: `materials_uploaded`
+- Uploaded material paths persisted after refresh: yes
+- Uploaded material types: synthetic question PDF, solution/model-answer PDF, rubric PDF
+- Uploaded script: synthetic PNG image
+- Manual answer region creation: passed
+- Codex suggestion provider: `codex_cli`
+- Codex suggestion `needs_review`: true
+- Codex suggestion score/confidence: `0.00` / `0.0000`
+- Review queue before teacher action: `suggested`
+- Final grade before teacher action: HTTP 404, confirming no auto-finalization
+- Teacher action: manual edit/finalization
+- Final grade status after teacher action: `edited`
+
+### Assessment summary counts
+
+| Metric | Value |
+| --- | ---: |
+| Total submissions | 1 |
+| Total answer regions | 1 |
+| Total grade suggestions | 1 |
+| Total final grades | 1 |
+| Approved count | 0 |
+| Edited count | 1 |
+| Rejected count | 0 |
+| Pending review count | 0 |
+| Average final score | 5.00 |
+| Max possible score | 5.00 |
+
+### XLSX export result
+
+- Endpoint: `/assessments/3494/export/final-grades.xlsx`
+- Local exported file: `/tmp/ta-w1-036b/assessment-3494-final-grades.xlsx`
+- Export HTTP status: 200
+- Export size: 5273 bytes
+- Workbook rows including header: 2
+- Created record IDs were present in export cells: yes
+- Confirmed absent from exported workbook text: `raw_response_json`, `password_hash`
+
+### Verification results
+
+- Initial `git status --short`: clean
+- `make up-infra`: passed
+- `make codex-ok`: passed, returned `OK`
+- Local Alembic migration against localhost Postgres: passed
+- Host backend health: passed
+- Frontend readiness at `localhost:3000`: passed
+- Custom controlled workflow validation: passed
+- `make test`: passed (`135 passed`)
+- `make lint`: passed
+- `npm run build`: passed; emitted existing non-fatal ESLint flat-config warning while exiting 0
+- Services shutdown: passed (`docker compose down` completed; no compose services left running)
+- Final `git status --short` before docs commit: clean except `BACKLOG.md` and `docs/VALIDATION_LOG.md` after recording this validation
+
+### Known issue / observation
+
+The real Codex grading call was operationally verified, but Codex image input remains disabled in the current runtime. The provider therefore produced a conservative zero-score suggestion from available metadata/rubric context. This validation proves the controlled workflow and teacher-review/export gate, not grading quality or full automation.
