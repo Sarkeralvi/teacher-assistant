@@ -738,9 +738,156 @@ Priority: P1
 Dependencies: TA-W1-035A
 Files affected: TBD
 Goal: Calibrate and evaluate Tough, General, and Easy rubric interpretation policies across mixed teacher-marked cases.
-Implementation notes: Future task only.
+Implementation notes: Superseded by Phase-2 functional-body tasks `TA-W2-005` and `TA-W2-006`; keep as historical W1 placeholder only.
 Acceptance criteria: Every grading run records policy; evaluation reports metrics by policy; teacher review remains mandatory.
 Tests required: TBD.
 Risks: Policy prompts may shift scores unpredictably without calibration.
+Status: Pending
+
+## Phase 2 — Functional body first
+
+Program direction: do not rush launch or UX polish. Build the full usable teacher grading body first, with Custom Controlled Mode as the safest first complete workflow. AI suggestions remain review-required and never auto-finalize grades.
+
+TASK-ID: TA-W2-001
+Title: Functional body reset and unified grading workflow foundation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W1-037B
+Files affected: docs/FUNCTIONAL_BODY_EXECUTION_PLAN.md, BACKLOG.md
+Goal: Create the execution structure for the three-mode grading product and reset the backlog around full functional-body milestones.
+Implementation notes: Documentation/backlog-only task. Audited the current implementation against Fully Automated, Semi-Automated, and Custom Controlled modes; defined usable V0; mapped current support and missing backend/frontend pieces; set build order; chose TA-W2-002 as the next implementation task. No grading behavior, ZIP upload, fully automated mode, UI polish, or real Codex grading was implemented.
+Acceptance criteria: Functional-body plan exists; backlog contains TA-W2-001 through TA-W2-011; next task is TA-W2-002; safety rules remain explicit; tests/lint pass; docs-only commit.
+Tests required: git status --short; make test; make lint; git status --short.
+Risks: This is execution structure only; it does not make the Custom Controlled workflow fully smooth yet.
+Status: Done
+
+TASK-ID: TA-W2-002
+Title: Custom Controlled Mode completion audit
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-001
+Files affected: docs/VALIDATION_LOG.md, docs/FUNCTIONAL_BODY_EXECUTION_PLAN.md, BACKLOG.md, possibly audit notes only
+Goal: Audit the current Custom Controlled flow from login through XLSX export and identify exact blockers preventing it from being the first complete usable V0 workflow.
+Implementation notes: Audit only unless a tiny documentation correction is needed. Do not implement ZIP upload, marking policy, auto-region detection, or real batch Codex. Verify current routes/UI/statuses and produce a precise fix list for TA-W2-003.
+Acceptance criteria: End-to-end Custom Controlled path is walked or blocked with exact evidence; missing pieces are categorized backend/frontend/status/data; next fixes are scoped; no raw artifacts committed.
+Tests required: git status --short; relevant smoke/check commands from audit; make test; make lint; git status --short.
+Risks: Audit may reveal workflow blockers requiring product-code changes in TA-W2-003.
+Status: Pending
+
+TASK-ID: TA-W2-003
+Title: Custom Controlled Mode full usable workflow fix
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-002
+Files affected: TBD from TA-W2-002 audit
+Goal: Fix the smallest set of backend/frontend/status issues so Custom Controlled Mode is usable end-to-end from login to XLSX export with rough UI.
+Implementation notes: Keep manual answer-region mapping. Do not add ZIP upload, fully automated mode, semi-automated mode, or real batch Codex. Reuse existing capabilities and make missing-step/status guidance clear.
+Acceptance criteria: Teacher can login, create course/assessment, start Custom Controlled run, upload materials, confirm questions/rubrics, upload scripts, create answer regions, run grading suggestion, review/approve, and export XLSX.
+Tests required: focused tests from changed files; make test; make lint; frontend build if relevant; manual smoke; git status --short.
+Risks: Scope creep into UX polish or automation must be avoided.
+Status: Pending
+
+TASK-ID: TA-W2-004
+Title: ZIP script upload and batch submission ingestion
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-003
+Files affected: TBD
+Goal: Add safe ZIP ingestion for multiple student scripts and create Submission/Page records without committing raw files.
+Implementation notes: Support ZIP as ingestion only; do not auto-grade or auto-map regions. Validate file types, path traversal, size/count limits, and per-file error reporting.
+Acceptance criteria: Teacher can upload a ZIP of scripts; valid PDFs/images become submissions/pages; rejected files are reported; raw uploaded content stays in storage only.
+Tests required: backend upload tests, path traversal tests, full tests/lint/build if frontend changes.
+Risks: ZIP handling can introduce path traversal and resource exhaustion risks.
+Status: Pending
+
+TASK-ID: TA-W2-005
+Title: Marking policy model: Tough/General/Easy
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-003
+Files affected: TBD
+Goal: Persist marking policy on grading runs and suggestions so every workflow records Tough, General, or Easy.
+Implementation notes: Add model/schema/API/UI support only; do not change grading prompt behavior until TA-W2-006.
+Acceptance criteria: Teacher can select policy for a grading run; policy is stored and visible; suggestions can record policy metadata; default is safe and explicit.
+Tests required: migration/model/API/frontend static tests; make test; make lint.
+Risks: Must avoid silently changing score behavior before prompt calibration.
+Status: Pending
+
+TASK-ID: TA-W2-006
+Title: Marking policy-aware Codex grading prompt
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-005
+Files affected: TBD
+Goal: Pass marking policy into mock/Codex grading prompt metadata and evaluate Tough/General/Easy behavior.
+Implementation notes: Keep teacher review mandatory. Real provider runs must be capped and explicit. Start with tests proving policy is included and recorded; do not claim quality until evaluated.
+Acceptance criteria: Grading prompt/provider output records policy; evaluation artifacts report policy; no auto-finalization; no default real batch grading.
+Tests required: provider/prompt tests, evaluation tests, capped smoke only if approved, make test, make lint.
+Risks: Prompt policy may shift scores unpredictably without calibration.
+Status: Pending
+
+TASK-ID: TA-W2-007
+Title: Semi-automated question/model/rubric confirmation flow
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-005
+Files affected: TBD
+Goal: Build the confirmation gate where AI-drafted questions/model answers/rubrics become teacher-confirmed canonical grading materials before grading.
+Implementation notes: Extend existing question import foundation. Do not start fully automated grading. Drafts remain drafts until teacher accepts/edits.
+Acceptance criteria: Grading cannot start until question discretization, model answers, rubrics, and marking policy are confirmed.
+Tests required: backend confirmation tests, frontend static/tests, make test, make lint, build.
+Risks: Draft quality may be poor; UI must make teacher authority clear.
+Status: Pending
+
+TASK-ID: TA-W2-008
+Title: Controlled batch Codex grading with review gates
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-005, TA-W2-006, TA-W2-004
+Files affected: TBD
+Goal: Add tightly controlled batch real Codex grading for confirmed/mapped answer regions with explicit limits, logging, and review gates.
+Implementation notes: Real batch grading stays disabled by default and must require explicit enablement, case limits, provider readiness, and teacher review. Mock batch remains the safe default.
+Acceptance criteria: Batch real Codex cannot run accidentally; every suggestion is logged, policy-tagged, review-required, and failure-tolerant.
+Tests required: guardrail tests, provider-error tests, capped smoke only if approved, make test, make lint.
+Risks: Cost/quota, provider errors, and quality risk.
+Status: Pending
+
+TASK-ID: TA-W2-009
+Title: Answer-region mapping improvement
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-003, TA-W2-004
+Files affected: TBD
+Goal: Improve answer-region mapping workflow before fully automated mode, starting with assisted/manual improvements rather than unchecked automation.
+Implementation notes: Prefer status clarity, easier manual mapping, and teacher confirmation before attempting auto-detection.
+Acceptance criteria: Teacher can map/confirm regions more reliably; mapping status is visible; grading only runs on confirmed/mapped regions.
+Tests required: answer-region tests, frontend checks, manual smoke, make test, make lint.
+Risks: Auto-detection errors can poison grading; keep teacher confirmation.
+Status: Pending
+
+TASK-ID: TA-W2-010
+Title: Fully automated mode prototype planning
+Owner: Hermes
+Priority: P2
+Dependencies: TA-W2-004, TA-W2-007, TA-W2-008, TA-W2-009
+Files affected: TBD
+Goal: Plan the fully automated ZIP grading prototype only after lower-risk workflows and quality gates are in place.
+Implementation notes: Planning first. Do not claim fully automated grading is reliable. Do not bypass teacher review.
+Acceptance criteria: Prototype plan defines extraction, ZIP ingestion, mapping, grading, review gates, evaluation gates, and stop conditions.
+Tests required: documentation checks plus normal test/lint if docs are committed.
+Risks: Highest product risk due to compounded extraction/mapping/grading errors.
+Status: Pending
+
+TASK-ID: TA-W2-011
+Title: UX redesign after full functional body works
+Owner: Hermes
+Priority: P2
+Dependencies: TA-W2-003, TA-W2-004, TA-W2-005, TA-W2-007, TA-W2-008, TA-W2-009
+Files affected: TBD
+Goal: Redesign and polish UX only after the full functional body works end-to-end.
+Implementation notes: Professional UI/UX polish is explicitly deferred until core workflows are functional and verified.
+Acceptance criteria: Redesigned workflow improves clarity without weakening safety gates or hiding teacher review requirements.
+Tests required: frontend tests/static checks, build, manual workflow smoke.
+Risks: Premature polish can distract from functional blockers.
 Status: Pending
 
