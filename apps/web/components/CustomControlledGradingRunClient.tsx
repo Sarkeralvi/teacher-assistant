@@ -15,6 +15,7 @@ import {
   updateGradingRun,
   uploadGradingRunMaterials,
   type Assessment,
+  type BatchMockGradeResponse,
   type GradingRun,
   type GradingRunWorkflowState,
   type MarkingPolicy,
@@ -111,7 +112,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastGradingResult, setLastGradingResult] = useState<string | null>(null);
+  const [lastGradingResult, setLastGradingResult] = useState<BatchMockGradeResponse | null>(null);
 
   const selectedRun = gradingRuns.find((run) => run.id === selectedRunId) ?? gradingRuns[0] ?? null;
   const workflowState = selectedRun?.workflow_state ?? null;
@@ -212,12 +213,10 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
     setLastGradingResult(null);
     try {
       const result = await gradeGradingRunReadyRegionsMock(selectedRun.id);
-      setLastGradingResult(
-        `Gated mock grading completed: ${result.graded_count} graded, ${result.skipped_count} skipped, ${result.failed_count} failed.`,
-      );
+      setLastGradingResult(result);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run gated mock grading");
+      setError(err instanceof Error ? err.message : "Failed to run bulk mock grading");
     } finally {
       setSaving(false);
     }
@@ -403,11 +402,16 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
 
       <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Grading readiness</h2>
-        <p className="text-sm text-amber-100">Grading is blocked until readiness requirements pass.</p>
-        <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.grading_ready} onClick={handleRunGatedMockGrading} type="button">
-          Run gated mock grading
-        </button>
-        {lastGradingResult ? <p className="text-sm text-emerald-200">{lastGradingResult}</p> : null}
+        <p className="text-sm text-amber-100">Mock grading only. Real Codex batch grading is not enabled.</p>
+        <div className="flex flex-wrap gap-3">
+          <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.grading_ready} onClick={handleRunGatedMockGrading} type="button">
+            {saving ? "Grading..." : "Bulk mock grade ungraded answers"}
+          </button>
+          <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
+            Review queue
+          </Link>
+        </div>
+        {lastGradingResult ? <MockGradingResultPanel result={lastGradingResult} /> : null}
       </section>
 
       <form onSubmit={handleUpdateRun} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
@@ -461,6 +465,34 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
           Run mock batch grading from this gated dashboard or use existing controlled grading actions only after teacher-confirmed materials are ready.
         </p>
       </section>
+    </div>
+  );
+}
+
+function MockGradingResultPanel({ result }: Readonly<{ result: BatchMockGradeResponse }>) {
+  return (
+    <section className="rounded border border-cyan-800 bg-cyan-950/20 p-4 text-sm text-cyan-100">
+      <h3 className="text-lg font-semibold">Bulk mock grading result</h3>
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <SummaryMetric label="graded_count" value={result.graded_count} />
+        <SummaryMetric label="skipped_count" value={result.skipped_count} />
+        <SummaryMetric label="failed_count" value={result.failed_count} />
+        <SummaryMetric label="created suggestions" value={result.created_grade_suggestion_ids.length} />
+      </div>
+      {result.errors.length > 0 ? (
+        <ul className="mt-3 list-disc pl-5 text-red-200">
+          {result.errors.map((error) => <li key={error}>{error}</li>)}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function SummaryMetric({ label, value }: Readonly<{ label: string; value: string | number }>) {
+  return (
+    <div className="rounded border border-slate-800 p-3">
+      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 text-2xl font-semibold">{value}</p>
     </div>
   );
 }
