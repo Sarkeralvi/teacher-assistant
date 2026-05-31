@@ -222,6 +222,7 @@ def serialize_grading_run(grading_run: GradingRun, db: Session) -> dict[str, obj
         "created_by_teacher_id": grading_run.created_by_teacher_id,
         "mode": grading_run.mode,
         "status": grading_run.status,
+        "marking_policy": grading_run.marking_policy,
         "question_pdf_path": grading_run.question_pdf_path,
         "solution_pdf_path": grading_run.solution_pdf_path,
         "rubric_pdf_path": grading_run.rubric_pdf_path,
@@ -264,6 +265,7 @@ def create_custom_grading_run(
         created_by_teacher_id=current_user.id,
         mode="custom_controlled",
         status="draft",
+        marking_policy=payload.marking_policy if payload else "general",
         notes=payload.notes if payload else None,
     )
     db.add(grading_run)
@@ -307,6 +309,8 @@ def update_grading_run(
         grading_run.status = payload.status
     if payload.notes is not None:
         grading_run.notes = payload.notes
+    if payload.marking_policy is not None:
+        grading_run.marking_policy = payload.marking_policy
     db.commit()
     db.refresh(grading_run)
     return serialize_grading_run(grading_run, db)
@@ -418,7 +422,11 @@ def grade_grading_run_ready_regions_mock(
 ) -> dict[str, object]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
     ensure_grading_ready(grading_run, db)
-    result = GradingService(db).grade_assessment_ungraded_regions_mock(grading_run.assessment_id)
+    result = GradingService(db).grade_assessment_ungraded_regions_mock(
+        grading_run.assessment_id,
+        marking_policy=grading_run.marking_policy,
+    )
     db.refresh(grading_run)
+    result["marking_policy"] = grading_run.marking_policy
     result["workflow_state"] = build_workflow_state(grading_run, db)
     return result

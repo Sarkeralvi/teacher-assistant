@@ -100,6 +100,8 @@ for (const symbol of [
   "confirmGradingRunQuestionsRubrics",
   "gradeGradingRunReadyRegionsMock",
   "GradingRunWorkflowState",
+  "MarkingPolicy",
+  "marking_policy",
 ]) {
   if (!api.includes(`export`) || !api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -241,6 +243,15 @@ for (const text of [
   "Confirm uploaded materials",
   "Confirm questions/rubrics",
   "Run gated mock grading",
+  "Current status and marking policy",
+  "Marking policy selector",
+  "Tough",
+  "General",
+  "Easy",
+  "Tough: stricter",
+  "General: normal",
+  "Easy: more lenient",
+  "marking_policy: markingPolicy",
   "Grading is blocked until readiness requirements pass.",
   "confirmGradingRunMaterials",
   "confirmGradingRunQuestionsRubrics",
@@ -330,6 +341,8 @@ for (const text of [
   "Next item to review",
   "Needs teacher review",
   "Mock score",
+  "Marking policy used",
+  "suggestion.marking_policy",
   "Select all visible suggested items",
   "Clear selection",
   "Approve selected",

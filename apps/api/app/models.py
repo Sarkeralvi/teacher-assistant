@@ -104,6 +104,10 @@ class GradingRun(TimestampMixin, Base):
             ")",
             name="ck_grading_runs_status",
         ),
+        CheckConstraint(
+            "marking_policy in ('tough', 'general', 'easy')",
+            name="ck_grading_runs_marking_policy",
+        ),
         Index("ix_grading_runs_assessment_id", "assessment_id"),
     )
 
@@ -116,6 +120,7 @@ class GradingRun(TimestampMixin, Base):
     )
     mode: Mapped[str] = mapped_column(String(64), nullable=False, default="custom_controlled")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    marking_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="general")
     question_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     solution_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     rubric_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -280,7 +285,13 @@ class GradingJob(Base):
 
 class GradeSuggestion(Base):
     __tablename__ = "grade_suggestions"
-    __table_args__ = (Index("ix_grade_suggestions_answer_region_id", "answer_region_id"),)
+    __table_args__ = (
+        CheckConstraint(
+            "marking_policy in ('tough', 'general', 'easy')",
+            name="ck_grade_suggestions_marking_policy",
+        ),
+        Index("ix_grade_suggestions_answer_region_id", "answer_region_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     grading_job_id: Mapped[int] = mapped_column(
@@ -295,6 +306,7 @@ class GradeSuggestion(Base):
     model_provider: Mapped[str] = mapped_column(String(128), nullable=False)
     model_name: Mapped[str] = mapped_column(String(255), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    marking_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="general")
     raw_response_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     score: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     max_score: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)

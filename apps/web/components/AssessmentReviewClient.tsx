@@ -537,6 +537,7 @@ function ReviewCard({
           <h3 className="font-semibold text-amber-200">AI suggested score — not final</h3>
           <p className="text-sm">Mock score: {suggestion.score} / {suggestion.max_score}</p>
           <p className="text-sm">confidence: {suggestion.confidence} · needs_review: {String(suggestion.needs_review)} · Needs teacher review</p>
+          <p className="text-sm">Marking policy used: {suggestion.marking_policy}</p>
           <p className="text-sm">feedback: {suggestion.feedback}</p>
           <p className="text-sm">review_flags: {(suggestion.raw_response_json.review_flags ?? []).join(", ")}</p>
           <div>

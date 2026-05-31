@@ -28,7 +28,7 @@ class GradingService:
 
     def grade_answer_region(self, answer_region_id: int) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
-        return self._grade_region(region, self.adapter)
+        return self._grade_region(region, self.adapter, marking_policy="general")
 
     def grade_answer_region_with_codex_cli(
         self, answer_region_id: int
@@ -50,9 +50,11 @@ class GradingService:
             image_input_enabled=settings.codex_cli_image_input_enabled,
             storage_root=settings.local_storage_root,
         )
-        return self._grade_region(region, codex_adapter)
+        return self._grade_region(region, codex_adapter, marking_policy="general")
 
-    def grade_assessment_ungraded_regions_mock(self, assessment_id: int) -> dict[str, object]:
+    def grade_assessment_ungraded_regions_mock(
+        self, assessment_id: int, *, marking_policy: str = "general"
+    ) -> dict[str, object]:
         if self.db.get(Assessment, assessment_id) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -78,7 +80,9 @@ class GradingService:
                 skipped_count += 1
                 continue
             try:
-                _, suggestion = self._grade_region(region, mock_adapter)
+                _, suggestion = self._grade_region(
+                    region, mock_adapter, marking_policy=marking_policy
+                )
                 created_ids.append(suggestion.id)
             except HTTPException as exc:
                 errors.append(f"answer_region_id={region.id}: {exc.detail}")
@@ -95,7 +99,7 @@ class GradingService:
         }
 
     def _grade_region(
-        self, region: AnswerRegion, adapter: BrainAdapter
+        self, region: AnswerRegion, adapter: BrainAdapter, *, marking_policy: str
     ) -> tuple[GradingJob, GradeSuggestion]:
         rubric = self._get_active_rubric(region.question_id)
         image_path = self.storage.resolve_relative(region.image_path)
@@ -120,6 +124,12 @@ class GradingService:
                 answer_image_path=region.image_path,
             )
             raw_response = output.model_dump(mode="json")
+            review_flags = list(raw_response.get("review_flags") or [])
+            policy_flag = f"marking_policy:{marking_policy}"
+            if policy_flag not in review_flags:
+                review_flags.append(policy_flag)
+            raw_response["review_flags"] = review_flags
+            raw_response["marking_policy"] = marking_policy
             suggestion = GradeSuggestion(
                 grading_job_id=job.id,
                 answer_region_id=region.id,
@@ -127,6 +137,7 @@ class GradingService:
                 model_provider=output.model_provider,
                 model_name=output.model_name,
                 prompt_version=output.prompt_version,
+                marking_policy=marking_policy,
                 raw_response_json=raw_response,
                 score=output.score,
                 max_score=output.max_score,

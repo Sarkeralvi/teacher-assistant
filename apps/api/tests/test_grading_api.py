@@ -224,7 +224,12 @@ def test_grade_answer_region_creates_job_and_mock_suggestion(
         == "This is a mock grading suggestion for pipeline validation only."
     )
     raw = suggestion["raw_response_json"]
-    assert raw["review_flags"] == ["mock_provider", "teacher_review_required"]
+    assert raw["review_flags"] == [
+        "mock_provider",
+        "teacher_review_required",
+        "marking_policy:general",
+    ]
+    assert raw["marking_policy"] == "general"
     assert [item["criterion_id"] for item in raw["rubric_breakdown"]] == ["concept", "clarity"]
 
     db_session.expire_all()

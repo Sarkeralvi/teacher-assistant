@@ -483,6 +483,7 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "ai_max_score",
         "ai_confidence",
         "ai_needs_review",
+        "marking_policy",
         "final_score",
         "approval_status",
         "teacher_comment",

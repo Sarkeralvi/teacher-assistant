@@ -50,6 +50,7 @@ def make_browser_codex_grade_response(
             "model_provider": suggestion.model_provider,
             "model_name": suggestion.model_name,
             "prompt_version": suggestion.prompt_version,
+            "marking_policy": suggestion.marking_policy,
             "score": suggestion.score,
             "max_score": suggestion.max_score,
             "confidence": suggestion.confidence,

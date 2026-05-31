@@ -112,6 +112,8 @@ export type SubmissionZipUploadResponse = {
   warnings: string[];
 };
 
+export type MarkingPolicy = "tough" | "general" | "easy";
+
 export type GradingRunWorkflowState = {
   materials_uploaded: boolean;
   materials_confirmed: boolean;
@@ -142,6 +144,7 @@ export type GradingRun = {
   created_by_teacher_id: number;
   mode: "custom_controlled" | string;
   status: string;
+  marking_policy: MarkingPolicy;
   question_pdf_path: string | null;
   solution_pdf_path: string | null;
   rubric_pdf_path: string | null;
@@ -156,11 +159,13 @@ export type GradingRun = {
 
 export type GradingRunCreate = {
   notes?: string | null;
+  marking_policy?: MarkingPolicy;
 };
 
 export type GradingRunUpdate = {
   status?: string;
   notes?: string | null;
+  marking_policy?: MarkingPolicy;
 };
 
 export type Rubric = {
@@ -225,6 +230,7 @@ export type GradeSuggestion = {
   model_provider: string;
   model_name: string;
   prompt_version: string;
+  marking_policy: MarkingPolicy;
   raw_response_json: {
     rubric_breakdown?: Array<{
       criterion_id: string;

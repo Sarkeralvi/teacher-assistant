@@ -104,15 +104,18 @@ GradingRunStatus = Literal[
     "review_ready",
     "completed",
 ]
+MarkingPolicy = Literal["tough", "general", "easy"]
 
 
 class GradingRunCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=4000)
+    marking_policy: MarkingPolicy = "general"
 
 
 class GradingRunUpdate(BaseModel):
     status: GradingRunStatus | None = None
     notes: str | None = Field(default=None, max_length=4000)
+    marking_policy: MarkingPolicy | None = None
 
 
 class GradingRunWorkflowState(BaseModel):
@@ -145,6 +148,7 @@ class GradingRunRead(ORMBase):
     created_by_teacher_id: int
     mode: Literal["custom_controlled"]
     status: GradingRunStatus
+    marking_policy: MarkingPolicy
     question_pdf_path: str | None
     solution_pdf_path: str | None
     rubric_pdf_path: str | None
@@ -404,6 +408,7 @@ class GradeSuggestionRead(ORMBase):
     model_provider: str
     model_name: str
     prompt_version: str
+    marking_policy: MarkingPolicy
     raw_response_json: dict[str, Any]
     score: Decimal | None
     max_score: Decimal
@@ -422,6 +427,7 @@ class BrowserCodexGradeSuggestionRead(ORMBase):
     model_provider: str
     model_name: str
     prompt_version: str
+    marking_policy: MarkingPolicy
     score: Decimal | None
     max_score: Decimal
     confidence: Decimal | None

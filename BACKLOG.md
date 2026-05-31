@@ -805,13 +805,13 @@ Title: Marking policy model: Tough/General/Easy
 Owner: Hermes
 Priority: P0
 Dependencies: TA-W2-003
-Files affected: TBD
+Files affected: apps/api/alembic/versions/0007_marking_policy.py, apps/api/app/models.py, apps/api/app/schemas.py, apps/api/app/api/routes/grading_runs.py, apps/api/app/services/grading_service.py, apps/api/app/services/final_grade_service.py, apps/api/tests/test_grading_runs_api.py, apps/api/tests/test_migrations.py, apps/api/tests/test_models_metadata.py, apps/api/tests/test_final_grade_review_api.py, apps/web/lib/api.ts, apps/web/components/CustomControlledGradingRunClient.tsx, apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs
 Goal: Persist marking policy on grading runs and suggestions so every workflow records Tough, General, or Easy.
-Implementation notes: Add model/schema/API/UI support only; do not change grading prompt behavior until TA-W2-006.
-Acceptance criteria: Teacher can select policy for a grading run; policy is stored and visible; suggestions can record policy metadata; default is safe and explicit.
+Implementation notes: Added model/schema/API/UI support only; scoring prompt behavior remains unchanged until TA-W2-006. Mock grading now records policy metadata/flag for propagation tests.
+Acceptance criteria: Teacher can select policy for a grading run; policy is stored and visible; suggestions record policy metadata; default is safe and explicit; export includes marking_policy.
 Tests required: migration/model/API/frontend static tests; make test; make lint.
 Risks: Must avoid silently changing score behavior before prompt calibration.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-006
 Title: Marking policy-aware Codex grading prompt

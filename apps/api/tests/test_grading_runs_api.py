@@ -534,3 +534,103 @@ def test_custom_controlled_workflow_state_counts_zip_imported_submissions(
     assert workflow["scripts_uploaded"] is True
     assert workflow["submission_count"] == 2
     assert workflow["submission_page_count"] == 2
+
+
+
+def test_marking_policy_defaults_validates_and_updates_on_custom_run(client: TestClient) -> None:
+    teacher, token = register_teacher(client, "policy")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+
+    default_response = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert default_response.status_code == 201
+    assert default_response.json()["marking_policy"] == "general"
+
+    tough_response = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"marking_policy": "tough", "notes": "Strict marking"},
+    )
+    assert tough_response.status_code == 201
+    run_id = tough_response.json()["id"]
+    assert tough_response.json()["marking_policy"] == "tough"
+
+    update_response = client.patch(
+        f"/grading-runs/{run_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"marking_policy": "easy"},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["marking_policy"] == "easy"
+
+    invalid = client.patch(
+        f"/grading-runs/{run_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"marking_policy": "harsh"},
+    )
+    assert invalid.status_code == 422
+
+
+def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    teacher, token = register_teacher(client, "policy-grade")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    run = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"marking_policy": "tough"},
+    ).json()
+    run_id = int(run["id"])
+    upload_all_materials(client, token, run_id)
+    assert client.post(
+        f"/grading-runs/{run_id}/confirm-materials",
+        headers={"Authorization": f"Bearer {token}"},
+    ).status_code == 200
+    question_data = create_question_and_active_rubric(client, int(assessment["id"]))
+    assert client.post(
+        f"/grading-runs/{run_id}/confirm-questions-rubrics",
+        headers={"Authorization": f"Bearer {token}"},
+    ).status_code == 200
+    upload_script_and_create_region(
+        client, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
+    )
+
+    grade_response = client.post(
+        f"/grading-runs/{run_id}/grade-all-mock",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert grade_response.status_code == 200
+    assert grade_response.json()["marking_policy"] == "tough"
+    suggestion_id = grade_response.json()["created_grade_suggestion_ids"][0]
+
+    suggestion = client.get(f"/grade-suggestions/{suggestion_id}")
+    assert suggestion.status_code == 200
+    suggestion_body = suggestion.json()
+    assert suggestion_body["marking_policy"] == "tough"
+    assert suggestion_body["raw_response_json"]["marking_policy"] == "tough"
+    assert "marking_policy:tough" in suggestion_body["raw_response_json"]["review_flags"]
+
+    review_queue = client.get(f"/assessments/{assessment['id']}/review-queue").json()
+    assert review_queue[0]["latest_grade_suggestion"]["marking_policy"] == "tough"
+    approve_response = client.post(
+        f"/grade-suggestions/{suggestion_id}/approve",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_comment": "Approved with tough policy."},
+    )
+    assert approve_response.status_code == 201
+
+    export_response = client.get(f"/assessments/{assessment['id']}/export/final-grades.xlsx")
+    assert export_response.status_code == 200
+    workbook = load_workbook(BytesIO(export_response.content))
+    rows = list(workbook.active.iter_rows(values_only=True))
+    headers = list(rows[0])
+    assert "marking_policy" in headers
+    policy_index = headers.index("marking_policy")
+    assert rows[1][policy_index] == "tough"

@@ -17,6 +17,7 @@ import {
   type Assessment,
   type GradingRun,
   type GradingRunWorkflowState,
+  type MarkingPolicy,
 } from "../lib/api";
 
 const workflowSteps = [
@@ -39,6 +40,12 @@ const statusOptions = [
   "grading_ready",
   "review_ready",
   "completed",
+];
+
+const markingPolicyOptions: Array<{ value: MarkingPolicy; label: string; description: string }> = [
+  { value: "tough", label: "Tough", description: "Tough: stricter rubric interpretation." },
+  { value: "general", label: "General", description: "General: normal rubric interpretation." },
+  { value: "easy", label: "Easy", description: "Easy: more lenient interpretation." },
 ];
 
 const dashboardSections: Array<{
@@ -97,6 +104,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
+  const [markingPolicy, setMarkingPolicy] = useState<MarkingPolicy>("general");
   const [questionPdf, setQuestionPdf] = useState<File | null>(null);
   const [solutionPdf, setSolutionPdf] = useState<File | null>(null);
   const [rubricPdf, setRubricPdf] = useState<File | null>(null);
@@ -121,6 +129,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       const preferredRun = runData.find((run) => run.id === selectedRunId) ?? runData[0] ?? null;
       setSelectedRunId(preferredRun?.id ?? null);
       setStatus(preferredRun?.status ?? "draft");
+      setMarkingPolicy(preferredRun?.marking_policy ?? "general");
       setNotes(preferredRun?.notes ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load custom controlled grading run");
@@ -139,6 +148,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
     try {
       const run = await createCustomGradingRun(assessmentId, {
         notes: notes || "Custom controlled mode: teacher confirmation required.",
+        marking_policy: markingPolicy,
       });
       setGradingRuns((current) => [run, ...current]);
       replaceRun(run);
@@ -236,7 +246,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
     setSaving(true);
     setError(null);
     try {
-      const updated = await updateGradingRun(selectedRun.id, { status, notes });
+      const updated = await updateGradingRun(selectedRun.id, { status, notes, marking_policy: markingPolicy });
       replaceRun(updated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update grading run");
@@ -250,6 +260,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
     setSelectedRunId(updated.id);
     setNotes(updated.notes ?? "");
     setStatus(updated.status);
+    setMarkingPolicy(updated.marking_policy ?? "general");
   }
 
   function handleFileChange(setter: (file: File | null) => void) {
@@ -343,6 +354,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
         {selectedRun ? (
           <div className="mt-4 rounded border border-slate-800 p-3 text-sm text-slate-300">
             <p>Run #{selectedRun.id}</p>
+            <p>Marking policy: {selectedRun.marking_policy}</p>
             <p>Question PDF: {selectedRun.question_pdf_path ?? "pending"}</p>
             <p>Solution/model answer PDF: {selectedRun.solution_pdf_path ?? "pending"}</p>
             <p>Rubric PDF: {selectedRun.rubric_pdf_path ?? "pending"}</p>
@@ -399,8 +411,23 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       </section>
 
       <form onSubmit={handleUpdateRun} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Current status</h2>
+        <h2 className="text-xl font-semibold">Current status and marking policy</h2>
         <p className="text-sm text-slate-400">Manual status is a note only. Backend readiness comes from the derived checklist above.</p>
+        <label className="grid gap-2 text-sm">
+          Marking policy selector
+          <select
+            className={inputClass}
+            value={markingPolicy}
+            onChange={(event) => setMarkingPolicy(event.target.value as MarkingPolicy)}
+          >
+            {markingPolicyOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <div className="grid gap-2 text-sm text-slate-300 md:grid-cols-3">
+          {markingPolicyOptions.map((option) => <p key={option.value}>{option.description}</p>)}
+        </div>
         <select className={inputClass} value={status} onChange={(event) => setStatus(event.target.value)}>
           {statusOptions.map((option) => (
             <option key={option} value={option}>{option}</option>
