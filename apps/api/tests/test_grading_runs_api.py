@@ -388,9 +388,12 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
     before_confirm = get_run(client, token, run_id)["workflow_state"]
     assert before_confirm["question_count"] == 1
     assert before_confirm["rubric_count"] == 1
-    assert before_confirm["questions_confirmed"] is False
-    assert before_confirm["rubrics_confirmed"] is False
-    assert before_confirm["grading_ready"] is False
+    assert before_confirm["mapped_question_count"] == 0
+    assert before_confirm["unmapped_question_count"] == 1
+    assert before_confirm["mapped_page_count"] == 0
+    assert before_confirm["unmapped_page_count"] == 0
+    assert before_confirm["mapped_submission_count"] == 0
+    assert before_confirm["unmapped_submission_count"] == 0
 
     confirm = client.post(
         f"/grading-runs/{run_id}/confirm-questions-rubrics",
@@ -409,6 +412,12 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
     assert ready["submission_count"] == 1
     assert ready["submission_page_count"] == 1
     assert ready["answer_region_count"] == 1
+    assert ready["mapped_question_count"] == 1
+    assert ready["unmapped_question_count"] == 0
+    assert ready["mapped_page_count"] == 1
+    assert ready["unmapped_page_count"] == 0
+    assert ready["mapped_submission_count"] == 1
+    assert ready["unmapped_submission_count"] == 0
     assert ready["grading_ready"] is True
     assert ready["review_ready"] is False
     assert created["region"]["id"]
@@ -534,6 +543,13 @@ def test_custom_controlled_workflow_state_counts_zip_imported_submissions(
     assert workflow["scripts_uploaded"] is True
     assert workflow["submission_count"] == 2
     assert workflow["submission_page_count"] == 2
+    assert workflow["answer_region_count"] == 0
+    assert workflow["mapped_question_count"] == 0
+    assert workflow["unmapped_question_count"] == 0
+    assert workflow["mapped_page_count"] == 0
+    assert workflow["unmapped_page_count"] == 2
+    assert workflow["mapped_submission_count"] == 0
+    assert workflow["unmapped_submission_count"] == 2
 
 
 

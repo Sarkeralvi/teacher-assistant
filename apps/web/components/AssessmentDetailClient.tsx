@@ -94,6 +94,97 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const draftQuestions = questionImportJob?.draft_questions ?? [];
   const selectedDraftCount = Object.values(draftQuestionEdits).filter((draft) => draft.selected).length;
 
+  const pageCountBySubmissionId = new Map<number, number>();
+  const answerRegionsByPageId = new Map<number, AnswerRegion[]>();
+  const answerRegionsByQuestionId = new Map<number, AnswerRegion[]>();
+  const answerRegionsBySubmissionId = new Map<number, AnswerRegion[]>();
+  for (const submission of submissions) {
+    pageCountBySubmissionId.set(submission.id, submission.pages.length);
+  }
+  for (const region of answerRegions) {
+    const pageRegions = answerRegionsByPageId.get(region.page_id) ?? [];
+    pageRegions.push(region);
+    answerRegionsByPageId.set(region.page_id, pageRegions);
+
+    const questionRegions = answerRegionsByQuestionId.get(region.question_id) ?? [];
+    questionRegions.push(region);
+    answerRegionsByQuestionId.set(region.question_id, questionRegions);
+
+    const submissionRegions = answerRegionsBySubmissionId.get(region.submission_id) ?? [];
+    submissionRegions.push(region);
+    answerRegionsBySubmissionId.set(region.submission_id, submissionRegions);
+  }
+
+  const finalizedRegionIds = new Set(reviewQueue.filter((item) => item.final_grade).map((item) => item.answer_region.id));
+  const gradedRegionIds = new Set(
+    reviewQueue.filter((item) => item.latest_grade_suggestion && !item.final_grade).map((item) => item.answer_region.id),
+  );
+  const mappedQuestionCount = answerRegionsByQuestionId.size;
+  const mappedPageCount = answerRegionsByPageId.size;
+  const mappedSubmissionCount = answerRegionsBySubmissionId.size;
+  const unmappedQuestionCount = Math.max(questions.length - mappedQuestionCount, 0);
+  const unmappedPageCount = Math.max(pages.length - mappedPageCount, 0);
+  const unmappedSubmissionCount = Math.max(submissions.length - mappedSubmissionCount, 0);
+
+  function statusForRegion(regionId: number): "finalized" | "graded" | "mapped" {
+    if (finalizedRegionIds.has(regionId)) {
+      return "finalized";
+    }
+    if (gradedRegionIds.has(regionId)) {
+      return "graded";
+    }
+    return "mapped";
+  }
+
+  function statusForQuestion(questionId: number): string {
+    const regions = answerRegionsByQuestionId.get(questionId) ?? [];
+    if (regions.length === 0) {
+      return "no regions";
+    }
+    if (regions.some((region) => finalizedRegionIds.has(region.id))) {
+      return "finalized";
+    }
+    if (regions.some((region) => gradedRegionIds.has(region.id))) {
+      return "graded";
+    }
+    return "mapped";
+  }
+
+  function statusForPage(pageId: number): string {
+    const regions = answerRegionsByPageId.get(pageId) ?? [];
+    if (regions.length === 0) {
+      return "no regions";
+    }
+    if (regions.some((region) => finalizedRegionIds.has(region.id))) {
+      return "finalized";
+    }
+    if (regions.some((region) => gradedRegionIds.has(region.id))) {
+      return "graded";
+    }
+    return "mapped";
+  }
+
+  function formatPageLabel(submission: Submission, page: Submission["pages"][number]) {
+    return `Submission #${submission.id} · ${submission.student_identifier} · page ${page.page_no}`;
+  }
+
+  function selectedPageContext() {
+    const pageId = Number(selectedPageId);
+    if (!pageId) {
+      return null;
+    }
+    for (const submission of submissions) {
+      const page = submission.pages.find((current) => current.id === pageId);
+      if (page) {
+        return { submission, page };
+      }
+    }
+    return null;
+  }
+
+  const selectedPage = selectedPageContext();
+  const selectedQuestion = questions.find((question) => question.id === Number(selectedQuestionId)) ?? null;
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -469,12 +560,18 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Submissions</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Total submissions: {submissions.length} · total pages: {pages.length} · mapped pages: {mappedPageCount} · unmapped pages: {unmappedPageCount}
+        </p>
         {!loading && submissions.length === 0 ? <EmptyState message="No submissions yet." /> : null}
         <div className="mt-4 grid gap-3">
           {submissions.map((submission) => (
             <article key={submission.id} className="rounded border border-slate-800 p-4">
               <h3 className="font-semibold">Submission #{submission.id} · {submission.student_identifier}</h3>
               <p className="text-sm text-slate-400">{submission.student_name || "Unnamed student"} · {submission.status}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Pages: {pageCountBySubmissionId.get(submission.id) ?? submission.pages.length} · mapped regions: {(answerRegionsBySubmissionId.get(submission.id) ?? []).length}
+              </p>
               <button
                 className="mt-3 rounded border border-red-800 px-3 py-2 text-sm text-red-200 hover:border-red-600"
                 type="button"
@@ -486,7 +583,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 {submission.pages.map((page) => (
                   <a key={page.id} href={getSubmissionPageImageUrl(page.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
-                    Page {page.page_no}
+                    <span className="flex items-center justify-between gap-2">
+                      <span>Page {page.page_no}</span>
+                      <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
+                        {statusForPage(page.id)}
+                      </span>
+                    </span>
                     <span className="block text-xs text-slate-500">{page.image_path}</span>
                   </a>
                 ))}
@@ -499,8 +601,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
           <h2 className="text-xl font-semibold">Answer regions</h2>
-          <p className="text-sm text-slate-400">Manually map a question to a rectangular crop on an uploaded page. No OCR or automatic detection is run.</p>
+          <p className="text-sm text-slate-400">Map each answer region to the correct question before grading. No OCR or automatic detection is run.</p>
+          <p className="mt-1 text-sm text-slate-400">
+            Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
+          </p>
         </div>
+        <div className="grid gap-3 rounded border border-slate-800 p-3 text-sm text-slate-300 md:grid-cols-2">
+          <p>Question status: {questions.length === 0 ? "no questions" : `${mappedQuestionCount} mapped, ${unmappedQuestionCount} unmapped`}</p>
+          <p>Submission/page status: {mappedSubmissionCount} submissions mapped · {unmappedSubmissionCount} unmapped submissions</p>
+        </div>
+        {selectedPage && selectedQuestion ? (
+          <p className="rounded border border-emerald-900 bg-emerald-950/20 p-3 text-sm text-emerald-200">
+            Currently mapping {formatPageLabel(selectedPage.submission, selectedPage.page)} to Question {selectedQuestion.question_no} ({statusForQuestion(selectedQuestion.id)}).
+          </p>
+        ) : null}
         {!loading && questions.length === 0 ? (
           <p className="text-sm text-amber-200">Create a question before mapping answer regions.</p>
         ) : null}
@@ -511,7 +625,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             {submissions.map((submission) =>
               submission.pages.map((page) => (
                 <option key={page.id} value={page.id}>
-                  Submission #{submission.id} · {submission.student_identifier} · page {page.page_no}
+                  {formatPageLabel(submission, page)} · {statusForPage(page.id)}
                 </option>
               )),
             )}
@@ -522,7 +636,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <select className={inputClass} value={selectedQuestionId} onChange={(event) => setSelectedQuestionId(event.target.value)} required>
             <option value="">Select question</option>
             {questions.map((question) => (
-              <option key={question.id} value={question.id}>Question {question.question_no}</option>
+              <option key={question.id} value={question.id}>Question {question.question_no} · {statusForQuestion(question.id)}</option>
             ))}
           </select>
         </label>
@@ -541,12 +655,27 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
         {!loading && answerRegions.length === 0 ? <EmptyState message="No answer regions yet." /> : null}
         <div className="grid gap-2 md:grid-cols-2">
-          {answerRegions.map((region) => (
-            <a key={region.id} href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
-              Cropped image #{region.id} · question #{region.question_id}
-              <span className="block text-xs text-slate-500">page #{region.page_id} · x {region.x}, y {region.y}, w {region.width}, h {region.height}</span>
-            </a>
-          ))}
+          {answerRegions.map((region) => {
+            const linkedSubmission = submissions.find((submission) => submission.id === region.submission_id) ?? null;
+            const linkedPage = linkedSubmission?.pages.find((page) => page.id === region.page_id) ?? null;
+            const linkedQuestion = questions.find((question) => question.id === region.question_id) ?? null;
+            const regionStatus = statusForRegion(region.id);
+            return (
+              <a key={region.id} href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
+                <span className="flex items-center justify-between gap-2">
+                  <span>Answer region #{region.id}</span>
+                  <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
+                    {regionStatus}
+                  </span>
+                </span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  Question {linkedQuestion?.question_no ?? region.question_id} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
+                </span>
+                <span className="block text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</span>
+                <span className="block text-xs text-cyan-300 underline">Open crop preview</span>
+              </a>
+            );
+          })}
         </div>
       </form>
 

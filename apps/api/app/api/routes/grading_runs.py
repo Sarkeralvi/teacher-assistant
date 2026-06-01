@@ -85,6 +85,27 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         .join(Submission, AnswerRegion.submission_id == Submission.id)
         .where(Submission.assessment_id == assessment_id),
     )
+    mapped_question_count = scalar_count(
+        db,
+        select(func.count(func.distinct(AnswerRegion.question_id)))
+        .join(Submission, AnswerRegion.submission_id == Submission.id)
+        .where(Submission.assessment_id == assessment_id),
+    )
+    mapped_page_count = scalar_count(
+        db,
+        select(func.count(func.distinct(AnswerRegion.page_id)))
+        .join(Submission, AnswerRegion.submission_id == Submission.id)
+        .where(Submission.assessment_id == assessment_id),
+    )
+    mapped_submission_count = scalar_count(
+        db,
+        select(func.count(func.distinct(AnswerRegion.submission_id)))
+        .join(Submission, AnswerRegion.submission_id == Submission.id)
+        .where(Submission.assessment_id == assessment_id),
+    )
+    unmapped_question_count = max(question_count - mapped_question_count, 0)
+    unmapped_page_count = max(submission_page_count - mapped_page_count, 0)
+    unmapped_submission_count = max(submission_count - mapped_submission_count, 0)
     grade_suggestion_count = scalar_count(
         db,
         select(func.count(GradeSuggestion.id))
@@ -166,6 +187,8 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         next_actions.append("Upload scripts.")
     if scripts_uploaded and not answer_regions_created:
         next_actions.append("Create answer regions.")
+    if unmapped_question_count > 0 and answer_regions_created:
+        next_actions.append("Map remaining questions to pages as needed.")
     if grading_ready and not suggestions_created:
         next_actions.append("Run mock grading or one real Codex grading.")
     if suggestions_created and not final_grades_created:
@@ -207,6 +230,12 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         "submission_count": submission_count,
         "submission_page_count": submission_page_count,
         "answer_region_count": answer_region_count,
+        "mapped_question_count": mapped_question_count,
+        "mapped_page_count": mapped_page_count,
+        "mapped_submission_count": mapped_submission_count,
+        "unmapped_question_count": unmapped_question_count,
+        "unmapped_page_count": unmapped_page_count,
+        "unmapped_submission_count": unmapped_submission_count,
         "grade_suggestion_count": grade_suggestion_count,
         "final_grade_count": final_grade_count,
         "blockers": blockers,

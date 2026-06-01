@@ -77,7 +77,7 @@ const dashboardSections: Array<{
     key: "regions",
     label: "Answer regions",
     isReady: (state) => state.answer_regions_created,
-    countText: (state) => `Answer regions created: ${state.answer_region_count}`,
+    countText: (state) => `Answer regions created: ${state.answer_region_count} · mapped questions: ${state.mapped_question_count}/${state.question_count} · unmapped questions: ${state.unmapped_question_count}`,
   },
   {
     key: "grading",
@@ -358,6 +358,8 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
             <p>Solution/model answer PDF: {selectedRun.solution_pdf_path ?? "pending"}</p>
             <p>Rubric PDF: {selectedRun.rubric_pdf_path ?? "pending"}</p>
             <p>Materials confirmed: {selectedRun.materials_confirmed_at ?? "pending"}</p>
+            <p>Answer regions: {selectedRun.workflow_state.answer_region_count} total · mapped questions {selectedRun.workflow_state.mapped_question_count}/{selectedRun.workflow_state.question_count} · unmapped questions {selectedRun.workflow_state.unmapped_question_count}</p>
+            <p>Mapped pages: {selectedRun.workflow_state.mapped_page_count}/{selectedRun.workflow_state.submission_page_count} · mapped submissions: {selectedRun.workflow_state.mapped_submission_count}/{selectedRun.workflow_state.submission_count}</p>
             <p>Questions/rubrics confirmed: {selectedRun.questions_confirmed_at && selectedRun.rubrics_confirmed_at ? "yes" : "pending"}</p>
           </div>
         ) : null}

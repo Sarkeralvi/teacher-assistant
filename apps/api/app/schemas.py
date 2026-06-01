@@ -135,6 +135,12 @@ class GradingRunWorkflowState(BaseModel):
     submission_count: int
     submission_page_count: int
     answer_region_count: int
+    mapped_question_count: int
+    mapped_page_count: int
+    mapped_submission_count: int
+    unmapped_question_count: int
+    unmapped_page_count: int
+    unmapped_submission_count: int
     grade_suggestion_count: int
     final_grade_count: int
     blockers: list[str]

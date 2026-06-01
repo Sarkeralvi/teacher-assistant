@@ -131,6 +131,12 @@ export type GradingRunWorkflowState = {
   submission_count: number;
   submission_page_count: number;
   answer_region_count: number;
+  mapped_question_count: number;
+  mapped_page_count: number;
+  mapped_submission_count: number;
+  unmapped_question_count: number;
+  unmapped_page_count: number;
+  unmapped_submission_count: number;
   grade_suggestion_count: number;
   final_grade_count: number;
   blockers: string[];
