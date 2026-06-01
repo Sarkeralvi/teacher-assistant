@@ -526,6 +526,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
               Custom Controlled Grading Run
             </Link>
+            <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run?mode=semi_automated`}>
+              Semi-Automated Grading Run
+            </Link>
             <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
               Review & export final grades
             </Link>
@@ -536,7 +539,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           {reviewQueue.every((item) => !item.final_grade) ? (
             <p className="mt-3 text-sm text-slate-400">Approve or edit at least one grade before export is useful.</p>
           ) : null}
-          <p className="mt-3 text-sm text-amber-200">Custom controlled mode: teacher confirmation required.</p>
+          <p className="mt-3 text-sm text-amber-200">Grading run modes require teacher confirmation before export.</p>
         </section>
       ) : null}
 
@@ -746,7 +749,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   Question {linkedQuestion?.question_no ?? region.question_id} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
                 </span>
                 <span className="block text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</span>
-                <span className="block text-xs text-cyan-300 underline">Open crop preview</span>
+                <span className="block text-xs text-cyan-300 underline">Open crop preview · Cropped image</span>
               </a>
             );
           })}

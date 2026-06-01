@@ -22,7 +22,7 @@ import {
 } from "../lib/api";
 
 const workflowSteps = [
-  "Start custom controlled run",
+  "Start grading run",
   "Upload/confirm materials",
   "Confirm or create questions/rubrics",
   "Upload scripts",
@@ -99,7 +99,10 @@ const dashboardSections: Array<{
   },
 ];
 
-export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
+export function CustomControlledGradingRunClient({
+  assessmentId,
+  mode = "custom_controlled",
+}: Readonly<{ assessmentId: number; mode?: "custom_controlled" | "semi_automated" }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [gradingRuns, setGradingRuns] = useState<GradingRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -113,6 +116,13 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastGradingResult, setLastGradingResult] = useState<BatchMockGradeResponse | null>(null);
+
+  const isSemiAutomated = mode === "semi_automated";
+  const modeTitle = isSemiAutomated ? "Semi-Automated Grading Run" : "Custom Controlled Grading Run";
+  const startRunTitle = isSemiAutomated ? "Start semi-automated run" : "Start custom controlled run";
+  const runNotes = isSemiAutomated
+    ? "Semi-automated mode: teacher confirmation required."
+    : "Custom controlled mode: teacher confirmation required.";
 
   const selectedRun = gradingRuns.find((run) => run.id === selectedRunId) ?? gradingRuns[0] ?? null;
   const workflowState = selectedRun?.workflow_state ?? null;
@@ -133,7 +143,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       setMarkingPolicy(preferredRun?.marking_policy ?? "general");
       setNotes(preferredRun?.notes ?? "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load custom controlled grading run");
+      setError(err instanceof Error ? err.message : "Failed to load grading run");
     } finally {
       setLoading(false);
     }
@@ -148,7 +158,8 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
     setError(null);
     try {
       const run = await createCustomGradingRun(assessmentId, {
-        notes: notes || "Custom controlled mode: teacher confirmation required.",
+        mode,
+        notes: runNotes,
         marking_policy: markingPolicy,
       });
       setGradingRuns((current) => [run, ...current]);
@@ -163,7 +174,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
   async function handleUploadMaterials(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedRun) {
-      setError("Start custom controlled run before uploading materials.");
+      setError("Start a grading run before uploading materials.");
       return;
     }
     setSaving(true);
@@ -171,8 +182,8 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
     try {
       const updated = await uploadGradingRunMaterials(selectedRun.id, {
         question_pdf: questionPdf,
-        solution_pdf: solutionPdf,
-        rubric_pdf: rubricPdf,
+        solution_pdf: isSemiAutomated ? null : solutionPdf,
+        rubric_pdf: isSemiAutomated ? null : rubricPdf,
       });
       replaceRun(updated);
       setQuestionPdf(null);
@@ -239,7 +250,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
   async function handleUpdateRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedRun) {
-      setError("Start custom controlled run before updating status.");
+      setError("Start a grading run before updating status.");
       return;
     }
     setSaving(true);
@@ -273,10 +284,10 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <p className="text-sm text-slate-400">Assessment #{assessmentId}</p>
-        <h1 className="text-3xl font-semibold">Custom Controlled Grading Run</h1>
+        <h1 className="text-3xl font-semibold">{modeTitle}</h1>
         <p className="mt-2 text-slate-300">{assessment?.title ?? "Loading assessment..."}</p>
         <p className="mt-3 rounded border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-100">
-          Custom controlled mode: teacher confirmation required. This wizard organizes existing tools; it does not finalize grades automatically.
+          {runNotes} This wizard organizes existing tools; it does not finalize grades automatically.
         </p>
         <div className="mt-4 grid gap-2 text-sm text-slate-300 md:grid-cols-2">
           <p>No automatic answer-region detection.</p>
@@ -324,7 +335,7 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
               </div>
             </div>
           </>
-        ) : <EmptyState message="Start a custom controlled run to see blockers and next actions." />}
+        ) : <EmptyState message="Start a grading run to see blockers and next actions." />}
       </section>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
@@ -342,18 +353,21 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold">Start custom controlled run</h2>
-            <p className="text-sm text-slate-400">Mode: custom_controlled · status: {selectedRun?.status ?? "not started"}</p>
+            <h2 className="text-xl font-semibold">{startRunTitle}</h2>
+            <p className="text-sm text-slate-400">Mode: {mode} · status: {selectedRun?.status ?? "not started"}</p>
           </div>
           <button className={buttonClass} disabled={saving} onClick={handleStartRun} type="button">
-            {saving ? "Saving..." : "Start custom controlled run"}
+            {saving ? "Saving..." : startRunTitle}
           </button>
         </div>
-        {!loading && gradingRuns.length === 0 ? <EmptyState message="No custom controlled grading run started yet." /> : null}
+        {!loading && gradingRuns.length === 0 ? <EmptyState message="No grading run started yet." /> : null}
         {selectedRun ? (
           <div className="mt-4 rounded border border-slate-800 p-3 text-sm text-slate-300">
             <p>Run #{selectedRun.id}</p>
             <p>Marking policy: {selectedRun.marking_policy}</p>
+            <p>Mode: {selectedRun.mode}</p>
+            <p>Question paper uploaded: {selectedRun.workflow_state.question_paper_uploaded ? "yes" : "no"}</p>
+            <p>Drafts created: {selectedRun.workflow_state.drafts_created ? "yes" : "no"} · confirmed: {selectedRun.workflow_state.drafts_confirmed ? "yes" : "no"}</p>
             <p>Question PDF: {selectedRun.question_pdf_path ?? "pending"}</p>
             <p>Solution/model answer PDF: {selectedRun.solution_pdf_path ?? "pending"}</p>
             <p>Rubric PDF: {selectedRun.rubric_pdf_path ?? "pending"}</p>
@@ -368,17 +382,21 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       <form onSubmit={handleUploadMaterials} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Upload/confirm materials</h2>
         <label className="grid gap-2 text-sm">
-          Question PDF
+          {isSemiAutomated ? "Question paper PDF" : "Question PDF"}
           <input className={inputClass} type="file" accept="application/pdf,.pdf" onChange={handleFileChange(setQuestionPdf)} />
         </label>
-        <label className="grid gap-2 text-sm">
-          Solution/model answer PDF
-          <input className={inputClass} type="file" accept="application/pdf,.pdf" onChange={handleFileChange(setSolutionPdf)} />
-        </label>
-        <label className="grid gap-2 text-sm">
-          Rubric PDF
-          <input className={inputClass} type="file" accept="application/pdf,.pdf" onChange={handleFileChange(setRubricPdf)} />
-        </label>
+        {!isSemiAutomated ? (
+          <>
+            <label className="grid gap-2 text-sm">
+              Solution/model answer PDF
+              <input className={inputClass} type="file" accept="application/pdf,.pdf" onChange={handleFileChange(setSolutionPdf)} />
+            </label>
+            <label className="grid gap-2 text-sm">
+              Rubric PDF
+              <input className={inputClass} type="file" accept="application/pdf,.pdf" onChange={handleFileChange(setRubricPdf)} />
+            </label>
+          </>
+        ) : null}
         <div className="flex flex-wrap gap-3">
           <button className={buttonClass} disabled={saving || !selectedRun} type="submit">
             Upload/confirm materials
@@ -390,14 +408,18 @@ export function CustomControlledGradingRunClient({ assessmentId }: Readonly<{ as
       </form>
 
       <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Confirm or create questions/rubrics</h2>
-        <p className="text-sm text-slate-300">Create or edit canonical questions/model answers/rubrics on the assessment page, then confirm them here.</p>
+        <h2 className="text-xl font-semibold">Confirm {isSemiAutomated ? "draft questions/rubrics" : "questions/rubrics"}</h2>
+        <p className="text-sm text-slate-300">
+          {isSemiAutomated
+            ? "Upload a question paper on the assessment page, generate drafts, and confirm them here."
+            : "Create or edit canonical questions/model answers/rubrics on the assessment page, then confirm them here."}
+        </p>
         <div className="flex flex-wrap gap-3">
           <Link className={buttonClass} href={`/assessments/${assessmentId}`}>
-            Confirm or create questions/rubrics, upload scripts, create answer regions manually, run mock grading
+            {isSemiAutomated ? "Open assessment page for draft review" : "Confirm or create questions/rubrics, upload scripts, create answer regions manually, run mock grading"}
           </Link>
           <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.materials_confirmed} onClick={handleConfirmQuestionsRubrics} type="button">
-            Confirm questions/rubrics
+            {isSemiAutomated ? "Confirm drafts" : "Confirm questions/rubrics"}
           </button>
         </div>
       </section>

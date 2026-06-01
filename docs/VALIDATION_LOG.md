@@ -332,3 +332,9 @@ This validates one synthetic image-input path and mandatory teacher review. It d
   - exported final grades to XLSX and verified the export row included `marking_policy=tough` and the created `final_grade_id`
 - Final outcome: validation passed; no product code changes were required for this checkpoint.
 - Repository state at closeout: clean after docs updates and commit.
+
+2026-06-01 — TA-W2-013 semi_automated grading-run mode verification
+- Added semi_automated grading-run support in API/models/migration and made workflow state mode-aware.
+- Updated frontend entry point, mode labels, and assessment link behavior for semi_automated runs.
+- Added focused coverage for semi_automated API flow and preserved the custom controlled workflow checks.
+- Verification passed: Alembic migration check, focused grading-run tests, frontend workflow static test, `make test`, `make lint`, `npm run build`, and `git diff --check`.

@@ -103,6 +103,10 @@ def create_assessment_for_teacher(client: TestClient, teacher_id: int) -> dict[s
     return assessment_response.json()
 
 
+def make_question_paper_pdf(path: Path) -> None:
+    Image.new("RGB", (160, 120), color="white").save(path, format="PDF")
+
+
 def test_create_and_list_custom_grading_run_requires_auth_and_assessment_scope(
     client: TestClient,
 ) -> None:
@@ -423,7 +427,132 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
     assert created["region"]["id"]
 
 
-def test_manual_status_cannot_falsely_mark_run_complete(client: TestClient) -> None:
+def test_semi_automated_run_supports_question_paper_drafts_and_ready_workflow(
+    client: TestClient, tmp_path: Path
+) -> None:
+    teacher, token = register_teacher(client, "semi")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    run_response = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"mode": "semi_automated", "notes": "Semi-automated mode", "marking_policy": "easy"},
+    )
+    assert run_response.status_code == 201
+    run = run_response.json()
+    assert run["mode"] == "semi_automated"
+    assert run["workflow_state"]["question_paper_uploaded"] is False
+    assert run["workflow_state"]["drafts_created"] is False
+
+    paper_path = tmp_path / "question-paper.pdf"
+    make_question_paper_pdf(paper_path)
+    with paper_path.open("rb") as file_obj:
+        upload_response = client.post(
+            f"/grading-runs/{run['id']}/materials",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"question_pdf": ("question-paper.pdf", file_obj, "application/pdf")},
+        )
+    assert upload_response.status_code == 200
+    uploaded = upload_response.json()
+    assert uploaded["question_pdf_path"]
+    assert uploaded["solution_pdf_path"] is None
+    assert uploaded["rubric_pdf_path"] is None
+    assert uploaded["workflow_state"]["question_paper_uploaded"] is True
+    assert uploaded["workflow_state"]["materials_uploaded"] is True
+    assert uploaded["workflow_state"]["materials_confirmed"] is False
+
+    confirm_response = client.post(
+        f"/grading-runs/{run['id']}/confirm-materials",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert confirm_response.status_code == 200
+    confirmed = confirm_response.json()
+    assert confirmed["workflow_state"]["materials_confirmed"] is True
+
+    with paper_path.open("rb") as file_obj:
+        import_response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            files={"file": ("question-paper.pdf", file_obj, "application/pdf")},
+        )
+    assert import_response.status_code == 201
+    import_job = import_response.json()
+    assert len(import_job["draft_questions"]) >= 1
+    first_draft = import_job["draft_questions"][0]
+    accepted_total_marks = str(first_draft["total_marks"] or "1.00")
+
+    accept_response = client.post(
+        f"/question-imports/{import_job['id']}/accept",
+        json={
+            "draft_questions": [
+                {
+                    "draft_id": first_draft["draft_id"],
+                    "question_no": first_draft["question_no"],
+                    "question_text": first_draft["question_text"],
+                    "model_answer": first_draft["model_answer"],
+                    "total_marks": accepted_total_marks,
+                }
+            ]
+        },
+    )
+    assert accept_response.status_code == 201
+    accepted = accept_response.json()
+    question = accepted["questions"][0]
+
+    rubric_response = client.post(
+        f"/questions/{question['id']}/rubrics",
+        json={
+            "version": 1,
+            "is_active": True,
+            "rubric_json": {
+                "total_marks": question["total_marks"],
+                "criteria": [
+                    {
+                        "id": "content",
+                        "name": "Content",
+                        "description": "Matches the drafted solution.",
+                        "max_marks": question["total_marks"],
+                    }
+                ],
+            },
+        },
+    )
+    assert rubric_response.status_code == 201
+
+    confirm_qr_response = client.post(
+        f"/grading-runs/{run['id']}/confirm-questions-rubrics",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert confirm_qr_response.status_code == 200
+    confirmed_qr = confirm_qr_response.json()["workflow_state"]
+    assert confirmed_qr["drafts_created"] is True
+    assert confirmed_qr["drafts_confirmed"] is True
+    assert confirmed_qr["questions_confirmed"] is True
+    assert confirmed_qr["rubrics_confirmed"] is True
+
+    created = upload_script_and_create_region(
+        client,
+        tmp_path,
+        int(assessment["id"]),
+        int(question["id"]),
+    )
+    ready = get_run(client, token, int(run["id"]))["workflow_state"]
+    assert ready["grading_ready"] is True
+    assert ready["blockers"] == [] or "Run grading before review/export." in ready["blockers"]
+
+    grade_response = client.post(
+        f"/grading-runs/{run['id']}/grade-all-mock",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert grade_response.status_code == 200
+    graded = grade_response.json()
+    assert graded["marking_policy"] == "easy"
+    assert graded["graded_count"] >= 1
+    after_grade = get_run(client, token, int(run["id"]))["workflow_state"]
+    assert after_grade["suggestions_created"] is True
+    assert after_grade["review_ready"] is True
+    assert after_grade["final_grades_created"] is False
+    assert after_grade["export_ready"] is False
+    assert created["region"]["id"]
+
     teacher, token = register_teacher(client)
     assessment = create_assessment_for_teacher(client, int(teacher["id"]))
     run = client.post(

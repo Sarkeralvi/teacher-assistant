@@ -117,6 +117,9 @@ export type MarkingPolicy = "tough" | "general" | "easy";
 export type GradingRunWorkflowState = {
   materials_uploaded: boolean;
   materials_confirmed: boolean;
+  question_paper_uploaded: boolean;
+  drafts_created: boolean;
+  drafts_confirmed: boolean;
   questions_confirmed: boolean;
   rubrics_confirmed: boolean;
   scripts_uploaded: boolean;
@@ -148,9 +151,10 @@ export type GradingRun = {
   id: number;
   assessment_id: number;
   created_by_teacher_id: number;
-  mode: "custom_controlled" | string;
+  mode: "custom_controlled" | "semi_automated" | string;
   status: string;
   marking_policy: MarkingPolicy;
+
   question_pdf_path: string | null;
   solution_pdf_path: string | null;
   rubric_pdf_path: string | null;
@@ -164,6 +168,7 @@ export type GradingRun = {
 };
 
 export type GradingRunCreate = {
+  mode?: "custom_controlled" | "semi_automated";
   notes?: string | null;
   marking_policy?: MarkingPolicy;
 };

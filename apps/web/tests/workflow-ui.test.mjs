@@ -195,8 +195,10 @@ for (const text of [
   "Manual question creation remains available",
   "draftQuestionEdits",
   "Custom Controlled Grading Run",
-  "Custom controlled mode: teacher confirmation required.",
+  "Semi-Automated Grading Run",
+  "Grading run modes require teacher confirmation before export.",
   "href={`/assessments/${assessmentId}/grading-run`}",
+  "href={`/assessments/${assessmentId}/grading-run?mode=semi_automated`}",
 ]) {
   if (!assessmentDetailUi.includes(text)) {
     throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);

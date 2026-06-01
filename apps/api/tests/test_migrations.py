@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-EXPECTED_REVISION_ID = "0007_marking_policy"
+EXPECTED_REVISION_ID = "0008_semi_automated_mode"
 
 
 def test_initial_alembic_migration_exists_and_is_importable() -> None:

@@ -917,3 +917,16 @@ Tests required: frontend tests/static checks, build, manual workflow smoke.
 Risks: Premature polish can distract from functional blockers.
 Status: Done
 
+TASK-ID: TA-W2-013
+Title: Semi-automated grading-run mode
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-011
+Files affected: apps/api/app/models.py, apps/api/app/schemas.py, apps/api/app/api/routes/grading_runs.py, apps/api/alembic/versions/0008_semi_automated_mode.py, apps/api/tests/test_grading_runs_api.py, apps/api/tests/test_migrations.py, apps/web/lib/api.ts, apps/web/components/CustomControlledGradingRunClient.tsx, apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/workflow-ui.test.mjs
+Goal: Add semi_automated grading-run mode support across API, workflow state, UI, and tests without changing product scope.
+Implementation notes: Preserve custom_controlled flow; semi_automated uses question-paper-only uploads and mode-aware labels/links.
+Acceptance criteria: Semi_automated mode is creatable and visible, workflow state is mode-aware, UI labels/entry point adapt, focused tests and full checks pass.
+Tests required: focused grading-run tests, frontend workflow test, make test, make lint, frontend build, migration check.
+Risks: Mode-specific branching can break existing custom controlled flow; keep check constraints and UI labels aligned.
+Status: Done
+

@@ -96,7 +96,10 @@ class Assessment(TimestampMixin, Base):
 class GradingRun(TimestampMixin, Base):
     __tablename__ = "grading_runs"
     __table_args__ = (
-        CheckConstraint("mode in ('custom_controlled')", name="ck_grading_runs_mode"),
+        CheckConstraint(
+            "mode in ('custom_controlled', 'semi_automated')",
+            name="ck_grading_runs_mode",
+        ),
         CheckConstraint(
             "status in ("
             "'draft', 'materials_uploaded', 'questions_ready', 'scripts_uploaded', "
