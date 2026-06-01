@@ -65,6 +65,22 @@ def test_controlled_grading_upload_refreshes_material_state_after_success() -> N
     assert "await load();" in upload_handler
 
 
+def test_assessment_workflow_has_stable_browser_target_markers() -> None:
+    source = _read(REPO_ROOT / "apps" / "web" / "components" / "AssessmentDetailClient.tsx")
+    assert 'data-testid="answer-region-page-select"' in source
+    assert 'data-testid="answer-region-question-select"' in source
+    assert 'data-testid="answer-region-card"' in source
+    assert 'data-testid="submission-file-input"' in source
+    assert 'data-testid="zip-file-input"' in source
+
+
+def test_review_queue_has_stable_browser_target_markers() -> None:
+    source = _read(REPO_ROOT / "apps" / "web" / "components" / "AssessmentReviewClient.tsx")
+    assert 'data-testid="batch-mock-grade-button"' in source
+    assert 'data-testid="select-all-visible-suggested-items-button"' in source
+    assert 'data-testid="approve-selected-button"' in source
+
+
 def test_browser_codex_button_uses_dev_endpoint_not_mock_endpoint() -> None:
     api_source = _read(WEB_API)
     review_source = _read(

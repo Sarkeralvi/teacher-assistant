@@ -269,7 +269,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
             Export final grades (.xlsx)
           </a>
-          <button className={buttonClass} type="button" disabled={batchGrading} onClick={() => void handleBatchMockGrade()}>
+          <button data-testid="batch-mock-grade-button" className={buttonClass} type="button" disabled={batchGrading} onClick={() => void handleBatchMockGrade()}>
             {batchGrading ? "Batch mock grading..." : "Batch mock grade ungraded answers"}
           </button>
         </div>
@@ -318,13 +318,13 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         </p>
         <div className="mt-4 grid gap-3 rounded border border-slate-800 p-3 text-sm">
           <div className="flex flex-wrap items-center gap-3">
-            <button className={buttonClass} type="button" disabled={!hasVisibleSelectableItems} onClick={selectAllVisibleSuggestedItems}>
+            <button data-testid="select-all-visible-suggested-items-button" className={buttonClass} type="button" disabled={!hasVisibleSelectableItems} onClick={selectAllVisibleSuggestedItems}>
               Select all visible suggested items
             </button>
             <button className={buttonClass} type="button" disabled={selectedCount === 0} onClick={clearSelection}>
               Clear selection
             </button>
-            <button className={buttonClass} type="button" disabled={batchApproving || selectedCount === 0} onClick={() => void handleApproveSelected()}>
+            <button data-testid="approve-selected-button" className={buttonClass} type="button" disabled={batchApproving || selectedCount === 0} onClick={() => void handleApproveSelected()}>
               {batchApproving ? "Approving selected..." : "Approve selected"}
             </button>
             <span className="text-slate-300">{selectedCount} selected count</span>

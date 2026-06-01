@@ -553,6 +553,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <input className={inputClass} name="student_identifier" placeholder="student_identifier" value={studentIdentifier} onChange={(event) => setStudentIdentifier(event.target.value)} required />
         <input className={inputClass} placeholder="Student name (optional)" value={studentName} onChange={(event) => setStudentName(event.target.value)} />
         <input
+          data-testid="submission-file-input"
           className={inputClass}
           name="file"
           type="file"
@@ -581,7 +582,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           </select>
         </label>
         <input className={inputClass} placeholder="Student name prefix (optional)" value={zipStudentNamePrefix} onChange={(event) => setZipStudentNamePrefix(event.target.value)} />
-        <input className={inputClass} name="file" type="file" accept=".zip,application/zip,application/x-zip-compressed" onChange={handleZipUploadFileChange} />
+        <input data-testid="zip-file-input" className={inputClass} name="file" type="file" accept=".zip,application/zip,application/x-zip-compressed" onChange={handleZipUploadFileChange} />
         {selectedZipUploadFileName ? (
           <p className="text-sm text-emerald-300">Selected ZIP file: {selectedZipUploadFileName}</p>
         ) : null}
@@ -697,7 +698,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         ) : null}
         <label className="grid gap-2 text-sm">
           Select page
-          <select className={inputClass} value={selectedPageId} onChange={(event) => setSelectedPageId(event.target.value)} required>
+          <select data-testid="answer-region-page-select" className={inputClass} value={selectedPageId} onChange={(event) => setSelectedPageId(event.target.value)} required>
             <option value="">Select page</option>
             {submissions.map((submission) =>
               submission.pages.map((page) => (
@@ -710,7 +711,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </label>
         <label className="grid gap-2 text-sm">
           Select question
-          <select className={inputClass} value={selectedQuestionId} onChange={(event) => setSelectedQuestionId(event.target.value)} required>
+          <select data-testid="answer-region-question-select" className={inputClass} value={selectedQuestionId} onChange={(event) => setSelectedQuestionId(event.target.value)} required>
             <option value="">Select question</option>
             {questions.map((question) => (
               <option key={question.id} value={question.id}>Question {question.question_no} · {statusForQuestion(question.id)}</option>
@@ -738,7 +739,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const linkedQuestion = questions.find((question) => question.id === region.question_id) ?? null;
             const regionStatus = statusForRegion(region.id);
             return (
-              <a key={region.id} href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
+              <a key={region.id} data-testid="answer-region-card" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
                 <span className="flex items-center justify-between gap-2">
                   <span>Answer region #{region.id}</span>
                   <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
