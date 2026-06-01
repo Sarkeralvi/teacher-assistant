@@ -219,6 +219,25 @@ export type AnswerRegion = {
   updated_at: string;
 };
 
+export type DraftAnswerRegionSuggestion = {
+  draft_id: string;
+  x: string | number;
+  y: string | number;
+  width: string | number;
+  height: string | number;
+  confidence: string | number;
+  reason: string;
+  source: string;
+  needs_teacher_confirmation: boolean;
+};
+
+export type AnswerRegionSuggestionResponse = {
+  page_id: number;
+  source: string;
+  message: string;
+  suggestions: DraftAnswerRegionSuggestion[];
+};
+
 export type GradingJob = {
   id: number;
   answer_region_id: number;
@@ -663,6 +682,12 @@ export function createAnswerRegion(pageId: number, payload: AnswerRegionCreate) 
   return apiRequest<AnswerRegion>(`/submission-pages/${pageId}/answer-regions`, {
     method: "POST",
     body: payload,
+  });
+}
+
+export function suggestAnswerRegions(pageId: number) {
+  return apiRequest<AnswerRegionSuggestionResponse>(`/submission-pages/${pageId}/answer-regions/suggest`, {
+    method: "POST",
   });
 }
 

@@ -397,6 +397,25 @@ class AnswerRegionRead(ORMBase):
     updated_at: datetime
 
 
+class DraftAnswerRegionSuggestion(BaseModel):
+    draft_id: str
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    reason: str
+    source: str = "heuristic"
+    needs_teacher_confirmation: bool = True
+
+
+class AnswerRegionSuggestionResponse(BaseModel):
+    page_id: int
+    source: str = "heuristic"
+    message: str
+    suggestions: list[DraftAnswerRegionSuggestion]
+
+
 class GradingJobRead(ORMBase):
     id: int
     answer_region_id: int

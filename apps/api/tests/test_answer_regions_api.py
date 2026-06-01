@@ -222,3 +222,82 @@ def test_rejects_question_from_different_assessment(client: TestClient, tmp_path
 
     assert response.status_code == 422
     assert "Question assessment must match submission assessment" in response.text
+
+
+def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
+    client: TestClient, tmp_path: Path
+) -> None:
+    image_path = tmp_path / "suggest-page.png"
+    make_png(image_path, size=(320, 240))
+    email = f"suggest-{image_path.stem}@example.com"
+    user_response = client.post("/users", json={"name": "Teacher", "email": email})
+    assert user_response.status_code == 201
+    course_response = client.post(
+        "/courses",
+        json={"teacher_id": user_response.json()["id"], "code": "SUG101", "title": "Suggest"},
+    )
+    assert course_response.status_code == 201
+    assessment_response = client.post(
+        f"/courses/{course_response.json()['id']}/assessments",
+        json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
+    )
+    assert assessment_response.status_code == 201
+    question_response = client.post(
+        f"/assessments/{assessment_response.json()['id']}/questions",
+        json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
+    )
+    assert question_response.status_code == 201
+    with image_path.open("rb") as file_obj:
+        submission_response = client.post(
+            f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            data={"student_identifier": "SUG-001"},
+            files={"file": ("suggest.png", file_obj, "image/png")},
+        )
+    assert submission_response.status_code == 201
+    page = submission_response.json()["pages"][0]
+
+    suggest_response = client.post(f"/submission-pages/{page['id']}/answer-regions/suggest")
+    assert suggest_response.status_code == 200
+    body = suggest_response.json()
+    assert body["page_id"] == page["id"]
+    assert body["source"] == "heuristic"
+    assert body["suggestions"]
+    suggestion = body["suggestions"][0]
+    assert suggestion["needs_teacher_confirmation"] is True
+    assert suggestion["source"] == "heuristic"
+    assert suggestion["confidence"] == "0.25"
+    assert float(suggestion["x"]) >= 0
+    assert float(suggestion["y"]) >= 0
+    assert float(suggestion["width"]) > 0
+    assert float(suggestion["height"]) > 0
+
+    list_response = client.get(f"/submissions/{page['submission_id']}/answer-regions")
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+    created_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={
+            "question_id": question_response.json()["id"],
+            "x": suggestion["x"],
+            "y": suggestion["y"],
+            "width": suggestion["width"],
+            "height": suggestion["height"],
+        },
+    )
+    assert created_response.status_code == 201
+
+
+def test_answer_region_suggestion_endpoint_handles_small_page_cleanly(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _question, page = create_uploaded_page(client, tmp_path)
+
+    suggest_response = client.post(f"/submission-pages/{page['id']}/answer-regions/suggest")
+    assert suggest_response.status_code == 200
+    body = suggest_response.json()
+    assert body["page_id"] == page["id"]
+    assert body["suggestions"] == []
+    assert "too small" in body["message"]
+
+    assert client.get(f"/submissions/{page['submission_id']}/answer-regions").json() == []

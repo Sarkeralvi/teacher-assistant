@@ -20,10 +20,12 @@ import {
   listAssessmentAnswerRegions,
   listQuestions,
   listSubmissions,
+  suggestAnswerRegions,
   uploadSubmission,
   uploadSubmissionZip,
   type AnswerRegion,
   type Assessment,
+  type DraftAnswerRegionSuggestion,
   type DraftQuestion,
   type FinalGrade,
   type Question,
@@ -77,6 +79,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionY, setRegionY] = useState("0");
   const [regionWidth, setRegionWidth] = useState("100");
   const [regionHeight, setRegionHeight] = useState("100");
+  const [regionSuggestions, setRegionSuggestions] = useState<DraftAnswerRegionSuggestion[]>([]);
+  const [regionSuggestionMessage, setRegionSuggestionMessage] = useState<string | null>(null);
+  const [suggestingRegions, setSuggestingRegions] = useState(false);
+  const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
   const [finalizeDrafts, setFinalizeDrafts] = useState<Record<number, FinalizeDraft>>({});
   const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [loading, setLoading] = useState(true);
@@ -184,6 +190,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   const selectedPage = selectedPageContext();
   const selectedQuestion = questions.find((question) => question.id === Number(selectedQuestionId)) ?? null;
+
+  function formatSuggestionLabel(suggestion: DraftAnswerRegionSuggestion) {
+    return `Draft ${suggestion.draft_id} · ${suggestion.reason}`;
+  }
 
   async function load() {
     setLoading(true);
@@ -411,6 +421,35 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleSuggestAnswerRegions() {
+    if (!selectedPage) {
+      setError("Select a page before suggesting answer regions");
+      return;
+    }
+    setSuggestingRegions(true);
+    setError(null);
+    setRegionSuggestionMessage(null);
+    try {
+      const response = await suggestAnswerRegions(selectedPage.page.id);
+      setSuggestionPageId(selectedPage.page.id);
+      setRegionSuggestions(response.suggestions);
+      setRegionSuggestionMessage(response.message);
+      if (response.suggestions[0]) {
+        const first = response.suggestions[0];
+        setRegionX(String(first.x));
+        setRegionY(String(first.y));
+        setRegionWidth(String(first.width));
+        setRegionHeight(String(first.height));
+      }
+    } catch (err) {
+      setRegionSuggestions([]);
+      setRegionSuggestionMessage(null);
+      setError(err instanceof Error ? err.message : "Failed to suggest answer regions");
+    } finally {
+      setSuggestingRegions(false);
+    }
+  }
+
   async function handleMockGrade(answerRegionId: number) {
     setGradingRegionId(answerRegionId);
     setError(null);
@@ -601,7 +640,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
           <h2 className="text-xl font-semibold">Answer regions</h2>
-          <p className="text-sm text-slate-400">Map each answer region to the correct question before grading. No OCR or automatic detection is run.</p>
+          <p className="text-sm text-slate-400">Map each answer region to the correct question before grading. Manual mapping remains the source of truth.</p>
           <p className="mt-1 text-sm text-slate-400">
             Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
           </p>
@@ -610,6 +649,41 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p>Question status: {questions.length === 0 ? "no questions" : `${mappedQuestionCount} mapped, ${unmappedQuestionCount} unmapped`}</p>
           <p>Submission/page status: {mappedSubmissionCount} submissions mapped · {unmappedSubmissionCount} unmapped submissions</p>
         </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button className={buttonClass} disabled={suggestingRegions || !selectedPage} type="button" onClick={() => void handleSuggestAnswerRegions()}>
+            {suggestingRegions ? "Suggesting..." : "Suggest answer regions"}
+          </button>
+          <p className="text-sm text-amber-200">Draft suggestions only. Teacher must confirm before grading.</p>
+        </div>
+        {suggestionPageId === selectedPage?.page.id && regionSuggestionMessage ? (
+          <p className="rounded border border-slate-700 bg-slate-950/30 p-3 text-sm text-slate-300">{regionSuggestionMessage}</p>
+        ) : null}
+        {suggestionPageId === selectedPage?.page.id && regionSuggestions.length > 0 ? (
+          <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm text-slate-300 md:grid-cols-2">
+            {regionSuggestions.map((suggestion) => (
+              <article key={suggestion.draft_id} className="rounded border border-slate-700 p-3">
+                <p className="font-medium">{formatSuggestionLabel(suggestion)}</p>
+                <p className="text-xs text-slate-500">x {suggestion.x}, y {suggestion.y}, w {suggestion.width}, h {suggestion.height}</p>
+                <p className="text-xs text-slate-500">Confidence {suggestion.confidence} · {suggestion.source} · teacher confirmation required</p>
+                <button
+                  className="mt-2 rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-200 hover:border-cyan-500"
+                  type="button"
+                  onClick={() => {
+                    setRegionX(String(suggestion.x));
+                    setRegionY(String(suggestion.y));
+                    setRegionWidth(String(suggestion.width));
+                    setRegionHeight(String(suggestion.height));
+                  }}
+                >
+                  Use suggestion
+                </button>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        {suggestionPageId === selectedPage?.page.id && regionSuggestions.length === 0 && regionSuggestionMessage ? (
+          <p className="text-sm text-slate-400">No draft suggestions to apply yet.</p>
+        ) : null}
         {selectedPage && selectedQuestion ? (
           <p className="rounded border border-emerald-900 bg-emerald-950/20 p-3 text-sm text-emerald-200">
             Currently mapping {formatPageLabel(selectedPage.submission, selectedPage.page)} to Question {selectedQuestion.question_no} ({statusForQuestion(selectedQuestion.id)}).

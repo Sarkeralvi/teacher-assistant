@@ -1,8 +1,10 @@
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
@@ -12,7 +14,12 @@ from app.api.routes.questions import get_question_or_404
 from app.api.routes.submissions import get_submission_or_404
 from app.db.session import get_db
 from app.models import AnswerRegion, Submission, SubmissionPage
-from app.schemas import AnswerRegionCreate, AnswerRegionRead
+from app.schemas import (
+    AnswerRegionCreate,
+    AnswerRegionRead,
+    AnswerRegionSuggestionResponse,
+    DraftAnswerRegionSuggestion,
+)
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.storage import LocalStorage
 
@@ -41,6 +48,53 @@ def get_answer_region_or_404(answer_region_id: int, db: Session) -> AnswerRegion
     if region is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found")
     return region
+
+
+def build_heuristic_answer_region_suggestions(
+    page: SubmissionPage,
+) -> AnswerRegionSuggestionResponse:
+    image_path = LocalStorage().resolve_relative(page.image_path)
+    if not image_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission page image not found",
+        )
+
+    with Image.open(image_path) as image:
+        if image.width < 160 or image.height < 160:
+            return AnswerRegionSuggestionResponse(
+                page_id=page.id,
+                message="Page is too small for a conservative heuristic suggestion.",
+                suggestions=[],
+            )
+
+        margin_x = max(int(image.width * 0.08), 12)
+        margin_y = max(int(image.height * 0.08), 12)
+        width = image.width - (margin_x * 2)
+        height = image.height - (margin_y * 2)
+        if width <= 0 or height <= 0:
+            return AnswerRegionSuggestionResponse(
+                page_id=page.id,
+                message="Heuristic suggestion could not fit within page bounds.",
+                suggestions=[],
+            )
+
+        suggestion = DraftAnswerRegionSuggestion(
+            draft_id=f"page-{page.id}-heuristic-1",
+            x=Decimal(margin_x),
+            y=Decimal(margin_y),
+            width=Decimal(width),
+            height=Decimal(height),
+            confidence=Decimal("0.25"),
+            reason="Conservative full-page band heuristic based on image dimensions.",
+            source="heuristic",
+            needs_teacher_confirmation=True,
+        )
+        return AnswerRegionSuggestionResponse(
+            page_id=page.id,
+            message="Heuristic suggestion generated from page dimensions.",
+            suggestions=[suggestion],
+        )
 
 
 @router.post(
@@ -82,6 +136,15 @@ def create_answer_region(
     db.commit()
     db.refresh(region)
     return region
+
+
+@router.post(
+    "/submission-pages/{page_id}/answer-regions/suggest",
+    response_model=AnswerRegionSuggestionResponse,
+)
+def suggest_answer_regions(page_id: int, db: DbSession) -> AnswerRegionSuggestionResponse:
+    page = get_submission_page_or_404(page_id, db)
+    return build_heuristic_answer_region_suggestions(page)
 
 
 @router.get("/submissions/{submission_id}/answer-regions", response_model=list[AnswerRegionRead])
