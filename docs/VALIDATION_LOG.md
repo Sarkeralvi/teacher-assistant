@@ -305,3 +305,30 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 - Repository state at closeout: clean at commit `6d8e5f1`.
 - No product code changed.
 - No new task was started; this closeout records the completion of TA-W2-008A only.
+
+## TA-W2-011 functional-body validation checkpoint
+
+- Validation scope: full functional-body smoke after the recent core workflow additions.
+- Live checks:
+  - `make up`
+  - `docker compose exec -T backend alembic upgrade head`
+  - `make health`
+  - `make frontend-health`
+  - end-to-end API smoke against the live app
+- Smoke flow evidence:
+  - registered a teacher account
+  - created course and assessment
+  - created question and active rubric
+  - started custom controlled grading run with `marking_policy=tough`
+  - uploaded question/solution/rubric PDFs and confirmed materials
+  - uploaded ZIP with 3 synthetic script submissions
+  - received 1 draft answer-region suggestion from the browser/API suggestion path
+  - verified the suggestion did not persist automatically
+  - created 1 real AnswerRegion from the draft coordinates
+  - verified `grading_ready=true`
+  - ran gated mock grading
+  - verified `GradeSuggestion` creation and `final_grade is None` before teacher action
+  - approved the suggestion manually
+  - exported final grades to XLSX and verified the export row included `marking_policy=tough` and the created `final_grade_id`
+- Final outcome: validation passed; no product code changes were required for this checkpoint.
+- Repository state at closeout: clean after docs updates and commit.

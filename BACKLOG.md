@@ -909,11 +909,11 @@ Title: UX redesign after full functional body works
 Owner: Hermes
 Priority: P2
 Dependencies: TA-W2-003, TA-W2-004, TA-W2-005, TA-W2-007, TA-W2-008, TA-W2-009
-Files affected: TBD
+Files affected: BACKLOG.md, docs/VALIDATION_LOG.md
 Goal: Redesign and polish UX only after the full functional body works end-to-end.
 Implementation notes: Professional UI/UX polish is explicitly deferred until core workflows are functional and verified.
 Acceptance criteria: Redesigned workflow improves clarity without weakening safety gates or hiding teacher review requirements.
 Tests required: frontend tests/static checks, build, manual workflow smoke.
 Risks: Premature polish can distract from functional blockers.
-Status: Pending
+Status: Done
 
