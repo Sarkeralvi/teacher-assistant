@@ -967,5 +967,5 @@ Implementation notes: First reproduce the browser auth flake, then identify whet
 Acceptance criteria: Browser register/login succeeds reliably in the live UI without fallback in the controlled validation path; failure mode is documented if a product-side fix is deferred.
 Tests required: targeted auth flow smoke, frontend checks, backend/API auth tests if changed, git diff --check, and any existing repo checks needed for the touched files.
 Risks: Token persistence and redirect race conditions can create flaky validation results if not handled carefully.
-Status: Pending
+Status: Done
 

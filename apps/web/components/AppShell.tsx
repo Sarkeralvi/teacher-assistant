@@ -38,7 +38,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
             </Link>
             <p className="text-sm text-slate-400">Backend: {API_BASE_URL}</p>
             {currentUser ? (
-              <p className="text-sm text-emerald-300">Current teacher: {currentUser.name} ({currentUser.email})</p>
+              <p data-testid="current-teacher" className="text-sm text-emerald-300">Current teacher: {currentUser.name} ({currentUser.email})</p>
             ) : (
               <p className="text-sm text-amber-200">No teacher logged in.</p>
             )}
@@ -60,7 +60,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
               Register
             </Link>
             {currentUser ? (
-              <button className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" type="button" onClick={() => void handleLogout()}>
+              <button data-testid="logout-button" className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" type="button" onClick={() => void handleLogout()}>
                 Logout
               </button>
             ) : null}

@@ -391,3 +391,35 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 |- Scope: documentation + targeted auth investigation only.
 |- Auth blocker to investigate: browser register/login flakiness that required API registration/token injection fallback.
 |- No product code changed.
+
+## TA-W2-015 — Browser auth flow reliability fix
+
+- Recorded at: 2026-06-01
+- Scope: targeted auth reliability investigation and minimal browser-automation hardening
+- Real Codex calls: 0
+- Product code changes required: yes, minimal
+
+### Root cause
+
+- The browser smoke could hit the auth forms before they were fully hydrated / ready, so the submit action occasionally failed to fire and no `/auth/login` request reached the backend.
+- The issue was on the browser-automation side, not in backend credential handling: `/auth/register`, `/auth/logout`, and `/auth/me` behaved correctly once the form was driven with proper waits.
+
+### Fix applied
+
+- Added stable `data-testid` hooks for the register/login forms, inputs, submit buttons, current-teacher marker, and logout button.
+- Added a small hydration gate so the submit buttons stay disabled until the client has mounted.
+- Updated static workflow coverage to assert the new auth hooks.
+
+### Verification results
+
+|- `make test`: passed (`156 passed`)
+|- `make lint`: passed
+|- `git diff --check`: passed
+|- `npm run build`: passed after restarting the stack cleanly
+|- 3-cycle browser auth smoke: passed end to end
+|- Backend auth logs showed register/logout/me calls; no `/auth/login` request was missing after the wait-based smoke was corrected
+|- Final `git status --short`: clean before commit
+
+### Caveat
+
+|- The auth flow is now reliable for browser validation as long as the smoke waits for the new stable hooks / hydrated submit buttons.

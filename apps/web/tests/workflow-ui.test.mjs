@@ -116,14 +116,40 @@ for (const text of ["Current teacher", "Logout", "Login", "Register", "getCurren
 }
 
 const loginPage = readFileSync(join(root, "app/login/page.tsx"), "utf8");
-for (const text of ["Login", "email", "password", "login(", "setStoredAuthToken", "localStorage", "dev-only"]) {
+for (const text of [
+  "Login",
+  "email",
+  "password",
+  "login(",
+  "setStoredAuthToken",
+  "localStorage",
+  "dev-only",
+  'data-testid="login-form"',
+  'data-testid="login-email-input"',
+  'data-testid="login-password-input"',
+  'data-testid="login-submit-button"',
+]) {
   if (!loginPage.includes(text)) {
     throw new Error(`Login page must include auth marker: ${text}`);
   }
 }
 
 const registerPage = readFileSync(join(root, "app/register/page.tsx"), "utf8");
-for (const text of ["Register", "name", "email", "password", "register(", "setStoredAuthToken", "localStorage", "dev-only"]) {
+for (const text of [
+  "Register",
+  "name",
+  "email",
+  "password",
+  "register(",
+  "setStoredAuthToken",
+  "localStorage",
+  "dev-only",
+  'data-testid="register-form"',
+  'data-testid="register-name-input"',
+  'data-testid="register-email-input"',
+  'data-testid="register-password-input"',
+  'data-testid="register-submit-button"',
+]) {
   if (!registerPage.includes(text)) {
     throw new Error(`Register page must include auth marker: ${text}`);
   }

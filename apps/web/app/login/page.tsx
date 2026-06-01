@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { buttonClass, ErrorState, inputClass } from "../../components/AppShell";
@@ -11,7 +11,12 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,10 +41,10 @@ export default function LoginPage() {
         <p className="mt-2 text-sm text-slate-400">Stores the token in localStorage for this dev-only demo foundation.</p>
       </div>
       {error ? <ErrorState message={error} /> : null}
-      <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
-        <input className={inputClass} name="email" type="email" placeholder="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-        <input className={inputClass} name="password" type="password" placeholder="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-        <button className={buttonClass} disabled={submitting} type="submit">
+      <form data-testid="login-form" onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+        <input data-testid="login-email-input" className={inputClass} name="email" type="email" placeholder="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+        <input data-testid="login-password-input" className={inputClass} name="password" type="password" placeholder="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+        <button data-testid="login-submit-button" className={buttonClass} disabled={submitting || !hydrated} type="submit">
           {submitting ? "Logging in..." : "Login"}
         </button>
       </form>
