@@ -943,3 +943,29 @@ Tests required: focused grading-run tests, frontend workflow test, make test, ma
 Risks: Mode-specific branching can break existing custom controlled flow; keep check constraints and UI labels aligned.
 Status: Done
 
+TASK-ID: TA-W2-014C
+Title: Custom controlled browser validation closeout
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-013
+Files affected: BACKLOG.md, docs/VALIDATION_LOG.md
+Goal: Record the completed TA-W2-014C-final browser validation workflow, including Docker recovery, browser smoke, mock-grade review, teacher approval, XLSX export, and clean repository state.
+Implementation notes: Verified the live Teacher Assistant app after Docker runtime restoration, confirmed the review queue and mock suggestion flow, verified `needs_review=true`, observed manual teacher approval, confirmed XLSX export download, and kept the repo clean. Browser auth was flaky, so API registration plus token injection fallback was used after recording the browser-auth failure. No product code changed.
+Acceptance criteria: TA-W2-014C-final is recorded as complete; browser validation evidence is documented; the auth caveat is captured; no new product task is started from the validation record.
+Tests required: Documentation update only; no code tests required beyond doc sanity checks.
+Risks: None beyond stale status if the closeout record is omitted.
+Status: Done
+
+TASK-ID: TA-W2-015
+Title: Browser auth flow reliability fix
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-014C
+Files affected: apps/web/app/login/page.tsx, apps/web/app/register/page.tsx, apps/web/lib/api.ts, apps/web/components/**, apps/api/app/api/routes/auth.py, apps/api/tests/**, BACKLOG.md
+Goal: Investigate and fix the browser register/login reliability issue that forced API registration plus token injection fallback during TA-W2-014C-final.
+Implementation notes: First reproduce the browser auth flake, then identify whether the issue is form submission, token persistence, redirect timing, or API response handling. Keep the change small and targeted; do not expand scope into unrelated auth features.
+Acceptance criteria: Browser register/login succeeds reliably in the live UI without fallback in the controlled validation path; failure mode is documented if a product-side fix is deferred.
+Tests required: targeted auth flow smoke, frontend checks, backend/API auth tests if changed, git diff --check, and any existing repo checks needed for the touched files.
+Risks: Token persistence and redirect race conditions can create flaky validation results if not handled carefully.
+Status: Pending
+

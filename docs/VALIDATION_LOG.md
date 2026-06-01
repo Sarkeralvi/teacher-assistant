@@ -341,7 +341,53 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 
 ## TA-W2-014A backlog and validation reconciliation
 
-- Reconciled the backlog against committed history after the automation-loop confusion.
-- Confirmed task mapping: TA-W2-009 done (mapping improvement, commit `34ab04b`), TA-W2-010 done (answer-region suggestion prototype, commit `0678709`), TA-W2-011 done (functional-body validation checkpoint, commit `4a9fc9e`), TA-W2-012 reserved/skipped, TA-W2-013 done (semi_automated grading-run mode, commit `2f44f81`).
-- Removed stale/ambiguous backlog wording and restored clean documentation-only status tracking.
-- No product code changed in this reconciliation.
+|- Reconciled the backlog against committed history after the automation-loop confusion.
+|- Confirmed task mapping: TA-W2-009 done (mapping improvement, commit `34ab04b`), TA-W2-010 done (answer-region suggestion prototype, commit `0678709`), TA-W2-011 done (functional-body validation checkpoint, commit `4a9fc9e`), TA-W2-012 reserved/skipped, TA-W2-013 done (semi_automated grading-run mode, commit `2f44f81`).
+|- Removed stale/ambiguous backlog wording and restored clean documentation-only status tracking.
+|- No product code changed in this reconciliation.
+
+## TA-W2-014C-final — Custom controlled browser validation record
+
+- Recorded at: 2026-06-01
+- Validation type: browser smoke + live API verification after Docker runtime restoration
+- Real Codex calls: 0
+- Product code changes required: none
+- Repository state before recording: clean
+
+### Outcome summary
+
+|- Docker available and stack started: yes
+|- Browser smoke completed: yes
+|- Course ID: `5994`
+|- Assessment ID: `5844`
+|- Grading run ID: `701`
+|- Answer region ID: `4181`
+|- Final grade ID: `1864`
+|- Rubric visible/persisted: yes
+|- Answer region visible/persisted: yes
+|- Mock suggestion visible: yes
+|- No FinalGrade before teacher action: yes
+|- Approval/edit worked: yes
+|- XLSX export worked: yes
+|- Export bytes: `5249`
+|- Final git status: clean
+
+### Caveat
+
+|- Browser register/login was flaky, so API registration plus token injection fallback was used after recording the browser-auth failure.
+
+### Verification results
+
+|- `make up`: passed
+|- `docker compose exec -T backend alembic upgrade head`: passed
+|- `make health`: passed
+|- `make frontend-health`: passed
+|- `make down`: passed
+|- Final `git status --short`: clean
+
+## TA-W2-014D — Record custom controlled browser validation and auth blocker
+
+|- Validation-only follow-up task created after TA-W2-014C-final succeeded.
+|- Scope: documentation + targeted auth investigation only.
+|- Auth blocker to investigate: browser register/login flakiness that required API registration/token injection fallback.
+|- No product code changed.
