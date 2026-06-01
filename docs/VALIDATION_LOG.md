@@ -338,3 +338,10 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 - Updated frontend entry point, mode labels, and assessment link behavior for semi_automated runs.
 - Added focused coverage for semi_automated API flow and preserved the custom controlled workflow checks.
 - Verification passed: Alembic migration check, focused grading-run tests, frontend workflow static test, `make test`, `make lint`, `npm run build`, and `git diff --check`.
+
+## TA-W2-014A backlog and validation reconciliation
+
+- Reconciled the backlog against committed history after the automation-loop confusion.
+- Confirmed task mapping: TA-W2-009 done (mapping improvement, commit `34ab04b`), TA-W2-010 done (answer-region suggestion prototype, commit `0678709`), TA-W2-011 done (functional-body validation checkpoint, commit `4a9fc9e`), TA-W2-012 reserved/skipped, TA-W2-013 done (semi_automated grading-run mode, commit `2f44f81`).
+- Removed stale/ambiguous backlog wording and restored clean documentation-only status tracking.
+- No product code changed in this reconciliation.

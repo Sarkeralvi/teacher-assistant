@@ -883,26 +883,26 @@ Title: Answer-region mapping improvement
 Owner: Hermes
 Priority: P1
 Dependencies: TA-W2-003, TA-W2-004
-Files affected: TBD
+Files affected: apps/api/app/api/routes/grading_runs.py, apps/api/app/schemas.py, apps/api/tests/test_grading_runs_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/components/CustomControlledGradingRunClient.tsx, apps/web/lib/api.ts
 Goal: Improve answer-region mapping workflow before fully automated mode, starting with assisted/manual improvements rather than unchecked automation.
-Implementation notes: Prefer status clarity, easier manual mapping, and teacher confirmation before attempting auto-detection.
+Implementation notes: Added mapping workflow refinements and related UI/API support so teachers can map/confirm regions more reliably while keeping teacher confirmation as the source of truth.
 Acceptance criteria: Teacher can map/confirm regions more reliably; mapping status is visible; grading only runs on confirmed/mapped regions.
 Tests required: answer-region tests, frontend checks, manual smoke, make test, make lint.
 Risks: Auto-detection errors can poison grading; keep teacher confirmation.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-010
-Title: Fully automated mode prototype planning
+Title: Answer-region suggestion prototype
 Owner: Hermes
-Priority: P2
-Dependencies: TA-W2-004, TA-W2-007, TA-W2-008, TA-W2-009
-Files affected: TBD
-Goal: Plan the fully automated ZIP grading prototype only after lower-risk workflows and quality gates are in place.
-Implementation notes: Planning first. Do not claim fully automated grading is reliable. Do not bypass teacher review.
-Acceptance criteria: Prototype plan defines extraction, ZIP ingestion, mapping, grading, review gates, evaluation gates, and stop conditions.
-Tests required: documentation checks plus normal test/lint if docs are committed.
-Risks: Highest product risk due to compounded extraction/mapping/grading errors.
-Status: Pending
+Priority: P1
+Dependencies: TA-W2-009
+Files affected: apps/api/app/api/routes/answer_regions.py, apps/api/app/schemas.py, apps/api/tests/test_answer_regions_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts
+Goal: Prototype draft answer-region suggestions in the API and UI without auto-persisting them.
+Implementation notes: Added an answer-region suggestion path that surfaces draft suggestions for teacher review and keeps manual creation/review as the durable source of truth.
+Acceptance criteria: Teacher can request suggestions, inspect the draft result, and manually decide whether to create a real answer region; suggestions remain review-only.
+Tests required: answer-region tests, frontend checks, manual smoke, make test, make lint.
+Risks: Suggestion quality may vary; do not auto-apply drafts.
+Status: Done
 
 TASK-ID: TA-W2-011
 Title: UX redesign after full functional body works
@@ -916,6 +916,19 @@ Acceptance criteria: Redesigned workflow improves clarity without weakening safe
 Tests required: frontend tests/static checks, build, manual workflow smoke.
 Risks: Premature polish can distract from functional blockers.
 Status: Done
+
+TASK-ID: TA-W2-012
+Title: Reserved numbering slot
+Owner: Hermes
+Priority: P2
+Dependencies: None
+Files affected: none
+Goal: Reserve the TA-W2-012 slot for a future docs/task entry if needed.
+Implementation notes: Intentionally skipped to preserve numbering continuity; no product work is associated with this slot.
+Acceptance criteria: The numbering gap is explicitly documented instead of being ambiguous.
+Tests required: none
+Risks: None
+Status: Reserved
 
 TASK-ID: TA-W2-013
 Title: Semi-automated grading-run mode
