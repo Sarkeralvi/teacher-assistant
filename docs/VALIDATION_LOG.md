@@ -297,3 +297,11 @@ Enable and validate image input for exactly one browser/backend Codex grading sm
 ### Known issue / observation
 
 This validates one synthetic image-input path and mandatory teacher review. It does not validate grading quality on real handwriting, batch grading, fully automated grading, voice command, or TA-W1-038.
+
+## TA-W2-008A browser validation closeout
+
+- Assessment / branch: `#5242 / Demo Midterm Review`
+- Browser validation confirmed: mock-grade flow reached a suggestion, `needs_review=true` was verified, teacher approval was completed manually, and XLSX export succeeded.
+- Repository state at closeout: clean at commit `6d8e5f1`.
+- No product code changed.
+- No new task was started; this closeout records the completion of TA-W2-008A only.

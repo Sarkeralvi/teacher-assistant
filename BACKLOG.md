@@ -865,6 +865,19 @@ Tests required: guardrail tests, provider-error tests, capped smoke only if appr
 Risks: Cost/quota, provider errors, and quality risk.
 Status: Pending
 
+TASK-ID: TA-W2-008A
+Title: TA-W2-008A browser validation closeout
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-008
+Files affected: BACKLOG.md, docs/VALIDATION_LOG.md
+Goal: Record the completed TA-W2-008A browser validation workflow, including mock-grade review, teacher approval, XLSX export, and clean repository state.
+Implementation notes: Verified the live Teacher Assistant app at assessment #5242 / Demo Midterm Review, confirmed the review queue and mock suggestion flow, verified `needs_review=true`, observed manual teacher approval, confirmed XLSX export download, and kept the repo clean at commit `6d8e5f1`. No product code changed.
+Acceptance criteria: TA-W2-008A is recorded as complete; browser validation evidence is documented; no auto-finalization is claimed; no new product task is started.
+Tests required: Documentation update only; no code tests required.
+Risks: None beyond stale status if the closeout record is omitted.
+Status: Done
+
 TASK-ID: TA-W2-009
 Title: Answer-region mapping improvement
 Owner: Hermes
