@@ -12,6 +12,8 @@ import {
   getAssessmentFinalGradesExportUrl,
   gradeGradingRunReadyRegionsMock,
   listAssessmentGradingRuns,
+  listQuestions,
+  listRubrics,
   updateGradingRun,
   uploadGradingRunMaterials,
   type Assessment,
@@ -19,6 +21,8 @@ import {
   type GradingRun,
   type GradingRunWorkflowState,
   type MarkingPolicy,
+  type Question,
+  type Rubric,
 } from "../lib/api";
 
 const workflowSteps = [
@@ -105,6 +109,7 @@ export function CustomControlledGradingRunClient({
 }: Readonly<{ assessmentId: number; mode?: "custom_controlled" | "semi_automated" }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [gradingRuns, setGradingRuns] = useState<GradingRun[]>([]);
+  const [canonicalUnits, setCanonicalUnits] = useState<Array<{ question: Question; activeRubrics: Rubric[] }>>([]);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("draft");
@@ -131,12 +136,18 @@ export function CustomControlledGradingRunClient({
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, runData] = await Promise.all([
+      const [assessmentData, runData, questionData] = await Promise.all([
         getAssessment(assessmentId),
         listAssessmentGradingRuns(assessmentId),
+        listQuestions(assessmentId),
       ]);
+      const rubricData = await Promise.all(questionData.map(async (question) => ({
+        question,
+        activeRubrics: (await listRubrics(question.id)).filter((rubric) => rubric.is_active),
+      })));
       setAssessment(assessmentData);
       setGradingRuns(runData);
+      setCanonicalUnits(rubricData);
       const preferredRun = runData.find((run) => run.id === selectedRunId) ?? runData[0] ?? null;
       setSelectedRunId(preferredRun?.id ?? null);
       setStatus(preferredRun?.status ?? "draft");
@@ -414,6 +425,33 @@ export function CustomControlledGradingRunClient({
             ? "Upload a question paper on the assessment page, generate drafts, and confirm them here."
             : "Create or edit canonical questions/model answers/rubrics on the assessment page, then confirm them here."}
         </p>
+        <div data-testid="canonical-grading-unit-table" className="overflow-x-auto rounded border border-slate-800">
+          <table className="min-w-full text-left text-sm">
+            <thead className="text-slate-300">
+              <tr>
+                <th className="p-2">label</th>
+                <th className="p-2">max marks</th>
+                <th className="p-2">model answer/rubric present</th>
+                <th className="p-2">active rubric present</th>
+                <th className="p-2">grading unit type</th>
+              </tr>
+            </thead>
+            <tbody>
+              {canonicalUnits.length === 0 ? (
+                <tr><td className="p-2 text-amber-200" colSpan={5}>No canonical grading units yet.</td></tr>
+              ) : canonicalUnits.map(({ question, activeRubrics }) => (
+                <tr key={question.id} className="border-t border-slate-800">
+                  <td className="p-2 font-medium">{question.question_no}</td>
+                  <td className="p-2">{question.total_marks}</td>
+                  <td className="p-2">{question.model_answer ? "model answer present" : "model answer missing"} / {activeRubrics.length > 0 ? "rubric present" : "rubric missing"}</td>
+                  <td className="p-2">{activeRubrics.length > 0 ? "yes" : "no"}</td>
+                  <td className="p-2">{gradingUnitType(question.question_no)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-sm text-amber-200">Founder/teacher must verify this canonical grading-unit table before grading. Labels like 1(a)(i) and max marks must match the paper/rubric.</p>
         <div className="flex flex-wrap gap-3">
           <Link className={buttonClass} href={`/assessments/${assessmentId}`}>
             {isSemiAutomated ? "Open assessment page for draft review" : "Confirm or create questions/rubrics, upload scripts, create answer regions manually, run mock grading"}
@@ -491,6 +529,11 @@ export function CustomControlledGradingRunClient({
       </section>
     </div>
   );
+}
+
+function gradingUnitType(questionNo: string): string {
+  const parentheticalCount = (questionNo.match(/\(/g) ?? []).length;
+  return parentheticalCount >= 2 ? "subpart" : "whole sub-question";
 }
 
 function MockGradingResultPanel({ result }: Readonly<{ result: BatchMockGradeResponse }>) {

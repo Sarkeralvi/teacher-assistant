@@ -115,7 +115,7 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     assessment = assessment_response.json()
     question_response = client.post(
         f"/assessments/{assessment['id']}/questions",
-        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+        json={"question_no": "1(a)(i)", "question_text": "Explain.", "total_marks": "5.00"},
     )
     assert question_response.status_code == 201
     question = question_response.json()
@@ -476,6 +476,8 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "student_name",
         "question_id",
         "question_no",
+        "grading_unit_label",
+        "grading_unit_max_marks",
         "answer_region_id",
         "grade_suggestion_id",
         "final_grade_id",
@@ -491,6 +493,9 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "feedback_to_student",
     ]
     exported_text = " ".join(str(cell) for row in rows for cell in row if cell is not None)
+    first_row = dict(zip(headers, rows[1], strict=True))
+    assert first_row["grading_unit_label"] == "1(a)(i)"
+    assert first_row["grading_unit_max_marks"] == 5
     assert "approved" in exported_text
     assert "edited" in exported_text
     assert "rejected" in exported_text

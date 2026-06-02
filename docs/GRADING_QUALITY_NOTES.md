@@ -1,5 +1,22 @@
 # Grading Quality Notes
 
+## TA-W2-022C — Canonical grading-unit correction before real retest
+
+Recorded at: 2026-06-02T21:06:01+06:00
+
+### Finding
+
+TA-W2-022B's founder real-document rehearsal must not be treated as grading-quality evidence. The real grading calls were made against an ambiguous/wrong canonical setup: reported labels like `2(a)(i)`, `2(b)(i)`, and `2(c)(i)` did not match the founder-confirmed material, which is Question 1.
+
+### Correct structure to use before any real retest
+
+- Whole sub-question totals: `1(a)=10`, `1(b)=12`, `1(c)=13`.
+- Subpart totals: `1(a)(i)=6`, `1(a)(ii)=4`, `1(b)(i)=6`, `1(b)(ii)=6`, `1(c)(i)=5`, `1(c)(ii)=4`, `1(c)(iii)=4`.
+
+### Rule for future quality runs
+
+A real grading run is not quality-evaluable unless the canonical grading-unit table is explicitly confirmed first and the run clearly states whether it is grading a whole sub-question (`1(a)`) or a subpart (`1(a)(i)`) with the correct max marks.
+
 ## TA-W2-019 — Marking policy calibration prompt and harness update
 
 Recorded at: 2026-06-02T08:00:00+06:00

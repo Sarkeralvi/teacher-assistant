@@ -38,6 +38,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Browser-backend Codex dev grading smoke exists behind explicit gate.
 - Teacher review / finalization / export flows exist.
 - Batch mock grading exists.
+- Canonical grading-unit labels such as `1(a)(i)` are supported through flat Question rows and must be confirmed with max marks before real grading.
 - Selected batch approval exists.
 - Evaluation harnesses exist for question import and grading-related flows.
 
@@ -77,6 +78,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Privacy baseline documentation and an owner-only assessment test-data deletion endpoint now exist for internal/founder testing.
 - Codex CLI is useful for internal validation, but it is not the scalable production runtime.
 - Broad real-document validation is not yet approved.
+- TA-W2-022B founder real-document grading rehearsal is invalidated for quality evaluation because canonical question labels/max marks were wrong or ambiguous.
 - Batch real Codex remains out of scope.
 
 ## Expert-review synthesis
@@ -123,6 +125,7 @@ Important correction from later validation:
 - Requires explicit founder approval for the exact private documents/pages/regions.
 
 ### Day 7
+- TA-W2-022C: canonical grading-unit confirmation before any real grading retest.
 - Optional follow-up hardening based on founder rehearsal findings.
 - Limit to 3–5 selected pages/regions only.
 - No batch.
@@ -133,13 +136,15 @@ Important correction from later validation:
 2. TA-W2-020: Playwright E2E smoke suite
 3. TA-W2-021: Mode gating / ghost-mode clarity
 4. TA-W2-022A: Privacy baseline documentation and deletion endpoint — completed
-5. Controlled founder real-document AI loop validation
+5. TA-W2-022C: canonical grading-unit confirmation — in progress
+6. Controlled founder real-document AI loop validation rerun only after canonical units are confirmed
 
 ## Gates before teacher pilot
 - Marking policy calibration shows the expected ordering and usable deltas.
 - E2E smoke coverage passes for auth and core custom-controlled flow.
 - Mode naming and gating are not misleading.
 - Privacy baseline is documented and deletion behavior exists for internal/local assessment test data.
+- Canonical grading units are confirmed with label, max marks, active rubric, and unit type before real grading.
 - No auto-finalization is possible.
 - Teacher approval remains required for finalization.
 - Draft suggestions and grading suggestions remain review-required.

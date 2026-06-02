@@ -367,6 +367,10 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   );
 }
 
+function formatReviewQuestion(question: ReviewQueueItem["question"]): string {
+  return `${question.question_no} · out of ${question.total_marks}`;
+}
+
 function BatchResultPanel({ result }: Readonly<{ result: BatchMockGradeResponse }>) {
   return (
     <section className="rounded border border-cyan-800 bg-cyan-950/20 p-5 text-sm text-cyan-100">
@@ -483,7 +487,7 @@ function ReviewCard({
         <div>
           <p className="text-xs uppercase tracking-wide text-slate-500">Review item overview</p>
           <h2 className="mt-1 text-xl font-semibold">
-            Submission {item.submission.student_identifier} · Question {item.question.question_no}
+            Submission {item.submission.student_identifier} · {formatReviewQuestion(item.question)}
           </h2>
           <p className="text-sm text-slate-400">{item.submission.student_name || "Unnamed student"}</p>
         </div>
@@ -506,7 +510,8 @@ function ReviewCard({
 
       <div className="grid gap-3 rounded border border-slate-800 p-3 text-sm md:grid-cols-5">
         <SummaryMetric label="student_identifier" value={item.submission.student_identifier} />
-        <SummaryMetric label="question number" value={item.question.question_no} />
+        <SummaryMetric label="grading unit" value={formatReviewQuestion(item.question)} />
+        <SummaryMetric label="grading unit max marks" value={item.question.total_marks} />
         <SummaryMetric label="review status" value={status.label} />
         <SummaryMetric label="AI/mock score" value={scoreText} />
         <SummaryMetric label="Final score if finalized" value={finalScoreText} />

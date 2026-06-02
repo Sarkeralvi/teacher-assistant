@@ -1,5 +1,18 @@
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+const CONFIGURED_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? null;
+
+export const API_BASE_URL = CONFIGURED_API_BASE_URL ?? "http://localhost:8000";
+
+function resolveApiBaseUrl() {
+  if (typeof window !== "undefined" && window.location.hostname === "host.docker.internal") {
+    if (!CONFIGURED_API_BASE_URL || CONFIGURED_API_BASE_URL.includes("//localhost")) {
+      return "http://host.docker.internal:8000";
+    }
+  }
+  if (CONFIGURED_API_BASE_URL) {
+    return CONFIGURED_API_BASE_URL;
+  }
+  return API_BASE_URL;
+}
 
 export type User = {
   id: number;
@@ -379,7 +392,7 @@ type RequestOptions = {
 export const UPLOAD_AUTH_ERROR_MESSAGE = "Please log in again before uploading materials.";
 
 export function backendUnreachableMessage() {
-  return `Could not reach backend at ${API_BASE_URL}. Check backend server.`;
+  return `Could not reach backend at ${resolveApiBaseUrl()}. Check backend server.`;
 }
 
 async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -394,7 +407,7 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${resolveApiBaseUrl()}${path}`, {
       method: options.method ?? "GET",
       headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: hasJsonBody ? JSON.stringify(options.body) : options.formData,
@@ -697,7 +710,7 @@ export function deleteSubmission(assessmentId: number, submissionId: number) {
 }
 
 export function getSubmissionPageImageUrl(pageId: number) {
-  return `${API_BASE_URL}/submission-pages/${pageId}/image`;
+  return `${resolveApiBaseUrl()}/submission-pages/${pageId}/image`;
 }
 
 export function createAnswerRegion(pageId: number, payload: AnswerRegionCreate) {
@@ -724,7 +737,7 @@ export function listAssessmentAnswerRegions(assessmentId: number, questionId?: n
 }
 
 export function getAnswerRegionImageUrl(answerRegionId: number) {
-  return `${API_BASE_URL}/answer-regions/${answerRegionId}/image`;
+  return `${resolveApiBaseUrl()}/answer-regions/${answerRegionId}/image`;
 }
 
 
@@ -818,5 +831,5 @@ export function getAssessmentSummary(assessmentId: number) {
 }
 
 export function getAssessmentFinalGradesExportUrl(assessmentId: number) {
-  return `${API_BASE_URL}/assessments/${assessmentId}/export/final-grades.xlsx`;
+  return `${resolveApiBaseUrl()}/assessments/${assessmentId}/export/final-grades.xlsx`;
 }

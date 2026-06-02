@@ -1,5 +1,48 @@
 # Validation Log
 
+## TA-W2-022C — Canonical grading-unit confirmation
+
+- Recorded at: 2026-06-02T21:06:01+06:00
+- Baseline commit: `58a52c85a27d5199eab29555dbd1bfa89dd486e6`
+- Workflow type: canonical grading-unit setup hardening + synthetic tests
+- Real Codex calls: 0
+- Provider used: mock/synthetic only
+- Data policy: no private files committed; founder material structure recorded as text only
+- Product code changes required: yes
+
+### Root-cause finding
+
+TA-W2-022B is invalid for grading-quality evaluation because the canonical grading units were ambiguous/wrong. The rehearsal used/report labels like `2(a)(i)`, `2(b)(i)`, and `2(c)(i)` even though the founder-confirmed material answers Question 1. This was primarily a manual setup error by Hermes, enabled by UI ambiguity and the absence of a required canonical grading-unit confirmation table. The existing schema could store labels such as `1(a)(i)`, so the core issue was not a schema inability.
+
+### Correct founder material structure to confirm before any future real grading
+
+- Whole sub-question totals: `1(a)=10`, `1(b)=12`, `1(c)=13`.
+- Subpart rubric totals: `1(a)(i)=6`, `1(a)(ii)=4`, `1(b)(i)=6`, `1(b)(ii)=6`, `1(c)(i)=5`, `1(c)(ii)=4`, `1(c)(iii)=4`.
+- Future real grading must first confirm whether the unit is a whole sub-question (`1(a)`) or a subpart (`1(a)(i)`) and must show the matching max marks.
+
+### Coverage added
+
+- Backend validates duplicate canonical grading-unit labels per assessment on direct question creation/update and accepted import drafts.
+- Custom Controlled run page now displays a canonical grading-unit confirmation table with label, max marks, model answer/rubric status, active-rubric status, and whole-sub-question/subpart classification.
+- Answer-region selector/cards and review queue show grading-unit label plus max marks.
+- Final-grade XLSX export includes `grading_unit_label` and `grading_unit_max_marks`.
+- E2E synthetic fixture now uses `1(a)(i)` out of 6 to protect subpart label handling.
+
+### Runtime and test results
+
+- Focused backend tests: `24 passed`.
+- Full backend tests via `make test`: `173 passed`.
+- Frontend static workflow test: passed.
+- `make e2e`: passed, 2/2 Playwright smoke tests.
+- `make lint`: passed.
+- `cd apps/web && npm run build`: passed; Next still reports the existing ESLint flat-config warning during build.
+- `git diff --check`: passed.
+
+### Notes
+
+- No new real grading was run in TA-W2-022C.
+- No FinalGrade auto-finalization behavior was added.
+
 ## TA-W2-022A — Privacy baseline and deletion workflow
 
 - Recorded at: 2026-06-02T18:51:31+06:00

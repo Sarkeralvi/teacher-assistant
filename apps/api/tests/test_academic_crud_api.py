@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
@@ -53,8 +54,15 @@ def db_session() -> Iterator[Session]:
 
 
 @pytest.fixture()
-def client(db_session: Session) -> TestClient:
-    return TestClient(app)
+def client(db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    get_settings.cache_clear()
+    monkeypatch.setenv("LOCAL_STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("UPLOADS_DIR", str(tmp_path / "storage" / "uploads"))
+    monkeypatch.setenv("ARTIFACTS_DIR", str(tmp_path / "storage" / "artifacts"))
+    try:
+        yield TestClient(app)
+    finally:
+        get_settings.cache_clear()
 
 
 def create_user(client: TestClient, email: str = "teacher@example.com") -> dict[str, object]:
@@ -118,6 +126,118 @@ def valid_rubric_json() -> dict[str, object]:
             }
         ],
     }
+
+
+def test_create_canonical_grading_unit_supports_subpart_labels_and_rejects_duplicates(
+    client: TestClient,
+) -> None:
+    teacher = create_user(client, email="canonical@example.com")
+    course = create_course(client, int(teacher["id"]))
+    assessment = create_assessment(client, int(course["id"]))
+
+    first = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={
+            "question_no": " 1(a)(i) ",
+            "question_text": "Probability subpart.",
+            "model_answer": "Synthetic model answer.",
+            "total_marks": "6.00",
+        },
+    )
+    duplicate = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={
+            "question_no": "1(a)(i)",
+            "question_text": "Duplicate label.",
+            "total_marks": "6.00",
+        },
+    )
+
+    assert first.status_code == 201
+    assert first.json()["question_no"] == "1(a)(i)"
+    assert first.json()["total_marks"] == "6.00"
+    assert duplicate.status_code == 409
+    assert "Canonical grading unit label already exists" in duplicate.json()["detail"]
+
+
+def test_update_canonical_grading_unit_rejects_duplicate_label(client: TestClient) -> None:
+    teacher = create_user(client, email="canonical-update@example.com")
+    course = create_course(client, int(teacher["id"]))
+    assessment = create_assessment(client, int(course["id"]))
+    first = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={"question_no": "1(a)(i)", "question_text": "A", "total_marks": "6.00"},
+    ).json()
+    second = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={"question_no": "1(a)(ii)", "question_text": "B", "total_marks": "4.00"},
+    ).json()
+
+    response = client.patch(
+        f"/questions/{second['id']}", json={"question_no": first["question_no"]}
+    )
+
+    assert response.status_code == 409
+    assert "Canonical grading unit label already exists" in response.json()["detail"]
+
+
+def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
+    client: TestClient, tmp_path
+) -> None:
+    teacher = create_user(client, email="canonical-region@example.com")
+    course = create_course(client, int(teacher["id"]))
+    assessment = create_assessment(client, int(course["id"]))
+    question = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={
+            "question_no": "1(b)(i)",
+            "question_text": "Synthetic statistics subpart.",
+            "model_answer": "Synthetic answer.",
+            "total_marks": "6.00",
+        },
+    ).json()
+    rubric = client.post(
+        f"/questions/{question['id']}/rubrics",
+        json={
+            "version": 1,
+            "is_active": True,
+            "rubric_json": {
+                "total_marks": "6.00",
+                "criteria": [
+                    {
+                        "id": "method",
+                        "name": "Method",
+                        "description": "Correct method.",
+                        "max_marks": "6.00",
+                    }
+                ],
+            },
+        },
+    )
+    image_path = tmp_path / "synthetic-answer.png"
+    from PIL import Image
+
+    Image.new("RGB", (100, 80), color="white").save(image_path, format="PNG")
+    with image_path.open("rb") as file_obj:
+        submission = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload",
+            data={"student_identifier": "SYN-001"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        ).json()
+    region = client.post(
+        f"/submission-pages/{submission['pages'][0]['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
+    ).json()
+    suggestion = client.post(f"/answer-regions/{region['id']}/grade").json()["suggestion"]
+    review = client.get(f"/assessments/{assessment['id']}/review-queue").json()[0]
+
+    assert rubric.status_code == 201
+    assert region["question_id"] == question["id"]
+    assert suggestion["question_id"] == question["id"]
+    assert suggestion["max_score"] == "6.00"
+    assert review["question"]["question_no"] == "1(b)(i)"
+    assert review["question"]["total_marks"] == "6.00"
+    assert review["final_grade"] is None
 
 
 def test_create_user_response_excludes_password_hash(client: TestClient) -> None:

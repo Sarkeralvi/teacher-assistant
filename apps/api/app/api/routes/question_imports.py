@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -115,16 +116,17 @@ def accept_question_import(
 ) -> QuestionImportAcceptResponse:
     job = get_question_import_or_404(job_id, db)
     known_draft_ids = {str(draft.get("draft_id")) for draft in job.draft_questions}
-    questions = [
-        create_question_from_draft(job.assessment_id, draft)
-        for draft in payload.draft_questions
-    ]
     for draft in payload.draft_questions:
         if draft.draft_id not in known_draft_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Draft question {draft.draft_id} does not belong to this import job",
             )
+    ensure_unique_question_labels(job.assessment_id, payload.draft_questions, db)
+    questions = [
+        create_question_from_draft(job.assessment_id, draft)
+        for draft in payload.draft_questions
+    ]
     db.add_all(questions)
     job.status = "accepted"
     db.commit()
@@ -144,10 +146,41 @@ def get_question_import_or_404(job_id: int, db: Session) -> QuestionImportJob:
     return job
 
 
+def ensure_unique_question_labels(
+    assessment_id: int, drafts: list[DraftQuestionAccept], db: Session
+) -> None:
+    labels = [draft.question_no.strip() for draft in drafts]
+    duplicate_payload_labels = sorted({label for label in labels if labels.count(label) > 1})
+    if duplicate_payload_labels:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Duplicate canonical grading unit labels in accepted drafts: "
+                + ", ".join(duplicate_payload_labels)
+            ),
+        )
+    existing_labels = set(
+        db.scalars(
+            select(Question.question_no).where(
+                Question.assessment_id == assessment_id,
+                Question.question_no.in_(labels),
+            )
+        ).all()
+    )
+    if existing_labels:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Canonical grading unit label already exists in this assessment: "
+                + ", ".join(sorted(existing_labels))
+            ),
+        )
+
+
 def create_question_from_draft(assessment_id: int, draft: DraftQuestionAccept) -> Question:
     return Question(
         assessment_id=assessment_id,
-        question_no=draft.question_no,
+        question_no=draft.question_no.strip(),
         question_text=draft.question_text,
         model_answer=draft.model_answer,
         total_marks=draft.total_marks,

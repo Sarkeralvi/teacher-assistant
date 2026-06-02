@@ -779,7 +779,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         ) : null}
         {selectedPage && selectedQuestion ? (
           <p className="rounded border border-emerald-900 bg-emerald-950/20 p-3 text-sm text-emerald-200">
-            Currently mapping {formatPageLabel(selectedPage.submission, selectedPage.page)} to Question {selectedQuestion.question_no} ({statusForQuestion(selectedQuestion.id)}).
+            Currently mapping {formatPageLabel(selectedPage.submission, selectedPage.page)} to grading unit {formatQuestionOption(selectedQuestion)} ({statusForQuestion(selectedQuestion.id)}).
           </p>
         ) : null}
         {!loading && questions.length === 0 ? (
@@ -803,7 +803,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <select data-testid="answer-region-question-select" className={inputClass} value={selectedQuestionId} onChange={(event) => setSelectedQuestionId(event.target.value)} required>
             <option value="">Select question</option>
             {questions.map((question) => (
-              <option key={question.id} value={question.id}>Question {question.question_no} · {statusForQuestion(question.id)}</option>
+              <option key={question.id} value={question.id}>{formatQuestionOption(question)} · {statusForQuestion(question.id)}</option>
             ))}
           </select>
         </label>
@@ -836,7 +836,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   </span>
                 </span>
                 <span className="mt-1 block text-xs text-slate-500">
-                  Question {linkedQuestion?.question_no ?? region.question_id} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
+                  {linkedQuestion ? formatQuestionOption(linkedQuestion) : `Question ${region.question_id}`} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
                 </span>
                 <span className="block text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</span>
                 <span className="block text-xs text-cyan-300 underline">Open crop preview · Cropped image</span>
@@ -955,14 +955,27 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <div className="grid gap-3">
         {questions.map((question) => (
           <Link key={question.id} href={`/questions/${question.id}`} className="rounded border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700">
-            <h2 className="text-lg font-semibold">Question {question.question_no}</h2>
-            <p className="text-sm text-slate-400">{question.total_marks} marks</p>
+            <h2 className="text-lg font-semibold">Grading unit {question.question_no}</h2>
+            <p className="text-sm text-slate-400">{question.total_marks} marks · {gradingUnitType(question.question_no)}</p>
             <p className="mt-2 line-clamp-2 text-slate-300">{question.question_text}</p>
           </Link>
         ))}
       </div>
     </div>
   );
+}
+
+function gradingUnitType(questionNo: string): string {
+  const parentheticalCount = (questionNo.match(/\(/g) ?? []).length;
+  return parentheticalCount >= 2 ? "subpart grading unit" : "whole sub-question grading unit";
+}
+
+function formatQuestionOption(question: Question): string {
+  return `${question.question_no} — ${question.total_marks} marks`;
+}
+
+function formatReviewQuestion(question: ReviewQueueItem["question"]): string {
+  return `${question.question_no} · out of ${question.total_marks}`;
 }
 
 function ReviewQueueCard({
@@ -989,8 +1002,8 @@ function ReviewQueueCard({
     <article className="grid gap-4 rounded border border-slate-700 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="font-semibold">Submission {item.submission.student_identifier} · Question {item.question.question_no}</h3>
-          <p className="text-sm text-slate-400">Review status: {item.review_status}</p>
+          <h3 className="font-semibold">Submission {item.submission.student_identifier} · {formatReviewQuestion(item.question)}</h3>
+          <p className="text-sm text-slate-400">Review status: {item.review_status} · out of {item.question.total_marks}</p>
         </div>
         <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
           Open cropped answer image

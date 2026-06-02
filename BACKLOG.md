@@ -1060,3 +1060,29 @@ Tests required: targeted endpoint/docs checks plus repo checks for touched files
 Risks: This is still an internal/local privacy baseline only; real teacher/private-document rehearsal still requires founder approval and careful scope limits.
 Status: Done
 
+
+TASK-ID: TA-W2-022B
+Title: Founder real-document grading rehearsal
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-022A
+Files affected: none committed
+Goal: Run a small founder-approved real-document rehearsal under manual controlled constraints.
+Implementation notes: Ran 3 real Codex grading calls on founder-approved local reference material, but the quality evaluation is invalidated because canonical grading units were set up ambiguously/wrongly as Question 2-style labels while the founder-confirmed paper answers Question 1.
+Acceptance criteria: Superseded by TA-W2-022C; do not use this rehearsal as grading-quality evidence.
+Tests required: N/A for committed code.
+Risks: Wrong question labels/max marks make real grading meaningless.
+Status: Invalidated
+
+TASK-ID: TA-W2-022C
+Title: Canonical grading unit confirmation
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-022B
+Files affected: apps/api/app/api/routes/questions.py, apps/api/app/api/routes/question_imports.py, apps/api/app/services/final_grade_service.py, apps/api/tests/**, apps/web/components/**, apps/web/e2e/support.ts, docs/**, BACKLOG.md
+Goal: Prevent wrong question/rubric setup before real grading by supporting explicit canonical grading-unit labels/max marks and showing a founder/teacher confirmation table.
+Implementation notes: Use a flat grading-unit representation via existing Question rows (`question_no` as labels such as `1(a)(i)`, `total_marks` as max marks). Add duplicate-label validation, label+marks display in answer-region/review/export surfaces, and a canonical confirmation table before questions/rubrics are confirmed. No real Codex.
+Acceptance criteria: Labels like `1(a)(i)` are supported, duplicate labels in one assessment are rejected, answer-region and review surfaces show label + max marks, export includes label/max marks, no FinalGrade is auto-created, and E2E mock flow still asserts teacher approval gating.
+Tests required: focused backend grading-unit/export tests, frontend static workflow test, make e2e, make test, make lint, frontend build, git diff checks.
+Risks: This is still a flat model; a richer hierarchy can wait until the product needs it.
+Status: Done

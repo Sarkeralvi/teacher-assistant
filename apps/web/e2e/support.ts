@@ -39,19 +39,32 @@ async function setInputValue(page: Page, testId: string, value: string) {
   await page.getByTestId(testId).fill(value);
 }
 
+async function fillAuthFormAndSubmit(
+  page: Page,
+  fields: Array<Readonly<{ testId: string; value: string }>>,
+  submitTestId: string,
+) {
+  await expect(page.getByTestId(submitTestId)).toBeEnabled();
+  for (const field of fields) {
+    await setInputValue(page, field.testId, field.value);
+    await expect(page.getByTestId(field.testId)).toHaveValue(field.value);
+  }
+  await page.getByTestId(submitTestId).click();
+  await expect(page).toHaveURL(/\/courses(?:\?.*)?$/, { timeout: 20000 });
+}
+
 export async function registerTeacherViaBrowser(page: Page, credentials: TeacherCredentials) {
   await page.goto("/register", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("register-form")).toBeVisible();
-  await page.waitForTimeout(500);
-  await setInputValue(page, "register-name-input", credentials.name);
-  await expect(page.getByTestId("register-name-input")).toHaveValue(credentials.name);
-  await setInputValue(page, "register-email-input", credentials.email);
-  await expect(page.getByTestId("register-email-input")).toHaveValue(credentials.email);
-  await setInputValue(page, "register-password-input", credentials.password);
-  await expect(page.getByTestId("register-password-input")).toHaveValue(credentials.password);
-  await expect(page.getByTestId("register-submit-button")).toBeEnabled();
-  await page.getByTestId("register-submit-button").click();
-  await expect(page).toHaveURL(/\/courses(?:\?.*)?$/);
+  await fillAuthFormAndSubmit(
+    page,
+    [
+      { testId: "register-name-input", value: credentials.name },
+      { testId: "register-email-input", value: credentials.email },
+      { testId: "register-password-input", value: credentials.password },
+    ],
+    "register-submit-button",
+  );
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.name);
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
 }
@@ -65,13 +78,14 @@ export async function logoutViaBrowser(page: Page) {
 export async function loginTeacherViaBrowser(page: Page, credentials: TeacherCredentials) {
   await page.goto("/login", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("login-form")).toBeVisible();
-  await page.waitForTimeout(500);
-  await setInputValue(page, "login-email-input", credentials.email);
-  await expect(page.getByTestId("login-email-input")).toHaveValue(credentials.email);
-  await setInputValue(page, "login-password-input", credentials.password);
-  await expect(page.getByTestId("login-password-input")).toHaveValue(credentials.password);
-  await page.getByTestId("login-submit-button").click();
-  await expect(page).toHaveURL(/\/courses(?:\?.*)?$/);
+  await fillAuthFormAndSubmit(
+    page,
+    [
+      { testId: "login-email-input", value: credentials.email },
+      { testId: "login-password-input", value: credentials.password },
+    ],
+    "login-submit-button",
+  );
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
 }
 
@@ -179,7 +193,7 @@ export async function seedCustomControlledFlow(token: string, files: ReturnType<
     body: {
       title: "Custom controlled smoke assessment",
       assessment_type: "exam",
-      total_marks: 10,
+      total_marks: 6,
       status: "draft",
     },
   });
@@ -188,9 +202,9 @@ export async function seedCustomControlledFlow(token: string, files: ReturnType<
     method: "POST",
     token,
     body: {
-      question_no: "1",
-      question_text: "Synthetic short-answer prompt for E2E smoke testing.",
-      total_marks: 10,
+      question_no: "1(a)(i)",
+      question_text: "Synthetic short-answer subpart prompt for E2E smoke testing.",
+      total_marks: 6,
       model_answer: "Synthetic model answer.",
     },
   });
@@ -202,20 +216,14 @@ export async function seedCustomControlledFlow(token: string, files: ReturnType<
       version: 1,
       is_active: true,
       rubric_json: {
-        total_marks: 10,
+        total_marks: 6,
         criteria: [
           {
             id: "c1",
             name: "Correct idea",
             description: "Identifies the correct principle or idea.",
             max_marks: 6,
-          },
-          {
-            id: "c2",
-            name: "Clarity",
-            description: "Shows clear presentation.",
-            max_marks: 4,
-          },
+          }
         ],
       },
 },
