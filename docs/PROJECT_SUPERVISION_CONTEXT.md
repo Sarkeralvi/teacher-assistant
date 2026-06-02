@@ -109,9 +109,9 @@ Important correction from later validation:
 - Coverage now includes a browser-only auth smoke, a Custom Controlled mock grading smoke, and an explicit approval-gating assertion.
 
 ### Day 4
-- Codex runtime/model hardening and/or TA-W2-021 mode gating.
-- Ensure unsupported Codex models fail clearly.
-- Ensure non-ready modes are not misleading.
+- TA-W2-021: mode gating / ghost-mode clarity — completed and validated.
+- Semi-Automated is blocked by default and hidden from the normal teacher flow.
+- Fully Automated is explicitly rejected as not ready.
 
 ### Day 5
 - Core AI loop synthetic validation.

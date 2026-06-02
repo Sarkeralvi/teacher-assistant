@@ -1041,11 +1041,11 @@ Priority: P1
 Dependencies: TA-W2-020
 Files affected: docs/**, apps/web/**, apps/api/**, BACKLOG.md
 Goal: Make unsupported or non-ready modes clearly gated and reduce misleading “ghost mode” behavior in the product surface and docs.
-Implementation notes: Clarify what is experimental, disabled, or ready; ensure unsupported Codex models fail clearly.
-Acceptance criteria: The mode surface is explicit about readiness and hidden/unsupported behavior is not misleading.
+Implementation notes: Custom Controlled remains the only teacher-ready path. Semi-Automated is blocked by default behind an explicit backend flag and hidden from the normal assessment page; Fully Automated is rejected with a clear error message until it is genuinely built and validated. Preserve the historical mode/migration scaffolding.
+Acceptance criteria: The mode surface is explicit about readiness; Semi-Automated is not usable from the normal teacher flow by default; Fully Automated is unavailable/rejected; hidden/unsupported behavior is not misleading.
 Tests required: targeted mode-gating checks and any docs or UI checks touched by the change.
 Risks: If mode labels stay ambiguous, teachers may misinterpret what is production-ready.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-022A
 Title: Privacy baseline documentation and deletion endpoint

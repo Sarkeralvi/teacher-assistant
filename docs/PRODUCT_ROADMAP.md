@@ -18,6 +18,8 @@ The product roadmap now separates grading into three workflow modes, documented 
 
 All modes must keep teacher review mandatory. The system must not auto-finalize grades without teacher approval. Fully automated grading must not be claimed reliable yet.
 
+Current product gating: Custom Controlled is the normal teacher workflow. Semi-Automated is experimental-only and blocked by default from normal entry points. Fully Automated is not available as a teacher workflow and should be treated as unreleased until the reactivation criteria in `docs/GRADING_WORKFLOW_MODES.md` are satisfied.
+
 ### Marking policy roadmap
 
 Each grading run should eventually record a rubric interpretation policy:

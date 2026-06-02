@@ -113,6 +113,7 @@ export type SubmissionZipUploadResponse = {
 };
 
 export type MarkingPolicy = "tough" | "general" | "easy";
+export type GradingRunMode = "custom_controlled" | "semi_automated" | "fully_automated";
 
 export type GradingRunWorkflowState = {
   materials_uploaded: boolean;
@@ -151,7 +152,7 @@ export type GradingRun = {
   id: number;
   assessment_id: number;
   created_by_teacher_id: number;
-  mode: "custom_controlled" | "semi_automated" | string;
+  mode: GradingRunMode | string;
   status: string;
   marking_policy: MarkingPolicy;
 
@@ -168,7 +169,7 @@ export type GradingRun = {
 };
 
 export type GradingRunCreate = {
-  mode?: "custom_controlled" | "semi_automated";
+  mode?: GradingRunMode;
   notes?: string | null;
   marking_policy?: MarkingPolicy;
 };

@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     codex_browser_grading_enabled: bool = Field(
         default=False, alias="CODEX_BROWSER_GRADING_ENABLED"
     )
+    semi_automated_mode_enabled: bool = Field(
+        default=False, alias="SEMI_AUTOMATED_MODE_ENABLED"
+    )
+    fully_automated_mode_enabled: bool = Field(
+        default=False, alias="FULLY_AUTOMATED_MODE_ENABLED"
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

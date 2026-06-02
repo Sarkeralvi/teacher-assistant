@@ -105,10 +105,11 @@ GradingRunStatus = Literal[
     "completed",
 ]
 MarkingPolicy = Literal["tough", "general", "easy"]
+GradingRunMode = Literal["custom_controlled", "semi_automated", "fully_automated"]
 
 
 class GradingRunCreate(BaseModel):
-    mode: Literal["custom_controlled", "semi_automated"] = "custom_controlled"
+    mode: GradingRunMode = "custom_controlled"
     notes: str | None = Field(default=None, max_length=4000)
     marking_policy: MarkingPolicy = "general"
 
@@ -156,7 +157,7 @@ class GradingRunRead(ORMBase):
     id: int
     assessment_id: int
     created_by_teacher_id: int
-    mode: Literal["custom_controlled", "semi_automated"]
+    mode: GradingRunMode
     status: GradingRunStatus
     marking_policy: MarkingPolicy
     question_pdf_path: str | None

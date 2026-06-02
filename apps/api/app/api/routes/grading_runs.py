@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
@@ -35,6 +36,30 @@ router = APIRouter(tags=["grading-runs"])
 
 PDF_CONTENT_TYPE = "application/pdf"
 PDF_SUFFIX = ".pdf"
+MODE_NOT_AVAILABLE_TEMPLATE = (
+    "Mode '{mode}' is not available for teacher workflow yet. Use Custom Controlled."
+)
+
+
+def require_grading_mode_available(mode: str) -> None:
+    if mode == "custom_controlled":
+        return
+    if mode == "semi_automated":
+        if get_settings().semi_automated_mode_enabled:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=MODE_NOT_AVAILABLE_TEMPLATE.format(mode=mode),
+        )
+    if mode == "fully_automated":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=MODE_NOT_AVAILABLE_TEMPLATE.format(mode=mode),
+        )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Unknown grading mode '{mode}'. Use Custom Controlled.",
+    )
 
 
 def get_owned_assessment_or_404(assessment_id: int, db: Session, teacher: User) -> Assessment:
@@ -331,10 +356,12 @@ def create_custom_grading_run(
     payload: GradingRunCreate | None = None,
 ) -> dict[str, object]:
     get_owned_assessment_or_404(assessment_id, db, current_user)
+    requested_mode = payload.mode if payload else "custom_controlled"
+    require_grading_mode_available(requested_mode)
     grading_run = GradingRun(
         assessment_id=assessment_id,
         created_by_teacher_id=current_user.id,
-        mode=payload.mode if payload else "custom_controlled",
+        mode=requested_mode,
         status="draft",
         marking_policy=payload.marking_policy if payload else "general",
         notes=payload.notes if payload else None,
@@ -397,6 +424,7 @@ def upload_grading_run_materials(
     rubric_pdf: OptionalMaterialFile = None,
 ) -> dict[str, object]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    require_grading_mode_available(grading_run.mode)
     if grading_run.mode == "semi_automated":
         if question_pdf is None:
             raise HTTPException(
@@ -446,6 +474,7 @@ def confirm_grading_run_materials(
     grading_run_id: int, db: DbSession, current_user: CurrentUser
 ) -> dict[str, object]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    require_grading_mode_available(grading_run.mode)
     if grading_run.mode == "semi_automated":
         if not grading_run.question_pdf_path:
             raise HTTPException(
@@ -477,6 +506,7 @@ def confirm_grading_run_questions_rubrics(
     grading_run_id: int, db: DbSession, current_user: CurrentUser
 ) -> dict[str, object]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    require_grading_mode_available(grading_run.mode)
     workflow_state = build_workflow_state(grading_run, db)
     if workflow_state["materials_confirmed"] is not True:
         raise HTTPException(
@@ -511,6 +541,7 @@ def grade_grading_run_ready_regions_mock(
     grading_run_id: int, db: DbSession, current_user: CurrentUser
 ) -> dict[str, object]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    require_grading_mode_available(grading_run.mode)
     ensure_grading_ready(grading_run, db)
     result = GradingService(db).grade_assessment_ungraded_regions_mock(
         grading_run.assessment_id,

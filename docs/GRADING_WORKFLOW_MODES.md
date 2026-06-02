@@ -27,6 +27,19 @@ This is a planning document only. It does not enable automatic final grading, ZI
 | Semi-Automated | Question PDF + ZIP of all student scripts | Medium: draft questions/model answers/rubrics, then batch grade after teacher confirmation | Teacher confirms question discretization, model answer, rubric, and marking strictness before grading; then reviews all grade suggestions | Medium | Second |
 | Custom / Controlled | Question PDF + answer/script PDFs or ZIP + solution PDF + rubric PDF | Lowest: import each source separately, teacher finalizes canonical grading materials, then system grades | Teacher finalizes questions, model answers, rubrics, and marking policy before grading; then reviews all suggestions | Lowest | First |
 
+## Current product gating
+
+- **Custom / Controlled** is the active teacher-ready workflow and remains available in the normal product surface.
+- **Semi-Automated** is experimental groundwork only. It is blocked by default and hidden from the normal teacher entry point so it does not look production-ready.
+- **Fully Automated** is not available for teacher workflow yet and is rejected/hidden so its presence in planning docs is not mistaken for a usable mode.
+
+Reactivation criteria for future work:
+
+1. Answer-region detection validated on multiple pages and layouts.
+2. Solution/rubric generation validated on real teacher-marked examples.
+3. E2E coverage added for the re-enabled mode path.
+4. Teacher review gates preserved end to end.
+
 ## Mode 1 — Fully Automated Grading
 
 ### Inputs required

@@ -556,9 +556,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
               Custom Controlled Grading Run
             </Link>
-            <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run?mode=semi_automated`}>
-              Semi-Automated Grading Run
-            </Link>
+            <span
+              className={`${buttonClass} cursor-not-allowed opacity-60`}
+              aria-disabled="true"
+              data-testid="semi-automated-mode-not-ready"
+            >
+              Semi-Automated: not ready for teacher workflow yet
+            </span>
             <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
               Review & export final grades
             </Link>

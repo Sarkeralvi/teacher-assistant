@@ -244,10 +244,10 @@ for (const text of [
   "Manual question creation remains available",
   "draftQuestionEdits",
   "Custom Controlled Grading Run",
-  "Semi-Automated Grading Run",
+  "Semi-Automated: not ready for teacher workflow yet",
+  'data-testid="semi-automated-mode-not-ready"',
   "Grading run modes require teacher confirmation before export.",
   "href={`/assessments/${assessmentId}/grading-run`}",
-  "href={`/assessments/${assessmentId}/grading-run?mode=semi_automated`}",
 ]) {
   if (!assessmentDetailUi.includes(text)) {
     throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);
@@ -260,6 +260,8 @@ const gradingRunClient = readFileSync(join(root, "components/CustomControlledGra
 const gradingRunUi = gradingRunPage + gradingRunClient;
 for (const text of [
   "Custom Controlled Grading Run",
+  "Mode unavailable",
+  'data-testid="grading-mode-unavailable"',
   "Custom controlled mode: teacher confirmation required.",
   "Start custom controlled run",
   "Upload/confirm materials",
@@ -443,11 +445,13 @@ for (const text of ["Login to create courses", "currentUser", "createAuthenticat
   }
 }
 
+if (assessmentDetailUi.includes("grading-run?mode=semi_automated") || assessmentDetailUi.includes("grading-run?mode=fully_automated")) {
+  throw new Error("Assessment detail must not expose semi/fully automated grading links in the normal teacher workflow");
+}
+
 if (/fetch\([^)]*(openai|codex|llm|chat\/completions)/i.test(assessmentDetail + assessmentReview)) {
   throw new Error("Frontend must not make direct LLM/Codex provider calls");
 }
-
-console.log("frontend workflow static checks passed");
 
 const reviewClientForCodex = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
 for (const text of [
@@ -465,3 +469,5 @@ for (const text of [
 if (reviewClientForCodex.includes("codex exec") || reviewClientForCodex.includes("CodexCliProvider")) {
   throw new Error("Frontend must not call Codex/LLM directly");
 }
+
+console.log("frontend workflow static checks passed");

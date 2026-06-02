@@ -1,5 +1,38 @@
 # Validation Log
 
+## TA-W2-021 — Mode gating / ghost-mode clarity
+
+- Recorded at: 2026-06-02T18:20:04+06:00
+- Baseline commit: `f27230aaea4360cc145989cae3189277237388a0`
+- Workflow type: backend gating + frontend clarity + docs reconciliation
+- Real Codex calls: 0
+- Provider used: mock/synthetic only
+- Data policy: no private teacher/student data
+- Product code changes required: yes
+
+### Coverage added
+
+- Added backend mode gating so Semi-Automated is blocked by default with a clear 400 message and Fully Automated is rejected with the same teacher-workflow message.
+- Kept Custom Controlled as the only normal teacher workflow entry point.
+- Removed the normal assessment-page Semi-Automated button and replaced it with a non-clickable readiness note.
+- Added an explicit blocked-mode page for direct `?mode=semi_automated` / `?mode=fully_automated` navigation.
+
+### Runtime and test results
+
+- Targeted grading-run tests: passed (`5 passed, 11 deselected`).
+- `node apps/web/tests/workflow-ui.test.mjs`: passed.
+- `make e2e`: passed (`2 passed`).
+- `make lint`: passed.
+- `make test`: passed (`167 passed`).
+- `npm run build` in `apps/web`: passed; Next still reports the existing ESLint flat-config warning while completing successfully.
+- `git diff --check`: passed.
+
+### Notes
+
+- Semi-Automated is now an explicit experimental gate instead of a normal teacher entry point.
+- Fully Automated is not presented as usable and is rejected instead of being silently implied by schema presence.
+- During verification, the E2E auth helper exposed a Playwright timing issue around `waitForURL(..., waitUntil: "commit")`; replacing that with click plus `expect(page).toHaveURL(...)` kept browser-only auth coverage while removing the flake.
+
 ## TA-W2-020 — Playwright E2E smoke suite
 
 - Recorded at: 2026-06-02T10:00:00+06:00

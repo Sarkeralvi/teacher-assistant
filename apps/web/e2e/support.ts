@@ -36,13 +36,7 @@ export function uniqueTeacherCredentials(prefix: string): TeacherCredentials {
 }
 
 async function setInputValue(page: Page, testId: string, value: string) {
-  await page.getByTestId(testId).evaluate((element, nextValue) => {
-    const input = element as HTMLInputElement;
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
-    descriptor?.set?.call(input, nextValue as string);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
+  await page.getByTestId(testId).fill(value);
 }
 
 export async function registerTeacherViaBrowser(page: Page, credentials: TeacherCredentials) {
@@ -56,10 +50,8 @@ export async function registerTeacherViaBrowser(page: Page, credentials: Teacher
   await setInputValue(page, "register-password-input", credentials.password);
   await expect(page.getByTestId("register-password-input")).toHaveValue(credentials.password);
   await expect(page.getByTestId("register-submit-button")).toBeEnabled();
-  await Promise.all([
-    page.waitForURL(/\/courses(?:\?.*)?$/, { waitUntil: "commit" }),
-    page.getByTestId("register-submit-button").click(),
-  ]);
+  await page.getByTestId("register-submit-button").click();
+  await expect(page).toHaveURL(/\/courses(?:\?.*)?$/);
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.name);
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
 }
@@ -78,10 +70,8 @@ export async function loginTeacherViaBrowser(page: Page, credentials: TeacherCre
   await expect(page.getByTestId("login-email-input")).toHaveValue(credentials.email);
   await setInputValue(page, "login-password-input", credentials.password);
   await expect(page.getByTestId("login-password-input")).toHaveValue(credentials.password);
-  await Promise.all([
-    page.waitForURL(/\/courses(?:\?.*)?$/, { waitUntil: "commit" }),
-    page.getByTestId("login-submit-button").click(),
-  ]);
+  await page.getByTestId("login-submit-button").click();
+  await expect(page).toHaveURL(/\/courses(?:\?.*)?$/);
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
 }
 
