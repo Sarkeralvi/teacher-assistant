@@ -304,3 +304,12 @@ If `localhost:5432` or `localhost:6379` is unavailable, check:
 docker compose ps
 docker compose up -d postgres redis
 ```
+
+### Supported Codex model note for this environment
+
+This environment requires an explicit supported Codex model override for successful smoke runs.
+
+- `CODEX_CLI_MODEL=gpt-5.5` worked for both `make codex-ok` and the answer-region suggestion smoke.
+- The default `gpt-5.3-codex` was rejected under the current ChatGPT-backed login.
+- Future `make codex-ok` or Codex smoke commands should explicitly set a supported model when the login path requires it.
+- Do not store or expose Codex auth tokens in docs, logs, commits, screenshots, or exported artifacts.

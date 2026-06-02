@@ -982,3 +982,81 @@ Tests required: `git diff --check`; `make lint`; `make down` if no further runti
 Risks: This proves the real Codex path for one selected answer region only and does not prove grading quality or batch automation.
 Status: Done
 
+TASK-ID: TA-W2-018A
+Title: Real Codex answer-region suggestion smoke record
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-016A
+Files affected: docs/VALIDATION_LOG.md, BACKLOG.md
+Goal: Record the completed real Codex answer-region suggestion smoke so future work has a durable validation record.
+Implementation notes: Documentation/backlog-only record. Real Codex answer-region suggestion smoke succeeded only when `CODEX_CLI_MODEL=gpt-5.5` was explicitly set. Call count: 2. Direct provider smoke on a blank synthetic page returned no suggestions, then a synthetic API smoke on a bordered page returned exactly 1 draft suggestion via `codex_cli_answer_region_suggester` with `needs_review=true` and confidence `0.96`. The draft stayed draft-only; no `AnswerRegion`, `GradeSuggestion`, or `FinalGrade` was created by the suggestion endpoint. Root cause: runtime model selection, not provider code. The default `gpt-5.3-codex` is rejected under the current ChatGPT-backed login.
+Acceptance criteria: Validation log contains the same evidence; no product code is changed; the result is clearly marked as completed validation, not a product feature rollout.
+Tests required: `git diff --check`; final git status review.
+Risks: This validates only the answer-region suggestion smoke path and does not imply broader production readiness.
+Status: Done
+
+TASK-ID: TA-W2-018B
+Title: Expert-review-adjusted recovery plan and supervision context
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-018A
+Files affected: BACKLOG.md, docs/VALIDATION_LOG.md, docs/CODEX_DEV_RUNTIME.md, docs/PROJECT_SUPERVISION_CONTEXT.md
+Goal: Record the expert-review-adjusted one-week recovery plan and create a durable supervision context handoff for future LLM supervisors.
+Implementation notes: Documentation-only record. Capture the founder’s corrected product direction, the expert synthesis, the verified TA-W2-018A result, the current non-ready gaps, the one-week recovery plan, the next task sequence, and the pre-pilot gates. Do not implement TA-W2-019/020/021/022A here.
+Acceptance criteria: The supervision context document exists and is durable; the runtime note captures the explicit supported Codex model requirement; the backlog clearly shows the next sequence after this task.
+Tests required: `git diff --check`; `make lint`; final git status review.
+Risks: If the backlog omits the next sequence, future supervisors may lose the intended recovery order.
+Status: Done
+
+TASK-ID: TA-W2-019
+Title: Marking policy calibration fix
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-018B
+Files affected: apps/api/**, apps/web/**, tests/**, BACKLOG.md
+Goal: Fix marking policy calibration so the same synthetic answer and rubric produce a meaningful toughness gradient (`tough < general < easy`).
+Implementation notes: Keep scope bounded to calibration and persistence of policy differences; do not expand into unrelated grading changes.
+Acceptance criteria: Synthetic test cases show a meaningful score delta across Tough/General/Easy.
+Tests required: targeted calibration tests, relevant backend/frontend checks, and repo checks for touched files.
+Risks: If calibration is still weak, downstream validation and teacher trust will remain limited.
+Status: Pending
+
+TASK-ID: TA-W2-020
+Title: Playwright E2E smoke suite
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-019
+Files affected: apps/web/**, apps/api/**, tests/**, BACKLOG.md
+Goal: Add a minimal Playwright E2E smoke suite covering auth, Custom Controlled mock flow, and no-FinalGrade-before-approval.
+Implementation notes: Keep the suite tiny and deterministic; focus on smoke coverage rather than breadth.
+Acceptance criteria: Auth, mock flow, and approval gating are exercised end to end in automated smoke tests.
+Tests required: Playwright smoke, frontend build/lint, backend tests touched by the suite, and git diff checks.
+Risks: UI timing and selector instability can make the smoke flaky if not constrained tightly.
+Status: Pending
+
+TASK-ID: TA-W2-021
+Title: Mode gating / ghost-mode clarity
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-020
+Files affected: docs/**, apps/web/**, apps/api/**, BACKLOG.md
+Goal: Make unsupported or non-ready modes clearly gated and reduce misleading “ghost mode” behavior in the product surface and docs.
+Implementation notes: Clarify what is experimental, disabled, or ready; ensure unsupported Codex models fail clearly.
+Acceptance criteria: The mode surface is explicit about readiness and hidden/unsupported behavior is not misleading.
+Tests required: targeted mode-gating checks and any docs or UI checks touched by the change.
+Risks: If mode labels stay ambiguous, teachers may misinterpret what is production-ready.
+Status: Pending
+
+TASK-ID: TA-W2-022A
+Title: Privacy baseline documentation and deletion endpoint
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-021
+Files affected: docs/**, apps/api/**, apps/web/**, BACKLOG.md
+Goal: Establish a privacy baseline with documentation, deletion support, and artifact/storage warnings.
+Implementation notes: Keep it scoped to privacy baseline and deletion support; do not broaden into unrelated retention policy work.
+Acceptance criteria: Privacy guidance is documented, a deletion endpoint exists where appropriate, and artifact/storage warnings are visible.
+Tests required: targeted endpoint/docs checks plus repo checks for touched files.
+Risks: Privacy controls are currently policy-heavy; missing technical support will remain a blocker for wider validation.
+Status: Pending
+

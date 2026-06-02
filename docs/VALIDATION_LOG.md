@@ -453,3 +453,33 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 - This is not fully automated grading; teacher review remains mandatory.
 - This is not a grading-quality proof.
 - The run validates the real Codex path and persistence contract only.
+
+## TA-W2-018A — Real Codex answer-region suggestion smoke
+
+- Recorded at: 2026-06-02
+- Real Codex calls: 2 suggestion attempts total
+- Provider used: `codex_cli_answer_region_suggester`
+- Runtime note: the answer-region suggestion smoke succeeded only when `CODEX_CLI_MODEL=gpt-5.5` was explicitly set
+- Attempt 1: direct provider call against a blank synthetic page; no suggestions were returned because the page was blank
+- Attempt 2: API smoke against a synthetic page with one bordered answer area; returned 1 draft suggestion
+- `needs_review`: `true`
+- Confidence: `0.96`
+- The suggestion stayed draft-only
+- No `AnswerRegion` was auto-created
+- No `GradeSuggestion` was created by the suggestion endpoint
+- No `FinalGrade` was created by the suggestion endpoint
+- Root cause of the earlier failure: runtime model selection, not provider code
+- The default `gpt-5.3-codex` is rejected under the current ChatGPT-backed login
+
+### Validation result
+
+- HTTP result: `200 OK`
+- Draft suggestions returned: 1
+- Provider warnings: none
+- Summary: real Codex answer-region suggestions work when the runtime model is explicitly set to a supported value
+
+### Caveats
+
+- This is a suggestion smoke, not a grading-quality proof.
+- This does not authorize batch real Codex.
+- This does not remove the need for teacher review and acceptance.
