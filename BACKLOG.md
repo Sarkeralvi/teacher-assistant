@@ -1113,3 +1113,21 @@ Acceptance criteria: Prompt includes canonical-unit/max-mark grounding, rubric/m
 Tests required: Focused prompt/provider tests, calibration harness tests, make test, make lint, frontend build only if frontend touched, git diff checks.
 Risks: This is deterministic prompt/harness calibration only; a small founder real-document retest is still needed to verify real Codex behavior after the prompt fix.
 Status: Done
+
+
+TASK-ID: TA-W2-023B
+Title: Bayes-specific rubric grounding and score-band guidance
+Status: Done
+Added: 2026-06-03T00:16:25+06:00
+Scope:
+- Add Bayes/probability 6-mark score-band guidance to the shared handwritten math/stat grading prompt.
+- Preserve marking policy, strict JSON, teacher-review, no-FinalGrade, answer-region, canonical-unit, auth, and workflow behavior.
+- Add deterministic calibration coverage for a near-full-credit Bayes answer with compact/unclear numerator/final expression.
+Validation plan:
+- Focused prompt/provider/calibration tests.
+- Deterministic fake calibration harness.
+- `make test`, `make lint`, `git diff --check`.
+- Optional real Codex retest for `1(b)(i)` region `5120` was skipped because the required test-suite cleanup removed the TA-W2-023A DB row before retest.
+Notes:
+- Triggered by TA-W2-023A: `1(b)(i)` improved `3/6 -> 4/6` but remained below founder fair `6/6`.
+- Teacher observation remains blocked until real retest is acceptable or demo framing is narrowed to conservative human-in-loop draft suggestions.

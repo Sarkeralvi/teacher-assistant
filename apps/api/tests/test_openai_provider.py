@@ -146,6 +146,13 @@ def test_openai_provider_mocked_response_validates_to_grade_suggestion() -> None
     assert "active rubric and model answer as primary evidence" in grading_prompt[1]["content"]
     assert "formula choice, substitution, and valid final answer" in grading_prompt[1]["content"]
     assert "Do not over-penalize messy handwriting" in grading_prompt[1]["content"]
+    assert (
+        "Bayes/probability score-band guidance for 6-mark subparts"
+        in grading_prompt[1]["content"]
+    )
+    assert "5-6 marks" in grading_prompt[1]["content"]
+    assert "3-4 marks" in grading_prompt[1]["content"]
+    assert "0-2 marks" in grading_prompt[1]["content"]
 
     result = provider.grade(
         task_name="answer_region_grading",

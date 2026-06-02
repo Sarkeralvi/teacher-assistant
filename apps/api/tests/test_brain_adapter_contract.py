@@ -175,6 +175,34 @@ def test_grading_prompt_includes_handwritten_math_statistics_guidance() -> None:
     assert "Do not create a final grade" in prompt
 
 
+def test_grading_prompt_includes_bayes_probability_score_band_guidance() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    prompt = "\n".join(
+        message["content"]
+        for message in build_grading_prompt(
+            question_text="Canonical grading unit: 1(b)(i), max marks: 6. Bayes theorem.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/answer_regions/region.png",
+            image_input_enabled=True,
+            marking_policy="general",
+        )
+    )
+
+    assert "Bayes/probability score-band guidance for 6-mark subparts" in prompt
+    assert "5-6 marks" in prompt
+    assert "Bayes theorem or equivalent conditional-probability formula" in prompt
+    assert "correct identification of target event and evidence event" in prompt
+    assert "correct denominator/total probability expansion" in prompt
+    assert "plausible numerator/substitution or final posterior value/expression" in prompt
+    assert "Messy handwriting, compressed arithmetic, or imperfect notation alone" in prompt
+    assert "3-4 marks" in prompt
+    assert "denominator missing one branch" in prompt
+    assert "0-2 marks" in prompt
+    assert "wrong conditional direction" in prompt
+    assert "do not automatically slash the score" in prompt
+
+
 def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> None:
     from packages.brain.codex_cli_provider import CodexCliProvider
     from packages.brain.prompt_registry import build_grading_prompt

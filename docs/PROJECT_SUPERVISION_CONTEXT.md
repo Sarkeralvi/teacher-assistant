@@ -72,7 +72,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 
 ## What is not ready
 - Manual answer-region mapping is not the final teacher workflow.
-- Marking policy calibration has deterministic coverage, but real handwritten math grading still needs a capped retest after the TA-W2-023 prompt fix.
+- Handwritten math grading remains quality-gated: TA-W2-023A improved `1(b)(i)` from `3/6` to `4/6`, but founder fair is `6/6`; TA-W2-023B adds Bayes-specific score-band grounding and still needs a capped one-region retest before teacher observation.
 - E2E smoke coverage is too thin.
 - Mode gating / ghost-mode clarity still needs hardening.
 - Privacy baseline documentation and an owner-only assessment test-data deletion endpoint now exist for internal/founder testing.

@@ -65,6 +65,24 @@ HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE: tuple[str, ...] = (
     "  incomplete working, and correct setup but missing final simplification.",
     "- For probability, Bayes, and statistics questions, give substantial credit for",
     "  correct formula and correct identification of numerator/denominator events.",
+    "Bayes/probability score-band guidance for 6-mark subparts",
+    (
+        "- 5-6 marks: Award near-full/full credit when the answer shows Bayes theorem "
+        "or equivalent conditional-probability formula, correct identification of "
+        "target event and evidence event, correct denominator/total probability "
+        "expansion, and plausible numerator/substitution or final posterior "
+        "value/expression"
+    ),
+    "  with no conceptual",
+    "  reversal of conditional probability.",
+    "- Messy handwriting, compressed arithmetic, or imperfect notation alone should not",
+    "  reduce a conceptually correct answer to mid-credit.",
+    "- 3-4 marks: Use for answers with correct formula but one important missing/unclear",
+    "  component, such as denominator missing one branch, numerator not tied to the target",
+    "  event, final arithmetic absent and substitution unclear, or recoverable event",
+    "  confusion.",
+    "- 0-2 marks: Use for wrong conditional direction, no Bayes/conditional probability",
+    "  setup, unsupported numeric answer, or major conceptual mismatch.",
     "- Do not mark harshly when final arithmetic is compressed but the result, setup, or",
     "  equivalent expression is present.",
     "- Penalize real conceptual mismatch, unsupported answers, or contradictions; do not",

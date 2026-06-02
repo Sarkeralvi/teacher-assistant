@@ -58,6 +58,7 @@ def test_synthetic_math_stat_cases_cover_bayes_credit_patterns() -> None:
         "math_stat_a_bayes_correct_setup_compact_working",
         "math_stat_b_correct_formula_arithmetic_slip",
         "math_stat_c_wrong_conceptual_setup",
+        "math_stat_d_bayes_score_band_near_full_credit",
     ]
     assert all("synthetic" in case.description.lower() for case in cases)
     assert cases[0].max_score == Decimal("6.00")
@@ -72,11 +73,17 @@ def test_fake_math_stat_calibration_targets_no_severe_underscore_for_bayes_setup
     assert math_report["real_provider_used"] is False
     assert math_report["call_count"] == 0
     assert math_report["final_grade_count"] == 0
-    assert math_report["case_count"] == 3
+    assert math_report["case_count"] == 4
     assert math_report["cases"][0]["case_id"] == "math_stat_a_bayes_correct_setup_compact_working"
     assert math_report["cases"][0]["expected_behavior"] == "near_full_credit"
     assert math_report["cases"][0]["fake_score"] >= Decimal("5.0")
     assert math_report["cases"][0]["severe_underscore"] is False
     assert math_report["cases"][1]["expected_behavior"] == "meaningful_partial_credit"
     assert math_report["cases"][2]["expected_behavior"] == "low_score"
+    score_band_case = math_report["cases"][3]
+    assert score_band_case["case_id"] == "math_stat_d_bayes_score_band_near_full_credit"
+    assert score_band_case["expected_behavior"] == "bayes_score_band_5_to_6"
+    assert Decimal("5.0") <= score_band_case["fake_score"] <= Decimal("6.0")
+    assert score_band_case["severe_underscore"] is False
     assert math_report["summary"]["bayes_compact_working_not_severely_under_scored"] is True
+    assert math_report["summary"]["bayes_score_band_case_gets_5_to_6"] is True

@@ -181,6 +181,21 @@ _MATH_STAT_CASES: tuple[CalibrationCase, ...] = (
         max_score=Decimal("6.00"),
         notes="Expected behavior: low score because the conceptual setup is wrong.",
     ),
+    CalibrationCase(
+        case_id="math_stat_d_bayes_score_band_near_full_credit",
+        title="Bayes score-band near-full credit target",
+        description=(
+            "Synthetic non-student example: Bayes formula, target/evidence events, and "
+            "denominator expansion are visible; numerator or final posterior expression is "
+            "compact or slightly unclear, but no conditional-probability reversal appears."
+        ),
+        rubric_json=_MATH_STAT_RUBRIC,
+        max_score=Decimal("6.00"),
+        notes=(
+            "Expected behavior: score-band guidance should place this in the 5-6/6 range, "
+            "not mid-credit, when the concept is correct."
+        ),
+    ),
 )
 
 _FAKE_MATH_STAT_SCORE_TABLE: dict[str, dict[str, Any]] = {
@@ -200,6 +215,12 @@ _FAKE_MATH_STAT_SCORE_TABLE: dict[str, dict[str, Any]] = {
         "fake_score": Decimal("1.5"),
         "confidence": Decimal("0.80"),
         "expected_behavior": "low_score",
+        "severe_underscore": False,
+    },
+    "math_stat_d_bayes_score_band_near_full_credit": {
+        "fake_score": Decimal("5.5"),
+        "confidence": Decimal("0.76"),
+        "expected_behavior": "bayes_score_band_5_to_6",
         "severe_underscore": False,
     },
 }
@@ -243,6 +264,9 @@ def _run_fake_math_stat_calibration() -> dict[str, Any]:
             "correct_formula_arithmetic_slip_gets_partial_credit": cases[1]["fake_score"]
             >= Decimal("3.0"),
             "wrong_conceptual_setup_stays_low": cases[2]["fake_score"] <= Decimal("2.0"),
+            "bayes_score_band_case_gets_5_to_6": Decimal("5.0")
+            <= cases[3]["fake_score"]
+            <= Decimal("6.0"),
         },
     }
 

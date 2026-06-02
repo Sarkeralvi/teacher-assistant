@@ -1,5 +1,28 @@
 # Validation Log
 
+## TA-W2-023B — Bayes-specific score-band grading guidance
+
+- Recorded at: 2026-06-03T00:16:25+06:00
+- Baseline commit: `aadfb13972adb297ee47920261dae4dbb8344395`
+- Workflow type: prompt/rubric grounding + deterministic synthetic calibration
+- Real Codex calls during code/harness phase: 0
+- Product scope: grading prompt/evaluation harness only; no workflow, answer-region, canonical-unit, auth, frontend, approval, export, or deletion changes
+
+### Trigger
+
+TA-W2-023A's capped real retest improved `1(b)(i)` from `3/6` to `4/6`, but founder fair mark remained `6/6`. The remaining blocker is Bayes/probability work being under-credited when formula, denominator expansion, and posterior expression are conceptually present but compact or imperfectly written.
+
+### Coverage added
+
+- Shared Bayes/probability 6-mark score-band guidance in the handwritten math/stat grading prompt.
+- Provider prompt tests verify the score-band text reaches both the Codex CLI and OpenAI-compatible grading prompt paths.
+- Deterministic math/stat calibration now includes a Bayes score-band near-full-credit case with fake score `5.5/6`, `needs_review=true`, and `final_grade_count=0`.
+
+### Caveat
+
+A single capped real Codex retest for existing `1(b)(i)` region `5120` was allowed after checks, but it was not run because the region was no longer present after the required test-suite database cleanup. Teacher observation remains blocked until a future capped retest is acceptable or the workflow is framed as conservative human-in-loop draft review only.
+
+
 ## TA-W2-023 — Handwritten math/stat grading prompt grounding
 
 - Recorded at: 2026-06-02T23:00:47+06:00

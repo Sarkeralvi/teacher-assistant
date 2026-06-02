@@ -1,5 +1,30 @@
 # Grading Quality Notes
 
+## TA-W2-023B — Bayes/probability score-band grounding
+
+Recorded at: 2026-06-03T00:16:25+06:00
+
+### Quality finding from TA-W2-023A
+
+The TA-W2-023 handwritten math/stat prompt improved two checked areas but did not fully solve Bayes under-crediting. In TA-W2-023A, `1(b)(i)` moved from `3/6` to `4/6`, while founder fair remained `6/6`. Codex recognized Bayes theorem and denominator expansion but still treated unclear numerator/final simplification as enough to keep the answer at mid-credit.
+
+### Prompt/rubric grounding fix
+
+The shared math/stat guidance now includes explicit 6-mark Bayes/probability score bands:
+
+- `5-6`: Bayes or equivalent conditional-probability formula, target/evidence events, correct denominator/total-probability expansion, and plausible numerator/substitution or posterior value/expression, with no conditional-probability reversal. Messy handwriting, compressed arithmetic, or imperfect notation alone should not reduce a conceptually correct answer to mid-credit.
+- `3-4`: correct formula but one important missing/unclear component, such as a missing denominator branch, numerator not tied to the target event, absent final arithmetic with unclear substitution, or recoverable event confusion.
+- `0-2`: wrong conditional direction, no Bayes/conditional setup, unsupported numeric answer, or major conceptual mismatch.
+
+### Deterministic calibration
+
+The fake calibration adds a synthetic Bayes score-band target case: correct formula/events/denominator with compact or slightly unclear numerator/final expression and no conceptual reversal. Expected fake score: `5.5/6`, `needs_review=true`, no `FinalGrade`.
+
+### Remaining caveat
+
+This code/harness update still needs a capped one-region real retest on `1(b)(i)` before deciding whether teacher-observation rehearsal is safe. The optional TA-W2-023B retest was skipped because answer region `5120` was no longer present after required test-suite database cleanup.
+
+
 ## TA-W2-023 — Handwritten math/stat grading prompt grounding
 
 Recorded at: 2026-06-02T23:00:47+06:00
