@@ -388,7 +388,7 @@ class AnswerRegionCreate(BaseModel):
 
 
 class AnswerRegionSuggestionRequest(BaseModel):
-    provider: Literal["mock", "codex_cli"] = "mock"
+    provider: Literal["mock", "codex_cli_answer_region_suggester", "codex_cli"] | None = None
     question_ids: list[int] | None = None
     question_nos: list[str] | None = None
 
@@ -417,7 +417,7 @@ class DraftAnswerRegionSuggestion(BaseModel):
     width: Decimal
     height: Decimal
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    provider: Literal["mock", "codex_cli"] = "mock"
+    provider: Literal["mock", "codex_cli_answer_region_suggester", "codex_cli"] = "mock"
     source: str = "mock"
     reason: str | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -428,10 +428,11 @@ class DraftAnswerRegionSuggestion(BaseModel):
 
 class AnswerRegionSuggestionResponse(BaseModel):
     page_id: int
-    provider: Literal["mock", "codex_cli"] = "mock"
+    provider: Literal["mock", "codex_cli_answer_region_suggester", "codex_cli"] = "mock"
     source: str = "mock"
     needs_review: bool = True
     message: str
+    provider_warnings: list[str] = Field(default_factory=list)
     suggestions: list[DraftAnswerRegionSuggestion]
 
 

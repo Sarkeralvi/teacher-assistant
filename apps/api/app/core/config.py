@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     artifacts_dir: str = Field(default="/data/artifacts", alias="ARTIFACTS_DIR")
     brain_provider: str = Field(default="mock", alias="BRAIN_PROVIDER")
     brain_allow_real_providers: bool = Field(default=False, alias="BRAIN_ALLOW_REAL_PROVIDERS")
+    answer_region_suggestion_provider: str = Field(
+        default="mock", alias="ANSWER_REGION_SUGGESTION_PROVIDER"
+    )
+    codex_answer_region_suggestions_enabled: bool = Field(
+        default=False, alias="CODEX_ANSWER_REGION_SUGGESTIONS_ENABLED"
+    )
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="", alias="OPENAI_MODEL")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")

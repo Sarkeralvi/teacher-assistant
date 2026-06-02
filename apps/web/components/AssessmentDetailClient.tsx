@@ -81,6 +81,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionHeight, setRegionHeight] = useState("100");
   const [regionSuggestions, setRegionSuggestions] = useState<DraftAnswerRegionSuggestion[]>([]);
   const [regionSuggestionMessage, setRegionSuggestionMessage] = useState<string | null>(null);
+  const [regionSuggestionWarnings, setRegionSuggestionWarnings] = useState<string[]>([]);
+  const [regionSuggestionProvider, setRegionSuggestionProvider] = useState<"mock" | "codex_cli_answer_region_suggester">("mock");
   const [suggestingRegions, setSuggestingRegions] = useState(false);
   const [acceptingSuggestionId, setAcceptingSuggestionId] = useState<string | null>(null);
   const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
@@ -426,14 +428,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setSuggestingRegions(true);
     setError(null);
     setRegionSuggestionMessage(null);
+    setRegionSuggestionWarnings([]);
     try {
       const response = await suggestAnswerRegions(selectedPage.page.id, {
-        provider: "mock",
+        provider: regionSuggestionProvider,
         question_ids: questions.map((question) => question.id),
       });
       setSuggestionPageId(selectedPage.page.id);
       setRegionSuggestions(response.suggestions);
       setRegionSuggestionMessage(response.message);
+      setRegionSuggestionWarnings(response.provider_warnings);
       if (response.suggestions[0]) {
         const first = response.suggestions[0];
         setRegionX(String(first.x));
@@ -445,6 +449,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     } catch (err) {
       setRegionSuggestions([]);
       setRegionSuggestionMessage(null);
+      setRegionSuggestionWarnings([]);
       setError(err instanceof Error ? err.message : "Failed to suggest answer regions");
     } finally {
       setSuggestingRegions(false);
@@ -679,11 +684,33 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p>Submission/page status: {mappedSubmissionCount} submissions mapped · {unmappedSubmissionCount} unmapped submissions</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <label className="grid gap-1 text-sm">
+            Suggestion provider
+            <select
+              className={inputClass}
+              value={regionSuggestionProvider}
+              onChange={(event) => setRegionSuggestionProvider(event.target.value as "mock" | "codex_cli_answer_region_suggester")}
+            >
+              <option value="mock">Mock/simple suggestions (default)</option>
+              <option value="codex_cli_answer_region_suggester">Codex-backed suggestions (backend flag required)</option>
+            </select>
+          </label>
           <button className={buttonClass} disabled={suggestingRegions || !selectedPage} type="button" onClick={() => void handleSuggestAnswerRegions()}>
             {suggestingRegions ? "Suggesting..." : "Suggest answer regions"}
           </button>
           <p className="text-sm text-amber-200">AI suggestions are drafts. Teacher must confirm before grading.</p>
         </div>
+        <p className="text-xs text-slate-400">Mock provider is default. Codex-backed suggestions require CODEX_ANSWER_REGION_SUGGESTIONS_ENABLED=true and backend image input enabled.</p>
+        {suggestionPageId === selectedPage?.page.id && regionSuggestionWarnings.length > 0 ? (
+          <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
+            <p className="font-semibold">Provider warnings</p>
+            <ul className="list-disc pl-5">
+              {regionSuggestionWarnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {suggestionPageId === selectedPage?.page.id && regionSuggestionMessage ? (
           <p className="rounded border border-slate-700 bg-slate-950/30 p-3 text-sm text-slate-300">{regionSuggestionMessage}</p>
         ) : null}

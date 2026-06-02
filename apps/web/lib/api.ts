@@ -234,7 +234,7 @@ export type DraftAnswerRegionSuggestion = {
   width: string | number;
   height: string | number;
   confidence: string | number;
-  provider: "mock" | "codex_cli";
+  provider: "mock" | "codex_cli_answer_region_suggester" | "codex_cli";
   source: string;
   reason?: string | null;
   warnings: string[];
@@ -244,17 +244,18 @@ export type DraftAnswerRegionSuggestion = {
 };
 
 export type AnswerRegionSuggestionRequest = {
-  provider?: "mock" | "codex_cli";
+  provider?: "mock" | "codex_cli_answer_region_suggester" | "codex_cli";
   question_ids?: number[];
   question_nos?: string[];
 };
 
 export type AnswerRegionSuggestionResponse = {
   page_id: number;
-  provider: "mock" | "codex_cli";
+  provider: "mock" | "codex_cli_answer_region_suggester" | "codex_cli";
   source: string;
   needs_review: boolean;
   message: string;
+  provider_warnings: string[];
   suggestions: DraftAnswerRegionSuggestion[];
 };
 

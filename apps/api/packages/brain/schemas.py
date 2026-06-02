@@ -60,3 +60,40 @@ class GradeSuggestionOutput(BaseModel):
         if breakdown_total != self.score:
             raise ValueError("rubric breakdown awarded marks must sum to score")
         return self
+
+
+class AnswerRegionSuggestionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: int | None = Field(default=None, gt=0)
+    question_no: str | None = Field(default=None, min_length=1, max_length=32)
+    x: Decimal = Field(ge=Decimal("0"))
+    y: Decimal = Field(ge=Decimal("0"))
+    width: Decimal = Field(gt=Decimal("0"))
+    height: Decimal = Field(gt=Decimal("0"))
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    notes: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    needs_review: bool = True
+
+    @model_validator(mode="after")
+    def question_reference_is_required(self) -> "AnswerRegionSuggestionItem":
+        if self.question_id is None and self.question_no is None:
+            raise ValueError("question_id or question_no is required")
+        if not self.needs_review:
+            raise ValueError("needs_review must be true")
+        return self
+
+
+class AnswerRegionSuggestionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_warnings: list[str] = Field(default_factory=list)
+    suggestions: list[AnswerRegionSuggestionItem] = Field(default_factory=list)
+
+    @field_validator("provider_warnings")
+    @classmethod
+    def provider_warnings_must_be_unique(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("provider_warnings must be unique")
+        return value
