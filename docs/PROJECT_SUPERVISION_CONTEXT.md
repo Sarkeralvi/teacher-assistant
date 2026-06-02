@@ -74,7 +74,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Marking policy calibration is still weak and needs a proper fix.
 - E2E smoke coverage is too thin.
 - Mode gating / ghost-mode clarity still needs hardening.
-- Privacy baseline documentation and deletion support are incomplete.
+- Privacy baseline documentation and an owner-only assessment test-data deletion endpoint now exist for internal/founder testing.
 - Codex CLI is useful for internal validation, but it is not the scalable production runtime.
 - Broad real-document validation is not yet approved.
 - Batch real Codex remains out of scope.
@@ -114,15 +114,16 @@ Important correction from later validation:
 - Fully Automated is explicitly rejected as not ready.
 
 ### Day 5
-- Core AI loop synthetic validation.
-- Validate the sequence: Codex suggests region → teacher accepts → Codex grades accepted region → no auto-finalization → export.
+- TA-W2-022A privacy baseline — completed and validated.
+- Added `docs/PRIVACY_BASELINE.md`, expanded artifact ignore rules, and added authenticated `DELETE /assessments/{assessment_id}/test-data` for owner-only test-data cleanup.
+- This is an internal/local safety baseline only, not production compliance.
 
 ### Day 6
-- TA-W2-022A privacy baseline.
-- Add privacy README guidance, deletion endpoint, ignore artifacts, and storage warnings.
+- Founder real-document controlled evaluation.
+- Requires explicit founder approval for the exact private documents/pages/regions.
 
 ### Day 7
-- Founder real-document controlled evaluation.
+- Optional follow-up hardening based on founder rehearsal findings.
 - Limit to 3–5 selected pages/regions only.
 - No batch.
 - Compare against known marks.
@@ -131,14 +132,14 @@ Important correction from later validation:
 1. TA-W2-019: Marking policy calibration fix
 2. TA-W2-020: Playwright E2E smoke suite
 3. TA-W2-021: Mode gating / ghost-mode clarity
-4. TA-W2-022A: Privacy baseline documentation and deletion endpoint
+4. TA-W2-022A: Privacy baseline documentation and deletion endpoint — completed
 5. Controlled founder real-document AI loop validation
 
 ## Gates before teacher pilot
 - Marking policy calibration shows the expected ordering and usable deltas.
 - E2E smoke coverage passes for auth and core custom-controlled flow.
 - Mode naming and gating are not misleading.
-- Privacy baseline is documented and deletion behavior exists.
+- Privacy baseline is documented and deletion behavior exists for internal/local assessment test data.
 - No auto-finalization is possible.
 - Teacher approval remains required for finalization.
 - Draft suggestions and grading suggestions remain review-required.

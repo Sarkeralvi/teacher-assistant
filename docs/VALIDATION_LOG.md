@@ -1,5 +1,39 @@
 # Validation Log
 
+## TA-W2-022A — Privacy baseline and deletion workflow
+
+- Recorded at: 2026-06-02T18:51:31+06:00
+- Baseline commit: `27a8332833c4e9c4f49962acf66d89e1569d6eb1`
+- Workflow type: privacy baseline docs + authenticated deletion endpoint + synthetic backend tests
+- Real Codex calls: 0
+- Provider used: mock/synthetic only
+- Data policy: synthetic non-student records/files only
+- Product code changes required: yes
+
+### Coverage added
+
+- Added `docs/PRIVACY_BASELINE.md` for founder/internal testing rules, sensitive artifact handling, teacher authority, AI-suggestion limits, deletion workflow, and explicit non-production gaps.
+- Expanded `.gitignore` for local uploads, rendered pages, crops, exports, Playwright outputs, evaluation outputs, local/private PDFs, Office files, and image artifacts.
+- Added authenticated `DELETE /assessments/{assessment_id}/test-data` for owner-only assessment test-data cleanup.
+- Added best-effort local file cleanup helpers for stored relative files, grading-run directories, and question-import directories.
+- Added synthetic backend deletion tests for owner deletion, cross-teacher rejection, auth requirement, dependent-row cleanup, no FinalGrade creation, best-effort file cleanup, and avoiding absolute-path exposure in normal deletion responses.
+
+### Runtime and test results
+
+- Focused privacy deletion tests: passed (`3 passed`).
+- Focused academic/submission/privacy tests: passed (`19 passed`).
+- `node apps/web/tests/workflow-ui.test.mjs`: passed.
+- `make lint`: passed.
+- `make test`: passed (`170 passed`).
+- `git diff --check`: passed.
+
+### Notes
+
+- The deletion endpoint preserves the assessment shell but removes submissions, submission pages, answer regions, grading jobs, grade suggestions, final grades, grading runs, question-import jobs, questions, and rubrics for that assessment's test workflow.
+- Physical file deletion is best-effort under configured local storage paths; API responses return counts and `file_delete_error_count` only, not private absolute paths.
+- This is not full compliance: encryption at rest, formal retention, audit-grade compliance, robust production multi-tenancy, and external teacher production deployment remain unresolved.
+- Founder approval is still required before any real teacher/private-document grading rehearsal.
+
 ## TA-W2-021 — Mode gating / ghost-mode clarity
 
 - Recorded at: 2026-06-02T18:20:04+06:00

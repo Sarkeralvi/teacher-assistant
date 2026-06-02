@@ -118,3 +118,32 @@ class LocalStorage:
                 for root in allowed_roots
             ):
                 shutil.rmtree(resolved_parent, ignore_errors=True)
+
+    def delete_relative_files(self, relative_paths: list[str]) -> int:
+        """Best-effort cleanup for stored relative files.
+
+        Returns the number of paths that could not be resolved or deleted. Callers must not
+        expose the underlying storage paths in API responses.
+        """
+        failure_count = 0
+        for relative_path in relative_paths:
+            try:
+                path = self.resolve_relative(relative_path)
+                if path.is_file():
+                    path.unlink(missing_ok=True)
+            except Exception:
+                failure_count += 1
+        return failure_count
+
+    def delete_grading_run_dirs(self, grading_run_ids: list[int]) -> None:
+        for grading_run_id in grading_run_ids:
+            target = (self.uploads_dir / "grading_runs" / str(grading_run_id)).resolve()
+            if target == self.uploads_dir or self.uploads_dir not in target.parents:
+                continue
+            shutil.rmtree(target, ignore_errors=True)
+
+    def delete_question_import_dir(self, assessment_id: int) -> None:
+        target = (self.uploads_dir / "question_imports" / str(assessment_id)).resolve()
+        if target == self.uploads_dir or self.uploads_dir not in target.parents:
+            return
+        shutil.rmtree(target, ignore_errors=True)

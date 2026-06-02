@@ -1054,9 +1054,9 @@ Priority: P1
 Dependencies: TA-W2-021
 Files affected: docs/**, apps/api/**, apps/web/**, BACKLOG.md
 Goal: Establish a privacy baseline with documentation, deletion support, and artifact/storage warnings.
-Implementation notes: Keep it scoped to privacy baseline and deletion support; do not broaden into unrelated retention policy work.
-Acceptance criteria: Privacy guidance is documented, a deletion endpoint exists where appropriate, and artifact/storage warnings are visible.
+Implementation notes: Added `docs/PRIVACY_BASELINE.md`, expanded ignore rules for local sensitive artifacts, and added authenticated `DELETE /assessments/{assessment_id}/test-data` for owner-only cleanup. The endpoint removes assessment test/grading rows while preserving the assessment shell, attempts best-effort local file cleanup, and returns counts without exposing absolute private paths. No encryption, retention policy, or production compliance was added.
+Acceptance criteria: Privacy guidance is documented, a deletion endpoint exists where appropriate, artifact/storage warnings are documented, and tests prove owner deletion, cross-teacher rejection, dependent-row cleanup, no FinalGrade creation, and no private path exposure in normal deletion responses.
 Tests required: targeted endpoint/docs checks plus repo checks for touched files.
-Risks: Privacy controls are currently policy-heavy; missing technical support will remain a blocker for wider validation.
-Status: Pending
+Risks: This is still an internal/local privacy baseline only; real teacher/private-document rehearsal still requires founder approval and careful scope limits.
+Status: Done
 

@@ -24,13 +24,31 @@ build/
 *.tsbuildinfo
 npm-debug.log*
 
-# Local data
+# Local data / sensitive generated artifacts
 /data/uploads/*
 /data/artifacts/*
 /data/exports/*
+/data/rendered-pages/*
+/data/crops/*
+/data/evaluation/*
+/data/tmp/*
 !/data/uploads/.gitkeep
 !/data/artifacts/.gitkeep
 !/data/exports/.gitkeep
+
+# Local/private document and grading artifacts
+*.pdf
+*.xlsx
+*.xls
+*.docx
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.tif
+*.tiff
+!apps/web/public/**
+!docs/**/*.png
 
 # Playwright / browser E2E artifacts
 apps/web/test-results/
