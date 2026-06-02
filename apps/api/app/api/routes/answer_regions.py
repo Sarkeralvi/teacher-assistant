@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
@@ -12,11 +12,13 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.routes.assessments import get_assessment_or_404
 from app.api.routes.questions import get_question_or_404
 from app.api.routes.submissions import get_submission_or_404
+from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import AnswerRegion, Submission, SubmissionPage
+from app.models import AnswerRegion, Question, Submission, SubmissionPage
 from app.schemas import (
     AnswerRegionCreate,
     AnswerRegionRead,
+    AnswerRegionSuggestionRequest,
     AnswerRegionSuggestionResponse,
     DraftAnswerRegionSuggestion,
 )
@@ -50,8 +52,56 @@ def get_answer_region_or_404(answer_region_id: int, db: Session) -> AnswerRegion
     return region
 
 
-def build_heuristic_answer_region_suggestions(
+def get_questions_for_suggestion(
     page: SubmissionPage,
+    db: Session,
+    question_ids: list[int] | None = None,
+    question_nos: list[str] | None = None,
+) -> list[Question]:
+    statement = (
+        select(Question)
+        .where(Question.assessment_id == page.submission.assessment_id)
+        .order_by(Question.id)
+    )
+    assessment_questions = list(db.scalars(statement).all())
+    by_id = {question.id: question for question in assessment_questions}
+    by_no = {question.question_no: question for question in assessment_questions}
+
+    if not question_ids and not question_nos:
+        return assessment_questions
+
+    selected: list[Question] = []
+    seen_question_ids: set[int] = set()
+
+    for question_id in question_ids or []:
+        question = by_id.get(question_id)
+        if question is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Question must belong to the same assessment as the submission page",
+            )
+        if question.id not in seen_question_ids:
+            selected.append(question)
+            seen_question_ids.add(question.id)
+
+    for question_no in question_nos or []:
+        question = by_no.get(question_no)
+        if question is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Question must belong to the same assessment as the submission page",
+            )
+        if question.id not in seen_question_ids:
+            selected.append(question)
+            seen_question_ids.add(question.id)
+
+    return selected
+
+
+def build_answer_region_suggestions(
+    page: SubmissionPage,
+    questions: Sequence[Question],
+    provider: Literal["mock", "codex_cli"],
 ) -> AnswerRegionSuggestionResponse:
     image_path = LocalStorage().resolve_relative(page.image_path)
     if not image_path.is_file():
@@ -61,39 +111,87 @@ def build_heuristic_answer_region_suggestions(
         )
 
     with Image.open(image_path) as image:
-        if image.width < 160 or image.height < 160:
+        if not questions:
             return AnswerRegionSuggestionResponse(
                 page_id=page.id,
-                message="Page is too small for a conservative heuristic suggestion.",
+                provider=provider,
+                source=provider,
+                needs_review=True,
+                message="No confirmed questions available for draft suggestions.",
+                suggestions=[],
+            )
+        if image.width < 160 or image.height < 120:
+            return AnswerRegionSuggestionResponse(
+                page_id=page.id,
+                provider=provider,
+                source=provider,
+                needs_review=True,
+                message="Page is too small for draft answer-region suggestions.",
                 suggestions=[],
             )
 
         margin_x = max(int(image.width * 0.08), 12)
-        margin_y = max(int(image.height * 0.08), 12)
-        width = image.width - (margin_x * 2)
-        height = image.height - (margin_y * 2)
-        if width <= 0 or height <= 0:
+        box_width = max(image.width - (margin_x * 2), 1)
+        band_height = image.height / max(len(questions), 1)
+        if band_height < 24:
             return AnswerRegionSuggestionResponse(
                 page_id=page.id,
-                message="Heuristic suggestion could not fit within page bounds.",
+                provider=provider,
+                source=provider,
+                needs_review=True,
+                message="Page is too small for draft answer-region suggestions.",
                 suggestions=[],
             )
 
-        suggestion = DraftAnswerRegionSuggestion(
-            draft_id=f"page-{page.id}-heuristic-1",
-            x=Decimal(margin_x),
-            y=Decimal(margin_y),
-            width=Decimal(width),
-            height=Decimal(height),
-            confidence=Decimal("0.25"),
-            reason="Conservative full-page band heuristic based on image dimensions.",
-            source="heuristic",
-            needs_teacher_confirmation=True,
+        suggestions: list[DraftAnswerRegionSuggestion] = []
+        warnings = [
+            "Draft suggestion only.",
+            "Teacher must confirm before grading.",
+        ]
+        for index, question in enumerate(questions):
+            slot_top = int(round(index * band_height))
+            slot_bottom = int(round((index + 1) * band_height))
+            slot_height = max(slot_bottom - slot_top, 1)
+            margin_y = max(int(min(slot_height * 0.15, image.height * 0.08)), 8)
+            y = min(slot_top + margin_y, image.height - 1)
+            usable_height = max(slot_bottom - margin_y - y, 1)
+            height = min(max(int(round(slot_height * 0.6)), 1), usable_height)
+            if y + height > image.height:
+                height = max(image.height - y, 1)
+            if height <= 0:
+                continue
+            suggestions.append(
+                DraftAnswerRegionSuggestion(
+                    draft_id=f"page-{page.id}-question-{question.id}-draft",
+                    page_id=page.id,
+                    suggested_question_id=question.id,
+                    suggested_question_no=question.question_no,
+                    x=Decimal(margin_x),
+                    y=Decimal(y),
+                    width=Decimal(box_width),
+                    height=Decimal(height),
+                    confidence=Decimal("0.35" if len(questions) == 1 else "0.30"),
+                    provider=provider,
+                    source=provider,
+                    warnings=warnings,
+                    reason="Mock deterministic layout based on confirmed questions.",
+                    notes="Mock deterministic layout based on confirmed questions.",
+                    needs_review=True,
+                    needs_teacher_confirmation=True,
+                )
+            )
+        message = (
+            "Mock deterministic suggestions generated from confirmed questions."
+            if provider == "mock"
+            else "Codex proposal suggestions generated from confirmed questions."
         )
         return AnswerRegionSuggestionResponse(
             page_id=page.id,
-            message="Heuristic suggestion generated from page dimensions.",
-            suggestions=[suggestion],
+            provider=provider,
+            source=provider,
+            needs_review=True,
+            message=message,
+            suggestions=suggestions,
         )
 
 
@@ -139,12 +237,36 @@ def create_answer_region(
 
 
 @router.post(
+    "/submission-pages/{page_id}/answer-region-suggestions",
+    response_model=AnswerRegionSuggestionResponse,
+)
+@router.post(
     "/submission-pages/{page_id}/answer-regions/suggest",
     response_model=AnswerRegionSuggestionResponse,
 )
-def suggest_answer_regions(page_id: int, db: DbSession) -> AnswerRegionSuggestionResponse:
+def suggest_answer_regions(
+    page_id: int, db: DbSession, payload: AnswerRegionSuggestionRequest | None = None
+) -> AnswerRegionSuggestionResponse:
     page = get_submission_page_or_404(page_id, db)
-    return build_heuristic_answer_region_suggestions(page)
+    request = payload or AnswerRegionSuggestionRequest()
+    if request.provider != "mock":
+        settings = get_settings()
+        if not settings.brain_allow_real_providers:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Real answer-region suggestions are disabled by configuration",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Codex answer-region suggestions are not implemented yet",
+        )
+    questions = get_questions_for_suggestion(
+        page,
+        db,
+        question_ids=request.question_ids,
+        question_nos=request.question_nos,
+    )
+    return build_answer_region_suggestions(page, questions, provider=request.provider)
 
 
 @router.get("/submissions/{submission_id}/answer-regions", response_model=list[AnswerRegionRead])

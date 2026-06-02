@@ -82,6 +82,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionSuggestions, setRegionSuggestions] = useState<DraftAnswerRegionSuggestion[]>([]);
   const [regionSuggestionMessage, setRegionSuggestionMessage] = useState<string | null>(null);
   const [suggestingRegions, setSuggestingRegions] = useState(false);
+  const [acceptingSuggestionId, setAcceptingSuggestionId] = useState<string | null>(null);
   const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
   const [finalizeDrafts, setFinalizeDrafts] = useState<Record<number, FinalizeDraft>>({});
   const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
@@ -190,10 +191,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   const selectedPage = selectedPageContext();
   const selectedQuestion = questions.find((question) => question.id === Number(selectedQuestionId)) ?? null;
-
-  function formatSuggestionLabel(suggestion: DraftAnswerRegionSuggestion) {
-    return `Draft ${suggestion.draft_id} · ${suggestion.reason}`;
-  }
 
   async function load() {
     setLoading(true);
@@ -430,7 +427,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setError(null);
     setRegionSuggestionMessage(null);
     try {
-      const response = await suggestAnswerRegions(selectedPage.page.id);
+      const response = await suggestAnswerRegions(selectedPage.page.id, {
+        provider: "mock",
+        question_ids: questions.map((question) => question.id),
+      });
       setSuggestionPageId(selectedPage.page.id);
       setRegionSuggestions(response.suggestions);
       setRegionSuggestionMessage(response.message);
@@ -440,6 +440,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         setRegionY(String(first.y));
         setRegionWidth(String(first.width));
         setRegionHeight(String(first.height));
+        setSelectedQuestionId(String(first.suggested_question_id));
       }
     } catch (err) {
       setRegionSuggestions([]);
@@ -447,6 +448,30 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Failed to suggest answer regions");
     } finally {
       setSuggestingRegions(false);
+    }
+  }
+
+  async function handleAcceptRegionSuggestion(suggestion: DraftAnswerRegionSuggestion) {
+    if (!selectedPage) {
+      setError("Select a page before accepting answer-region suggestions");
+      return;
+    }
+    setAcceptingSuggestionId(suggestion.draft_id);
+    setError(null);
+    try {
+      await createAnswerRegion(selectedPage.page.id, {
+        question_id: suggestion.suggested_question_id,
+        x: suggestion.x,
+        y: suggestion.y,
+        width: suggestion.width,
+        height: suggestion.height,
+      });
+      setRegionSuggestions((current) => current.filter((item) => item.draft_id !== suggestion.draft_id));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to accept answer-region suggestion");
+    } finally {
+      setAcceptingSuggestionId(null);
     }
   }
 
@@ -657,7 +682,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <button className={buttonClass} disabled={suggestingRegions || !selectedPage} type="button" onClick={() => void handleSuggestAnswerRegions()}>
             {suggestingRegions ? "Suggesting..." : "Suggest answer regions"}
           </button>
-          <p className="text-sm text-amber-200">Draft suggestions only. Teacher must confirm before grading.</p>
+          <p className="text-sm text-amber-200">AI suggestions are drafts. Teacher must confirm before grading.</p>
         </div>
         {suggestionPageId === selectedPage?.page.id && regionSuggestionMessage ? (
           <p className="rounded border border-slate-700 bg-slate-950/30 p-3 text-sm text-slate-300">{regionSuggestionMessage}</p>
@@ -666,21 +691,54 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm text-slate-300 md:grid-cols-2">
             {regionSuggestions.map((suggestion) => (
               <article key={suggestion.draft_id} className="rounded border border-slate-700 p-3">
-                <p className="font-medium">{formatSuggestionLabel(suggestion)}</p>
-                <p className="text-xs text-slate-500">x {suggestion.x}, y {suggestion.y}, w {suggestion.width}, h {suggestion.height}</p>
-                <p className="text-xs text-slate-500">Confidence {suggestion.confidence} · {suggestion.source} · teacher confirmation required</p>
-                <button
-                  className="mt-2 rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-200 hover:border-cyan-500"
-                  type="button"
-                  onClick={() => {
-                    setRegionX(String(suggestion.x));
-                    setRegionY(String(suggestion.y));
-                    setRegionWidth(String(suggestion.width));
-                    setRegionHeight(String(suggestion.height));
-                  }}
-                >
-                  Use suggestion
-                </button>
+                <p className="font-medium">
+                  Question {suggestion.suggested_question_no} · Page {suggestion.page_id}
+                </p>
+                <p className="text-xs text-slate-500">
+                  x {suggestion.x}, y {suggestion.y}, w {suggestion.width}, h {suggestion.height}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Confidence {suggestion.confidence} · {suggestion.provider} · needs review
+                </p>
+                {suggestion.warnings.length > 0 ? (
+                  <ul className="mt-1 list-disc pl-4 text-xs text-amber-200">
+                    {suggestion.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    className="rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-200 hover:border-cyan-500"
+                    type="button"
+                    onClick={() => {
+                      setRegionX(String(suggestion.x));
+                      setRegionY(String(suggestion.y));
+                      setRegionWidth(String(suggestion.width));
+                      setRegionHeight(String(suggestion.height));
+                      setSelectedQuestionId(String(suggestion.suggested_question_id));
+                    }}
+                  >
+                    Use suggestion
+                  </button>
+                  <button
+                    className="rounded border border-emerald-700 px-3 py-1 text-xs text-emerald-200 hover:border-emerald-500"
+                    type="button"
+                    disabled={acceptingSuggestionId === suggestion.draft_id}
+                    onClick={() => void handleAcceptRegionSuggestion(suggestion)}
+                  >
+                    {acceptingSuggestionId === suggestion.draft_id ? "Accepting..." : "Accept suggestion"}
+                  </button>
+                  <button
+                    className="rounded border border-slate-600 px-3 py-1 text-xs text-slate-300 hover:border-slate-400"
+                    type="button"
+                    onClick={() =>
+                      setRegionSuggestions((current) => current.filter((item) => item.draft_id !== suggestion.draft_id))
+                    }
+                  >
+                    Ignore
+                  </button>
+                </div>
               </article>
             ))}
           </div>

@@ -225,7 +225,7 @@ def test_rejects_question_from_different_assessment(client: TestClient, tmp_path
 
 
 def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
     image_path = tmp_path / "suggest-page.png"
     make_png(image_path, size=(320, 240))
@@ -256,16 +256,23 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
 
-    suggest_response = client.post(f"/submission-pages/{page['id']}/answer-regions/suggest")
+    suggest_response = client.post(
+        f"/submission-pages/{page['id']}/answer-region-suggestions",
+        json={"provider": "mock", "question_ids": [question_response.json()["id"]]},
+    )
     assert suggest_response.status_code == 200
     body = suggest_response.json()
     assert body["page_id"] == page["id"]
-    assert body["source"] == "heuristic"
+    assert body["provider"] == "mock"
+    assert body["needs_review"] is True
     assert body["suggestions"]
     suggestion = body["suggestions"][0]
-    assert suggestion["needs_teacher_confirmation"] is True
-    assert suggestion["source"] == "heuristic"
-    assert suggestion["confidence"] == "0.25"
+    assert suggestion["needs_review"] is True
+    assert suggestion["suggested_question_id"] == question_response.json()["id"]
+    assert suggestion["suggested_question_no"] == "1"
+    assert suggestion["provider"] == "mock"
+    assert suggestion["warnings"]
+    assert suggestion["confidence"] == "0.35"
     assert float(suggestion["x"]) >= 0
     assert float(suggestion["y"]) >= 0
     assert float(suggestion["width"]) > 0
@@ -278,7 +285,7 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
     created_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
         json={
-            "question_id": question_response.json()["id"],
+            "question_id": suggestion["suggested_question_id"],
             "x": suggestion["x"],
             "y": suggestion["y"],
             "width": suggestion["width"],
@@ -287,13 +294,19 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
     )
     assert created_response.status_code == 201
 
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+
 
 def test_answer_region_suggestion_endpoint_handles_small_page_cleanly(
     client: TestClient, tmp_path: Path
 ) -> None:
     _question, page = create_uploaded_page(client, tmp_path)
 
-    suggest_response = client.post(f"/submission-pages/{page['id']}/answer-regions/suggest")
+    suggest_response = client.post(
+        f"/submission-pages/{page['id']}/answer-region-suggestions",
+        json={"provider": "mock"},
+    )
     assert suggest_response.status_code == 200
     body = suggest_response.json()
     assert body["page_id"] == page["id"]
@@ -301,3 +314,24 @@ def test_answer_region_suggestion_endpoint_handles_small_page_cleanly(
     assert "too small" in body["message"]
 
     assert client.get(f"/submissions/{page['submission_id']}/answer-regions").json() == []
+
+
+def test_answer_region_suggestion_rejects_cross_assessment_questions(
+    client: TestClient, tmp_path: Path
+) -> None:
+    question, page = create_uploaded_page(client, tmp_path)
+    other_question, _other_page = create_uploaded_page(client, tmp_path)
+
+    response = client.post(
+        f"/submission-pages/{page['id']}/answer-region-suggestions",
+        json={"provider": "mock", "question_ids": [other_question["id"]]},
+    )
+
+    assert response.status_code == 422
+    assert "same assessment" in response.text
+
+    accept_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 1, "y": 1, "width": 10, "height": 10},
+    )
+    assert accept_response.status_code == 201

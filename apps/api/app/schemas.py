@@ -387,6 +387,12 @@ class AnswerRegionCreate(BaseModel):
     height: Decimal = Field(gt=Decimal("0"))
 
 
+class AnswerRegionSuggestionRequest(BaseModel):
+    provider: Literal["mock", "codex_cli"] = "mock"
+    question_ids: list[int] | None = None
+    question_nos: list[str] | None = None
+
+
 class AnswerRegionRead(ORMBase):
     id: int
     submission_id: int
@@ -403,19 +409,28 @@ class AnswerRegionRead(ORMBase):
 
 class DraftAnswerRegionSuggestion(BaseModel):
     draft_id: str
+    page_id: int
+    suggested_question_id: int
+    suggested_question_no: str
     x: Decimal
     y: Decimal
     width: Decimal
     height: Decimal
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    reason: str
-    source: str = "heuristic"
+    provider: Literal["mock", "codex_cli"] = "mock"
+    source: str = "mock"
+    reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    needs_review: bool = True
     needs_teacher_confirmation: bool = True
 
 
 class AnswerRegionSuggestionResponse(BaseModel):
     page_id: int
-    source: str = "heuristic"
+    provider: Literal["mock", "codex_cli"] = "mock"
+    source: str = "mock"
+    needs_review: bool = True
     message: str
     suggestions: list[DraftAnswerRegionSuggestion]
 

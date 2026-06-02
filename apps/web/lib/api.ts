@@ -226,19 +226,34 @@ export type AnswerRegion = {
 
 export type DraftAnswerRegionSuggestion = {
   draft_id: string;
+  page_id: number;
+  suggested_question_id: number;
+  suggested_question_no: string;
   x: string | number;
   y: string | number;
   width: string | number;
   height: string | number;
   confidence: string | number;
-  reason: string;
+  provider: "mock" | "codex_cli";
   source: string;
+  reason?: string | null;
+  warnings: string[];
+  notes: string | null;
+  needs_review: boolean;
   needs_teacher_confirmation: boolean;
+};
+
+export type AnswerRegionSuggestionRequest = {
+  provider?: "mock" | "codex_cli";
+  question_ids?: number[];
+  question_nos?: string[];
 };
 
 export type AnswerRegionSuggestionResponse = {
   page_id: number;
+  provider: "mock" | "codex_cli";
   source: string;
+  needs_review: boolean;
   message: string;
   suggestions: DraftAnswerRegionSuggestion[];
 };
@@ -690,9 +705,10 @@ export function createAnswerRegion(pageId: number, payload: AnswerRegionCreate) 
   });
 }
 
-export function suggestAnswerRegions(pageId: number) {
-  return apiRequest<AnswerRegionSuggestionResponse>(`/submission-pages/${pageId}/answer-regions/suggest`, {
+export function suggestAnswerRegions(pageId: number, payload: AnswerRegionSuggestionRequest = {}) {
+  return apiRequest<AnswerRegionSuggestionResponse>(`/submission-pages/${pageId}/answer-region-suggestions`, {
     method: "POST",
+    body: payload,
   });
 }
 
