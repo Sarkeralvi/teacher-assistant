@@ -132,15 +132,22 @@ def test_openai_provider_mocked_response_validates_to_grade_suggestion() -> None
         client=client,
     )
 
+    grading_prompt = build_grading_prompt(
+        question_text="Explain the concept.",
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/region.png",
+        image_input_enabled=False,
+    )
+    assert "Marking policy: general" in grading_prompt[1]["content"]
+    assert "General marking" in grading_prompt[1]["content"]
+    assert "Apply the rubric criterion-by-criterion" in grading_prompt[1]["content"]
+    assert "Return strict JSON" in grading_prompt[1]["content"]
+    assert "teacher_review_required" in grading_prompt[1]["content"]
+
     result = provider.grade(
         task_name="answer_region_grading",
         model_policy=ModelPolicy.REAL_GRADING,
-        messages=build_grading_prompt(
-            question_text="Explain the concept.",
-            rubric_json=rubric_payload(),
-            answer_image_path="artifacts/region.png",
-            image_input_enabled=False,
-        ),
+        messages=grading_prompt,
         question_text="Explain the concept.",
         question_total_marks=Decimal("10.00"),
         rubric_json=rubric_payload(),

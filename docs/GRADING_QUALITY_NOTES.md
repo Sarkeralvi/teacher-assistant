@@ -1,5 +1,35 @@
 # Grading Quality Notes
 
+## TA-W2-019 — Marking policy calibration prompt and harness update
+
+Recorded at: 2026-06-02T08:00:00+06:00
+
+### Scope
+
+- Policy prompt update: shared Tough/General/Easy guidance now uses one source of truth.
+- Deterministic harness: synthetic non-student examples only; fake mode is the default.
+- Real provider calibration: not run in this task.
+- Production/batch grading: not run.
+
+### Synthetic calibration cases and fake scores
+
+|| Case | Scenario | Tough | General | Easy |
+|| --- | --- | ---: | ---: | ---: |
+|| A | Correct final answer, weak/no working | 3.0 | 5.0 | 7.0 |
+|| B | Partially correct method with one wrong step | 2.0 | 4.0 | 6.0 |
+|| C | Mostly complete answer with minor notation issue | 7.0 | 8.0 | 9.0 |
+
+### Result
+
+- `tough <= general <= easy`: true for every synthetic case.
+- Meaningful separation: true on the controlled synthetic set.
+- Final grade creation: none.
+- Real Codex calls: 0 in this task.
+
+### Interpretation
+
+This is a prompt-and-test calibration fix, not a claim about real classroom data. The harness is useful for regression checks and documentation, but future real-provider calibration is still needed before making stronger quality claims about live grading behavior.
+
 ## TA-W1-031 — Tiny synthetic grading-quality evaluation
 
 Recorded at: 2026-05-29T10:04:17Z

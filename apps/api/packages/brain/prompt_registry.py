@@ -7,24 +7,45 @@ PROMPT_VERSIONS: dict[ModelPolicy, str] = {
     ModelPolicy.REAL_GRADING: "real-grading-v1",
 }
 
-MARKING_POLICY_INSTRUCTIONS: dict[str, str] = {
+MARKING_POLICY_INSTRUCTIONS: dict[str, tuple[str, ...]] = {
     "tough": (
-        "Tough marking: Strictly follow the rubric. Penalize missing reasoning even if "
-        "the final answer is correct. Penalize unsupported final answers. Penalize "
-        "ambiguous or unreadable work. Do not give benefit of doubt unless evidence is "
-        "visible. Lower confidence when required steps are missing or handwriting is "
-        "unclear."
+        "Tough marking",
+        "- Apply the rubric criterion-by-criterion rather than using a vague overall impression.",
+        "- Award full marks only for complete, correct, and well-justified answers.",
+        "- Penalize missing reasoning, missing steps, vague reasoning, unsupported claims,",
+        "  and final answers that are not justified by visible work.",
+        "- A correct final answer with little or no working should receive limited credit,",
+        "  not automatic full marks.",
+        "- Penalize notation or presentation problems when they reduce clarity or hide",
+        "  missing reasoning.",
+        "- When a score is borderline, bias toward the lower end of the rubric range.",
+        "- Confidence should fall when key steps are missing or evidence is hard to read.",
     ),
     "general": (
-        "General marking: Follow the rubric normally. Award marks for equivalent valid "
-        "methods. Penalize clear errors according to the rubric. Use balanced judgement."
+        "General marking",
+        "- Apply the rubric criterion-by-criterion and keep the rubric as the source of truth.",
+        "- Award marks fairly for correct methods and correct reasoning.",
+        "- Give partial credit when the method is mostly correct but a step is missing or",
+        "  slightly wrong.",
+        "- Minor wording, notation, or presentation issues should not be heavily penalized",
+        "  when the meaning is clear.",
+        "- Balance the final answer and the working instead of over-weighting either one.",
+        "- When a score is borderline, choose the middle of the plausible rubric range.",
     ),
     "easy": (
-        "Easy marking: Follow the rubric but be lenient on minor notation/presentation "
-        "issues. Accept equivalent reasoning where mathematically/semantically valid. "
-        "Give partial credit for correct ideas even if presentation is imperfect. Do not "
-        "ignore major conceptual errors. Do not award marks for unsupported work that "
-        "contradicts the answer."
+        "Easy marking",
+        "- Apply the rubric criterion-by-criterion and keep the rubric as the source of truth.",
+        "- Award partial credit generously when the answer shows real understanding or visible",
+        "  method.",
+        "- Give the benefit of the doubt when reasoning is partially visible and the answer is",
+        "  plausibly on track.",
+        "- Penalize only clear conceptual mistakes, unsupported claims, or missing required",
+        "  components.",
+        "- A correct final answer with weak working can receive more credit than under tough or",
+        "  general, but not automatic full marks.",
+        "- Do not ignore major conceptual errors or contradictions.",
+        "- When a score is borderline, bias toward the higher end of the rubric range if the",
+        "  rubric allows it.",
     ),
 }
 
@@ -38,6 +59,15 @@ lower confidence and explain the uncertainty. Output only strict JSON matching t
 
 def get_prompt_version(policy: ModelPolicy) -> str:
     return PROMPT_VERSIONS[policy]
+
+
+def build_marking_policy_instruction(marking_policy: str) -> str:
+    normalized_policy = marking_policy.strip().lower()
+    return "\n".join(
+        MARKING_POLICY_INSTRUCTIONS.get(
+            normalized_policy, MARKING_POLICY_INSTRUCTIONS["general"]
+        )
+    )
 
 
 def build_grading_prompt(
@@ -64,9 +94,7 @@ def build_grading_prompt(
             "Do not claim handwriting/image understanding."
         )
     normalized_policy = marking_policy.strip().lower()
-    policy_instruction = MARKING_POLICY_INSTRUCTIONS.get(
-        normalized_policy, MARKING_POLICY_INSTRUCTIONS["general"]
-    )
+    policy_instruction = build_marking_policy_instruction(normalized_policy)
     user_prompt = f"""
 Task: answer_region_grading
 Question text:

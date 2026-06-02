@@ -1,5 +1,45 @@
 # Validation Log
 
+## TA-W2-019 — Marking policy calibration fix
+
+- Recorded at: 2026-06-02T08:00:00+06:00
+- Baseline commit: `5066b860ecc76c3351e3b2e53a0642b18ecefd8b`
+- Workflow type: prompt calibration + deterministic synthetic harness
+- Real Codex calls: 0
+- Provider used: fake/mock deterministic harness
+- Data policy: synthetic non-student examples only
+- Product code changes required: yes
+- Commit generated during TA-W2-019 validation itself: pending
+
+### Prompt and harness changes
+
+- Added a shared `build_marking_policy_instruction()` source so Tough/General/Easy guidance is consistent across grading prompts.
+- Tough now explicitly biases toward the lower end of the rubric range, especially when working is weak or missing.
+- General now explicitly targets the middle of the plausible rubric range.
+- Easy now explicitly biases toward the higher end of the rubric range when the rubric allows it.
+- Added a deterministic marking-policy calibration harness with synthetic non-student examples and a fake default run mode.
+
+### Synthetic calibration cases
+
+|| Case | Scenario | Fake Tough | Fake General | Fake Easy | Adjacent gap |
+|| --- | --- | ---: | ---: | ---: | ---: |
+|| A | Correct final answer, weak/no working | 3.0 | 5.0 | 7.0 | 2.0 / 2.0 |
+|| B | Partially correct method with one wrong step | 2.0 | 4.0 | 6.0 | 2.0 / 2.0 |
+|| C | Mostly complete answer with minor notation issue | 7.0 | 8.0 | 9.0 | 1.0 / 1.0 |
+
+### Calibration result
+
+- `case_count`: 3
+- `call_count`: 0 real provider calls
+- `monotonic_ordering`: true (`tough <= general <= easy` held for every synthetic case)
+- `meaningful_separation`: true (adjacent gaps were at least 10% of max marks)
+- `final_grade_count`: 0
+- `real_provider_used`: false
+
+### Interpretation
+
+The prompt is now more operational and the harness can prove the desired ordering on controlled synthetic cases without using real AI. This does **not** prove production calibration on real student work. If a future real Codex calibration still collapses to identical scores, the next action is stronger few-shot or score-band prompting, not hidden fallback logic.
+
 ## TA-W1-019 — End-to-end teacher workflow validation
 
 - Recorded at: 2026-05-27T05:23:20+06:00

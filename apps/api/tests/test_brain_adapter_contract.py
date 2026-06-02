@@ -117,24 +117,34 @@ def test_marking_policy_prompt_text_is_distinct_for_each_policy() -> None:
         )
     )
 
-    assert "Tough marking:" in tough_prompt
-    assert "Strictly follow the rubric." in tough_prompt
-    assert "Penalize missing reasoning even if the final answer is correct." in tough_prompt
-    assert "Penalize unsupported final answers." in tough_prompt
-    assert "Penalize ambiguous or unreadable work." in tough_prompt
-    assert (
-        "Lower confidence when required steps are missing or handwriting is unclear."
-        in tough_prompt
+    assert all(
+        fragment in tough_prompt
+        for fragment in (
+            "Apply the rubric criterion-by-criterion",
+            "Award full marks only for complete, correct, and well-justified answers.",
+            "A correct final answer with little or no working should receive limited credit",
+            "bias toward the lower end of the rubric range",
+        )
     )
-    assert "General marking:" in general_prompt
-    assert "Award marks for equivalent valid methods." in general_prompt
-    assert "Use balanced judgement." in general_prompt
-    assert "Easy marking:" in easy_prompt
-    assert "be lenient on minor notation/presentation issues." in easy_prompt
-    assert "Accept equivalent reasoning where mathematically/semantically valid." in easy_prompt
-    assert "Give partial credit for correct ideas even if presentation is imperfect." in easy_prompt
-    assert "Do not ignore major conceptual errors." in easy_prompt
-    assert "Do not award marks for unsupported work that contradicts the answer." in easy_prompt
+    assert "General marking" in general_prompt
+    assert all(
+        fragment in general_prompt
+        for fragment in (
+            "Award marks fairly for correct methods and correct reasoning.",
+            "Give partial credit when the method is mostly correct but a step is missing or",
+            "choose the middle of the plausible rubric range",
+        )
+    )
+    assert "Easy marking" in easy_prompt
+    assert all(
+        fragment in easy_prompt
+        for fragment in (
+            "Award partial credit generously when the answer shows real understanding or visible",
+            "Give the benefit of the doubt when reasoning is partially visible",
+            "A correct final answer with weak working can receive more credit",
+            "bias toward the higher end of the rubric range",
+        )
+    )
 
 
 def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> None:
@@ -158,7 +168,7 @@ def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> N
     )
 
     assert "Marking policy: easy" in prompt
-    assert "Easy marking:" in prompt
+    assert "Easy marking" in prompt
     assert "Do not change max_score or criterion max_marks because of marking policy." in prompt
     assert "marking_policy:easy" in prompt
     assert "data:image" not in prompt

@@ -1013,13 +1013,13 @@ Title: Marking policy calibration fix
 Owner: Hermes
 Priority: P1
 Dependencies: TA-W2-018B
-Files affected: apps/api/**, apps/web/**, tests/**, BACKLOG.md
+Files affected: apps/api/packages/brain/prompt_registry.py, apps/api/packages/evaluation/marking_policy_calibration.py, apps/api/tests/test_brain_adapter_contract.py, apps/api/tests/test_openai_provider.py, apps/api/tests/test_codex_cli_provider.py, apps/api/tests/test_marking_policy_calibration.py, docs/VALIDATION_LOG.md, docs/GRADING_QUALITY_NOTES.md, BACKLOG.md
 Goal: Fix marking policy calibration so the same synthetic answer and rubric produce a meaningful toughness gradient (`tough < general < easy`).
-Implementation notes: Keep scope bounded to calibration and persistence of policy differences; do not expand into unrelated grading changes.
+Implementation notes: Introduced one shared policy-instruction source, made Tough/General/Easy instructions concrete and operational, and added a deterministic synthetic calibration harness. Do not expand into unrelated grading changes.
 Acceptance criteria: Synthetic test cases show a meaningful score delta across Tough/General/Easy.
-Tests required: targeted calibration tests, relevant backend/frontend checks, and repo checks for touched files.
-Risks: If calibration is still weak, downstream validation and teacher trust will remain limited.
-Status: Pending
+Tests required: targeted calibration tests, relevant backend/provider checks, repo checks for touched files.
+Risks: If calibration is still weak on real provider runs later, downstream validation and teacher trust will remain limited.
+Status: Done
 
 TASK-ID: TA-W2-020
 Title: Playwright E2E smoke suite
