@@ -969,3 +969,16 @@ Tests required: targeted auth flow smoke, frontend checks, backend/API auth test
 Risks: Token persistence and redirect race conditions can create flaky validation results if not handled carefully.
 Status: Done
 
+TASK-ID: TA-W2-016A
+Title: Single real Codex grading validation record
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-015
+Files affected: docs/VALIDATION_LOG.md, docs/CODEX_DEV_RUNTIME.md, BACKLOG.md
+Goal: Record the successful TA-W2-016A controlled validation of exactly one real Codex grading call and keep the scope documented as one selected answer region only.
+Implementation notes: Documentation/backlog-only record. `make codex-ok` passed after forcing the Codex model to `gpt-5.5`; the default `gpt-5.3-codex` was rejected under the current ChatGPT-backed login. Host backend was started with Codex dev flags, exactly one real grading call was run against `POST /answer-regions/4281/grade-codex-dev`, the endpoint returned `201 Created`, a `GradeSuggestion` was created with `model_provider=codex_cli`, `needs_review=true`, and `image_input_used`, no `FinalGrade` was created afterward, no auto-finalization occurred, and the host backend was stopped afterward while Postgres and Redis stayed running.
+Acceptance criteria: BACKLOG marks TA-W2-016A done; validation log contains the same evidence; runtime docs include the `gpt-5.5` compatibility note; no product code is changed; the record clearly states single-region only and not batch or fully automated grading.
+Tests required: `git diff --check`; `make lint`; `make down` if no further runtime is needed; final git status review.
+Risks: This proves the real Codex path for one selected answer region only and does not prove grading quality or batch automation.
+Status: Done
+

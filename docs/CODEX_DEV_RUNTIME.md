@@ -121,6 +121,7 @@ Notes:
 - Keep `BRAIN_PROVIDER=mock`; the browser smoke endpoint constructs the Codex CLI provider explicitly.
 - Keep `CODEX_CLI_IMAGE_INPUT_ENABLED=false` for default host-backend smoke mode. Set it to `true` only for an approved one-answer image-input smoke after confirming the installed Codex CLI supports `-i, --image <FILE>`.
 - Keep `CODEX_CLI_SANDBOX=read-only` and `CODEX_CLI_APPROVAL_POLICY=never`.
+- In this environment, `gpt-5.5` was required for the ChatGPT-backed Codex login; the default `gpt-5.3-codex` was rejected during validation.
 
 ### Image-input smoke mode
 

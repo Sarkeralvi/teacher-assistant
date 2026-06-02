@@ -423,3 +423,33 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 ### Caveat
 
 |- The auth flow is now reliable for browser validation as long as the smoke waits for the new stable hooks / hydrated submit buttons.
+
+## TA-W2-016A — Single real Codex grading validation
+
+- Recorded at: 2026-06-02T07:58:22+06:00
+- Baseline commit: `938804bf9550cfd6f94259754fb5e0d7c3ccafb5`
+- Workflow type: manual controlled host-backend smoke with one selected answer region only
+- Real Codex calls: 1 grading call through `POST /answer-regions/4281/grade-codex-dev`
+- Provider used for real-grade step: `codex_cli`
+- Data policy: synthetic/non-student teacher demo data only
+- Product code changes required: none
+- Codex CLI model compatibility: `gpt-5.5` worked; the default `gpt-5.3-codex` was rejected under the current ChatGPT-backed login
+
+### Validation result
+
+- HTTP result: `201 Created`
+- GradeSuggestion created: yes
+- `model_provider`: `codex_cli`
+- `needs_review`: `true`
+- `review_flags` included: `image_input_used`
+- FinalGrade existed afterward: no
+- Auto-finalization occurred: no
+- Host backend stopped afterward: yes
+- Postgres and Redis left running: yes
+
+### Caveats
+
+- This proves a single selected answer region only, not batch grading.
+- This is not fully automated grading; teacher review remains mandatory.
+- This is not a grading-quality proof.
+- The run validates the real Codex path and persistence contract only.
