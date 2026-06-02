@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     codex_browser_grading_enabled: bool = Field(
         default=False, alias="CODEX_BROWSER_GRADING_ENABLED"
     )
+    answer_region_grading_crop_padding_ratio: float = Field(
+        default=0.10, alias="ANSWER_REGION_GRADING_CROP_PADDING_RATIO"
+    )
     semi_automated_mode_enabled: bool = Field(
         default=False, alias="SEMI_AUTOMATED_MODE_ENABLED"
     )

@@ -1131,3 +1131,18 @@ Validation plan:
 Notes:
 - Triggered by TA-W2-023A: `1(b)(i)` improved `3/6 -> 4/6` but remained below founder fair `6/6`.
 - Teacher observation remains blocked until real retest is acceptable or demo framing is narrowed to conservative human-in-loop draft suggestions.
+
+TASK-ID: TA-W2-024
+Title: Answer-region crop/context audit for real grading quality
+Status: Done / grading-quality blocked
+Added: 2026-06-03T00:53:02+06:00
+Scope:
+- Audit the actual `1(b)(i)` crop against the full rendered script page.
+- Add minimal AI-grading-only padded crop context where crop/context is inadequate.
+- Run at most one real Codex grading retest after crop/context is verified or improved.
+Outcome:
+- Original crop was too tight at bottom/right; a 10% padded grading-context crop recovers more denominator/result evidence while preserving original region coordinates.
+- Implemented `ANSWER_REGION_GRADING_CROP_PADDING_RATIO` default `0.10`, clamped to page bounds, with separate `artifacts/grading_context/...` images and `grading_crop_padded` metadata.
+- One real Codex retest on `1(b)(i)` still returned `4/6` vs founder fair `6/6`; no FinalGrade was created.
+Risks:
+- Remaining issue should be treated as real-model conservative scoring limitation for now; do not continue prompt/crop churn on this case without a new founder-approved direction.

@@ -1,5 +1,36 @@
 # Validation Log
 
+## TA-W2-024 — Answer-region crop/context audit for real grading quality
+
+- Recorded at: 2026-06-03T00:53:02+06:00
+- Baseline commit: `9ccadf028411ce966813dee58d2a725516a5c869`
+- Workflow type: answer-region crop/context audit + minimal AI-grading context fix
+- Real Codex grading calls: 1
+- Region suggestion calls: 0
+- Batch grading: not run
+- FinalGrade creation: 0
+- Teacher approval/edit/export/observation: not run
+
+### Crop/context finding
+
+The original `1(b)(i)` crop used the preserved coordinates `x=118`, `y=1176`, `width=1018`, `height=430` on page 3. Visual audit of the private local crop and full rendered page classified the crop as **mixed but inadequate**: it included the Bayes setup/denominator work, but it was tight at the bottom/right and cut off visible denominator arithmetic/result context. A 10% padded context crop recovered more of the denominator/result evidence without adding excessive unrelated content. The full visible page still did not show a fully completed posterior division/value, so the remaining grading-quality issue is not purely a crop problem.
+
+### Change made
+
+Added configurable AI-grading-only answer-region crop padding via `ANSWER_REGION_GRADING_CROP_PADDING_RATIO` (default `0.10`). The original teacher/founder answer-region coordinates and stored crop remain unchanged; grading now sends a separate clamped relative `artifacts/grading_context/...` crop and records `grading_crop_padded` plus relative-path metadata in the suggestion raw response.
+
+### Real retest result
+
+The prior TA-W2-023C score was `4/6`; founder fair remained `6/6`. After the padded context fix, one real Codex retest for recreated `1(b)(i)` again returned `4/6` with `model_provider=codex_cli`, `model_name=gpt-5.5`, `needs_review=true`, and no `FinalGrade`. The grading context expanded from `1018x430` to `1174x516`.
+
+### Classification
+
+Mixed: crop/context was inadequate and is now improved for future grading calls, but the post-fix real Codex score remained `4/6`. Treat the remaining under-credit as a real-model scoring limitation for now, not another prompt-only/crop-only fix target.
+
+### Limitation
+
+During focused backend tests, the live local Postgres test data from the previous TA-W2-023C run was cleared by the existing cleanup fixture; the retest state was recreated from preserved local artifacts and scripts. No private PDFs, crops, pages, exports, screenshots, or generated artifacts were committed.
+
 ## TA-W2-023B — Bayes-specific score-band grading guidance
 
 - Recorded at: 2026-06-03T00:16:25+06:00

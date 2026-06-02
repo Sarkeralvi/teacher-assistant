@@ -72,7 +72,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 
 ## What is not ready
 - Manual answer-region mapping is not the final teacher workflow.
-- Handwritten math grading remains quality-gated: TA-W2-023A improved `1(b)(i)` from `3/6` to `4/6`, but founder fair is `6/6`; TA-W2-023B adds Bayes-specific score-band grounding and still needs a capped one-region retest before teacher observation.
+- Handwritten math grading remains quality-gated: `1(b)(i)` improved from `3/6` to `4/6`, but founder fair is `6/6`; TA-W2-024 found the original crop/context was too tight and added padded AI-grading context, yet a one-call real Codex retest still returned `4/6`.
 - E2E smoke coverage is too thin.
 - Mode gating / ghost-mode clarity still needs hardening.
 - Privacy baseline documentation and an owner-only assessment test-data deletion endpoint now exist for internal/founder testing.
@@ -80,6 +80,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Broad real-document validation is not yet approved.
 - TA-W2-022B founder real-document grading rehearsal is invalidated for quality evaluation because canonical question labels/max marks were wrong or ambiguous.
 - TA-W2-022D corrected canonical-unit rehearsal worked technically but showed Codex under-crediting near-correct handwritten Bayes/statistics work (`1(b)(i)` scored 3/6 vs founder fair 6/6).
+- TA-W2-024 classifies the remaining Bayes under-credit as mixed but now mostly a real-model scoring limitation: crop context was improved, no FinalGrade was created, and teacher observation remains blocked for grading-accuracy demo purposes.
 - Batch real Codex remains out of scope.
 
 ## Expert-review synthesis

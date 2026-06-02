@@ -1,5 +1,27 @@
 # Grading Quality Notes
 
+## TA-W2-024 — Crop/context audit and padded grading context
+
+Recorded at: 2026-06-03T00:53:02+06:00
+
+### Crop/context diagnosis
+
+For the `1(b)(i)` Bayes answer, the original crop was too tight at the bottom/right. It captured much of the Bayes setup and denominator expansion, but cut off visible denominator arithmetic/result context. A 10% padded crop captured more complete visual evidence, including the denominator result, without adding excessive unrelated content.
+
+The full rendered page still did not clearly show a completed posterior division/final value, so the issue is mixed: crop/context quality was a real contributor, but not the whole explanation for the remaining under-credit.
+
+### Product/code change
+
+AI grading now uses a separate padded, clamped grading-context crop by default (`ANSWER_REGION_GRADING_CROP_PADDING_RATIO=0.10`). Original answer-region coordinates and the stored teacher crop remain unchanged for audit/display. Grade suggestions record `grading_crop_padded` and safe relative metadata for the grading context image.
+
+### Real Codex retest
+
+One real Codex retest was run after the context fix. The previous TA-W2-023C score was `4/6`; the padded-context retest also returned `4/6`, while founder fair remains `6/6`. `needs_review=true` was preserved and no `FinalGrade` was created.
+
+### Recommendation
+
+Stop additional prompt/crop attempts on this case for now. Frame Codex as a conservative draft reviewer: useful for workflow validation and draft feedback, but teacher edit/final authority is necessary. Teacher observation should remain blocked for grading-accuracy demo purposes; if used at all, it should be framed only as workflow feedback.
+
 ## TA-W2-023B — Bayes/probability score-band grounding
 
 Recorded at: 2026-06-03T00:16:25+06:00

@@ -71,6 +71,12 @@ class LocalStorage:
         target = target_dir / f"region_{uuid4().hex}.png"
         return StoredFile(target, self.relative_to_root(target))
 
+    def grading_context_image_path(self, submission_id: int) -> StoredFile:
+        target_dir = self.artifacts_dir / "grading_context" / f"submission_{submission_id}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"region_context_{uuid4().hex}.png"
+        return StoredFile(target, self.relative_to_root(target))
+
     def save_question_import(
         self, upload: UploadFile, assessment_id: int, suffix: str
     ) -> StoredFile:

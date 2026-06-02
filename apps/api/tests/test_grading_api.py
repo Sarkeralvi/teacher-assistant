@@ -224,18 +224,97 @@ def test_grade_answer_region_creates_job_and_mock_suggestion(
         == "This is a mock grading suggestion for pipeline validation only."
     )
     raw = suggestion["raw_response_json"]
-    assert raw["review_flags"] == [
+    assert set(raw["review_flags"]) == {
         "mock_provider",
         "teacher_review_required",
+        "grading_crop_padded",
         "marking_policy:general",
-    ]
+    }
     assert raw["marking_policy"] == "general"
+    assert raw["grading_context"]["original_image_path"] == region["image_path"]
+    assert "grading_context" in raw["grading_context"]["answer_image_path"]
     assert [item["criterion_id"] for item in raw["rubric_breakdown"]] == ["concept", "clarity"]
 
     db_session.expire_all()
     assert db_session.scalars(select(GradingJob)).one().status == "succeeded"
     assert db_session.scalars(select(GradeSuggestion)).one().model_provider == "mock"
 
+
+def test_grading_uses_padded_context_crop_without_changing_region_coordinates(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.grading_service import GradingService
+
+    region_payload = create_answer_region_with_optional_rubric(client, tmp_path)
+    region = db_session.get(AnswerRegion, region_payload["id"])
+    assert region is not None
+    original_image_path = region.image_path
+    original_coordinates = (region.x, region.y, region.width, region.height)
+
+    class RecordingAdapter:
+        provider = type("Provider", (), {"provider_name": "mock"})()
+
+        def __init__(self) -> None:
+            self.answer_image_path: str | None = None
+
+        def grade_answer_region(self, **kwargs: object) -> GradeSuggestionOutput:
+            self.answer_image_path = str(kwargs["answer_image_path"])
+            return GradeSuggestionOutput(
+                model_provider="mock",
+                model_name="mock-grader-v1",
+                prompt_version="mock-grading-v1",
+                score=Decimal("0.00"),
+                max_score=Decimal("5.00"),
+                confidence=Decimal("0.00"),
+                feedback_to_student="mock",
+                detected_answer_summary="mock summary",
+                major_errors=[],
+                rubric_breakdown=[
+                    RubricBreakdownItem(
+                        criterion_id="concept",
+                        criterion="Core concept",
+                        max_marks=Decimal("5.00"),
+                        awarded_marks=Decimal("0.00"),
+                        reason="mock",
+                        confidence=Decimal("0.00"),
+                    )
+                ],
+                needs_review=True,
+                review_flags=["mock_provider", "teacher_review_required"],
+            )
+
+    monkeypatch.setenv("ANSWER_REGION_GRADING_CROP_PADDING_RATIO", "0.10")
+    get_settings.cache_clear()
+    service = GradingService(db_session, use_configured_adapter=False)
+    recording_adapter = RecordingAdapter()
+    service.adapter = recording_adapter  # type: ignore[assignment]
+
+    service.grade_answer_region(region.id)
+
+    assert recording_adapter.answer_image_path is not None
+    assert recording_adapter.answer_image_path != original_image_path
+    assert "grading_context" in recording_adapter.answer_image_path
+    padded_path = service.storage.resolve_relative(recording_adapter.answer_image_path)
+    original_path = service.storage.resolve_relative(original_image_path)
+    with Image.open(original_path) as original_image, Image.open(padded_path) as padded_image:
+        assert padded_image.width > original_image.width
+        assert padded_image.height > original_image.height
+
+    db_session.refresh(region)
+    assert (region.x, region.y, region.width, region.height) == original_coordinates
+    suggestion = db_session.scalars(select(GradeSuggestion)).one()
+    assert "grading_crop_padded" in suggestion.raw_response_json["review_flags"]
+    assert (
+        suggestion.raw_response_json["grading_context"]["original_image_path"]
+        == original_image_path
+    )
+    assert (
+        suggestion.raw_response_json["grading_context"]["answer_image_path"]
+        == recording_adapter.answer_image_path
+    )
 
 
 def test_batch_mock_grading_grades_ungraded_regions_only_and_skips_existing(

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import get_settings
 from app.models import AnswerRegion, Assessment, GradeSuggestion, GradingJob, Rubric, Submission
+from app.services.answer_region_processing import crop_grading_context_image
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
 from packages.brain.codex_cli_provider import CodexCliProvider
@@ -103,6 +104,7 @@ class GradingService:
     def _grade_region(
         self, region: AnswerRegion, adapter: BrainAdapter, *, marking_policy: str
     ) -> tuple[GradingJob, GradeSuggestion]:
+        settings = get_settings()
         rubric = self._get_active_rubric(region.question_id)
         image_path = self.storage.resolve_relative(region.image_path)
 
@@ -119,20 +121,42 @@ class GradingService:
             )
 
         try:
+            grading_answer_image_path = region.image_path
+            grading_context: dict[str, object] | None = None
+            if settings.answer_region_grading_crop_padding_ratio > 0:
+                grading_answer_image_path = crop_grading_context_image(
+                    storage=self.storage,
+                    source_image_path=region.page.image_path,
+                    submission_id=region.submission_id,
+                    x=region.x,
+                    y=region.y,
+                    width=region.width,
+                    height=region.height,
+                    padding_ratio=settings.answer_region_grading_crop_padding_ratio,
+                )
+                grading_context = {
+                    "original_image_path": region.image_path,
+                    "answer_image_path": grading_answer_image_path,
+                    "padding_ratio": settings.answer_region_grading_crop_padding_ratio,
+                }
             output = adapter.grade_answer_region(
                 question_text=region.question.question_text,
                 question_total_marks=Decimal(region.question.total_marks),
                 rubric_json=rubric.rubric_json,
-                answer_image_path=region.image_path,
+                answer_image_path=grading_answer_image_path,
                 marking_policy=marking_policy,
             )
             raw_response = output.model_dump(mode="json")
             review_flags = list(raw_response.get("review_flags") or [])
+            if grading_context is not None and "grading_crop_padded" not in review_flags:
+                review_flags.append("grading_crop_padded")
             policy_flag = f"marking_policy:{marking_policy}"
             if policy_flag not in review_flags:
                 review_flags.append(policy_flag)
             raw_response["review_flags"] = review_flags
             raw_response["marking_policy"] = marking_policy
+            if grading_context is not None:
+                raw_response["grading_context"] = grading_context
             suggestion = GradeSuggestion(
                 grading_job_id=job.id,
                 answer_region_id=region.id,
@@ -181,7 +205,7 @@ class GradingService:
     def _get_region(self, answer_region_id: int) -> AnswerRegion:
         statement = (
             select(AnswerRegion)
-            .options(joinedload(AnswerRegion.question))
+            .options(joinedload(AnswerRegion.question), joinedload(AnswerRegion.page))
             .where(AnswerRegion.id == answer_region_id)
         )
         region = self.db.scalars(statement).first()
