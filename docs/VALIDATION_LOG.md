@@ -1,5 +1,38 @@
 # Validation Log
 
+## TA-W2-020 — Playwright E2E smoke suite
+
+- Recorded at: 2026-06-02T10:00:00+06:00
+- Baseline commit: `dbb5961f126751f77b1022f3ca4546a449a9da74`
+- Workflow type: browser-first Playwright smoke plus synthetic backend seeding
+- Real Codex calls: 0
+- Provider used: mock/synthetic only
+- Data policy: synthetic non-student PDFs/images only
+- Product code changes required: yes
+- Commit generated during TA-W2-020 validation itself: pending
+
+### Coverage added
+
+- Added Playwright config and npm scripts for web E2E smoke runs.
+- Added auth smoke coverage that registers a synthetic teacher in-browser, logs out, and logs back in without token injection fallback.
+- Added Custom Controlled mock flow coverage that seeds a synthetic course/assessment/question/rubric/submission/answer-region stack, runs mock grading, and verifies teacher-gated approval.
+- Added an explicit no-FinalGrade-before-approval assertion via the review queue before teacher approval.
+
+### Runtime and test results
+
+- `make e2e`: passed after fixing the synthetic PNG fixture, the demo-teacher selection, and the approval assertions.
+- `node apps/web/tests/workflow-ui.test.mjs`: passed.
+- `make lint`: passed.
+- `make test`: passed (`164 passed`).
+- `npm run build` in `apps/web`: passed.
+- `git diff --check`: passed.
+
+### Notes
+
+- The first E2E failure came from a malformed synthetic PNG. Replacing it with a valid 1×1 PNG and tightening the crop fixture fixed the upload path.
+- The review/approval page uses a demo-teacher selector, so the smoke now selects the synthetic teacher before approving the suggestion.
+- The export-link assertion is intentionally lightweight and only checks the generated link target.
+
 ## TA-W2-019 — Marking policy calibration fix
 
 - Recorded at: 2026-06-02T08:00:00+06:00

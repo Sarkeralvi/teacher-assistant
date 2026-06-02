@@ -22,13 +22,19 @@ settings = get_settings()
 
 app = FastAPI(title=settings.app_name)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if settings.app_env == "development":
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://host.docker.internal:3000",
+    ]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.include_router(health_router)
 app.include_router(auth_router)

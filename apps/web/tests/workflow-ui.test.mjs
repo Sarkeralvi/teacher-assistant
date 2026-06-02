@@ -23,11 +23,25 @@ const requiredFiles = [
   "app/login/page.tsx",
   "app/register/page.tsx",
   "app/questions/[questionId]/page.tsx",
+  "playwright.config.ts",
+  "e2e/support.ts",
+  "e2e/auth-smoke.spec.ts",
+  "e2e/custom-controlled-mock.spec.ts",
 ];
 
 for (const file of requiredFiles) {
   if (!existsSync(join(root, file))) {
     throw new Error(`Missing required frontend workflow file: ${file}`);
+  }
+}
+
+const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+for (const [scriptName, scriptValue] of [
+  ["e2e", "playwright test"],
+  ["e2e:headed", "playwright test --headed"],
+]) {
+  if (packageJson.scripts?.[scriptName] !== scriptValue) {
+    throw new Error(`Package script ${scriptName} must equal ${scriptValue}`);
   }
 }
 

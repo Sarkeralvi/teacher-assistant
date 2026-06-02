@@ -104,8 +104,9 @@ Important correction from later validation:
 - Acceptance: same synthetic answer plus same rubric should produce `tough < general < easy` with meaningful deltas.
 
 ### Day 3
-- TA-W2-020: Playwright E2E smoke suite.
+- TA-W2-020: Playwright E2E smoke suite — completed and validated.
 - Minimum tests: auth, Custom Controlled mock flow, and no-FinalGrade-before-approval.
+- Coverage now includes a browser-only auth smoke, a Custom Controlled mock grading smoke, and an explicit approval-gating assertion.
 
 ### Day 4
 - Codex runtime/model hardening and/or TA-W2-021 mode gating.

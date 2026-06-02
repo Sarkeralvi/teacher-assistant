@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: test lint verify up up-infra down health ps frontend-health backend-test frontend-lint codex-ok backend-host-dev
+.PHONY: test lint verify up up-infra down health ps frontend-health backend-test frontend-lint codex-ok backend-host-dev e2e e2e-headed
 
 test:
 	cd apps/api && python -m pytest -q
@@ -64,3 +64,16 @@ backend-host-dev:
 	CODEX_CLI_IMAGE_INPUT_ENABLED=$${CODEX_CLI_IMAGE_INPUT_ENABLED:-false} \
 	CODEX_CLI_WORKDIR='$(CURDIR)' \
 	../../.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+e2e:
+	docker run --rm --ipc=host --shm-size=1g --add-host=host.docker.internal:host-gateway \
+		-e E2E_BASE_URL=http://host.docker.internal:3000 \
+		-e E2E_API_BASE_URL=http://host.docker.internal:8000 \
+		-v $(CURDIR):/work -w /work/apps/web \
+		mcr.microsoft.com/playwright:v1.60.0-jammy npm run e2e
+
+e2e-headed:
+	docker run --rm --ipc=host --shm-size=1g --add-host=host.docker.internal:host-gateway \
+		-e E2E_BASE_URL=http://host.docker.internal:3000 \
+		-v $(CURDIR):/work -w /work/apps/web \
+		mcr.microsoft.com/playwright:v1.60.0-jammy npm run e2e:headed

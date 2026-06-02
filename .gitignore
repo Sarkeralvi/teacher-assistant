@@ -32,11 +32,15 @@ npm-debug.log*
 !/data/artifacts/.gitkeep
 !/data/exports/.gitkeep
 
+# Playwright / browser E2E artifacts
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/test-results/**
+
 # OS/editor
 .DS_Store
 .vscode/
 .idea/
-# Codex/Hermes context safety exclusions for local generated artifacts
 .ipynb_checkpoints/
 /datasets/
 /raw/

@@ -1028,11 +1028,11 @@ Priority: P1
 Dependencies: TA-W2-019
 Files affected: apps/web/**, apps/api/**, tests/**, BACKLOG.md
 Goal: Add a minimal Playwright E2E smoke suite covering auth, Custom Controlled mock flow, and no-FinalGrade-before-approval.
-Implementation notes: Keep the suite tiny and deterministic; focus on smoke coverage rather than breadth.
-Acceptance criteria: Auth, mock flow, and approval gating are exercised end to end in automated smoke tests.
-Tests required: Playwright smoke, frontend build/lint, backend tests touched by the suite, and git diff checks.
+Implementation notes: Keep the suite tiny and deterministic; use stable browser selectors, a synthetic submission fixture, and a demo-teacher selector for approval. Avoid real Codex and keep the export check lightweight.
+Acceptance criteria: Auth, mock flow, and approval gating are exercised end to end in automated smoke tests; the no-FinalGrade-before-approval invariant is asserted.
+Tests required: Playwright smoke, frontend workflow/static test, frontend build/lint, backend tests touched by the suite, and git diff checks.
 Risks: UI timing and selector instability can make the smoke flaky if not constrained tightly.
-Status: Pending
+Status: Done
 
 TASK-ID: TA-W2-021
 Title: Mode gating / ghost-mode clarity
