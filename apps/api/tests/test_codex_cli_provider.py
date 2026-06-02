@@ -146,6 +146,14 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "General marking" in inputs[-1]
     assert "Apply the rubric criterion-by-criterion" in inputs[-1]
     assert "Return strict JSON" in inputs[-1]
+    assert "exact canonical grading unit and max marks" in inputs[-1]
+    assert "formula choice, substitution, and valid final answer" in inputs[-1]
+    assert "Do not over-penalize messy handwriting" in inputs[-1]
+    assert "conceptual error" in inputs[-1]
+    assert "arithmetic slip" in inputs[-1]
+    assert "notation/presentation issue" in inputs[-1]
+    assert "Bayes" in inputs[-1]
+    assert "do not automatically slash the score" in inputs[-1]
     assert result.model_provider == "codex_cli"
     assert result.model_name == "codex-cli"
     assert result.prompt_version == "codex_cli_grading_v1"

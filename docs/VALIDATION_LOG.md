@@ -1,5 +1,37 @@
 # Validation Log
 
+## TA-W2-023 — Handwritten math/stat grading prompt grounding
+
+- Recorded at: 2026-06-02T23:00:47+06:00
+- Baseline commit: `b881f11237e85304a900b3905e1b1b8929937f01`
+- Workflow type: prompt/rubric grounding + deterministic synthetic calibration
+- Real Codex calls: 0
+- Provider used: fake/synthetic only
+- Data policy: no private files or generated private artifacts committed
+- Product code changes required: yes
+
+### Coverage added
+
+- Shared handwritten math/stat guidance in grading prompt registry.
+- Codex CLI prompt includes the same guidance via shared prompt helpers.
+- OpenAI-compatible prompt path receives the guidance through `build_grading_prompt()`.
+- Synthetic math/stat calibration cases added:
+  - Bayes correct setup + compact/imperfect working: fake score `5.5/6`, not severe under-score.
+  - Correct formula with arithmetic slip: fake score `4/6`, meaningful partial credit.
+  - Wrong conceptual setup: fake score `1.5/6`, low score.
+- Safety preserved: `needs_review=true`; harness creates no `FinalGrade`; real provider disabled by default.
+
+### Runtime and test results
+
+- Focused prompt/provider/calibration tests: `33 passed`.
+- Deterministic calibration harness: passed in fake mode with `call_count=0`, `real_provider_used=false`, `final_grade_count=0`.
+- Full checks recorded in the final task report.
+
+### Remaining caveat
+
+TA-W2-023 does not prove real founder-document quality. A capped corrected retest is still needed after this prompt fix.
+
+
 ## TA-W2-022C — Canonical grading-unit confirmation
 
 - Recorded at: 2026-06-02T21:06:01+06:00

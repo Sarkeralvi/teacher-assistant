@@ -6,6 +6,7 @@ from packages.evaluation.marking_policy_calibration import (
     MarkingPolicyCalibrationError,
     MarkingPolicyCalibrationRunner,
     build_synthetic_marking_policy_cases,
+    build_synthetic_math_stat_grading_cases,
 )
 
 
@@ -48,3 +49,34 @@ def test_real_marking_policy_calibration_requires_explicit_enable() -> None:
 
     with pytest.raises(MarkingPolicyCalibrationError, match="TA_EVAL_ALLOW_REAL_PROVIDER=true"):
         runner.run()
+
+
+def test_synthetic_math_stat_cases_cover_bayes_credit_patterns() -> None:
+    cases = build_synthetic_math_stat_grading_cases()
+
+    assert [case.case_id for case in cases] == [
+        "math_stat_a_bayes_correct_setup_compact_working",
+        "math_stat_b_correct_formula_arithmetic_slip",
+        "math_stat_c_wrong_conceptual_setup",
+    ]
+    assert all("synthetic" in case.description.lower() for case in cases)
+    assert cases[0].max_score == Decimal("6.00")
+    assert "Bayes formula present" in cases[0].description
+    assert "near full credit" in cases[0].notes
+
+
+def test_fake_math_stat_calibration_targets_no_severe_underscore_for_bayes_setup() -> None:
+    report = MarkingPolicyCalibrationRunner(provider_mode="fake").run()
+
+    math_report = report["math_stat_calibration"]
+    assert math_report["real_provider_used"] is False
+    assert math_report["call_count"] == 0
+    assert math_report["final_grade_count"] == 0
+    assert math_report["case_count"] == 3
+    assert math_report["cases"][0]["case_id"] == "math_stat_a_bayes_correct_setup_compact_working"
+    assert math_report["cases"][0]["expected_behavior"] == "near_full_credit"
+    assert math_report["cases"][0]["fake_score"] >= Decimal("5.0")
+    assert math_report["cases"][0]["severe_underscore"] is False
+    assert math_report["cases"][1]["expected_behavior"] == "meaningful_partial_credit"
+    assert math_report["cases"][2]["expected_behavior"] == "low_score"
+    assert math_report["summary"]["bayes_compact_working_not_severely_under_scored"] is True

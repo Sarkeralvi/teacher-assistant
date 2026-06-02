@@ -1,5 +1,32 @@
 # Grading Quality Notes
 
+## TA-W2-023 — Handwritten math/stat grading prompt grounding
+
+Recorded at: 2026-06-02T23:00:47+06:00
+
+### Root cause / quality diagnosis
+
+TA-W2-022D proved the corrected canonical-unit workflow works technically, but exposed a grading-quality problem: Codex under-credited mathematically correct or near-correct handwritten work. The serious miss was `1(b)(i)`, where Codex scored `3/6` while the founder fair mark was `6/6`.
+
+Corrected TA-W2-022D comparison:
+
+| Subpart | Codex | Founder fair | Absolute error | Judgment |
+| --- | ---: | ---: | ---: | --- |
+| `1(a)(i)` | 2/6 | 3/6 | 1 | slightly too strict / acceptable-ish |
+| `1(b)(i)` | 3/6 | 6/6 | 3 | too strict / serious miss |
+| `1(c)(i)` | 4/5 | 4/5 | 0 | acceptable |
+
+### Prompt/rubric grounding fix
+
+The shared grading prompt now explicitly tells providers to grade against the exact canonical grading unit and max marks, use the active rubric/model answer as primary evidence, award credit for correct setup/formula/substitution/final answer, and avoid over-penalizing messy handwriting or imperfect notation when the mathematical intent is clear.
+
+For probability/Bayes/statistics, the prompt now specifically calls out substantial credit for correct formula and numerator/denominator event identification, compressed arithmetic with a present result/setup, and the difference between conceptual errors, arithmetic slips, notation/presentation issues, incomplete working, and correct setup with missing final simplification.
+
+### Remaining caveat
+
+No real Codex calibration was run in TA-W2-023. The deterministic harness protects the intended prompt behavior, but a small founder real-document retest is still required before teacher in-person observation.
+
+
 ## TA-W2-022C — Canonical grading-unit correction before real retest
 
 Recorded at: 2026-06-02T21:06:01+06:00

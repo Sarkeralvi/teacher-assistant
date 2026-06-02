@@ -72,13 +72,14 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 
 ## What is not ready
 - Manual answer-region mapping is not the final teacher workflow.
-- Marking policy calibration is still weak and needs a proper fix.
+- Marking policy calibration has deterministic coverage, but real handwritten math grading still needs a capped retest after the TA-W2-023 prompt fix.
 - E2E smoke coverage is too thin.
 - Mode gating / ghost-mode clarity still needs hardening.
 - Privacy baseline documentation and an owner-only assessment test-data deletion endpoint now exist for internal/founder testing.
 - Codex CLI is useful for internal validation, but it is not the scalable production runtime.
 - Broad real-document validation is not yet approved.
 - TA-W2-022B founder real-document grading rehearsal is invalidated for quality evaluation because canonical question labels/max marks were wrong or ambiguous.
+- TA-W2-022D corrected canonical-unit rehearsal worked technically but showed Codex under-crediting near-correct handwritten Bayes/statistics work (`1(b)(i)` scored 3/6 vs founder fair 6/6).
 - Batch real Codex remains out of scope.
 
 ## Expert-review synthesis
@@ -137,10 +138,11 @@ Important correction from later validation:
 3. TA-W2-021: Mode gating / ghost-mode clarity
 4. TA-W2-022A: Privacy baseline documentation and deletion endpoint — completed
 5. TA-W2-022C: canonical grading-unit confirmation — in progress
-6. Controlled founder real-document AI loop validation rerun only after canonical units are confirmed
+6. TA-W2-022D: corrected founder real-document retest — technically successful, grading-quality blocked
+7. TA-W2-023: handwritten math/stat prompt grounding — completed; requires capped real retest before teacher observation
 
 ## Gates before teacher pilot
-- Marking policy calibration shows the expected ordering and usable deltas.
+- Marking policy calibration shows expected ordering/deltas and handwritten math/stat prompt grounding is verified synthetically.
 - E2E smoke coverage passes for auth and core custom-controlled flow.
 - Mode naming and gating are not misleading.
 - Privacy baseline is documented and deletion behavior exists for internal/local assessment test data.

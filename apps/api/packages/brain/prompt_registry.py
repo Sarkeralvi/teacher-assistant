@@ -49,6 +49,31 @@ MARKING_POLICY_INSTRUCTIONS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE: tuple[str, ...] = (
+    "Handwritten mathematics/statistics grading guidance",
+    "- Grade against the exact canonical grading unit and max marks shown in the question",
+    "  context.",
+    "- Use the active rubric and model answer as primary evidence; do not replace them",
+    "  with a vague overall impression.",
+    (
+        "- Award credit for correct mathematical/statistical setup, formula choice, "
+        "substitution, and valid final answer."
+    ),
+    "- Do not over-penalize messy handwriting, imperfect notation, or missing polish if",
+    "  the mathematical intent is clear.",
+    "- Distinguish conceptual error, arithmetic slip, notation/presentation issue,",
+    "  incomplete working, and correct setup but missing final simplification.",
+    "- For probability, Bayes, and statistics questions, give substantial credit for",
+    "  correct formula and correct identification of numerator/denominator events.",
+    "- Do not mark harshly when final arithmetic is compressed but the result, setup, or",
+    "  equivalent expression is present.",
+    "- Penalize real conceptual mismatch, unsupported answers, or contradictions; do not",
+    "  treat presentation mess as a conceptual error by default.",
+    "- If handwriting is uncertain, set needs_review=true, lower confidence, and explain",
+    "  the uncertainty, but do not automatically slash the score.",
+    "- Never create a FinalGrade. Always preserve teacher review requirement.",
+)
+
 
 REAL_GRADING_SYSTEM_PROMPT = """You are a grading assistant. Produce a grade suggestion only.
 Teacher final review is always required. Do not create a final grade.
@@ -68,6 +93,10 @@ def build_marking_policy_instruction(marking_policy: str) -> str:
             normalized_policy, MARKING_POLICY_INSTRUCTIONS["general"]
         )
     )
+
+
+def build_handwritten_math_stat_guidance() -> str:
+    return "\n".join(HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE)
 
 
 def build_grading_prompt(
@@ -95,6 +124,7 @@ def build_grading_prompt(
         )
     normalized_policy = marking_policy.strip().lower()
     policy_instruction = build_marking_policy_instruction(normalized_policy)
+    math_stat_guidance = build_handwritten_math_stat_guidance()
     user_prompt = f"""
 Task: answer_region_grading
 Question text:
@@ -115,6 +145,9 @@ Image instructions:
 Marking policy: {normalized_policy}
 Policy instructions:
 {policy_instruction}
+
+Math/stat grading guidance:
+{math_stat_guidance}
 Do not change max_score, rubric criterion max_marks, or teacher-review requirements
 because of policy. Include marking_policy:{normalized_policy} in review_flags.
 

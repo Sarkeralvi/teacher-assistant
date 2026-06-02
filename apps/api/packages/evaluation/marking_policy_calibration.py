@@ -109,6 +109,143 @@ _FAKE_SCORE_TABLE: dict[str, dict[str, CalibrationScore]] = {
     },
 }
 
+_MATH_STAT_RUBRIC = {
+    "total_marks": "6.00",
+    "model_answer": (
+        "Use the correct Bayes/probability formula, identify numerator and denominator "
+        "events, substitute given probabilities correctly, and present the final probability "
+        "or an equivalent expression."
+    ),
+    "criteria": [
+        {
+            "id": "formula_events",
+            "name": "Formula and events",
+            "description": "Chooses the correct formula and identifies the relevant events.",
+            "max_marks": "2.00",
+        },
+        {
+            "id": "substitution_working",
+            "name": "Substitution and working",
+            "description": (
+                "Substitutes the correct numerator and denominator terms and shows "
+                "enough working."
+            ),
+            "max_marks": "2.00",
+        },
+        {
+            "id": "answer_interpretation",
+            "name": "Answer and interpretation",
+            "description": (
+                "Gives the final probability or equivalent expression with reasonable notation."
+            ),
+            "max_marks": "2.00",
+        },
+    ],
+}
+
+_MATH_STAT_CASES: tuple[CalibrationCase, ...] = (
+    CalibrationCase(
+        case_id="math_stat_a_bayes_correct_setup_compact_working",
+        title="Bayes setup correct with compact handwritten working",
+        description=(
+            "Synthetic non-student example: Bayes formula present, denominator correctly "
+            "structured, numerator/substitution mostly correct, and final answer or equivalent "
+            "expression present, but handwriting/presentation is imperfect."
+        ),
+        rubric_json=_MATH_STAT_RUBRIC,
+        max_score=Decimal("6.00"),
+        notes="Expected behavior: near full credit, not a severe 3/6-style under-score.",
+    ),
+    CalibrationCase(
+        case_id="math_stat_b_correct_formula_arithmetic_slip",
+        title="Correct formula with arithmetic slip",
+        description=(
+            "Synthetic non-student example: the correct probability/statistics formula and "
+            "events are used, but one arithmetic simplification is wrong."
+        ),
+        rubric_json=_MATH_STAT_RUBRIC,
+        max_score=Decimal("6.00"),
+        notes=(
+            "Expected behavior: meaningful partial credit because the concept and setup "
+            "are right."
+        ),
+    ),
+    CalibrationCase(
+        case_id="math_stat_c_wrong_conceptual_setup",
+        title="Wrong conceptual setup",
+        description=(
+            "Synthetic non-student example: uses an independence/product assumption or wrong "
+            "conditional event where Bayes/total probability is required."
+        ),
+        rubric_json=_MATH_STAT_RUBRIC,
+        max_score=Decimal("6.00"),
+        notes="Expected behavior: low score because the conceptual setup is wrong.",
+    ),
+)
+
+_FAKE_MATH_STAT_SCORE_TABLE: dict[str, dict[str, Any]] = {
+    "math_stat_a_bayes_correct_setup_compact_working": {
+        "fake_score": Decimal("5.5"),
+        "confidence": Decimal("0.78"),
+        "expected_behavior": "near_full_credit",
+        "severe_underscore": False,
+    },
+    "math_stat_b_correct_formula_arithmetic_slip": {
+        "fake_score": Decimal("4.0"),
+        "confidence": Decimal("0.74"),
+        "expected_behavior": "meaningful_partial_credit",
+        "severe_underscore": False,
+    },
+    "math_stat_c_wrong_conceptual_setup": {
+        "fake_score": Decimal("1.5"),
+        "confidence": Decimal("0.80"),
+        "expected_behavior": "low_score",
+        "severe_underscore": False,
+    },
+}
+
+
+def build_synthetic_math_stat_grading_cases() -> list[CalibrationCase]:
+    return list(_MATH_STAT_CASES)
+
+
+def _run_fake_math_stat_calibration() -> dict[str, Any]:
+    cases: list[dict[str, Any]] = []
+    for case in build_synthetic_math_stat_grading_cases():
+        row = _FAKE_MATH_STAT_SCORE_TABLE[case.case_id]
+        cases.append(
+            {
+                "case_id": case.case_id,
+                "title": case.title,
+                "description": case.description,
+                "notes": case.notes,
+                "max_score": case.max_score,
+                "fake_score": row["fake_score"],
+                "confidence": row["confidence"],
+                "needs_review": True,
+                "expected_behavior": row["expected_behavior"],
+                "severe_underscore": row["severe_underscore"],
+            }
+        )
+    first_case = cases[0]
+    return {
+        "provider_mode": "fake",
+        "real_provider_used": False,
+        "call_count": 0,
+        "final_grade_count": 0,
+        "case_count": len(cases),
+        "cases": cases,
+        "summary": {
+            "bayes_compact_working_not_severely_under_scored": (
+                first_case["fake_score"] >= Decimal("5.0")
+                and first_case["severe_underscore"] is False
+            ),
+            "correct_formula_arithmetic_slip_gets_partial_credit": cases[1]["fake_score"]
+            >= Decimal("3.0"),
+            "wrong_conceptual_setup_stays_low": cases[2]["fake_score"] <= Decimal("2.0"),
+        },
+    }
+
 
 def build_synthetic_marking_policy_cases() -> list[CalibrationCase]:
     return list(_CALIBRATION_CASES)
@@ -208,6 +345,7 @@ class MarkingPolicyCalibrationRunner:
             "adjacent_gap_threshold": adjacent_gap_threshold,
             "policy_averages": policy_averages,
             "cases": case_results,
+            "math_stat_calibration": _run_fake_math_stat_calibration(),
             "real_provider_used": False,
             "final_grade_count": 0,
         }

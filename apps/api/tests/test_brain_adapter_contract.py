@@ -147,6 +147,34 @@ def test_marking_policy_prompt_text_is_distinct_for_each_policy() -> None:
     )
 
 
+def test_grading_prompt_includes_handwritten_math_statistics_guidance() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    prompt = "\n".join(
+        message["content"]
+        for message in build_grading_prompt(
+            question_text="Canonical grading unit: 1(b)(i), max marks: 6. Bayes problem.",
+            rubric_json=rubric_payload(),
+            answer_image_path="artifacts/answer_regions/region.png",
+            image_input_enabled=True,
+            marking_policy="general",
+        )
+    )
+
+    assert "exact canonical grading unit and max marks" in prompt
+    assert "active rubric and model answer as primary evidence" in prompt
+    assert "formula choice, substitution, and valid final answer" in prompt
+    assert "Do not over-penalize messy handwriting" in prompt
+    assert "conceptual error" in prompt
+    assert "arithmetic slip" in prompt
+    assert "notation/presentation issue" in prompt
+    assert "correct setup but missing final simplification" in prompt
+    assert "Bayes" in prompt
+    assert "do not automatically slash the score" in prompt
+    assert "Set needs_review=true" in prompt
+    assert "Do not create a final grade" in prompt
+
+
 def test_codex_cli_prompt_preserves_policy_instruction_without_image_data() -> None:
     from packages.brain.codex_cli_provider import CodexCliProvider
     from packages.brain.prompt_registry import build_grading_prompt

@@ -10,7 +10,10 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from packages.brain.prompt_registry import MARKING_POLICY_INSTRUCTIONS
+from packages.brain.prompt_registry import (
+    build_handwritten_math_stat_guidance,
+    build_marking_policy_instruction,
+)
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
@@ -259,6 +262,7 @@ class CodexCliProvider(BrainProvider):
                 "Include image_input_disabled in review_flags."
             )
         policy_instruction = self._policy_instruction(marking_policy)
+        math_stat_guidance = build_handwritten_math_stat_guidance()
         normalized_policy = self._normalize_marking_policy(marking_policy)
         rendered_messages = "\n\n".join(
             f"{message.get('role', 'unknown')}: {message.get('content', '')}"
@@ -279,6 +283,9 @@ Include codex_cli_provider in review_flags.
 If image input is disabled, include image_input_disabled in review_flags.
 Use marking policy: {normalized_policy}.
 {policy_instruction}
+
+Math/stat grading guidance:
+{math_stat_guidance}
 Include marking_policy:{normalized_policy} in review_flags.
 Do not change max_score or criterion max_marks because of marking policy.
 If you cannot evaluate the answer, set confidence=0 and needs_review=true.
@@ -321,9 +328,7 @@ reason, evidence, confidence. Awarded marks must sum to score.
     @classmethod
     def _policy_instruction(cls, marking_policy: str) -> str:
         normalized = cls._normalize_marking_policy(marking_policy)
-        return MARKING_POLICY_INSTRUCTIONS.get(
-            normalized, MARKING_POLICY_INSTRUCTIONS["general"]
-        )
+        return build_marking_policy_instruction(normalized)
 
     @staticmethod
     def _append_flag(flags: list[str], flag: str) -> None:

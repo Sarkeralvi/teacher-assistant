@@ -1086,3 +1086,30 @@ Acceptance criteria: Labels like `1(a)(i)` are supported, duplicate labels in on
 Tests required: focused backend grading-unit/export tests, frontend static workflow test, make e2e, make test, make lint, frontend build, git diff checks.
 Risks: This is still a flat model; a richer hierarchy can wait until the product needs it.
 Status: Done
+
+
+TASK-ID: TA-W2-022D
+Title: Corrected founder real-document grading retest with canonical units
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-022C
+Files affected: none committed
+Goal: Rerun a tiny founder-approved real-document rehearsal using confirmed canonical Question 1 grading units.
+Implementation notes: Created a fresh assessment and confirmed canonical units before grading. Ran exactly 3 Codex answer-region suggestion calls and 3 real Codex grading calls on `1(a)(i)`, `1(b)(i)`, and `1(c)(i)`. No batch, no whole-script grading, no approve/edit/export, no FinalGrade auto-created, needs_review stayed true.
+Acceptance criteria: Technical corrected canonical-unit flow works; grading-quality comparison remains review-required.
+Tests required: Runtime/manual controlled founder rehearsal only; no code changes.
+Risks: Quality blocker found: `1(b)(i)` was under-credited by Codex (3/6 vs founder fair 6/6).
+Status: Partial — technically successful, grading-quality blocked
+
+TASK-ID: TA-W2-023
+Title: Improve handwritten math grading prompt
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-022D
+Files affected: apps/api/packages/brain/prompt_registry.py, apps/api/packages/brain/codex_cli_provider.py, apps/api/packages/evaluation/marking_policy_calibration.py, apps/api/tests/**, docs/**, BACKLOG.md
+Goal: Improve real handwritten math/stat grading prompt and deterministic calibration so near-correct Bayes/statistics work receives appropriate credit instead of severe under-scoring.
+Implementation notes: Added shared handwritten math/stat guidance to grading prompts, included it in Codex/OpenAI prompt paths, preserved Tough/General/Easy policy behavior, and expanded the fake calibration harness with synthetic Bayes/stat cases.
+Acceptance criteria: Prompt includes canonical-unit/max-mark grounding, rubric/model-answer grounding, math/stat credit guidance, conceptual/arithmetic/presentation distinction, teacher review/no-FinalGrade language, and synthetic Bayes compact-working case targets 5–6/6 instead of 3/6.
+Tests required: Focused prompt/provider tests, calibration harness tests, make test, make lint, frontend build only if frontend touched, git diff checks.
+Risks: This is deterministic prompt/harness calibration only; a small founder real-document retest is still needed to verify real Codex behavior after the prompt fix.
+Status: Done
