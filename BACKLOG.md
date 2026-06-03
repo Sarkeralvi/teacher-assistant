@@ -1171,3 +1171,42 @@ Acceptance criteria: Evidence packets include segment metadata and continuation 
 Tests required: Focused answer-region/evidence-packet/grading tests, frontend static workflow test, make test, make lint, git diff --check, web build if frontend touched, make down after services.
 Risks: This is a deterministic first gate; OCR/next-label detection remains future work.
 Status: Done
+
+TASK-ID: TA-W2-027
+Title: Prepare controlled teacher workflow observation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-026
+Files affected: docs/TEACHER_OBSERVATION_PLAN.md, docs/GRADING_QUALITY_NOTES.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/VALIDATION_LOG.md, BACKLOG.md
+Goal: Prepare a safe in-person teacher workflow observation plan using the validated `1(b)(i)` multi-segment case, without conducting the observation or making production accuracy claims.
+Implementation notes: Docs only. Manual controlled mode only. Do not enable autonomous loop, start teacher observation, run new real Codex calls, run batch grading, auto-grade the whole script, approve/edit/export private real data, delete test data, commit private artifacts, auto-finalize grades, or weaken auth.
+Acceptance criteria: Observation plan documents purpose, framing, what to show, what not to claim, exact demo flow, privacy warnings, teacher questions, stop conditions, founder wording, and follow-up tasks. Quality/supervision docs record that the previous `4/6` was invalid due to incomplete evidence and the multi-segment retest produced `6/6` with draft-only review-required status.
+Tests required: `git status --short`, docs lint if available, `make lint`, `git diff --check`, final `git status --short`. Full test not required because no code changed.
+Risks: Observation could be misread as a teacher pilot or accuracy proof; wording must repeatedly state early controlled prototype, draft-only AI suggestion, teacher final authority, and evidence completeness gate.
+Status: Done
+
+TASK-ID: TA-W2-028
+Title: Conduct teacher observation and record feedback
+Owner: Founder/Hermes
+Priority: P1
+Dependencies: TA-W2-027
+Files affected: docs/TEACHER_OBSERVATION_FEEDBACK.md or founder-approved equivalent
+Goal: Conduct the controlled in-person teacher workflow observation and record non-private workflow/trust feedback.
+Implementation notes: Do not conduct without founder approval. Do not run new real Codex calls, batch grading, export, finalization, or private-data actions unless explicitly approved in-session. Stop on any privacy, evidence, instability, or automation-risk condition.
+Acceptance criteria: Feedback records teacher views on grading-unit clarity, evidence packet, multi-page confirmation, draft suggestions, review/edit/export flow, trust/distrust factors, UI confusion, and privacy concerns. No private identifiers or artifacts are committed.
+Tests required: Manual safety checklist; final `git status --short`.
+Risks: Session drift into pilot/accuracy claim, private-data exposure, or unapproved finalization/export.
+Status: Pending
+
+TASK-ID: TA-W2-029
+Title: Post-observation improvement plan
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-028
+Files affected: docs/**, BACKLOG.md, optionally scoped code files if founder approves implementation
+Goal: Convert teacher observation feedback into a prioritized improvement plan before any broader pilot.
+Implementation notes: Planning first. Separate workflow improvements, trust/explanation improvements, privacy fixes, UI confusion, and grading-quality validation. Do not implement code without a bounded approved task.
+Acceptance criteria: Plan identifies issues, priority, safety impact, acceptance criteria, required tests, and whether each item is docs-only, UI, backend, privacy, or grading-quality validation.
+Tests required: Docs review; code tests only if later implementation is approved.
+Risks: Over-expanding from one observation into broad product claims or unapproved automation.
+Status: Pending

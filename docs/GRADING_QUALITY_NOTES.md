@@ -1,5 +1,21 @@
 # Grading Quality Notes
 
+## TA-W2-027 — Controlled teacher observation readiness framing
+
+Recorded at: 2026-06-03
+
+### Updated quality interpretation
+The previous `1(b)(i)` `4/6` result is invalid as a grading-quality benchmark because the evidence was incomplete: the graded region covered page 3 while the answer continued onto page 4 before `1(b)(ii)`.
+
+The controlled multi-segment retest for `1(b)(i)` used page 3 plus the page 4 continuation, full-answer confirmation, and a `multi_segment_composite` grading context. The real Codex draft score was `6/6`, matching the founder fair score `6/6`, with confidence `0.88`, `needs_review=true`, and no `FinalGrade` created.
+
+### Quality gate rule
+Evidence completeness is now a primary quality gate. Do not judge grading quality unless the exact canonical grading unit, active rubric/model answer, and complete answer evidence are confirmed first. Incomplete crops, missing page continuations, wrong labels, or ambiguous max marks invalidate grading-quality conclusions.
+
+### Observation implication
+Teacher observation may now be prepared only as a controlled workflow/trust observation. It must not be framed as a production accuracy proof, public pilot, fully automated grading demo, or batch-grading validation.
+
+
 ## TA-W2-026 — Multi-segment answer evidence and continuation gate
 
 Recorded at: 2026-06-03

@@ -1,5 +1,32 @@
 # Project Supervision Context
 
+## TA-W2-027 current state — controlled teacher workflow observation may be prepared
+
+TA-W2-026 plus the controlled `1(b)(i)` multi-segment retest changed the project state: a safe in-person teacher workflow observation can be prepared, but only as a manual controlled observation.
+
+Current baseline:
+
+- HEAD: `5c0d5c6c26c1bf134f68bc50b31c097a084d3e82` (`Add multi-segment answer evidence gate`).
+- Multi-segment evidence gate is implemented and validated.
+- `1(b)(i)` was retested with page 3 + page 4 continuation segments, full-answer confirmation, and `multi_segment_composite` context.
+- Real Codex draft score: `6/6`; founder fair score: `6/6`; confidence: `0.88`; `needs_review=true`; `FinalGrade` count: `0`.
+- The earlier `4/6` result is classified as evidence-boundary failure, not confirmed model-quality failure.
+
+Allowed next step: prepare a controlled teacher workflow observation plan. This is not a teacher pilot, not full batch grading, not fully automated grading, and not a public/product accuracy claim.
+
+Required framing:
+
+- early controlled prototype;
+- AI draft marking assistant;
+- teacher review required;
+- evidence packet and full-answer confirmation are central;
+- AI suggestions remain draft-only until teacher approval/edit;
+- no autonomous loop;
+- no new real Codex calls unless explicitly approved during the observation plan;
+- no batch grading;
+- no auto-finalization.
+
+
 ## Purpose
 This document is the durable supervision handoff for the Teacher Assistant project. It is meant for a future supervising LLM or maintainer who needs the current product direction, non-negotiables, validation history, and next-step sequencing without re-deriving the entire project.
 

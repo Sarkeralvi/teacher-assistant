@@ -1,5 +1,30 @@
 # Validation Log
 
+## TA-W2-027 — Prepare controlled teacher workflow observation
+
+- Recorded at: 2026-06-03
+- Baseline commit: `5c0d5c6c26c1bf134f68bc50b31c097a084d3e82`
+- Workflow type: docs-only controlled observation preparation
+- Real Codex calls: 0
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- FinalGrade creation: 0
+- Product code changed: no
+
+### Scope
+Prepared documentation for a safe in-person teacher workflow observation using the already-validated `1(b)(i)` multi-segment case as a controlled demo. The observation is framed as workflow/trust feedback for an early AI draft marking assistant, not a public pilot and not a production accuracy claim.
+
+### Safety framing recorded
+The plan requires manual controlled mode, teacher review, evidence packet review, full-answer confirmation, no automatic finalization, no unapproved exports, no private artifact commits, no batch grading, and no new real Codex calls unless explicitly approved during the observation plan.
+
+### Demonstration baseline
+The demo may show the existing `1(b)(i)` draft suggestion only: page 3 + page 4 continuation evidence, full-answer confirmation, `multi_segment_composite` context, draft score `6/6`, confidence `0.88`, `needs_review=true`, and no `FinalGrade` before teacher action.
+
+### Follow-up sequencing
+Next possible tasks are TA-W2-028 (conduct teacher observation and record feedback) and TA-W2-029 (post-observation improvement plan). Neither should be treated as approval for autonomous grading, batch grading, or production claims.
+
+
 ## TA-W2-026 — Multi-segment answer evidence and continuation gate
 
 Recorded at: 2026-06-03
