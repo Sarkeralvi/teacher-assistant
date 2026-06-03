@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -259,13 +260,52 @@ class AnswerRegion(TimestampMixin, Base):
     width: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     height: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    full_answer_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     submission: Mapped[Submission] = relationship(back_populates="answer_regions")
     question: Mapped[Question] = relationship(back_populates="answer_regions")
     page: Mapped[SubmissionPage] = relationship(back_populates="answer_regions")
+    segments: Mapped[list[AnswerRegionSegment]] = relationship(
+        back_populates="answer_region", cascade="all, delete-orphan"
+    )
     grading_jobs: Mapped[list[GradingJob]] = relationship(back_populates="answer_region")
     grade_suggestions: Mapped[list[GradeSuggestion]] = relationship(back_populates="answer_region")
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="answer_region")
+
+
+class AnswerRegionSegment(TimestampMixin, Base):
+    __tablename__ = "answer_region_segments"
+    __table_args__ = (
+        CheckConstraint(
+            "source in ('manual', 'suggestion', 'imported')",
+            name="ck_answer_region_segments_source",
+        ),
+        Index("ix_answer_region_segments_answer_region_id", "answer_region_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    answer_region_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_regions.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_page_id: Mapped[int] = mapped_column(
+        ForeignKey("submission_pages.id", ondelete="CASCADE"), nullable=False
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    x: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    y: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    width: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    height: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    answer_region: Mapped[AnswerRegion] = relationship(back_populates="segments")
+    page: Mapped[SubmissionPage] = relationship()
+
+    @property
+    def page_id(self) -> int:
+        return self.submission_page_id
 
 
 class GradingJob(Base):

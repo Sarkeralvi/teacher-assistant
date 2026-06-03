@@ -1,5 +1,26 @@
 # Grading Quality Notes
 
+## TA-W2-026 — Multi-segment answer evidence and continuation gate
+
+Recorded at: 2026-06-03
+
+### Root cause/classification
+The latest one-call real grading attempt for `1(b)(i)` must be treated as invalid for quality benchmarking: `answer_region_id=5552` covered only one rectangle on page 3 while the student answer continued onto page 4 before `1(b)(ii)`. The failure class is answer-region capture / multi-page answer evidence, not primarily prompt quality.
+
+### Product correction
+A canonical grading unit may require multiple ordered answer segments. Real grading readiness must therefore validate segment completeness and continuation risk before provider execution.
+
+### Implementation summary
+- Added persistent `AnswerRegionSegment` support linked to existing `AnswerRegion` rows.
+- Existing single-page regions remain backward-compatible through a primary segment.
+- Evidence packets now report `segment_count`, `pages_covered`, ordered segment metadata, `continuation_check_status`, `next_page_context_available`, and full-answer confirmation state.
+- A deterministic page-bottom heuristic marks possible continuation and blocks grading until teacher/founder full-answer confirmation is recorded.
+- Multi-segment grading uses a local composite grading-context image with ordered segment labels, stored only in ignored local artifacts.
+
+### Safety result
+No real Codex was run in TA-W2-026. No teacher observation was started. The blocked path creates no `GradingJob`, `GradeSuggestion`, or `FinalGrade`. Teacher observation remains blocked until multi-segment evidence is validated with the full page 3 + page 4 `1(b)(i)` answer.
+
+
 ## TA-W2-025 — Evidence-first grading gate
 
 Recorded at: 2026-06-03T10:05:27+06:00

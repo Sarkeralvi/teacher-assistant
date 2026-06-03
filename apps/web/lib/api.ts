@@ -224,6 +224,23 @@ export type Submission = {
   updated_at: string;
 };
 
+export type AnswerRegionSegment = {
+  id: number;
+  answer_region_id: number;
+  page_id: number;
+  order_index: number;
+  x: string | number;
+  y: string | number;
+  width: string | number;
+  height: string | number;
+  image_path: string;
+  source: string;
+  confirmed: boolean;
+  is_primary: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AnswerRegion = {
   id: number;
   submission_id: number;
@@ -234,6 +251,8 @@ export type AnswerRegion = {
   width: string | number;
   height: string | number;
   image_path: string;
+  full_answer_confirmed: boolean;
+  segments: AnswerRegionSegment[];
   created_at: string;
   updated_at: string;
 };
@@ -365,6 +384,12 @@ export type GradingEvidencePacket = {
   student_answer_evidence: {
     answer_region_coordinates: Record<string, string | number>;
     crop_path: string | null;
+    segment_count: number;
+    pages_covered: number[];
+    segments: Array<Record<string, unknown>>;
+    continuation_check_status: string;
+    next_page_context_available: boolean;
+    teacher_founder_confirmed_full_answer: boolean;
     padded_grading_context_generated: boolean;
     context_completeness_status: string;
   };

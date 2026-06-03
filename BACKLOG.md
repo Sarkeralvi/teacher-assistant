@@ -1159,3 +1159,15 @@ Acceptance criteria: Evidence packet reports the bounded assessment/submission/p
 Tests required: `python -m pytest tests/test_grading_api.py -q`, full backend tests / `make test`, `node apps/web/tests/workflow-ui.test.mjs`, `make e2e`, `make lint`, `cd apps/web && npm run build`, `git diff --check`.
 Risks: Confirmation statuses are currently `unknown` until the real teacher/founder confirmation workflow is fully validated with real documents. Teacher observation remains blocked until the evidence-packet flow is validated with real documents.
 Status: Done
+TASK-ID: TA-W2-026
+Title: Multi-segment answer evidence and continuation gate
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-025
+Files affected: apps/api/app/models.py, apps/api/app/schemas.py, apps/api/app/api/routes/answer_regions.py, apps/api/app/services/grading_service.py, apps/api/app/services/answer_region_processing.py, apps/api/alembic/versions/0009_answer_region_segments.py, apps/api/tests/**, apps/web/**, docs/**, BACKLOG.md
+Goal: Support one logical grading unit with multiple ordered page segments and block/warn when page-bottom continuation is unconfirmed.
+Implementation notes: Manual controlled mode only. No real Codex, no batch real grading, no teacher observation. Keep AnswerRegion as logical unit and add AnswerRegionSegment for ordered crops.
+Acceptance criteria: Evidence packets include segment metadata and continuation status; near-bottom regions block grading until full-answer confirmation; multi-segment grading uses all confirmed segments/composite context; no FinalGrade auto-creation.
+Tests required: Focused answer-region/evidence-packet/grading tests, frontend static workflow test, make test, make lint, git diff --check, web build if frontend touched, make down after services.
+Risks: This is a deterministic first gate; OCR/next-label detection remains future work.
+Status: Done

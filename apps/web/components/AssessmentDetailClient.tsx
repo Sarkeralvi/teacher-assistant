@@ -1032,9 +1032,20 @@ function ReviewQueueCard({
           Evidence packet: {readiness ? (readiness.ready_for_grading ? "ready for grading" : "not ready for grading") : "loading"}
         </p>
         {evidencePacket ? (
-          <p className="text-xs text-slate-400">
-            Grading unit {evidencePacket.canonical_grading_unit.label ?? "unknown"} · rubric present: {String(evidencePacket.rubric_evidence.criteria_max_marks.length > 0)} · padded context: {String(evidencePacket.student_answer_evidence.padded_grading_context_generated)}
-          </p>
+          <div className="text-xs text-slate-400">
+            <p>
+              Grading unit {evidencePacket.canonical_grading_unit.label ?? "unknown"} · rubric present: {String(evidencePacket.rubric_evidence.criteria_max_marks.length > 0)} · padded context: {String(evidencePacket.student_answer_evidence.padded_grading_context_generated)}
+            </p>
+            <p>
+              Segment list: segment_count {evidencePacket.student_answer_evidence.segment_count} · pages_covered {evidencePacket.student_answer_evidence.pages_covered.join(", ") || "unknown"} · continuation_check_status {evidencePacket.student_answer_evidence.continuation_check_status}
+            </p>
+            {evidencePacket.student_answer_evidence.continuation_check_status === "possible_continuation" ? (
+              <p className="mt-1 text-amber-200">Possible continuation on next page. Confirm full answer before grading.</p>
+            ) : null}
+            <p>
+              This contains the complete answer for {evidencePacket.canonical_grading_unit.label ?? "this grading unit"}: {String(evidencePacket.student_answer_evidence.teacher_founder_confirmed_full_answer)}
+            </p>
+          </div>
         ) : null}
         {readiness?.blockers.length ? (
           <p className="mt-1 text-xs text-red-300">Blockers: {readiness.blockers.join(", ")}</p>

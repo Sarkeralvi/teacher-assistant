@@ -394,6 +394,38 @@ class AnswerRegionSuggestionRequest(BaseModel):
     question_nos: list[str] | None = None
 
 
+class AnswerRegionSegmentCreate(BaseModel):
+    page_id: int
+    x: Decimal = Field(ge=Decimal("0"))
+    y: Decimal = Field(ge=Decimal("0"))
+    width: Decimal = Field(gt=Decimal("0"))
+    height: Decimal = Field(gt=Decimal("0"))
+    order_index: int = Field(ge=1)
+    source: Literal["manual", "suggestion", "imported"] = "manual"
+    confirmed: bool = False
+
+
+class AnswerRegionFullAnswerConfirmation(BaseModel):
+    full_answer_confirmed: bool
+
+
+class AnswerRegionSegmentRead(ORMBase):
+    id: int
+    answer_region_id: int
+    page_id: int
+    order_index: int
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    image_path: str
+    source: str
+    confirmed: bool
+    is_primary: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class AnswerRegionRead(ORMBase):
     id: int
     submission_id: int
@@ -404,6 +436,8 @@ class AnswerRegionRead(ORMBase):
     width: Decimal
     height: Decimal
     image_path: str
+    full_answer_confirmed: bool = False
+    segments: list[AnswerRegionSegmentRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -474,6 +508,18 @@ class EvidencePacketRubricEvidence(BaseModel):
 class EvidencePacketStudentAnswerEvidence(BaseModel):
     answer_region_coordinates: dict[str, Decimal]
     crop_path: str | None
+    segment_count: int = 0
+    pages_covered: list[int] = Field(default_factory=list)
+    segments: list[dict[str, Any]] = Field(default_factory=list)
+    continuation_check_status: Literal[
+        "not_checked",
+        "checked_no_continuation",
+        "possible_continuation",
+        "continuation_confirmed_included",
+        "continuation_confirmed_not_needed",
+    ] = "not_checked"
+    next_page_context_available: bool = False
+    teacher_founder_confirmed_full_answer: bool = False
     padded_grading_context_generated: bool
     context_completeness_status: Literal[
         "unknown", "complete", "possibly_incomplete", "incomplete"

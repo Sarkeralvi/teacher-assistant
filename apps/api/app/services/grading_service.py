@@ -2,12 +2,24 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException, status
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import get_settings
-from app.models import AnswerRegion, Assessment, GradeSuggestion, GradingJob, Rubric, Submission
-from app.services.answer_region_processing import crop_grading_context_image
+from app.models import (
+    AnswerRegion,
+    AnswerRegionSegment,
+    Assessment,
+    GradeSuggestion,
+    GradingJob,
+    Rubric,
+    Submission,
+)
+from app.services.answer_region_processing import (
+    create_composite_grading_context_image,
+    crop_grading_context_image,
+)
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
 from packages.brain.codex_cli_provider import CodexCliProvider
@@ -40,6 +52,45 @@ def _criteria_from_rubric(rubric: Rubric | None) -> list[dict[str, object]]:
             }
         )
     return result
+
+
+def _segment_payload(segment: AnswerRegionSegment) -> dict[str, object]:
+    return {
+        "id": segment.id,
+        "answer_region_id": segment.answer_region_id,
+        "page_id": segment.submission_page_id,
+        "page_no": segment.page.page_no if segment.page else None,
+        "order_index": segment.order_index,
+        "x": str(segment.x),
+        "y": str(segment.y),
+        "width": str(segment.width),
+        "height": str(segment.height),
+        "image_path": segment.image_path,
+        "source": segment.source,
+        "confirmed": segment.confirmed,
+        "is_primary": segment.is_primary,
+    }
+
+
+def _ordered_segments(region: AnswerRegion) -> list[AnswerRegionSegment]:
+    return sorted(region.segments, key=lambda item: (item.order_index, item.id))
+
+
+def _segment_near_page_bottom(segment: AnswerRegionSegment) -> bool:
+    if segment.page is None:
+        return False
+    return _rectangle_near_page_bottom(segment.y, segment.height, segment.page.image_path)
+
+
+def _rectangle_near_page_bottom(y: Decimal, height: Decimal, page_image_path: str | None) -> bool:
+    if not page_image_path:
+        return False
+    try:
+        with Image.open(LocalStorage().resolve_relative(page_image_path)) as image:
+            bottom = float(y) + float(height)
+            return bottom >= image.height * 0.75
+    except Exception:
+        return float(y) + float(height) >= 75.0
 
 
 class GradingService:
@@ -91,15 +142,56 @@ class GradingService:
         if page is not None and question is not None and submission is not None:
             if question.assessment_id != submission.assessment_id:
                 blockers.append("answer region not linked to correct assessment/question")
-        crop_path = region.image_path
-        if not crop_path:
-            blockers.append("answer-region image is missing")
+        segments = _ordered_segments(region)
+        confirmed_segments = [segment for segment in segments if segment.confirmed]
+        segment_payloads = [_segment_payload(segment) for segment in segments]
+        pages_covered = [
+            page_no
+            for page_no in dict.fromkeys(payload.get("page_no") for payload in segment_payloads)
+            if page_no is not None
+        ]
+        continuation_suspected = any(
+            _segment_near_page_bottom(segment) for segment in confirmed_segments
+        )
+        if not continuation_suspected and page is not None:
+            continuation_suspected = _rectangle_near_page_bottom(
+                region.y, region.height, page.image_path
+            )
+        next_page_context_available = False
+        if page is not None and submission is not None:
+            covered_page_numbers = {
+                int(page_no) for page_no in pages_covered if isinstance(page_no, int)
+            }
+            next_page_context_available = any(
+                candidate.page_no == page.page_no + 1 for candidate in submission.pages
+            ) and (page.page_no + 1 not in covered_page_numbers)
+        if region.full_answer_confirmed:
+            continuation_check_status = (
+                "continuation_confirmed_included"
+                if len(confirmed_segments) > 1
+                else "continuation_confirmed_not_needed"
+            )
+        elif continuation_suspected and next_page_context_available:
+            continuation_check_status = "possible_continuation"
         else:
+            continuation_check_status = "checked_no_continuation"
+
+        crop_path = region.image_path
+        if not confirmed_segments:
+            blockers.append("missing confirmed answer segment")
+        for segment in confirmed_segments:
             try:
-                if not self.storage.resolve_relative(crop_path).is_file():
+                if not self.storage.resolve_relative(segment.image_path).is_file():
                     blockers.append("answer-region image is missing")
+                    break
             except Exception:
                 blockers.append("answer-region image is missing")
+                break
+        if continuation_check_status == "possible_continuation":
+            blockers.append("possible answer continuation not confirmed")
+            warnings.append(
+                "Possible continuation on next page. Confirm full answer before grading."
+            )
         warnings.append("context completeness unknown")
 
         return {
@@ -142,9 +234,17 @@ class GradingService:
                     "height": region.height,
                 },
                 "crop_path": crop_path,
+                "segment_count": len(confirmed_segments),
+                "pages_covered": pages_covered,
+                "segments": segment_payloads,
+                "continuation_check_status": continuation_check_status,
+                "next_page_context_available": next_page_context_available,
+                "teacher_founder_confirmed_full_answer": region.full_answer_confirmed,
                 "padded_grading_context_generated": False,
-                "context_completeness_status": "unknown",
-                "teacher_founder_confirmed_region": None,
+                "context_completeness_status": "possibly_incomplete"
+                if continuation_check_status == "possible_continuation"
+                else "unknown",
+                "teacher_founder_confirmed_region": region.full_answer_confirmed,
             },
             "readiness_result": {
                 "ready_for_grading": not blockers,
@@ -234,39 +334,61 @@ class GradingService:
             )
         settings = get_settings()
         rubric = self._get_active_rubric(region.question_id)
-        image_path = self.storage.resolve_relative(region.image_path)
+        confirmed_segments = [segment for segment in _ordered_segments(region) if segment.confirmed]
+        if not confirmed_segments:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Evidence packet not ready for grading: missing confirmed answer segment",
+            )
 
         job = GradingJob(answer_region_id=region.id, status="running")
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
 
-        if not image_path.is_file():
-            self._mark_job_failed(job.id, "Answer region image is missing")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Answer region image is missing",
-            )
-
         try:
-            grading_answer_image_path = region.image_path
             grading_context: dict[str, object] | None = None
-            if settings.answer_region_grading_crop_padding_ratio > 0:
-                grading_answer_image_path = crop_grading_context_image(
+            segment_metadata = [_segment_payload(segment) for segment in confirmed_segments]
+            if len(confirmed_segments) > 1:
+                grading_answer_image_path = create_composite_grading_context_image(
                     storage=self.storage,
-                    source_image_path=region.page.image_path,
                     submission_id=region.submission_id,
-                    x=region.x,
-                    y=region.y,
-                    width=region.width,
-                    height=region.height,
-                    padding_ratio=settings.answer_region_grading_crop_padding_ratio,
+                    segments=[
+                        {
+                            "image_path": segment.image_path,
+                            "label": f"Segment {index} — page {segment.page.page_no}",
+                        }
+                        for index, segment in enumerate(confirmed_segments, start=1)
+                    ],
                 )
                 grading_context = {
-                    "original_image_path": region.image_path,
+                    "type": "multi_segment_composite",
                     "answer_image_path": grading_answer_image_path,
-                    "padding_ratio": settings.answer_region_grading_crop_padding_ratio,
+                    "segment_count": len(confirmed_segments),
+                    "segments": segment_metadata,
                 }
+            else:
+                primary_segment = confirmed_segments[0]
+                grading_answer_image_path = primary_segment.image_path
+                if settings.answer_region_grading_crop_padding_ratio > 0:
+                    grading_answer_image_path = crop_grading_context_image(
+                        storage=self.storage,
+                        source_image_path=primary_segment.page.image_path,
+                        submission_id=region.submission_id,
+                        x=primary_segment.x,
+                        y=primary_segment.y,
+                        width=primary_segment.width,
+                        height=primary_segment.height,
+                        padding_ratio=settings.answer_region_grading_crop_padding_ratio,
+                    )
+                    grading_context = {
+                        "type": "single_segment_padded",
+                        "original_image_path": primary_segment.image_path,
+                        "answer_image_path": grading_answer_image_path,
+                        "padding_ratio": settings.answer_region_grading_crop_padding_ratio,
+                        "segment_count": 1,
+                        "segments": segment_metadata,
+                    }
             output = adapter.grade_answer_region(
                 question_text=region.question.question_text,
                 question_total_marks=Decimal(region.question.total_marks),
@@ -278,6 +400,8 @@ class GradingService:
             review_flags = list(raw_response.get("review_flags") or [])
             if grading_context is not None and "grading_crop_padded" not in review_flags:
                 review_flags.append("grading_crop_padded")
+            if len(confirmed_segments) > 1 and "multi_segment_context" not in review_flags:
+                review_flags.append("multi_segment_context")
             policy_flag = f"marking_policy:{marking_policy}"
             if policy_flag not in review_flags:
                 review_flags.append(policy_flag)
@@ -336,7 +460,8 @@ class GradingService:
             .options(
                 joinedload(AnswerRegion.question),
                 joinedload(AnswerRegion.page),
-                joinedload(AnswerRegion.submission),
+                joinedload(AnswerRegion.submission).selectinload(Submission.pages),
+                selectinload(AnswerRegion.segments).joinedload(AnswerRegionSegment.page),
             )
             .where(AnswerRegion.id == answer_region_id)
         )

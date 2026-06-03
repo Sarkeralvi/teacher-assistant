@@ -14,10 +14,13 @@ from app.api.routes.questions import get_question_or_404
 from app.api.routes.submissions import get_submission_or_404
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import AnswerRegion, Question, Submission, SubmissionPage
+from app.models import AnswerRegion, AnswerRegionSegment, Question, Submission, SubmissionPage
 from app.schemas import (
     AnswerRegionCreate,
+    AnswerRegionFullAnswerConfirmation,
     AnswerRegionRead,
+    AnswerRegionSegmentCreate,
+    AnswerRegionSegmentRead,
     AnswerRegionSuggestionRequest,
     AnswerRegionSuggestionResponse,
     DraftAnswerRegionSuggestion,
@@ -334,6 +337,22 @@ def create_answer_region(
         image_path=image_path,
     )
     db.add(region)
+    db.flush()
+    db.add(
+        AnswerRegionSegment(
+            answer_region_id=region.id,
+            submission_page_id=page.id,
+            order_index=1,
+            x=payload.x,
+            y=payload.y,
+            width=payload.width,
+            height=payload.height,
+            image_path=image_path,
+            source="manual",
+            confirmed=True,
+            is_primary=True,
+        )
+    )
     db.commit()
     db.refresh(region)
     return region
@@ -443,6 +462,63 @@ def list_assessment_answer_regions(
 @router.get("/answer-regions/{answer_region_id}", response_model=AnswerRegionRead)
 def get_answer_region(answer_region_id: int, db: DbSession) -> AnswerRegion:
     return get_answer_region_or_404(answer_region_id, db)
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/segments",
+    response_model=AnswerRegionSegmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_answer_region_segment(
+    answer_region_id: int, payload: AnswerRegionSegmentCreate, db: DbSession
+) -> AnswerRegionSegment:
+    region = get_answer_region_or_404(answer_region_id, db)
+    page = get_submission_page_or_404(payload.page_id, db)
+    if page.submission_id != region.submission_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Segment page must belong to the same submission",
+        )
+    image_path = crop_answer_region_image(
+        storage=LocalStorage(),
+        source_image_path=page.image_path,
+        submission_id=page.submission_id,
+        x=payload.x,
+        y=payload.y,
+        width=payload.width,
+        height=payload.height,
+    )
+    segment = AnswerRegionSegment(
+        answer_region_id=region.id,
+        submission_page_id=page.id,
+        order_index=payload.order_index,
+        x=payload.x,
+        y=payload.y,
+        width=payload.width,
+        height=payload.height,
+        image_path=image_path,
+        source=payload.source,
+        confirmed=payload.confirmed,
+        is_primary=False,
+    )
+    db.add(segment)
+    db.commit()
+    db.refresh(segment)
+    return segment
+
+
+@router.patch(
+    "/answer-regions/{answer_region_id}/full-answer-confirmation",
+    response_model=AnswerRegionRead,
+)
+def update_answer_region_full_answer_confirmation(
+    answer_region_id: int, payload: AnswerRegionFullAnswerConfirmation, db: DbSession
+) -> AnswerRegion:
+    region = get_answer_region_or_404(answer_region_id, db)
+    region.full_answer_confirmed = payload.full_answer_confirmed
+    db.commit()
+    db.refresh(region)
+    return region
 
 
 @router.get("/answer-regions/{answer_region_id}/image")

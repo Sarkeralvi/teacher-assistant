@@ -12,6 +12,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     AnswerRegion,
+    AnswerRegionSegment,
     Assessment,
     Course,
     FinalGrade,
@@ -27,6 +28,7 @@ CLEANUP_MODELS = (
     FinalGrade,
     GradeSuggestion,
     GradingJob,
+    AnswerRegionSegment,
     AnswerRegion,
     SubmissionPage,
     Submission,
@@ -335,3 +337,81 @@ def test_answer_region_suggestion_rejects_cross_assessment_questions(
         json={"question_id": question["id"], "x": 1, "y": 1, "width": 10, "height": 10},
     )
     assert accept_response.status_code == 201
+
+
+def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
+    client: TestClient, tmp_path: Path
+) -> None:
+    question, page = create_uploaded_page(client, tmp_path)
+    region_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 20},
+    )
+    assert region_response.status_code == 201
+    region = region_response.json()
+
+    segment_response = client.post(
+        f"/answer-regions/{region['id']}/segments",
+        json={
+            "page_id": page["id"],
+            "x": 4,
+            "y": 5,
+            "width": 30,
+            "height": 22,
+            "order_index": 2,
+            "source": "manual",
+            "confirmed": True,
+        },
+    )
+
+    assert segment_response.status_code == 201
+    segment = segment_response.json()
+    assert segment["answer_region_id"] == region["id"]
+    assert segment["page_id"] == page["id"]
+    assert segment["order_index"] == 2
+    assert segment["source"] == "manual"
+    assert segment["confirmed"] is True
+    assert segment["image_path"].endswith(".png")
+    assert not segment["image_path"].startswith("/")
+
+    detail_response = client.get(f"/answer-regions/{region['id']}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["full_answer_confirmed"] is False
+    assert [item["order_index"] for item in detail["segments"]] == [1, 2]
+    assert detail["segments"][0]["is_primary"] is True
+    assert detail["segments"][1]["is_primary"] is False
+
+    confirm_response = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        json={"full_answer_confirmed": True},
+    )
+    assert confirm_response.status_code == 200
+    assert confirm_response.json()["full_answer_confirmed"] is True
+
+
+def test_answer_region_segment_rejects_page_from_other_submission(
+    client: TestClient, tmp_path: Path
+) -> None:
+    question, page = create_uploaded_page(client, tmp_path)
+    _other_question, other_page = create_uploaded_page(client, tmp_path)
+    region_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 20},
+    )
+    assert region_response.status_code == 201
+
+    response = client.post(
+        f"/answer-regions/{region_response.json()['id']}/segments",
+        json={
+            "page_id": other_page["id"],
+            "x": 4,
+            "y": 5,
+            "width": 30,
+            "height": 22,
+            "order_index": 2,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Segment page must belong to the same submission" in response.text

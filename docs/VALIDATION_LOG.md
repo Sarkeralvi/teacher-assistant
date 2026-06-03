@@ -1,5 +1,37 @@
 # Validation Log
 
+## TA-W2-026 — Multi-segment answer evidence and continuation gate
+
+Recorded at: 2026-06-03
+
+### Root cause/classification
+The latest one-call real grading attempt for `1(b)(i)` must be treated as invalid for quality benchmarking: `answer_region_id=5552` covered only one rectangle on page 3 while the student answer continued onto page 4 before `1(b)(ii)`. The failure class is answer-region capture / multi-page answer evidence, not primarily prompt quality.
+
+### Product correction
+A canonical grading unit may require multiple ordered answer segments. Real grading readiness must therefore validate segment completeness and continuation risk before provider execution.
+
+### Implementation summary
+- Added persistent `AnswerRegionSegment` support linked to existing `AnswerRegion` rows.
+- Existing single-page regions remain backward-compatible through a primary segment.
+- Evidence packets now report `segment_count`, `pages_covered`, ordered segment metadata, `continuation_check_status`, `next_page_context_available`, and full-answer confirmation state.
+- A deterministic page-bottom heuristic marks possible continuation and blocks grading until teacher/founder full-answer confirmation is recorded.
+- Multi-segment grading uses a local composite grading-context image with ordered segment labels, stored only in ignored local artifacts.
+
+### Safety result
+No real Codex was run in TA-W2-026. No teacher observation was started. The blocked path creates no `GradingJob`, `GradeSuggestion`, or `FinalGrade`. Teacher observation remains blocked until multi-segment evidence is validated with the full page 3 + page 4 `1(b)(i)` answer.
+
+### Verification results
+- Focused multi-segment/evidence tests: `4 passed`.
+- Focused metadata/migration/answer-region/grading API tests: `30 passed`.
+- `make test`: `187 passed`.
+- `node apps/web/tests/workflow-ui.test.mjs`: passed.
+- `make lint`: passed (`ruff check`, `tsc --noEmit`).
+- `cd apps/web && npm run build`: passed; retained existing non-fatal ESLint flat-config warning.
+- `make e2e`: passed (`2 passed`) after restarting the dev server cleanly because running `next build` while dev server was active corrupted `.next` for the first attempt.
+- `git diff --check`: passed.
+- `make down`: run after verification.
+
+
 ## TA-W2-025 — Pre-grading evidence packet gate
 
 - Recorded at: 2026-06-03T10:05:27+06:00

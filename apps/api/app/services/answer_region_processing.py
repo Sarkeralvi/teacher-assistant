@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.services.storage import LocalStorage
 
@@ -77,3 +77,48 @@ def crop_grading_context_image(
         stored = storage.grading_context_image_path(submission_id)
         cropped.save(stored.absolute_path, format="PNG")
         return stored.relative_path
+
+
+def create_composite_grading_context_image(
+    storage: LocalStorage,
+    submission_id: int,
+    segments: list[dict[str, object]],
+) -> str:
+    """Stack confirmed answer segment crops into one auditable grading context image."""
+    if not segments:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one answer segment is required",
+        )
+    opened: list[tuple[str, Image.Image]] = []
+    try:
+        for segment in segments:
+            image_path = str(segment["image_path"])
+            path = storage.resolve_relative(image_path)
+            if not path.is_file():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Answer segment image is missing",
+                )
+            label = str(segment.get("label") or "Segment")
+            opened.append((label, Image.open(path).convert("RGB")))
+
+        label_height = 32
+        gap = 12
+        padding = 12
+        width = max(image.width for _label, image in opened) + padding * 2
+        height = padding + sum(label_height + image.height + gap for _label, image in opened)
+        composite = Image.new("RGB", (width, height), color="white")
+        draw = ImageDraw.Draw(composite)
+        y = padding
+        for label, image in opened:
+            draw.text((padding, y), label, fill="black")
+            y += label_height
+            composite.paste(image, (padding, y))
+            y += image.height + gap
+        stored = storage.grading_context_image_path(submission_id)
+        composite.save(stored.absolute_path, format="PNG")
+        return stored.relative_path
+    finally:
+        for _label, image in opened:
+            image.close()

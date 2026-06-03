@@ -13,6 +13,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     AnswerRegion,
+    AnswerRegionSegment,
     Assessment,
     Course,
     FinalGrade,
@@ -30,6 +31,7 @@ CLEANUP_MODELS = (
     FinalGrade,
     GradeSuggestion,
     GradingJob,
+    AnswerRegionSegment,
     AnswerRegion,
     SubmissionPage,
     Submission,
@@ -697,3 +699,149 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
     assert job.error is not None
     assert "image input is not supported" in job.error
 
+
+
+def test_evidence_packet_blocks_possible_continuation_near_page_bottom(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    answer_region = db_session.get(AnswerRegion, region["id"])
+    assert answer_region is not None
+    answer_region.y = Decimal("62.00")
+    answer_region.height = Decimal("18.00")
+    db_session.add(
+        SubmissionPage(
+            submission_id=answer_region.submission_id,
+            page_no=2,
+            image_path=answer_region.page.image_path,
+        )
+    )
+    db_session.commit()
+
+    packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+
+    assert packet_response.status_code == 200
+    packet = packet_response.json()
+    student_evidence = packet["student_answer_evidence"]
+    assert student_evidence["segment_count"] == 1
+    assert student_evidence["pages_covered"] == [1]
+    assert student_evidence["continuation_check_status"] == "possible_continuation"
+    assert student_evidence["next_page_context_available"] is True
+    assert student_evidence["teacher_founder_confirmed_full_answer"] is False
+    assert "possible answer continuation not confirmed" in packet["readiness_result"]["blockers"]
+    assert packet["readiness_result"]["ready_for_grading"] is False
+
+    grade_response = client.post(f"/answer-regions/{region['id']}/grade")
+    assert grade_response.status_code == 400
+    assert "possible answer continuation not confirmed" in grade_response.text
+    db_session.expire_all()
+    assert db_session.scalars(select(GradingJob)).all() == []
+    assert db_session.scalars(select(GradeSuggestion)).all() == []
+    assert db_session.scalars(select(FinalGrade)).all() == []
+
+
+def test_full_answer_confirmation_clears_continuation_blocker(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    answer_region = db_session.get(AnswerRegion, region["id"])
+    assert answer_region is not None
+    answer_region.y = Decimal("62.00")
+    answer_region.height = Decimal("18.00")
+    db_session.commit()
+
+    confirm_response = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        json={"full_answer_confirmed": True},
+    )
+    assert confirm_response.status_code == 200
+
+    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert (
+        packet["student_answer_evidence"]["continuation_check_status"]
+        == "continuation_confirmed_not_needed"
+    )
+    assert (
+        "possible answer continuation not confirmed"
+        not in packet["readiness_result"]["blockers"]
+    )
+    assert packet["readiness_result"]["ready_for_grading"] is True
+
+
+def test_multisegment_grading_uses_composite_context_with_all_segments(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    from app.services.grading_service import GradingService
+
+    region_payload = create_answer_region_with_optional_rubric(client, tmp_path)
+    region = db_session.get(AnswerRegion, region_payload["id"])
+    assert region is not None
+    segment_response = client.post(
+        f"/answer-regions/{region.id}/segments",
+        json={
+            "page_id": region.page_id,
+            "x": 30,
+            "y": 30,
+            "width": 20,
+            "height": 20,
+            "order_index": 2,
+            "source": "manual",
+            "confirmed": True,
+        },
+    )
+    assert segment_response.status_code == 201
+    confirm_response = client.patch(
+        f"/answer-regions/{region.id}/full-answer-confirmation",
+        json={"full_answer_confirmed": True},
+    )
+    assert confirm_response.status_code == 200
+
+    class RecordingAdapter:
+        provider = type("Provider", (), {"provider_name": "mock"})()
+
+        def __init__(self) -> None:
+            self.answer_image_path: str | None = None
+
+        def grade_answer_region(self, **kwargs: object) -> GradeSuggestionOutput:
+            self.answer_image_path = str(kwargs["answer_image_path"])
+            return GradeSuggestionOutput(
+                model_provider="mock",
+                model_name="mock-grader-v1",
+                prompt_version="mock-grading-v1",
+                score=Decimal("0.00"),
+                max_score=Decimal("5.00"),
+                confidence=Decimal("0.00"),
+                feedback_to_student="mock",
+                detected_answer_summary="mock summary",
+                major_errors=[],
+                rubric_breakdown=[
+                    RubricBreakdownItem(
+                        criterion_id="concept",
+                        criterion="Core concept",
+                        max_marks=Decimal("5.00"),
+                        awarded_marks=Decimal("0.00"),
+                        reason="mock",
+                        confidence=Decimal("0.00"),
+                    )
+                ],
+                needs_review=True,
+                review_flags=["mock_provider", "teacher_review_required"],
+            )
+
+    service = GradingService(db_session, use_configured_adapter=False)
+    recording_adapter = RecordingAdapter()
+    service.adapter = recording_adapter  # type: ignore[assignment]
+
+    service.grade_answer_region(region.id)
+
+    assert recording_adapter.answer_image_path is not None
+    assert "grading_context" in recording_adapter.answer_image_path
+    composite_path = service.storage.resolve_relative(recording_adapter.answer_image_path)
+    with Image.open(composite_path) as composite:
+        assert composite.width >= 20
+        assert composite.height > 40
+    suggestion = db_session.scalars(select(GradeSuggestion)).one()
+    raw = suggestion.raw_response_json
+    assert "multi_segment_context" in raw["review_flags"]
+    assert raw["grading_context"]["segment_count"] == 2
+    assert len(raw["grading_context"]["segments"]) == 2

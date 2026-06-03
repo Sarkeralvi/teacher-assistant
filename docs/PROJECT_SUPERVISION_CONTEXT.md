@@ -39,6 +39,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Teacher review / finalization / export flows exist.
 - Batch mock grading exists.
 - Pre-grading evidence packet/readiness endpoint exists and is reused as a grading gate before provider/job execution.
+- Multi-segment answer evidence exists: one logical `AnswerRegion` can have ordered `AnswerRegionSegment` crops, and grading can use a composite context image when multiple confirmed segments are present.
 - Canonical grading-unit labels such as `1(a)(i)` are supported through flat Question rows and must be confirmed with max marks before real grading.
 - Selected batch approval exists.
 - Evaluation harnesses exist for question import and grading-related flows.
@@ -73,7 +74,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 
 ## What is not ready
 - Manual answer-region mapping is not the final teacher workflow.
-- Handwritten math grading remains quality-gated: `1(b)(i)` improved from `3/6` to `4/6`, but founder fair is `6/6`; TA-W2-024 found the original crop/context was too tight and added padded AI-grading context, yet a one-call real Codex retest still returned `4/6`.
+- Handwritten math grading remains quality-gated. The latest `1(b)(i)` `4/6` result is invalid as a quality benchmark because the answer evidence was incomplete: the app graded only page 3 while the answer continued on page 4 before `1(b)(ii)`.
 - E2E smoke coverage is too thin.
 - Mode gating / ghost-mode clarity still needs hardening.
 - Privacy baseline documentation and an owner-only assessment test-data deletion endpoint now exist for internal/founder testing.
@@ -81,9 +82,9 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Broad real-document validation is not yet approved.
 - TA-W2-022B founder real-document grading rehearsal is invalidated for quality evaluation because canonical question labels/max marks were wrong or ambiguous.
 - TA-W2-022D corrected canonical-unit rehearsal worked technically but showed Codex under-crediting near-correct handwritten Bayes/statistics work (`1(b)(i)` scored 3/6 vs founder fair 6/6).
-- TA-W2-024 classifies the remaining Bayes under-credit as mixed but now mostly a real-model scoring limitation: crop context was improved, no FinalGrade was created, and teacher observation remains blocked for grading-accuracy demo purposes.
+- TA-W2-024/025 improved crop context and evidence readiness, but the later page-4 continuation finding reclassifies the latest `1(b)(i)` result as an evidence-completeness failure rather than proof of model under-crediting.
 - TA-W2-025 adds an evidence-first grading gate: exact question, solution/model answer, rubric, and answer mapping must be confirmed before real grading is quality-evaluable.
-- Teacher observation remains blocked until the evidence-packet flow is validated with real documents.
+- TA-W2-026 adds multi-segment evidence and a page-bottom continuation gate. Teacher observation remains blocked until the full page 3 + page 4 `1(b)(i)` evidence path is validated.
 - Batch real Codex remains out of scope.
 
 ## Expert-review synthesis
@@ -145,7 +146,8 @@ Important correction from later validation:
 6. TA-W2-022D: corrected founder real-document retest — technically successful, grading-quality blocked
 7. TA-W2-023: handwritten math/stat prompt grounding — completed
 8. TA-W2-024: crop/context audit and padded grading context — completed, grading-quality blocked
-9. TA-W2-025: pre-grading evidence packet gate — completed; real-document evidence-packet validation still required before teacher observation
+9. TA-W2-025: pre-grading evidence packet gate — completed
+10. TA-W2-026: multi-segment answer evidence and continuation gate — completed; rerun `1(b)(i)` only after page 3 + page 4 continuation segments are confirmed
 
 ## Gates before teacher pilot
 - Marking policy calibration shows expected ordering/deltas and handwritten math/stat prompt grounding is verified synthetically.
@@ -153,7 +155,7 @@ Important correction from later validation:
 - Mode naming and gating are not misleading.
 - Privacy baseline is documented and deletion behavior exists for internal/local assessment test data.
 - Canonical grading units are confirmed with label, max marks, active rubric, and unit type before real grading.
-- Evidence packet readiness is green for the exact bounded grading unit before real grading: confirmed question, solution/model answer, rubric, and student-answer mapping.
+- Evidence packet readiness is green for the exact bounded grading unit before real grading: confirmed question, solution/model answer, rubric, and complete student-answer mapping, including all required page segments.
 - No auto-finalization is possible.
 - Teacher approval remains required for finalization.
 - Draft suggestions and grading suggestions remain review-required.
