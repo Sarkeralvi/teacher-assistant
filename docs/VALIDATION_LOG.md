@@ -1,5 +1,44 @@
 # Validation Log
 
+## TA-W2-025 — Pre-grading evidence packet gate
+
+- Recorded at: 2026-06-03T10:05:27+06:00
+- Baseline commit: `73f9898152a9641ae7519b49a5b5f77ce6b57a00`
+- Workflow type: manual controlled evidence-packet implementation + verification
+- Real Codex calls: 0
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not run; remains blocked until evidence-packet flow is validated with real documents
+- FinalGrade creation by evidence packet endpoint or blocked grading path: 0, covered by focused API tests
+
+### Change made
+
+Added `GET /answer-regions/{answer_region_id}/grading-evidence-packet` plus typed response schemas and a reusable backend readiness gate before grading provider/job execution. The packet records assessment/submission/page/answer-region context, canonical grading unit, question evidence, solution/model-answer evidence, rubric evidence, student answer crop/context evidence, and readiness blockers/warnings.
+
+### Readiness gate behavior
+
+`POST /answer-regions/{answer_region_id}/grade` now checks the evidence packet first and returns HTTP 400 before creating a `GradingJob`, invoking a provider, or creating downstream grading records when the packet is not ready. Missing active rubric and missing answer-region image/context are tested blockers. The endpoint itself is read-only.
+
+### Founder principle recorded
+
+Teacher/founder confirmation of the exact question, solution/model answer, rubric, and student-answer mapping is a prerequisite for real grading. This task addresses the founder principle that grading quality depends first on confirmed evidence and bounded context, not question-specific prompt hacks.
+
+### Frontend behavior
+
+The review card fetches and displays the evidence-packet readiness checklist, including ready/not-ready state, blockers, and warnings. Mock Grade remains usable when the packet is ready and is disabled while the packet is missing/not ready.
+
+### Verification results
+
+- Initial repo state: `git status --short` showed only scoped in-progress files; baseline `git rev-parse HEAD` was `73f9898152a9641ae7519b49a5b5f77ce6b57a00`.
+- `python -m pytest tests/test_grading_api.py -q`: passed (`14 passed`).
+- `make test`: passed (`182 passed`).
+- `node apps/web/tests/workflow-ui.test.mjs`: passed (`frontend workflow static checks passed`).
+- `make e2e`: passed (`2 passed`): auth smoke and Custom Controlled mock grading loop, including no-FinalGrade-before-approval.
+- `make lint`: passed (`ruff check` and `tsc --noEmit`).
+- `cd apps/web && npm run build`: passed; emitted the existing non-fatal ESLint flat-config warning while exiting 0.
+- `git diff --check`: passed.
+- `make down`: run after verification to stop compose services.
+
 ## TA-W2-024 — Answer-region crop/context audit for real grading quality
 
 - Recorded at: 2026-06-03T00:53:02+06:00

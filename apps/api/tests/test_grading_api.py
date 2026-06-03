@@ -317,6 +317,65 @@ def test_grading_uses_padded_context_crop_without_changing_region_coordinates(
     )
 
 
+def test_grading_evidence_packet_reports_ready_state_and_auditable_fields(
+    client: TestClient, tmp_path: Path
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+
+    assert response.status_code == 200
+    packet = response.json()
+    assert packet["assessment_context"]["answer_region_id"] == region["id"]
+    assert packet["assessment_context"]["submission_id"] == region["submission_id"]
+    assert packet["assessment_context"]["page_id"] == region["page_id"]
+    assert packet["canonical_grading_unit"]["label"] == "1"
+    assert packet["canonical_grading_unit"]["max_marks"] == "5.00"
+    assert packet["canonical_grading_unit"]["active_rubric_present"] is True
+    assert packet["canonical_grading_unit"]["rubric_total_matches_grading_unit"] is True
+    assert packet["question_evidence"]["confirmed_status"] == "unknown"
+    assert packet["rubric_evidence"]["confirmed_status"] == "unknown"
+    assert packet["student_answer_evidence"]["answer_region_coordinates"] == {
+        "x": "1.00",
+        "y": "2.00",
+        "width": "20.00",
+        "height": "25.00",
+    }
+    assert packet["student_answer_evidence"]["crop_path"] == region["image_path"]
+    assert packet["student_answer_evidence"]["context_completeness_status"] == "unknown"
+    assert packet["readiness_result"]["ready_for_grading"] is True
+    assert packet["readiness_result"]["blockers"] == []
+    assert "context completeness unknown" in packet["readiness_result"]["warnings"]
+
+
+def test_grading_evidence_packet_blocks_when_active_rubric_is_missing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    region = create_answer_region_with_optional_rubric(
+        client, tmp_path, create_rubric=False
+    )
+
+    packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+
+    assert packet_response.status_code == 200
+    packet = packet_response.json()
+    assert packet["readiness_result"]["ready_for_grading"] is False
+    assert "missing active rubric" in packet["readiness_result"]["blockers"]
+
+    grade_response = client.post(f"/answer-regions/{region['id']}/grade")
+    assert grade_response.status_code == 400
+    assert "Evidence packet not ready for grading" in grade_response.text
+    assert db_session_scalars_count(FinalGrade) == 0
+
+
+def db_session_scalars_count(model: type[object]) -> int:
+    db = SessionLocal()
+    try:
+        return len(db.scalars(select(model)).all())
+    finally:
+        db.close()
+
+
 def test_batch_mock_grading_grades_ungraded_regions_only_and_skips_existing(
     client: TestClient,
     tmp_path: Path,
@@ -486,9 +545,7 @@ def test_grade_answer_region_missing_image_fails_before_provider_call(
     assert response.status_code == 400
     assert "image is missing" in response.text
     db_session.expire_all()
-    job = db_session.scalars(select(GradingJob)).one()
-    assert job.status == "failed"
-    assert job.error == "Answer region image is missing"
+    assert db_session_scalars_count(GradingJob) == 0
 
 
 def codex_api_output() -> GradeSuggestionOutput:

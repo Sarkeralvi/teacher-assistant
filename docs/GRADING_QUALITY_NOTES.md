@@ -1,5 +1,25 @@
 # Grading Quality Notes
 
+## TA-W2-025 — Evidence-first grading gate
+
+Recorded at: 2026-06-03T10:05:27+06:00
+
+### Quality finding
+
+Before real grading, the product must prove the bounded grading evidence is correct: exact canonical grading unit, question text, solution/model answer, active rubric, and student answer crop/context. The founder principle is that grading quality depends first on confirmed evidence and mapping, not question-specific prompt hacks.
+
+### Product/code change
+
+Added an auditable pre-grading evidence packet endpoint and reused it as a backend readiness gate before grading provider/job execution. If the packet is not ready, grading returns HTTP 400 before creating a `GradingJob`, invoking Codex/OpenAI/mock providers, or creating downstream grading records.
+
+### Required confirmation before real grading
+
+Teacher/founder must confirm the exact question, solution/model answer, rubric, and student-answer mapping before any real grading run is quality-evaluable. Current confirmation fields remain `unknown` until the real-document evidence-packet flow is validated.
+
+### Safety result
+
+No real Codex was run, no batch grading was run, and focused tests cover that the evidence packet endpoint and blocked grading path create no `FinalGrade`. Teacher observation remains blocked until this evidence-packet flow is validated with real documents.
+
 ## TA-W2-024 — Crop/context audit and padded grading context
 
 Recorded at: 2026-06-03T00:53:02+06:00

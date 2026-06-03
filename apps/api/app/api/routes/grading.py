@@ -23,6 +23,7 @@ from app.schemas import (
     BrowserCodexGradeResponse,
     GradeAnswerRegionResponse,
     GradeSuggestionRead,
+    GradingEvidencePacketRead,
     GradingJobRead,
 )
 from app.services.grading_service import GradingService
@@ -78,6 +79,14 @@ def assert_teacher_owns_answer_region(
     if region is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found")
     return region
+
+
+@router.get(
+    "/answer-regions/{answer_region_id}/grading-evidence-packet",
+    response_model=GradingEvidencePacketRead,
+)
+def get_grading_evidence_packet(answer_region_id: int, db: DbSession) -> dict[str, object]:
+    return GradingService(db).get_grading_evidence_packet(answer_region_id)
 
 
 @router.post(

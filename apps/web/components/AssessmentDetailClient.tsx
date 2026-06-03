@@ -14,6 +14,7 @@ import {
   getAssessment,
   getAssessmentFinalGradesExportUrl,
   getAssessmentReviewQueue,
+  getGradingEvidencePacket,
   getSubmissionPageImageUrl,
   gradeAnswerRegion,
   importQuestionsFromPaper,
@@ -28,6 +29,7 @@ import {
   type DraftAnswerRegionSuggestion,
   type DraftQuestion,
   type FinalGrade,
+  type GradingEvidencePacket,
   type Question,
   type QuestionImportJob,
   type ReviewQueueItem,
@@ -56,6 +58,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [questions, setQuestions] = useState<Question[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
+  const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [questionNo, setQuestionNo] = useState("");
   const [questionText, setQuestionText] = useState("");
@@ -210,6 +213,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setQuestions(questionData);
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
+      const evidenceEntries = await Promise.all(
+        answerRegionData.map(async (region) => [region.id, await getGradingEvidencePacket(region.id)] as const),
+      );
+      setEvidencePackets(Object.fromEntries(evidenceEntries));
       setReviewQueue(reviewQueueData);
       setFinalizeDrafts((current) => mergeFinalizeDrafts(current, reviewQueueData));
       if (!selectedPageId && submissionData[0]?.pages[0]) {
@@ -481,6 +488,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   }
 
   async function handleMockGrade(answerRegionId: number) {
+    const packet = evidencePackets[answerRegionId];
+    if (packet && !packet.readiness_result.ready_for_grading) {
+      setError(`Evidence packet not ready for grading: ${packet.readiness_result.blockers.join(", ")}`);
+      return;
+    }
     setGradingRegionId(answerRegionId);
     setError(null);
     try {
@@ -862,6 +874,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               draft={finalizeDrafts[item.answer_region.id] ?? defaultFinalizeDraft(item)}
               grading={gradingRegionId === item.answer_region.id}
               finalizing={finalizingRegionId === item.answer_region.id}
+              evidencePacket={evidencePackets[item.answer_region.id] ?? null}
               onMockGrade={() => void handleMockGrade(item.answer_region.id)}
               onDraftChange={(patch) => updateFinalizeDraft(item.answer_region.id, patch)}
               onFinalize={(status) => void handleFinalize(item, status)}
@@ -983,6 +996,7 @@ function ReviewQueueCard({
   draft,
   grading,
   finalizing,
+  evidencePacket,
   onMockGrade,
   onDraftChange,
   onFinalize,
@@ -991,6 +1005,7 @@ function ReviewQueueCard({
   draft: FinalizeDraft;
   grading: boolean;
   finalizing: boolean;
+  evidencePacket: GradingEvidencePacket | null;
   onMockGrade: () => void;
   onDraftChange: (patch: Partial<FinalizeDraft>) => void;
   onFinalize: (status: "approved" | "edited" | "rejected") => void;
@@ -998,6 +1013,7 @@ function ReviewQueueCard({
   const suggestion = item.latest_grade_suggestion;
   const finalGrade: FinalGrade | null = item.final_grade;
   const rubricBreakdown = suggestion?.raw_response_json.rubric_breakdown ?? [];
+  const readiness = evidencePacket?.readiness_result;
   return (
     <article className="grid gap-4 rounded border border-slate-700 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1011,8 +1027,25 @@ function ReviewQueueCard({
       </div>
       <img className="max-h-72 rounded border border-slate-800 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Cropped answer region ${item.answer_region.id}`} />
 
+      <div className="rounded border border-slate-800 bg-slate-950/40 p-3 text-sm">
+        <p className={readiness?.ready_for_grading ? "font-semibold text-emerald-300" : "font-semibold text-amber-200"}>
+          Evidence packet: {readiness ? (readiness.ready_for_grading ? "ready for grading" : "not ready for grading") : "loading"}
+        </p>
+        {evidencePacket ? (
+          <p className="text-xs text-slate-400">
+            Grading unit {evidencePacket.canonical_grading_unit.label ?? "unknown"} · rubric present: {String(evidencePacket.rubric_evidence.criteria_max_marks.length > 0)} · padded context: {String(evidencePacket.student_answer_evidence.padded_grading_context_generated)}
+          </p>
+        ) : null}
+        {readiness?.blockers.length ? (
+          <p className="mt-1 text-xs text-red-300">Blockers: {readiness.blockers.join(", ")}</p>
+        ) : null}
+        {readiness?.warnings.length ? (
+          <p className="mt-1 text-xs text-amber-200">Warnings: {readiness.warnings.join(", ")}</p>
+        ) : null}
+      </div>
+
       {!suggestion ? (
-        <button className={buttonClass} type="button" disabled={grading} onClick={onMockGrade}>
+        <button className={buttonClass} type="button" disabled={grading || !readiness?.ready_for_grading} onClick={onMockGrade}>
           {grading ? "Creating MOCK suggestion..." : "Mock Grade"}
         </button>
       ) : (

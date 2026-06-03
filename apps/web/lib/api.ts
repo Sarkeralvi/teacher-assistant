@@ -335,6 +335,46 @@ export type BatchMockGradeResponse = {
   errors: string[];
 };
 
+export type GradingEvidencePacket = {
+  assessment_context: {
+    assessment_id: number | null;
+    submission_id: number | null;
+    page_id: number | null;
+    answer_region_id: number;
+  };
+  canonical_grading_unit: {
+    question_id: number | null;
+    label: string | null;
+    max_marks: string | number | null;
+    active_rubric_present: boolean;
+    rubric_total_matches_grading_unit: boolean | null;
+  };
+  question_evidence: {
+    question_text_present: boolean;
+    confirmed_status: string;
+  };
+  solution_model_answer_evidence: {
+    model_answer_present: boolean;
+    confirmed_status: string;
+  };
+  rubric_evidence: {
+    rubric_present: boolean;
+    criteria_max_marks: Array<Record<string, unknown>>;
+    confirmed_status: string;
+  };
+  student_answer_evidence: {
+    answer_region_coordinates: Record<string, string | number>;
+    crop_path: string | null;
+    padded_grading_context_generated: boolean;
+    context_completeness_status: string;
+  };
+  readiness_result: {
+    ready_for_grading: boolean;
+    blockers: string[];
+    warnings: string[];
+  };
+};
+
 export type BrowserCodexGradeResponse = {
   job: {
     id: number;
@@ -740,6 +780,9 @@ export function getAnswerRegionImageUrl(answerRegionId: number) {
   return `${resolveApiBaseUrl()}/answer-regions/${answerRegionId}/image`;
 }
 
+export function getGradingEvidencePacket(answerRegionId: number) {
+  return apiRequest<GradingEvidencePacket>(`/answer-regions/${answerRegionId}/grading-evidence-packet`);
+}
 
 export function gradeAnswerRegion(answerRegionId: number) {
   return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {

@@ -437,6 +437,66 @@ class AnswerRegionSuggestionResponse(BaseModel):
     suggestions: list[DraftAnswerRegionSuggestion]
 
 
+class EvidencePacketAssessmentContext(BaseModel):
+    assessment_id: int
+    submission_id: int
+    page_id: int
+    answer_region_id: int
+
+
+class EvidencePacketCanonicalGradingUnit(BaseModel):
+    label: str | None
+    max_marks: Decimal | None
+    active_rubric_present: bool
+    model_answer_present: bool
+    teacher_founder_confirmed: bool | None = None
+    rubric_total_matches_grading_unit: bool | None = None
+
+
+class EvidencePacketQuestionEvidence(BaseModel):
+    question_label: str | None
+    question_text: str | None
+    max_marks: Decimal | None
+    confirmed_status: Literal["unknown", "confirmed", "unconfirmed"] = "unknown"
+
+
+class EvidencePacketSolutionEvidence(BaseModel):
+    solution_model_answer_text_or_reference: str | None
+    confirmed_status: Literal["unknown", "confirmed", "unconfirmed"] = "unknown"
+
+
+class EvidencePacketRubricEvidence(BaseModel):
+    criteria_max_marks: list[dict[str, Any]]
+    confirmed_status: Literal["unknown", "confirmed", "unconfirmed"] = "unknown"
+    total_marks_match_grading_unit_max_marks: bool | None
+
+
+class EvidencePacketStudentAnswerEvidence(BaseModel):
+    answer_region_coordinates: dict[str, Decimal]
+    crop_path: str | None
+    padded_grading_context_generated: bool
+    context_completeness_status: Literal[
+        "unknown", "complete", "possibly_incomplete", "incomplete"
+    ] = "unknown"
+    teacher_founder_confirmed_region: bool | None = None
+
+
+class EvidencePacketReadinessResult(BaseModel):
+    ready_for_grading: bool
+    blockers: list[str]
+    warnings: list[str]
+
+
+class GradingEvidencePacketRead(BaseModel):
+    assessment_context: EvidencePacketAssessmentContext
+    canonical_grading_unit: EvidencePacketCanonicalGradingUnit
+    question_evidence: EvidencePacketQuestionEvidence
+    solution_model_answer_evidence: EvidencePacketSolutionEvidence
+    rubric_evidence: EvidencePacketRubricEvidence
+    student_answer_evidence: EvidencePacketStudentAnswerEvidence
+    readiness_result: EvidencePacketReadinessResult
+
+
 class GradingJobRead(ORMBase):
     id: int
     answer_region_id: int

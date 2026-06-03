@@ -1146,3 +1146,16 @@ Outcome:
 - One real Codex retest on `1(b)(i)` still returned `4/6` vs founder fair `6/6`; no FinalGrade was created.
 Risks:
 - Remaining issue should be treated as real-model conservative scoring limitation for now; do not continue prompt/crop churn on this case without a new founder-approved direction.
+
+TASK-ID: TA-W2-025
+Title: Pre-grading evidence packet gate
+Owner: Hermes
+Priority: P1
+Dependencies: TA-W2-024
+Files affected: apps/api/app/api/routes/grading.py, apps/api/app/schemas.py, apps/api/app/services/grading_service.py, apps/api/tests/test_grading_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md, docs/VALIDATION_LOG.md, docs/GRADING_QUALITY_NOTES.md, docs/PROJECT_SUPERVISION_CONTEXT.md
+Goal: Add an auditable pre-grading evidence packet/readiness gate so grading quality is blocked on confirmed evidence before any provider/job execution.
+Implementation notes: Added `GET /answer-regions/{answer_region_id}/grading-evidence-packet`, evidence packet schemas, readiness blockers/warnings, a backend grading readiness gate that returns 400 before provider/job execution when the packet is not ready, and frontend review-card checklist display that disables Mock Grade until the packet is ready. Teacher/founder must confirm the exact question, solution/model answer, rubric, and answer mapping before real grading. This addresses the founder principle that grading quality depends first on confirmed evidence, not question-specific prompt hacks. No real Codex, autonomous loop, batch grading, teacher observation, approval, export, or private artifacts were run/committed.
+Acceptance criteria: Evidence packet reports the bounded assessment/submission/page/answer-region context, canonical grading unit, question evidence, solution/model answer evidence, rubric evidence, student answer crop/context evidence, blockers, and warnings; missing active rubric or image/context blocks grading before provider/job execution; the evidence endpoint and blocked path create no FinalGrade; frontend shows readiness and keeps Mock Grade disabled until ready; required backend/frontend/E2E checks pass.
+Tests required: `python -m pytest tests/test_grading_api.py -q`, full backend tests / `make test`, `node apps/web/tests/workflow-ui.test.mjs`, `make e2e`, `make lint`, `cd apps/web && npm run build`, `git diff --check`.
+Risks: Confirmation statuses are currently `unknown` until the real teacher/founder confirmation workflow is fully validated with real documents. Teacher observation remains blocked until the evidence-packet flow is validated with real documents.
+Status: Done

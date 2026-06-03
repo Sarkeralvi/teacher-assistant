@@ -38,6 +38,7 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - Browser-backend Codex dev grading smoke exists behind explicit gate.
 - Teacher review / finalization / export flows exist.
 - Batch mock grading exists.
+- Pre-grading evidence packet/readiness endpoint exists and is reused as a grading gate before provider/job execution.
 - Canonical grading-unit labels such as `1(a)(i)` are supported through flat Question rows and must be confirmed with max marks before real grading.
 - Selected batch approval exists.
 - Evaluation harnesses exist for question import and grading-related flows.
@@ -81,6 +82,8 @@ Manual mapping remains a fallback/debug/scaffold path, not the final teacher exp
 - TA-W2-022B founder real-document grading rehearsal is invalidated for quality evaluation because canonical question labels/max marks were wrong or ambiguous.
 - TA-W2-022D corrected canonical-unit rehearsal worked technically but showed Codex under-crediting near-correct handwritten Bayes/statistics work (`1(b)(i)` scored 3/6 vs founder fair 6/6).
 - TA-W2-024 classifies the remaining Bayes under-credit as mixed but now mostly a real-model scoring limitation: crop context was improved, no FinalGrade was created, and teacher observation remains blocked for grading-accuracy demo purposes.
+- TA-W2-025 adds an evidence-first grading gate: exact question, solution/model answer, rubric, and answer mapping must be confirmed before real grading is quality-evaluable.
+- Teacher observation remains blocked until the evidence-packet flow is validated with real documents.
 - Batch real Codex remains out of scope.
 
 ## Expert-review synthesis
@@ -138,9 +141,11 @@ Important correction from later validation:
 2. TA-W2-020: Playwright E2E smoke suite
 3. TA-W2-021: Mode gating / ghost-mode clarity
 4. TA-W2-022A: Privacy baseline documentation and deletion endpoint — completed
-5. TA-W2-022C: canonical grading-unit confirmation — in progress
+5. TA-W2-022C: canonical grading-unit confirmation — completed
 6. TA-W2-022D: corrected founder real-document retest — technically successful, grading-quality blocked
-7. TA-W2-023: handwritten math/stat prompt grounding — completed; requires capped real retest before teacher observation
+7. TA-W2-023: handwritten math/stat prompt grounding — completed
+8. TA-W2-024: crop/context audit and padded grading context — completed, grading-quality blocked
+9. TA-W2-025: pre-grading evidence packet gate — completed; real-document evidence-packet validation still required before teacher observation
 
 ## Gates before teacher pilot
 - Marking policy calibration shows expected ordering/deltas and handwritten math/stat prompt grounding is verified synthetically.
@@ -148,6 +153,7 @@ Important correction from later validation:
 - Mode naming and gating are not misleading.
 - Privacy baseline is documented and deletion behavior exists for internal/local assessment test data.
 - Canonical grading units are confirmed with label, max marks, active rubric, and unit type before real grading.
+- Evidence packet readiness is green for the exact bounded grading unit before real grading: confirmed question, solution/model answer, rubric, and student-answer mapping.
 - No auto-finalization is possible.
 - Teacher approval remains required for finalization.
 - Draft suggestions and grading suggestions remain review-required.
