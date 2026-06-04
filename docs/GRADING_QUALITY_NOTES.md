@@ -499,3 +499,8 @@ Recorded at: 2026-05-31T11:36:07Z.
 ### Interpretation
 
 This smoke confirms that policy metadata reaches the real Codex grading path and is recorded in outputs. It does **not** show meaningful score calibration between Tough, General, and Easy. The tested rubrics had clearly separable criteria, so Codex awarded criterion marks deterministically. Before treating policy as a reliable scoring control, use more ambiguous partial-credit cases or tighten the prompt/rubric design so policy can affect borderline evidence without changing maximum marks or teacher-review requirements.
+## TA-MAP-003 mapping-quality gate
+
+TA-MAP-003 makes answer-boundary quality measurable before grading quality is claimed. The synthetic benchmark explicitly checks for missed continuations, wrong-question mapping, blank/low-content false mappings, unsafe auto-accept behavior, and accidental `GradeSuggestion`/`FinalGrade` side effects.
+
+Current deterministic/mock provider result is intentionally limited: 3/7 cases pass, with 0 unsafe auto-accepts, 0 `GradeSuggestion` creations, and 0 `FinalGrade` creations. The failing cases are evidence that real AI mapping must be benchmark-gated, not evidence that grading can proceed.

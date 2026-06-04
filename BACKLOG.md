@@ -1256,13 +1256,13 @@ Title: Mapping evaluation harness and synthetic benchmark
 Owner: Hermes
 Priority: P0
 Dependencies: TA-CORE-001, TA-MAP-002
-Files affected: apps/api/packages/evaluation/** or scoped equivalent, apps/api/tests/**, docs/ANSWER_REGION_MAPPING_ALGORITHM.md, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, BACKLOG.md
+Files affected: apps/api/packages/evaluation/answer_mapping_evaluator.py, apps/api/packages/evaluation/fixtures/answer_mapping/*.json, apps/api/tests/test_answer_mapping_evaluation.py, docs/ANSWER_REGION_MAPPING_ALGORITHM.md, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/GRADING_QUALITY_NOTES.md, docs/VALIDATION_LOG.md, BACKLOG.md
 Goal: Build the evaluation harness and synthetic benchmark for answer-region mapping quality before real AI mapping provider work.
-Implementation notes: No real Codex/AI mapping provider. Use synthetic/non-private fixtures. Measure single-page answers, multi-page continuation, possible-continuation false positives, wrong/partial mapping, multi-question page confusion, blank/skipped answers, inconsistent labels, and page-order anomalies.
-Acceptance criteria: Harness reports mapping metrics including question-label accuracy, segment recall/precision, bbox IoU where applicable, continuation recall/F1, false continuation rate, wrong-question assignment rate, packet-readiness false positives/negatives, and teacher correction burden proxy.
-Tests required: focused harness tests, `git diff --check`, `make lint`, scoped tests as implementation requires.
-Risks: Synthetic-only benchmark can still overfit; later founder-approved annotated real cases will be needed.
-Status: Pending
+Implementation notes: Added provider-agnostic synthetic JSON fixture loading, direct provider-output evaluation, per-case pass/fail, critical failure classification, and metric summaries. No real Codex, real AI/OCR mapping provider, private files, batch grading, GradeSuggestion creation, FinalGrade creation, teacher observation, VSCode/Codex, or additional coding agent was used. The deterministic/current mock provider is measured honestly rather than improved to pass all cases.
+Acceptance criteria: Harness covers single-page complete answer, multi-page continuation, near-bottom no-continuation, ambiguous possible continuation, multiple questions on one page, wrong-question trap, and blank/low-content page. Metrics include suggestion group count accuracy, question-label accuracy, segment count/order accuracy, page coverage accuracy, continuation-risk accuracy, wrong-question detection, blank-page handling, complete-answer packet success, unsafe auto-accept count, GradeSuggestion count, FinalGrade count, and critical continuation/wrong-question/blank-page failures.
+Tests required: focused harness tests, existing mapping contract/provider tests, `make test`, `make lint`, `git diff --check`, final git status. Frontend/e2e not required because frontend was not touched.
+Risks: Synthetic-only benchmark can still overfit; later founder-approved annotated real cases will be needed. Current mock-provider result is intentionally not a real-mapping quality claim.
+Status: Done
 
 TASK-ID: TA-REF-001
 Title: Question/solution/rubric extraction evaluation harness

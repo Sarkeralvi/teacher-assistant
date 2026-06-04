@@ -271,3 +271,8 @@ Important correction from later validation:
 - If a future task needs implementation, ensure it is a single, bounded task with explicit acceptance criteria.
 - If a task is docs-only, do not expand it into product work.
 - If a task requires real Codex, use the smallest safe validation possible and keep the call count bounded.
+## TA-MAP-003 status — mapping evaluation harness
+
+TA-MAP-003 is Done as an evaluation-first implementation. It adds `apps/api/packages/evaluation/answer_mapping_evaluator.py`, seven synthetic JSON benchmark fixtures, and focused tests. It does not use VSCode/Codex, real Codex, real OCR, real AI mapping, private files, batch grading, teacher observation, `GradeSuggestion`, or `FinalGrade`.
+
+The benchmark result is intentionally conservative: current mock-provider saved outputs pass 3/7 cases and fail realistic gaps such as multi-question page confusion, wrong-question trap detection, and blank/low-content page handling. This is not a product-quality claim; it is the first executable gate before TA-MAP-004 can be planned.

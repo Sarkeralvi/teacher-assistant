@@ -1,0 +1,70 @@
+{
+  "case_id": "wrong_question_trap",
+  "classification": "future_real_provider_target",
+  "description": "Evidence belongs to 1(b)(i), but nearby 1(b)(ii) text can lure a provider into the wrong label.",
+  "expected_blank_page_handled": false,
+  "expected_blockers": [
+    "wrong-question trap"
+  ],
+  "expected_full_answer_confirmation_required": true,
+  "expected_suggestion_groups": [],
+  "expected_warnings": [
+    "wrong-question trap must be blocked"
+  ],
+  "expected_wrong_question_detected": true,
+  "fixture_type": "synthetic",
+  "grading_units": [
+    {
+      "max_marks": "6.00",
+      "question_no": "1(b)(i)"
+    },
+    {
+      "max_marks": "4.00",
+      "question_no": "1(b)(ii)"
+    }
+  ],
+  "pages": [
+    {
+      "content_notes": "synthetic page",
+      "height": 600,
+      "page_no": 1,
+      "page_ref": "p1",
+      "width": 420
+    }
+  ],
+  "provider_outputs": {
+    "current_mock_provider": {
+      "blockers": [],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "provider": "current_mock_provider",
+      "suggestion_groups": [
+        {
+          "blockers": [],
+          "confidence": "0.70",
+          "continuation_risk": "none",
+          "needs_review": true,
+          "needs_teacher_confirmation": true,
+          "question_no": "1(b)(ii)",
+          "requires_full_answer_confirmation": true,
+          "segments": [
+            {
+              "box": [
+                "20",
+                "30",
+                "200",
+                "180"
+              ],
+              "order_index": 1,
+              "page_ref": "p1"
+            }
+          ],
+          "warnings": [
+            "Draft mapping suggestion only."
+          ]
+        }
+      ],
+      "warnings": []
+    }
+  }
+}

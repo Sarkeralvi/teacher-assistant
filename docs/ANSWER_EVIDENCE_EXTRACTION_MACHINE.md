@@ -305,3 +305,10 @@ Modified or rejected for this repo now:
 - kept OCR/vision provider abstraction instead of hardcoding one vendor;
 - replaced "100% AI OCR" style claims with "100% confirmed evidence before grading";
 - did not start real AI mapping, batch grading, prompt tuning, teacher observation, or product-code implementation in TA-CORE-001.
+## TA-MAP-003 executable mapping benchmark
+
+TA-MAP-003 adds the first executable AEEM safety net for answer-boundary evidence. The benchmark is synthetic JSON only and lives under `apps/api/packages/evaluation/fixtures/answer_mapping/`. The evaluator is provider-agnostic and compares draft mapping provider output to expected `EvidencePacket`-oriented answer groups before real AI mapping is allowed.
+
+The benchmark covers single-page complete answers, multi-page continuations, near-bottom no-continuation cases, ambiguous possible continuation, multiple questions on one page, wrong-question traps, and blank/low-content pages. Metrics include question-label, group, segment, order, page coverage, continuation-risk, wrong-question, blank-page, full-answer-confirmation, unsafe auto-accept, `GradeSuggestion`, and `FinalGrade` counts.
+
+Current result: the deterministic/mock provider is useful contract plumbing but is not a production mapper. It passes only the cases matching its deliberately simple behavior and fails realistic traps such as multi-question page confusion, wrong-question detection, and blank/low-content pages. Real AI mapping remains blocked until benchmark expectations and follow-up gates are accepted.

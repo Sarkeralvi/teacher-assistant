@@ -1,0 +1,109 @@
+{
+  "case_id": "multi_page_continuation",
+  "classification": "current_mock_provider_pass",
+  "description": "Answer for 1(b)(i) starts on page 1 and continues on page 2; both segments are required.",
+  "expected_blank_page_handled": false,
+  "expected_full_answer_confirmation_required": true,
+  "expected_suggestion_groups": [
+    {
+      "blockers": [],
+      "continuation_risk": "continuation_included",
+      "question_no": "1(b)(i)",
+      "requires_full_answer_confirmation": true,
+      "segments": [
+        {
+          "box": [
+            "20",
+            "30",
+            "200",
+            "180"
+          ],
+          "order_index": 1,
+          "page_ref": "p1"
+        },
+        {
+          "box": [
+            "20",
+            "30",
+            "200",
+            "180"
+          ],
+          "order_index": 2,
+          "page_ref": "p2"
+        }
+      ],
+      "warnings": [
+        "Draft mapping suggestion only."
+      ]
+    }
+  ],
+  "expected_wrong_question_detected": false,
+  "fixture_type": "synthetic",
+  "grading_units": [
+    {
+      "max_marks": "6.00",
+      "question_no": "1(b)(i)"
+    }
+  ],
+  "pages": [
+    {
+      "content_notes": "synthetic page",
+      "height": 600,
+      "page_no": 1,
+      "page_ref": "p1",
+      "width": 420
+    },
+    {
+      "content_notes": "continuation segment",
+      "height": 600,
+      "page_no": 2,
+      "page_ref": "p2",
+      "width": 420
+    }
+  ],
+  "provider_outputs": {
+    "current_mock_provider": {
+      "blockers": [],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "provider": "current_mock_provider",
+      "suggestion_groups": [
+        {
+          "blockers": [],
+          "confidence": "0.70",
+          "continuation_risk": "continuation_included",
+          "needs_review": true,
+          "needs_teacher_confirmation": true,
+          "question_no": "1(b)(i)",
+          "requires_full_answer_confirmation": true,
+          "segments": [
+            {
+              "box": [
+                "20",
+                "30",
+                "200",
+                "180"
+              ],
+              "order_index": 1,
+              "page_ref": "p1"
+            },
+            {
+              "box": [
+                "20",
+                "30",
+                "200",
+                "180"
+              ],
+              "order_index": 2,
+              "page_ref": "p2"
+            }
+          ],
+          "warnings": [
+            "Draft mapping suggestion only."
+          ]
+        }
+      ],
+      "warnings": []
+    }
+  }
+}

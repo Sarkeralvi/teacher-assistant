@@ -1,6 +1,6 @@
 # Answer-Region Mapping Algorithm
 
-Status: AEEM-aligned after TA-CORE-001. TA-MAP-002 deterministic/mock provider remains Done. Real AI mapping is deliberately deferred until evaluation harnesses and benchmark datasets exist.
+Status: AEEM-aligned after TA-MAP-003. TA-MAP-002 deterministic/mock provider remains Done. TA-MAP-003 adds an executable synthetic mapping evaluation harness. Real AI mapping remains deliberately deferred.
 
 ## Role inside AEEM
 
@@ -89,31 +89,39 @@ Use these values in the draft mapping contract:
 
 Possible or ambiguous continuation must block grading readiness until resolved by teacher/founder confirmation or corrected segments.
 
-## Evaluation-first next direction
+## Evaluation-first harness now added
 
-TA-MAP-003 should not be real Codex/AI mapping. It should build a mapping evaluation harness and synthetic benchmark first.
+TA-MAP-003 implements the first executable synthetic mapping benchmark in `apps/api/packages/evaluation/answer_mapping_evaluator.py` with JSON fixtures under `apps/api/packages/evaluation/fixtures/answer_mapping/`.
 
-Minimum benchmark cases:
+Benchmark cases now present:
 
-1. single-page simple answer;
-2. one answer spanning pages;
-3. near-bottom answer with possible but absent continuation;
-4. wrong/partial mapping;
-5. multi-question page confusion;
-6. skipped/blank answer;
-7. inconsistent question labels;
-8. page order anomaly affecting continuation.
+1. single-page complete answer;
+2. multi-page continuation;
+3. near-bottom complete answer with no continuation;
+4. ambiguous / possible continuation;
+5. multiple questions on one page;
+6. wrong-question trap;
+7. blank or low-content page.
 
-Minimum metrics:
+Evaluator metrics now reported:
 
+- suggestion group count accuracy;
 - question-label accuracy;
-- segment recall/precision;
-- bbox IoU where annotated;
-- continuation detection recall/F1;
-- false continuation rate;
-- wrong-question assignment rate;
-- packet readiness false-positive/false-negative rate;
-- teacher correction burden.
+- segment count accuracy;
+- segment order accuracy;
+- page coverage accuracy;
+- continuation-risk accuracy;
+- wrong-question detection accuracy;
+- blank-page handling accuracy;
+- complete-answer packet success;
+- unsafe auto-accept count;
+- `GradeSuggestion` created count;
+- `FinalGrade` created count;
+- continuation false-negative count;
+- blank-page false mapping count;
+- possible-continuation confirmation count.
+
+The current deterministic/mock provider is measured honestly through saved synthetic provider outputs. It passes the simple single-page, multi-page continuation, and ambiguous-continuation cases, but it does not pass the full synthetic suite. That is expected: TA-MAP-003 is a measuring gate, not a claim that the mock provider is production-quality mapping.
 
 ## Safety rules
 

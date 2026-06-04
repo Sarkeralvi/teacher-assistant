@@ -1,3 +1,41 @@
+# TA-MAP-003 — Mapping evaluation harness and synthetic benchmark
+
+- Recorded at: 2026-06-04
+- Baseline commit: `1c69a1ae2c0e514caf11cf5decb7bc653086bf8d`
+- Workflow type: manual controlled evaluation harness and synthetic fixtures
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI/OCR mapping implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation: 0
+- FinalGrade creation: 0
+- Private files/artifacts used: no
+
+## Change made
+
+Added `apps/api/packages/evaluation/answer_mapping_evaluator.py`, seven tiny synthetic JSON fixtures, and focused evaluator tests. The harness loads provider-agnostic fixture definitions, compares provider output to expected mapping groups/segments/continuation states, reports per-case pass/fail plus metric summaries, and classifies critical failures such as missed continuation, wrong-question traps, blank-page false mappings, unsafe auto-accept, or grading/finalization side effects.
+
+## Synthetic benchmark cases
+
+1. single-page complete answer;
+2. multi-page continuation;
+3. near-bottom complete answer with no continuation;
+4. ambiguous / possible continuation;
+5. multiple questions on one page;
+6. wrong-question trap;
+7. blank or low-content page.
+
+## Current mock-provider result
+
+Using saved `current_mock_provider` synthetic outputs: overall pass is false, 3/7 cases pass, critical failures are reported for wrong-question trap and blank/low-content false mapping, unsafe auto-accept count is 0, `GradeSuggestion` count is 0, and `FinalGrade` count is 0. This is an honest benchmark result, not a production mapping-quality claim.
+
+## Safety result
+
+TA-MAP-003 is evaluation-only. Real AI mapping remains blocked. TA-MAP-004 was not started. No grading or finalization records are created by the evaluator.
+
 # TA-CORE-002 — Map AEEM architecture to implementation roadmap
 
 - Recorded at: 2026-06-04T12:13:40+06:00
