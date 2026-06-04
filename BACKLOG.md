@@ -1382,17 +1382,17 @@ Risks: Any later TA-GRADE-001 implementation must not turn batch evidence prep i
 Status: Done
 
 TASK-ID: TA-GRADE-001
-Title: Question-wise grading queue from sealed/confirmed packets
+Title: Build confirmed-packet-only grading queue scaffold
 Owner: Hermes
 Priority: P0
 Dependencies: TA-GRADE-000, TA-BATCH-001A
-Files affected: scoped backend/frontend/docs/tests after approval
-Goal: Create a question-wise grading queue only from confirmed ready evidence packets under the accepted TA-GRADE-000 contract.
-Implementation notes: AEEM output feeds grading. Do not expose other students' answers as grading context. Sealed/immutable store is future/hardening scope; current requirement is confirmed evidence packets and auditable release.
-Acceptance criteria: Grading queue groups confirmed packets by canonical grading unit and blocks unconfirmed/incomplete packets. Teacher review and no auto-finalization remain mandatory.
-Tests required: focused queue/readiness tests, lint, diff check.
-Risks: Premature grading queue work can bypass evidence gates; only start after the TA-GRADE-000 contract is accepted and batch evidence readiness is proven.
-Status: Pending
+Files affected: apps/api/app/models.py, apps/api/app/services/grading_queue_service.py, apps/api/app/api/routes/grading_queue.py, apps/api/app/schemas.py, apps/api/alembic/versions/0012_grading_queue_scaffold.py, apps/api/tests/test_grading_queue_runs_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, docs/tests
+Goal: Create scaffold queue records only from confirmed ready evidence packets under the accepted TA-GRADE-000 contract.
+Implementation notes: Adds `GradingQueueRun` and `GradingQueueItem` persistence plus API/UI summaries. Queue creation consumes only confirmed ready packets and refuses missing, unconfirmed, partial, blank, possible-continuation, missing-rubric, no-segment, missing-context, and blocked packets. Queue items default `provider_allowed=false`; readiness fields and a snapshot hash are recorded for future staleness checks.
+Acceptance criteria: Queue creation creates only queue records, reports exact candidate/queued/refused counts, includes only complete ready packets, rejects cross-teacher access, and creates no `GradeSuggestion`, `FinalGrade`, or existing provider `GradingJob` records. Provider execution remains a separate explicit future task.
+Tests required: focused grading queue tests, evidence prep tests, full test, lint, frontend static/build/e2e if frontend touched, diff check.
+Risks: Future execution must re-check queue snapshots/readiness before any provider call and must preserve teacher review before final grade.
+Status: Done
 
 
 TASK-ID: TA-CORE-002

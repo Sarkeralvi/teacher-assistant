@@ -1267,3 +1267,34 @@ This validates one synthetic image-input path and mandatory teacher review. It d
 - This is a suggestion smoke, not a grading-quality proof.
 - This does not authorize batch real Codex.
 - This does not remove the need for teacher review and acceptance.
+
+
+# TA-GRADE-001 — Confirmed-packet-only grading queue scaffold
+
+- Recorded at: 2026-06-04
+- Baseline commit: `2bfa4e80c8de5d6872dd331c50d0187178dd4a25`
+- Workflow type: manual controlled mode
+
+## Scope result
+
+TA-GRADE-001 adds scaffold-only grading queue records and endpoints. Queue creation only persists `GradingQueueRun` and eligible `GradingQueueItem` records from confirmed ready evidence packets. Refused packet states and reasons are reported. Provider execution remains blocked for future explicit work.
+
+## Safety record
+
+No grading was run. No Codex/OpenAI/Claude/Gemini/provider call was made. No `GradeSuggestion`, `FinalGrade`, or existing provider `GradingJob` was created by queue creation. No batch grading execution, real AI mapping, real OCR/vision provider, auto-finalization, teacher observation, private-file access, VSCode/Codex, or additional coding agent was used.
+
+## Checks run
+
+- `git status --short` — clean at baseline.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... alembic upgrade head` — applied `0012_grading_queue_scaffold` locally.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... python -m pytest tests/test_grading_queue_runs_api.py -q` — 4 passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... python -m pytest tests/test_evidence_prep_runs_api.py -q` — 6 passed.
+- `node tests/workflow-ui.test.mjs && npm run build` — frontend static markers passed and Next build completed; existing ESLint flat-config warning printed during build, exit 0.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... make test` — 250 passed.
+- `PATH=/tmp/ta-bin:$PATH make up` — services built/started for E2E.
+- `PATH=/tmp/ta-bin:$PATH docker compose exec -T backend alembic upgrade head` — migration check passed in service container.
+- health checks for backend/frontend — passed.
+- Playwright Docker E2E command — first attempt failed with WSL `UtilAcceptVsock: accept4 failed 110`; retry passed with 2 tests passed.
+- `git diff --check` — passed.
+- `PATH=/tmp/ta-bin:$PATH make down` — services stopped and removed.

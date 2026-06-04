@@ -49,6 +49,9 @@ class User(TimestampMixin, Base):
     evidence_prep_runs: Mapped[list[BatchEvidencePrepRun]] = relationship(
         back_populates="created_by_teacher"
     )
+    grading_queue_runs: Mapped[list[GradingQueueRun]] = relationship(
+        back_populates="created_by_teacher"
+    )
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="teacher")
 
 
@@ -93,6 +96,9 @@ class Assessment(TimestampMixin, Base):
     submissions: Mapped[list[Submission]] = relationship(back_populates="assessment")
     grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="assessment")
     evidence_prep_runs: Mapped[list[BatchEvidencePrepRun]] = relationship(
+        back_populates="assessment"
+    )
+    grading_queue_runs: Mapped[list[GradingQueueRun]] = relationship(
         back_populates="assessment"
     )
     question_import_jobs: Mapped[list[QuestionImportJob]] = relationship(
@@ -180,6 +186,95 @@ class BatchEvidencePrepRun(TimestampMixin, Base):
 
     assessment: Mapped[Assessment] = relationship(back_populates="evidence_prep_runs")
     created_by_teacher: Mapped[User] = relationship(back_populates="evidence_prep_runs")
+    grading_queue_runs: Mapped[list[GradingQueueRun]] = relationship(
+        back_populates="evidence_prep_run"
+    )
+
+
+class GradingQueueRun(TimestampMixin, Base):
+    __tablename__ = "grading_queue_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'built', 'blocked', 'failed')",
+            name="ck_grading_queue_runs_status",
+        ),
+        Index("ix_grading_queue_runs_assessment_id", "assessment_id"),
+        Index("ix_grading_queue_runs_evidence_prep_run_id", "evidence_prep_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    evidence_prep_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("batch_evidence_prep_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    total_candidate_packets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    queued_item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    refused_item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="grading_queue_runs")
+    evidence_prep_run: Mapped[BatchEvidencePrepRun | None] = relationship(
+        back_populates="grading_queue_runs"
+    )
+    created_by_teacher: Mapped[User] = relationship(back_populates="grading_queue_runs")
+    items: Mapped[list[GradingQueueItem]] = relationship(
+        back_populates="queue_run",
+        cascade="all, delete-orphan",
+        order_by="GradingQueueItem.id",
+    )
+
+
+class GradingQueueItem(TimestampMixin, Base):
+    __tablename__ = "grading_queue_items"
+    __table_args__ = (
+        CheckConstraint(
+            "queue_status in ('pending_review', 'ready_for_provider_later', 'blocked')",
+            name="ck_grading_queue_items_status",
+        ),
+        Index("ix_grading_queue_items_queue_run_id", "queue_run_id"),
+        Index("ix_grading_queue_items_answer_region_id", "answer_region_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    queue_run_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_queue_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    student_identifier: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
+    )
+    grading_unit_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
+    )
+    grading_unit_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    max_marks: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    answer_region_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_regions.id", ondelete="CASCADE"), nullable=False
+    )
+    segment_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    pages_covered: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
+    evidence_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    continuation_check_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    queue_status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="pending_review"
+    )
+    provider_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evidence_snapshot_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    readiness_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    queue_run: Mapped[GradingQueueRun] = relationship(back_populates="items")
 
 
 class QuestionImportJob(TimestampMixin, Base):

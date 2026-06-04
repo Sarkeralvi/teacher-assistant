@@ -14,6 +14,8 @@ from app.models import (
     FinalGrade,
     GradeSuggestion,
     GradingJob,
+    GradingQueueItem,
+    GradingQueueRun,
     GradingRun,
     Question,
     QuestionImportJob,
@@ -31,6 +33,8 @@ EXPECTED_TABLES = {
     "question_import_jobs",
     "grading_runs",
     "batch_evidence_prep_runs",
+    "grading_queue_runs",
+    "grading_queue_items",
     "rubrics",
     "submissions",
     "submission_pages",
@@ -126,6 +130,41 @@ EXPECTED_COLUMNS = {
         "blank_packet_count",
         "partial_packet_count",
         "error",
+        "created_at",
+        "updated_at",
+    },
+    "grading_queue_runs": {
+        "id",
+        "assessment_id",
+        "evidence_prep_run_id",
+        "created_by_teacher_id",
+        "status",
+        "total_candidate_packets",
+        "queued_item_count",
+        "refused_item_count",
+        "error",
+        "created_at",
+        "updated_at",
+    },
+    "grading_queue_items": {
+        "id",
+        "queue_run_id",
+        "assessment_id",
+        "submission_id",
+        "student_identifier",
+        "question_id",
+        "grading_unit_id",
+        "grading_unit_label",
+        "max_marks",
+        "answer_region_id",
+        "segment_count",
+        "pages_covered",
+        "evidence_status",
+        "continuation_check_status",
+        "queue_status",
+        "provider_allowed",
+        "evidence_snapshot_hash",
+        "readiness_snapshot_json",
         "created_at",
         "updated_at",
     },
@@ -245,6 +284,8 @@ EXPECTED_INDEX_COLUMNS = {
     "question_import_jobs": {"assessment_id"},
     "grading_runs": {"assessment_id"},
     "batch_evidence_prep_runs": {"assessment_id"},
+    "grading_queue_runs": {"assessment_id", "evidence_prep_run_id"},
+    "grading_queue_items": {"queue_run_id", "answer_region_id"},
     "rubrics": {"question_id"},
     "submissions": {"assessment_id"},
     "answer_regions": {"question_id"},
@@ -263,6 +304,8 @@ def test_all_required_models_are_registered_with_expected_tables_and_columns() -
         QuestionImportJob,
         GradingRun,
         BatchEvidencePrepRun,
+        GradingQueueRun,
+        GradingQueueItem,
         Rubric,
         Submission,
         SubmissionPage,
@@ -312,6 +355,7 @@ def test_numeric_and_json_fields_use_postgresql_friendly_types() -> None:
         GradeSuggestion.confidence,
         GradeSuggestion.cost_estimate,
         FinalGrade.final_score,
+        GradingQueueItem.max_marks,
     ]
     for column in numeric_columns:
         assert isinstance(column.property.columns[0].type, Numeric)
@@ -320,6 +364,10 @@ def test_numeric_and_json_fields_use_postgresql_friendly_types() -> None:
     assert isinstance(QuestionImportJob.draft_questions.property.columns[0].type, JSONB)
     assert isinstance(QuestionImportJob.provider_warnings.property.columns[0].type, JSONB)
     assert isinstance(GradeSuggestion.raw_response_json.property.columns[0].type, JSONB)
+    assert isinstance(GradingQueueItem.pages_covered.property.columns[0].type, JSONB)
+    assert isinstance(
+        GradingQueueItem.readiness_snapshot_json.property.columns[0].type, JSONB
+    )
     assert isinstance(AuditLog.payload_json.property.columns[0].type, JSONB)
 
     suggestion = GradeSuggestion(score=Decimal("8.50"), max_score=Decimal("10.00"))

@@ -8,6 +8,7 @@ from app.api.routes.courses import router as courses_router
 from app.api.routes.evidence_prep import router as evidence_prep_router
 from app.api.routes.final_grades import router as final_grades_router
 from app.api.routes.grading import router as grading_router
+from app.api.routes.grading_queue import router as grading_queue_router
 from app.api.routes.grading_runs import router as grading_runs_router
 from app.api.routes.health import router as health_router
 from app.api.routes.question_imports import router as question_imports_router
@@ -49,5 +50,6 @@ app.include_router(submissions_router)
 app.include_router(answer_regions_router)
 app.include_router(evidence_prep_router)
 app.include_router(grading_router)
+app.include_router(grading_queue_router)
 app.include_router(grading_runs_router)
 app.include_router(final_grades_router)

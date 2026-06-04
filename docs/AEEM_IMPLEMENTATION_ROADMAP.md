@@ -158,3 +158,8 @@ This roadmap update does not start TA-MAP-004. It does not implement real AI map
 TA-BATCH-001 is implemented as an evidence-preparation scaffold, not grading. It adds batch prep run metadata, current assessment summary endpoints, per-student/per-question packet summaries, and quarantine counts for blocked evidence. The assessment UI shows an Evidence preparation summary with ready/blocked/warning/partial/blank counts and blocked packet reasons.
 
 This satisfies the AEEM ordering principle: batch organization can exist before grading, but only as readiness/quarantine reporting. Real AI mapping, real OCR/vision providers, real Codex, `GradeSuggestion`, `FinalGrade`, and batch grading remain blocked. The next grading-related task must consume only ready/confirmed packets and must be separately approved.
+
+
+## TA-GRADE-001 completion note
+
+TA-GRADE-001 is complete as a scaffold, not as grading execution. It adds queue-run/item persistence and API/UI summaries for confirmed ready evidence packets only. Provider execution remains blocked for a future explicit task; no batch grading, model calls, `GradeSuggestion`, `FinalGrade`, or existing provider `GradingJob` creation is part of this milestone.

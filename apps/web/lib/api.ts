@@ -511,6 +511,60 @@ export type EvidencePrepRun = {
   updated_at: string | null;
 };
 
+export type GradingQueueRefusedItem = {
+  submission_id: number;
+  student_identifier: string | null;
+  question_id: number | null;
+  grading_unit_id: number | null;
+  grading_unit_label: string | null;
+  answer_region_id: number | null;
+  evidence_status: string;
+  continuation_check_status: string;
+  segment_count: number;
+  pages_covered: number[];
+  refusal_reasons: string[];
+  readiness_snapshot_json: Record<string, unknown>;
+};
+
+export type GradingQueueItem = {
+  id: number;
+  queue_run_id: number;
+  assessment_id: number;
+  submission_id: number;
+  student_identifier: string | null;
+  question_id: number;
+  grading_unit_id: number;
+  grading_unit_label: string;
+  max_marks: string | number;
+  answer_region_id: number;
+  segment_count: number;
+  pages_covered: number[];
+  evidence_status: string;
+  continuation_check_status: string;
+  queue_status: "pending_review" | "ready_for_provider_later" | "blocked";
+  provider_allowed: boolean;
+  evidence_snapshot_hash: string | null;
+  readiness_snapshot_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GradingQueueRun = {
+  id: number | null;
+  assessment_id: number;
+  evidence_prep_run_id: number | null;
+  created_by_teacher_id: number | null;
+  status: "pending" | "built" | "blocked" | "failed";
+  total_candidate_packets: number;
+  queued_item_count: number;
+  refused_item_count: number;
+  items: GradingQueueItem[];
+  refused_items: GradingQueueRefusedItem[];
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 export type BrowserCodexGradeResponse = {
   job: {
     id: number;
@@ -962,6 +1016,16 @@ export function getEvidencePrepSummary(assessmentId: number) {
 
 export function createEvidencePrepRun(assessmentId: number) {
   return apiRequest<EvidencePrepRun>(`/assessments/${assessmentId}/evidence-prep-runs`, {
+    method: "POST",
+  });
+}
+
+export function getGradingQueueSummary(assessmentId: number) {
+  return apiRequest<GradingQueueRun>(`/assessments/${assessmentId}/grading-queue-summary`);
+}
+
+export function createGradingQueueRun(assessmentId: number) {
+  return apiRequest<GradingQueueRun>(`/assessments/${assessmentId}/grading-queue-runs`, {
     method: "POST",
   });
 }

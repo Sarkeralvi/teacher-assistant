@@ -213,6 +213,70 @@ class BatchEvidencePrepRunRead(ORMBase):
     updated_at: datetime | None = None
 
 
+class GradingQueueRunCreate(BaseModel):
+    evidence_prep_run_id: int | None = None
+
+
+GradingQueueRunStatus = Literal["pending", "built", "blocked", "failed"]
+GradingQueueItemStatus = Literal[
+    "pending_review", "ready_for_provider_later", "blocked"
+]
+
+
+class GradingQueueItemRead(ORMBase):
+    id: int
+    queue_run_id: int
+    assessment_id: int
+    submission_id: int
+    student_identifier: str | None
+    question_id: int
+    grading_unit_id: int
+    grading_unit_label: str
+    max_marks: Decimal
+    answer_region_id: int
+    segment_count: int
+    pages_covered: list[int] = Field(default_factory=list)
+    evidence_status: str
+    continuation_check_status: str
+    queue_status: GradingQueueItemStatus
+    provider_allowed: bool
+    evidence_snapshot_hash: str | None
+    readiness_snapshot_json: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class GradingQueueRefusedItem(BaseModel):
+    submission_id: int
+    student_identifier: str | None
+    question_id: int | None = None
+    grading_unit_id: int | None = None
+    grading_unit_label: str | None = None
+    answer_region_id: int | None = None
+    evidence_status: str
+    continuation_check_status: str
+    segment_count: int
+    pages_covered: list[int] = Field(default_factory=list)
+    refusal_reasons: list[str] = Field(default_factory=list)
+    readiness_snapshot_json: dict[str, Any]
+
+
+class GradingQueueRunRead(ORMBase):
+    id: int | None = None
+    assessment_id: int
+    evidence_prep_run_id: int | None = None
+    created_by_teacher_id: int | None = None
+    status: GradingQueueRunStatus
+    total_candidate_packets: int
+    queued_item_count: int
+    refused_item_count: int
+    items: list[GradingQueueItemRead] = Field(default_factory=list)
+    refused_items: list[GradingQueueRefusedItem] = Field(default_factory=list)
+    error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class QuestionCreate(BaseModel):
     question_no: str = Field(min_length=1, max_length=32)
     question_text: str = Field(min_length=1)

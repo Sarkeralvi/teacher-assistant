@@ -409,3 +409,8 @@ TA-BATCH-001 adds batch evidence packet preparation only. It organizes the curre
 Per-packet summaries include submission id, student identifier, grading-unit label, max marks, packet status, continuation status, readiness, blockers, warnings, segment count, and pages covered. Quarantine blockers include unknown page order, missing answer region/segment, unconfirmed packet, partial packet, blank packet under current policy, possible continuation not confirmed, missing active rubric, invalid segment order, and missing crop/context.
 
 This is not batch grading. It creates no `GradeSuggestion`, no `FinalGrade`, no grading job, no real Codex job, and no real AI/OCR work. Real providers remain blocked behind the evaluation gates.
+
+
+## TA-GRADE-001 grading queue scaffold boundary
+
+TA-GRADE-001 adds a confirmed-packet-only grading queue scaffold downstream of AEEM. The queue builder consumes the evidence readiness summary, creates queue records only for packets with complete evidence, confirmed continuation state, active rubric, valid grading unit, positive marks, valid segment/crop context, and no blockers, and reports all refused packets. Batch evidence prep still does not grade; it only produces readiness evidence that the queue scaffold may reference. Future provider execution must re-check the readiness snapshot/hash before running anything.

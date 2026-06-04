@@ -112,3 +112,8 @@ TA-GRADE-001 remains blocked until this contract is accepted. When TA-GRADE-001 
 - missing/unconfirmed/partial/blank/possible-continuation packets are refused;
 - active rubric, canonical grading unit, crop/context, segment count, segment order, ownership, and blocker checks are enforced;
 - queue-item creation has zero grading/provider side effects.
+
+
+## TA-GRADE-001 scaffold implementation note
+
+TA-GRADE-001 implements this contract as a scaffold only. The backend has `GradingQueueRun` and `GradingQueueItem` records, and queue creation includes only confirmed ready packets that satisfy the contract. Refused packets are reported with refusal reasons but are not queued. Queue items snapshot readiness fields and an evidence snapshot hash so future provider execution can re-check staleness before any model call. `provider_allowed` is `false` by default. Creating a queue run does not create `GradeSuggestion`, `FinalGrade`, or existing provider `GradingJob` records and does not call Codex/OpenAI/Claude/Gemini/any model.

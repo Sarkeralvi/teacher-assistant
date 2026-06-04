@@ -568,3 +568,8 @@ Current deterministic/mock provider result is intentionally limited: 3/7 cases p
 Batch evidence preparation now exists to expose readiness and quarantine state across many submissions before grading. Counts for ready, blocked, warnings, blank, and partial packets are evidence-quality indicators, not grading results. A `completed_with_blockers` prep run means the assessment is not ready for downstream grading queues until blocked packets are corrected or explicitly handled by policy.
 
 The current blank policy is conservative: blank packets are counted and blocked from normal grading. Partial and unconfirmed packets are blocked. Possible continuations are blocked until teacher confirmation. Missing rubric, invalid segment order, missing crop/context, and page-order uncertainty are blockers.
+
+
+## TA-GRADE-001 grading-quality boundary
+
+The grading queue scaffold is a quality gate, not a grading mechanism. It accepts only confirmed complete packets and refuses missing, unconfirmed, partial, blank, possible-continuation, not-ready, missing-rubric, no-segment, invalid-context, and otherwise blocked packets. Teacher review remains mandatory before any future `FinalGrade`; provider execution must be explicitly implemented and triggered in a later task.

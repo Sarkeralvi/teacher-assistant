@@ -326,3 +326,8 @@ Real OCR/vision sequencing, real AI mapping, TA-MAP-004 implementation, Codex, p
 TA-BATCH-001 is evidence preparation only. It may create `BatchEvidencePrepRun` metadata and compute evidence-readiness summaries. It must not create `GradeSuggestion`, must not create `FinalGrade`, must not start batch grading, must not run real Codex, and must not invoke real AI/OCR providers.
 
 Current quarantine policy blocks packets for unknown page order, no mapped region/segment, unconfirmed/partial/blank packet status, unconfirmed possible continuation, missing active rubric, invalid segment order, and missing crop/context. The UI warning must continue saying evidence preparation does not grade.
+
+
+## TA-GRADE-001 supervision record
+
+TA-GRADE-001 was executed in manual controlled mode. The accepted TA-GRADE-000 contract is now represented by scaffold queue records and endpoints. The implementation deliberately stops at queue creation: no grading execution, no real Codex/provider calls, no `GradeSuggestion`, no `FinalGrade`, no existing provider `GradingJob`, no auto-finalization, no teacher observation, and no private files. Batch evidence prep remains separate from grading.

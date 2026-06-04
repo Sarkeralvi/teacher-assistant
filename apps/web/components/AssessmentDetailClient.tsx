@@ -11,6 +11,7 @@ import {
   confirmAnswerRegionFullAnswer,
   createAnswerRegion,
   createEvidencePrepRun,
+  createGradingQueueRun,
   createQuestion,
   deleteSubmission,
   editAnswerRegionSegment,
@@ -21,6 +22,7 @@ import {
   getAssessmentReviewQueue,
   getEvidencePrepSummary,
   getGradingEvidencePacket,
+  getGradingQueueSummary,
   getSubmissionPageImageUrl,
   gradeAnswerRegion,
   importQuestionsFromPaper,
@@ -39,6 +41,7 @@ import {
   type EvidencePrepRun,
   type FinalGrade,
   type GradingEvidencePacket,
+  type GradingQueueRun,
   type Question,
   type QuestionImportJob,
   type ReviewQueueItem,
@@ -69,6 +72,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
+  const [gradingQueueSummary, setGradingQueueSummary] = useState<GradingQueueRun | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [questionNo, setQuestionNo] = useState("");
   const [questionText, setQuestionText] = useState("");
@@ -106,6 +110,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [uploading, setUploading] = useState(false);
   const [creatingRegion, setCreatingRegion] = useState(false);
   const [creatingEvidencePrepRun, setCreatingEvidencePrepRun] = useState(false);
+  const [creatingGradingQueueRun, setCreatingGradingQueueRun] = useState(false);
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [finalizingRegionId, setFinalizingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -212,7 +217,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, questionData, submissionData, answerRegionData, reviewQueueData, evidencePrepData] =
+      const [
+        assessmentData,
+        questionData,
+        submissionData,
+        answerRegionData,
+        reviewQueueData,
+        evidencePrepData,
+        gradingQueueData,
+      ] =
         await Promise.all([
           getAssessment(assessmentId),
           listQuestions(assessmentId),
@@ -220,6 +233,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           listAssessmentAnswerRegions(assessmentId),
           getAssessmentReviewQueue(assessmentId),
           getEvidencePrepSummary(assessmentId).catch(() => null),
+          getGradingQueueSummary(assessmentId).catch(() => null),
         ]);
 
       setAssessment(assessmentData);
@@ -232,6 +246,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setEvidencePackets(Object.fromEntries(evidenceEntries));
       setReviewQueue(reviewQueueData);
       setEvidencePrepSummary(evidencePrepData);
+      setGradingQueueSummary(gradingQueueData);
       setFinalizeDrafts((current) => mergeFinalizeDrafts(current, reviewQueueData));
       if (!selectedPageId && submissionData[0]?.pages[0]) {
         setSelectedPageId(String(submissionData[0].pages[0].id));
@@ -586,10 +601,25 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       const run = await createEvidencePrepRun(assessmentId);
       setEvidencePrepSummary(run);
+      const queueSummary = await getGradingQueueSummary(assessmentId).catch(() => null);
+      setGradingQueueSummary(queueSummary);
     } catch (err) {
       setError(err instanceof Error ? `Evidence preparation failed: ${err.message}` : "Evidence preparation failed");
     } finally {
       setCreatingEvidencePrepRun(false);
+    }
+  }
+
+  async function handleCreateGradingQueueRun() {
+    setCreatingGradingQueueRun(true);
+    setError(null);
+    try {
+      const run = await createGradingQueueRun(assessmentId);
+      setGradingQueueSummary(run);
+    } catch (err) {
+      setError(err instanceof Error ? `Grading queue scaffold failed: ${err.message}` : "Grading queue scaffold failed");
+    } finally {
+      setCreatingGradingQueueRun(false);
     }
   }
 
@@ -776,6 +806,72 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p className="mt-3 text-sm text-slate-400">Evidence preparation summary has not loaded yet.</p>
         )}
         <p className="mt-3 text-xs text-slate-500">No batch grade button is available here. Real AI/OCR and Codex are not invoked by evidence preparation.</p>
+      </section>
+
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Grading queue scaffold</h2>
+            <p className="text-sm text-amber-200">This only prepares a queue from confirmed evidence. It does not grade.</p>
+          </div>
+          <button className={buttonClass} type="button" disabled={creatingGradingQueueRun} onClick={() => void handleCreateGradingQueueRun()}>
+            {creatingGradingQueueRun ? "Preparing queue..." : "Create grading queue scaffold"}
+          </button>
+        </div>
+        {gradingQueueSummary ? (
+          <div className="mt-4 grid gap-4">
+            <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm md:grid-cols-4">
+              <p>status: {gradingQueueSummary.status}</p>
+              <p>candidates: {gradingQueueSummary.total_candidate_packets}</p>
+              <p>queued item count: {gradingQueueSummary.queued_item_count}</p>
+              <p>refused item count: {gradingQueueSummary.refused_item_count}</p>
+            </div>
+            <div className="rounded border border-emerald-900/70 p-3 text-sm">
+              <p className="font-semibold">Queued confirmed packets</p>
+              {gradingQueueSummary.items.length === 0 ? (
+                <p className="mt-2 text-slate-400">No confirmed packets are queued yet.</p>
+              ) : (
+                <div className="mt-2 grid gap-2">
+                  {gradingQueueSummary.items.slice(0, 10).map((item) => (
+                    <article key={item.id} className="rounded border border-emerald-900/70 p-3">
+                      <p className="font-medium">
+                        Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label}
+                      </p>
+                      <p className="text-slate-400">
+                        queue_status {item.queue_status} · provider_allowed {String(item.provider_allowed)} · segments {item.segment_count}
+                      </p>
+                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="rounded border border-amber-900/70 p-3 text-sm">
+              <p className="font-semibold">Refused packet reasons</p>
+              {gradingQueueSummary.refused_items.length === 0 ? (
+                <p className="mt-2 text-slate-400">No refused packets in the current queue summary.</p>
+              ) : (
+                <div className="mt-2 grid gap-2">
+                  {gradingQueueSummary.refused_items.slice(0, 10).map((item) => (
+                    <article key={`${item.submission_id}-${item.grading_unit_id ?? "missing"}-${item.answer_region_id ?? "none"}`} className="rounded border border-amber-900/70 p-3">
+                      <p className="font-medium">
+                        Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label ?? "unknown grading unit"}
+                      </p>
+                      <p className="text-slate-400">
+                        evidence_status {item.evidence_status} · continuation {item.continuation_check_status} · segments {item.segment_count}
+                      </p>
+                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
+                      <p className="text-amber-200">Reason: {item.refusal_reasons.join("; ") || "refused by queue contract"}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-slate-400">Grading queue scaffold summary has not loaded yet.</p>
+        )}
+        <p className="mt-3 text-xs text-slate-500">No provider run button, no batch grade button, and no FinalGrade action are available in this scaffold.</p>
       </section>
 
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
