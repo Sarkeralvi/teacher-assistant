@@ -1,3 +1,9 @@
+## TA-MANUAL-001A completion note
+
+TA-MANUAL-001A documents the founder/manual evidence-to-queue smoke checklist. It does not add product features. The safe direct-test scope is: demo teacher login/selection, synthetic assessment setup, questions/rubrics, synthetic submissions, manual answer regions/segments, evidence readiness, correction/reconfirmation, batch evidence prep counts, grading queue scaffold counts, and staleness/rebuild behavior.
+
+The checklist preserves the AEEM boundary: queue records are not grades, provider execution is still blocked, and future provider execution must re-check current evidence readiness/staleness immediately before any model call. Founder direct manual testing is safe for evidence-to-queue only, not for grading, provider execution, teacher observation, private student data, or teacher-facing finalization/export.
+
 ## TA-GRADE-000 completion note
 
 TA-GRADE-000 defines the confirmed-packet-only grading queue contract before TA-GRADE-001. This is a documentation/contract gate, not grading implementation. It makes the AEEM boundary explicit: batch evidence preparation produces readiness/quarantine evidence, while a future grading queue may only accept confirmed ready packets and must refuse all blocked/missing/partial/blank/unconfirmed evidence.

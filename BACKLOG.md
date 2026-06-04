@@ -1409,6 +1409,19 @@ Tests required: focused grading queue tests, evidence prep tests if affected, fu
 Risks: Future provider execution must call staleness validation/readiness re-check immediately before any model call and refuse any non-fresh item.
 Status: Done
 
+TASK-ID: TA-MANUAL-001A
+Title: Document founder manual smoke checklist and runtime caveats
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MANUAL-001, TA-GRADE-001A
+Files affected: BACKLOG.md, docs/FOUNDER_MANUAL_EVIDENCE_QUEUE_CHECKLIST.md, docs/VALIDATION_LOG.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md
+Goal: Create a short founder/internal manual checklist for safely testing the current evidence-to-queue workflow.
+Implementation notes: Documents the TA-MANUAL-001 synthetic smoke result, safe founder test scope, prohibited provider/grading/observation/private-data actions, expected zero safety counts, stop conditions, rough UI caveats, and Dockerized browser registration/login localhost API caveat. Documentation/backlog only; no product features are implemented.
+Acceptance criteria: Founder can follow the checklist to test demo teacher selection/login, synthetic assessment/questions/rubrics/submissions, manual answer regions/segments, evidence readiness/correction, evidence prep counts, grading queue queued/refused counts, and stale/blocked_now behavior while preserving all provider/grading blocks.
+Tests required: docs-only gates: `git status --short`, `git diff --check`, `make lint`, final `git status --short`. Full test not required because docs/backlog only.
+Risks: Founder must not treat the rough internal page as teacher-ready, must not use private data without separate approval, and must stop if any GradeSuggestion/FinalGrade/GradingJob/provider call appears.
+Status: Done
+
 TASK-ID: TA-CORE-002
 Title: Map AEEM architecture to implementation roadmap and gates
 Owner: Hermes

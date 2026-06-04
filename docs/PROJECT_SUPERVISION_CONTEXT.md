@@ -1,3 +1,11 @@
+## TA-MANUAL-001A supervision record
+
+TA-MANUAL-001A was executed in manual controlled mode as a docs/backlog-only task after the TA-MANUAL-001 synthetic founder smoke passed. It creates the founder manual evidence-to-queue checklist and records the safe testing boundary: demo/synthetic evidence-to-queue only, not real grading, not provider execution, not teacher observation, and not production/pilot use.
+
+The documented runtime caveat is that browser registration/login in a Dockerized browser may hit the frontend `localhost` API URL issue. The TA-MANUAL-001 smoke used API-assisted setup and then verified the final workflow state in the browser. Founder manual testing should use the normal browser where possible; if setup blocks, the founder should report the blocker rather than bypassing silently.
+
+No product code was changed. No autonomous loop was enabled. Real Codex, OpenAI, Claude, Gemini, provider execution, real AI mapping, real OCR/vision, batch grading, teacher observation, `GradeSuggestion`, `FinalGrade`, and provider `GradingJob` creation remain blocked.
+
 ## TA-GRADE-000 supervision record
 
 TA-GRADE-000 was executed in manual controlled mode as a documentation/contract task. It defines the boundary for a future confirmed-packet-only grading queue and records that batch evidence preparation is still not grading.

@@ -1,3 +1,39 @@
+# TA-MANUAL-001A — Founder manual evidence-to-queue checklist
+
+- Recorded at: 2026-06-04
+- Baseline commit: `258de5556c588c5776ab0df64a5c158adb68c7a4`
+- Workflow type: docs/backlog-only founder manual smoke checklist
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Provider/model calls: 0
+- Real AI mapping implementation: not started
+- Real OCR/vision implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Private files/artifacts used: no
+
+## Change made
+
+TA-MANUAL-001A adds `docs/FOUNDER_MANUAL_EVIDENCE_QUEUE_CHECKLIST.md` and records the founder-only/manual evidence-to-queue testing scope. The checklist documents what the founder can safely test, what remains prohibited, expected zero safety counts, stop conditions, known rough UI states, and the Dockerized browser registration/login `localhost` API caveat observed during TA-MANUAL-001.
+
+## Safety result
+
+This is documentation/backlog only. It does not implement product features, grading, provider execution, real Codex, real AI mapping, real OCR/vision, batch grading, teacher observation, `GradeSuggestion`, `FinalGrade`, or provider `GradingJob` creation. Founder direct manual testing remains safe for evidence-to-queue only.
+
+## Checks run
+
+- `git status --short` — clean at baseline.
+- `git rev-parse HEAD` — `258de5556c588c5776ab0df64a5c158adb68c7a4`.
+- `git diff --check` — passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- Full `make test` not run because TA-MANUAL-001A is docs/backlog only and product behavior was not changed.
+- `git diff --check` — passed again before commit.
+
 # TA-GRADE-000 — Confirmed-packet-only grading queue contract
 
 - Recorded at: 2026-06-04
