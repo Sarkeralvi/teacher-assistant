@@ -1,3 +1,9 @@
+## TA-UI-001 supervision record
+
+TA-UI-001 added a manual-controlled teacher correction workflow for accepted answer-region evidence. The workflow is explicitly evidence preparation, not grading. It supports segment bbox edit, add/split, removal with invariant checks, reorder, full-answer confirmation, continuation-not-needed confirmation, and partial/needs-review marking. Backend correction APIs require auth and teacher ownership; cross-assessment/cross-teacher corrections are rejected. Audit metadata is recorded through `AuditLog` with correction type, before/after payload, teacher id, and timestamp.
+
+No autonomous loop was enabled. Real Codex was not run. Real AI mapping and real OCR/vision remain blocked. No batch grading or teacher observation was started. Correction paths do not create `GradeSuggestion` or `FinalGrade`.
+
 # TA-CORE-002 current state — AEEM mapped to implementation roadmap
 
 Recorded at: 2026-06-04T12:13:40+06:00

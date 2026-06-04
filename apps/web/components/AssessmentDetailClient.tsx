@@ -7,9 +7,12 @@ import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from ".
 import {
   acceptAnswerRegionMappingSuggestion,
   acceptQuestionImportDrafts,
+  addAnswerRegionSegment,
+  confirmAnswerRegionFullAnswer,
   createAnswerRegion,
   createQuestion,
   deleteSubmission,
+  editAnswerRegionSegment,
   finalizeGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
@@ -22,6 +25,8 @@ import {
   listAssessmentAnswerRegions,
   listQuestions,
   listSubmissions,
+  removeAnswerRegionSegment,
+  reorderAnswerRegionSegments,
   suggestAnswerRegionMappings,
   uploadSubmission,
   uploadSubmissionZip,
@@ -507,6 +512,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleEvidenceCorrection(action: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await action();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to apply evidence correction");
+    }
+  }
+
   async function handleDeleteSubmission(submissionId: number) {
     if (!window.confirm("Delete this submission? This is for demo cleanup only.")) {
       return;
@@ -886,6 +901,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               finalizing={finalizingRegionId === item.answer_region.id}
               evidencePacket={evidencePackets[item.answer_region.id] ?? null}
               onMockGrade={() => void handleMockGrade(item.answer_region.id)}
+              onEvidenceCorrection={(action) => void handleEvidenceCorrection(action)}
               onDraftChange={(patch) => updateFinalizeDraft(item.answer_region.id, patch)}
               onFinalize={(status) => void handleFinalize(item, status)}
             />
@@ -1008,6 +1024,7 @@ function ReviewQueueCard({
   finalizing,
   evidencePacket,
   onMockGrade,
+  onEvidenceCorrection,
   onDraftChange,
   onFinalize,
 }: Readonly<{
@@ -1017,6 +1034,7 @@ function ReviewQueueCard({
   finalizing: boolean;
   evidencePacket: GradingEvidencePacket | null;
   onMockGrade: () => void;
+  onEvidenceCorrection: (action: () => Promise<unknown>) => void;
   onDraftChange: (patch: Partial<FinalizeDraft>) => void;
   onFinalize: (status: "approved" | "edited" | "rejected") => void;
 }>) {
@@ -1024,6 +1042,7 @@ function ReviewQueueCard({
   const finalGrade: FinalGrade | null = item.final_grade;
   const rubricBreakdown = suggestion?.raw_response_json.rubric_breakdown ?? [];
   const readiness = evidencePacket?.readiness_result;
+  const segments = [...item.answer_region.segments].sort((left, right) => left.order_index - right.order_index);
   return (
     <article className="grid gap-4 rounded border border-slate-700 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1063,6 +1082,102 @@ function ReviewQueueCard({
         {readiness?.warnings.length ? (
           <p className="mt-1 text-xs text-amber-200">Warnings: {readiness.warnings.join(", ")}</p>
         ) : null}
+      </div>
+
+      <div className="grid gap-3 rounded border border-cyan-900 bg-slate-950/40 p-3 text-sm" data-testid="teacher-evidence-correction-workflow">
+        <div>
+          <p className="font-semibold text-cyan-200">Teacher correction workflow: split / merge / reorder / confirm</p>
+          <p className="text-xs text-amber-200">Corrections prepare evidence only. They do not create grades.</p>
+        </div>
+        <p className="text-xs text-slate-400">
+          Continuation status: {evidencePacket?.student_answer_evidence.continuation_check_status ?? "unknown"} · full-answer confirmed: {String(item.answer_region.full_answer_confirmed)}
+        </p>
+        <div className="grid gap-2">
+          {segments.map((segment, index) => (
+            <form
+              key={segment.id}
+              className="grid gap-2 rounded border border-slate-800 p-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = new FormData(event.currentTarget);
+                onEvidenceCorrection(() => editAnswerRegionSegment(item.answer_region.id, segment.id, {
+                  x: String(form.get("x") ?? segment.x),
+                  y: String(form.get("y") ?? segment.y),
+                  width: String(form.get("width") ?? segment.width),
+                  height: String(form.get("height") ?? segment.height),
+                }));
+              }}
+            >
+              <p className="text-xs text-slate-300">Segment {segment.order_index} · page_id {segment.page_id} · primary: {String(segment.is_primary)}</p>
+              <div className="grid gap-2 md:grid-cols-4">
+                <input className={inputClass} name="x" aria-label={`Segment ${segment.id} bbox x`} defaultValue={String(segment.x)} />
+                <input className={inputClass} name="y" aria-label={`Segment ${segment.id} bbox y`} defaultValue={String(segment.y)} />
+                <input className={inputClass} name="width" aria-label={`Segment ${segment.id} bbox width`} defaultValue={String(segment.width)} />
+                <input className={inputClass} name="height" aria-label={`Segment ${segment.id} bbox height`} defaultValue={String(segment.height)} />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className={buttonClass} type="submit">Edit segment bbox</button>
+                <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => removeAnswerRegionSegment(item.answer_region.id, segment.id))}>Remove segment</button>
+                <button
+                  className={buttonClass}
+                  type="button"
+                  disabled={index === 0}
+                  onClick={() => {
+                    const ids = segments.map((current) => current.id);
+                    [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
+                    onEvidenceCorrection(() => reorderAnswerRegionSegments(item.answer_region.id, ids));
+                  }}
+                >
+                  Move segment up
+                </button>
+                <button
+                  className={buttonClass}
+                  type="button"
+                  disabled={index === segments.length - 1}
+                  onClick={() => {
+                    const ids = segments.map((current) => current.id);
+                    [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
+                    onEvidenceCorrection(() => reorderAnswerRegionSegments(item.answer_region.id, ids));
+                  }}
+                >
+                  Move segment down
+                </button>
+              </div>
+            </form>
+          ))}
+        </div>
+        <form
+          className="grid gap-2 rounded border border-slate-800 p-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            onEvidenceCorrection(() => addAnswerRegionSegment(item.answer_region.id, {
+              page_id: Number(form.get("page_id") ?? item.answer_region.page_id),
+              order_index: Number(form.get("order_index") ?? segments.length + 1),
+              x: String(form.get("x") ?? "0"),
+              y: String(form.get("y") ?? "0"),
+              width: String(form.get("width") ?? "100"),
+              height: String(form.get("height") ?? "100"),
+            }));
+          }}
+        >
+          <p className="text-xs font-semibold text-slate-300">Split / add segment from user-provided box</p>
+          <div className="grid gap-2 md:grid-cols-6">
+            <input className={inputClass} name="page_id" aria-label="New segment page id" defaultValue={String(item.answer_region.page_id)} />
+            <input className={inputClass} name="order_index" aria-label="New segment order" defaultValue={String(segments.length + 1)} />
+            <input className={inputClass} name="x" aria-label="New segment x" defaultValue="0" />
+            <input className={inputClass} name="y" aria-label="New segment y" defaultValue="0" />
+            <input className={inputClass} name="width" aria-label="New segment width" defaultValue="100" />
+            <input className={inputClass} name="height" aria-label="New segment height" defaultValue="100" />
+          </div>
+          <button className={buttonClass} type="submit">Add segment / split answer</button>
+        </form>
+        <div className="flex flex-wrap gap-2">
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: true }))}>Confirm full answer</button>
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: true, continuation_not_needed: true }))}>Mark continuation not needed</button>
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false }))}>Mark partial / needs review</button>
+        </div>
+        <p className="text-xs text-slate-400">Merge support: move/add segments into this AnswerRegion, then reorder into contiguous packet order.</p>
       </div>
 
       {!suggestion ? (

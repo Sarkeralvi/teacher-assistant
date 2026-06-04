@@ -1320,14 +1320,14 @@ TASK-ID: TA-UI-001
 Title: Teacher correction workflow for split/merge/reorder/confirm
 Owner: Hermes
 Priority: P0
-Dependencies: TA-MAP-003
-Files affected: apps/web/**, apps/api/app/**, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, BACKLOG.md
-Goal: Build the teacher correction workflow for answer evidence: accept/reject/edit bbox/split/merge/reorder/add segment/reassign CGU/mark blank/mark partial/mark complete.
-Implementation notes: Teacher action remains required. Add audit trail where scoped. Do not auto-finalize or run batch grading.
-Acceptance criteria: Teacher can correct draft evidence into confirmed ordered packets, resolve continuation risk, and confirm full-answer completeness before grading readiness.
-Tests required: focused backend/frontend tests, e2e or static workflow check, lint, diff check.
-Risks: Poor correction UX can cause rubber-stamping or missed evidence gaps.
-Status: Pending
+Dependencies: TA-SCRIPT-001, TA-MAP-003A, TA-REF-001
+Files affected: apps/api/app/api/routes/answer_regions.py, apps/api/app/schemas.py, apps/api/tests/test_answer_regions_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, docs/**
+Goal: Add the controlled teacher correction workflow for accepted AnswerRegion/AnswerRegionSegment evidence before grading.
+Implementation notes: Auth-required correction APIs support segment bbox edit, add/split, remove, reorder, and full-answer/continuation confirmation. The rough review UI exposes numeric controls and warning copy. Corrections update evidence-packet segment_count, pages_covered, segment order, confirmation state, and readiness blockers; they do not implement real AI mapping/OCR and do not create GradeSuggestion or FinalGrade.
+Acceptance criteria: Cross-teacher/cross-assessment corrections are rejected; invalid boxes are rejected against page bounds; orders remain unique/contiguous; audit metadata is written to AuditLog; frontend controls render; no direct frontend Codex/LLM calls are added.
+Tests required: focused answer-region correction tests; frontend static workflow test; make test; make lint; frontend build; make e2e; git diff --check; make down.
+Risks: This is rough numeric UI, not polished drag/drop; blank/partial packet semantics remain lightweight and can be refined after teacher trials.
+Status: Done
 
 TASK-ID: TA-BATCH-001
 Title: Batch evidence packet preparation

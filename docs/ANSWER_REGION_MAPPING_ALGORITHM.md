@@ -1,3 +1,19 @@
+## TA-UI-001 teacher correction policy
+
+Mapping suggestions and accepted regions are not final evidence until teacher/founder correction and confirmation can resolve known evaluation-gate failures. TA-UI-001 adds correction operations for accepted `AnswerRegion` packets: edit segment bbox, add/split a segment from user-provided boxes, remove non-final segments, reorder segments into contiguous packet order, confirm full answer, mark continuation not needed, and mark partial/needs review.
+
+Safety policy:
+
+- correction APIs require authentication;
+- only the owning teacher can correct the assessment/submission data;
+- pages must remain inside the same submission/assessment;
+- invalid boxes outside page bounds are rejected;
+- segment order is normalized to unique contiguous order;
+- corrections never create `GradeSuggestion` or `FinalGrade`;
+- corrections never start batch grading, real AI mapping, real OCR, or Codex.
+
+Current mock/deterministic mapping remains non-product-quality. Real AI mapping remains blocked until mapping gates are satisfied and teacher correction is available as the controlled fallback.
+
 # Answer-Region Mapping Algorithm
 
 Status: AEEM-aligned after TA-MAP-003. TA-MAP-002 deterministic/mock provider remains Done. TA-MAP-003 adds an executable synthetic mapping evaluation harness. Real AI mapping remains deliberately deferred.

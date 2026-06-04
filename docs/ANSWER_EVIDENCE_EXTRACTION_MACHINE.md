@@ -1,3 +1,16 @@
+## TA-UI-001 correction workflow update
+
+TA-UI-001 adds the controlled teacher/founder correction path required after evaluation gates expose blockers such as missed continuation, wrong mapping, ambiguous boundary, blank/cover-page confusion, duplicate/missing page, multiple questions on one page, and incomplete answer packets. Corrections are part of evidence preparation only: they edit, add/split, remove, reorder, and confirm `AnswerRegionSegment` evidence before grading readiness is recalculated. They do not create grades, do not invoke real AI mapping, and do not invoke real OCR/vision.
+
+Correction effects on the evidence packet:
+
+- `segment_count` reflects the corrected confirmed segment list.
+- `pages_covered` reflects corrected ordered segments.
+- segment order remains contiguous after reorder/remove.
+- continuation blockers clear only after explicit full-answer or continuation-not-needed confirmation.
+- `ready_for_grading` can change after correction, but grading still requires the existing readiness checks.
+- correction audit metadata records correction type, before/after state, teacher id, and timestamp through `AuditLog`.
+
 # TA-CORE-002 implementation-roadmap bridge
 
 Recorded at: 2026-06-04T12:13:40+06:00

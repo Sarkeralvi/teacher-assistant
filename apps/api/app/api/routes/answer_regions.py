@@ -1,6 +1,7 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse
@@ -12,10 +13,25 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.routes.assessments import get_assessment_or_404
 from app.api.routes.questions import get_question_or_404
 from app.api.routes.submissions import get_submission_or_404
+from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import AnswerRegion, AnswerRegionSegment, Question, Submission, SubmissionPage
+from app.models import (
+    AnswerRegion,
+    AnswerRegionSegment,
+    Assessment,
+    AuditLog,
+    Course,
+    Question,
+    Submission,
+    SubmissionPage,
+    User,
+)
 from app.schemas import (
+    AnswerRegionCorrectionResponse,
+    AnswerRegionCorrectionSegmentBox,
+    AnswerRegionCorrectionSegmentCreate,
+    AnswerRegionCorrectionSegmentReorder,
     AnswerRegionCreate,
     AnswerRegionFullAnswerConfirmation,
     AnswerRegionMappingSuggestionRequest,
@@ -38,6 +54,7 @@ from packages.brain.answer_region_suggestion_codex_provider import (
 )
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["answer-regions"])
 
@@ -62,6 +79,107 @@ def get_answer_region_or_404(answer_region_id: int, db: Session) -> AnswerRegion
     if region is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found")
     return region
+
+
+def get_owned_answer_region_or_404(
+    answer_region_id: int, db: Session, current_user: User
+) -> AnswerRegion:
+    region = get_answer_region_or_404(answer_region_id, db)
+    owned_course_id = db.scalar(
+        select(Course.id)
+        .join(Assessment, Assessment.course_id == Course.id)
+        .join(Submission, Submission.assessment_id == Assessment.id)
+        .where(Submission.id == region.submission_id)
+        .where(Course.teacher_id == current_user.id)
+    )
+    if owned_course_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found")
+    return region
+
+
+def segment_state(segment: AnswerRegionSegment) -> dict[str, Any]:
+    return {
+        "id": segment.id,
+        "answer_region_id": segment.answer_region_id,
+        "page_id": segment.submission_page_id,
+        "order_index": segment.order_index,
+        "x": str(segment.x),
+        "y": str(segment.y),
+        "width": str(segment.width),
+        "height": str(segment.height),
+        "image_path": segment.image_path,
+        "source": segment.source,
+        "confirmed": segment.confirmed,
+        "is_primary": segment.is_primary,
+    }
+
+
+def region_confirmation_state(region: AnswerRegion) -> dict[str, Any]:
+    return {"id": region.id, "full_answer_confirmed": region.full_answer_confirmed}
+
+
+def record_answer_region_correction(
+    db: Session,
+    region: AnswerRegion,
+    current_user: User,
+    correction_type: str,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> AnswerRegionCorrectionResponse:
+    corrected_at = datetime.now(UTC)
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type=f"answer_region.{correction_type}",
+            entity_type="answer_region",
+            entity_id=region.id,
+            payload_json={
+                "correction_type": correction_type,
+                "before": before,
+                "after": after,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(region)
+    return AnswerRegionCorrectionResponse(
+        correction_type=correction_type,
+        teacher_id=current_user.id,
+        corrected_at=corrected_at,
+        before=before,
+        after=after,
+        answer_region=AnswerRegionRead.model_validate(region),
+    )
+
+
+def get_region_segment_or_404(region: AnswerRegion, segment_id: int) -> AnswerRegionSegment:
+    for segment in region.segments:
+        if segment.id == segment_id:
+            return segment
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND, detail="Answer region segment not found"
+    )
+
+
+def normalize_segment_orders(region: AnswerRegion) -> None:
+    ordered = sorted(region.segments, key=lambda segment: (segment.order_index, segment.id or 0))
+    for index, segment in enumerate(ordered, start=1):
+        segment.order_index = index
+
+
+def update_region_primary_from_segments(region: AnswerRegion) -> None:
+    ordered = sorted(region.segments, key=lambda segment: segment.order_index)
+    for segment in ordered:
+        segment.is_primary = False
+    primary = ordered[0]
+    primary.is_primary = True
+    region.page_id = primary.submission_page_id
+    region.x = primary.x
+    region.y = primary.y
+    region.width = primary.width
+    region.height = primary.height
+    region.image_path = primary.image_path
 
 
 def get_questions_for_suggestion(
@@ -356,9 +474,7 @@ def build_mock_mapping_suggestion_groups(
     )
 
 
-def normalize_answer_region_suggestion_provider(
-    provider: str | None, default_provider: str
-) -> str:
+def normalize_answer_region_suggestion_provider(provider: str | None, default_provider: str) -> str:
     value = (provider or default_provider or "mock").strip().lower()
     if value == "codex_cli":
         return "codex_cli_answer_region_suggester"
@@ -391,8 +507,7 @@ def build_codex_answer_region_suggestions(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
-                    "Codex suggestion must reference a confirmed question from the same "
-                    "assessment"
+                    "Codex suggestion must reference a confirmed question from the same assessment"
                 ),
             )
         if item_question_id is not None and question.id != item_question_id:
@@ -464,9 +579,7 @@ def get_codex_answer_region_suggestion_provider(settings) -> CodexAnswerRegionSu
     response_model=AnswerRegionRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_answer_region(
-    page_id: int, payload: AnswerRegionCreate, db: DbSession
-) -> AnswerRegion:
+def create_answer_region(page_id: int, payload: AnswerRegionCreate, db: DbSession) -> AnswerRegion:
     page = get_submission_page_or_404(page_id, db)
     question = get_question_or_404(payload.question_id, db)
     if question.assessment_id != page.submission.assessment_id:
@@ -514,6 +627,182 @@ def create_answer_region(
     db.commit()
     db.refresh(region)
     return region
+
+
+@router.patch(
+    "/answer-regions/{answer_region_id}/corrections/segments/reorder",
+    response_model=AnswerRegionCorrectionResponse,
+)
+def correct_answer_region_reorder_segments(
+    answer_region_id: int,
+    payload: AnswerRegionCorrectionSegmentReorder,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionCorrectionResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    if set(payload.segment_ids) != {segment.id for segment in region.segments}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Reorder segment_ids must include exactly all segments for the answer region",
+        )
+    before = {"segments": [segment_state(segment) for segment in region.segments]}
+    segments_by_id = {segment.id: segment for segment in region.segments}
+    for order_index, segment_id in enumerate(payload.segment_ids, start=1):
+        segments_by_id[segment_id].order_index = order_index
+    update_region_primary_from_segments(region)
+    after = {"segments": [segment_state(segment) for segment in region.segments]}
+    return record_answer_region_correction(
+        db, region, current_user, "reorder_segments", before, after
+    )
+
+
+@router.patch(
+    "/answer-regions/{answer_region_id}/corrections/segments/{segment_id}",
+    response_model=AnswerRegionCorrectionResponse,
+)
+def correct_answer_region_segment_bbox(
+    answer_region_id: int,
+    segment_id: int,
+    payload: AnswerRegionCorrectionSegmentBox,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionCorrectionResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    segment = get_region_segment_or_404(region, segment_id)
+    page = get_submission_page_or_404(segment.submission_page_id, db)
+    validate_page_box(page, payload.x, payload.y, payload.width, payload.height)
+    before = segment_state(segment)
+    image_path = crop_answer_region_image(
+        storage=LocalStorage(),
+        source_image_path=page.image_path,
+        submission_id=region.submission_id,
+        x=payload.x,
+        y=payload.y,
+        width=payload.width,
+        height=payload.height,
+    )
+    segment.x = payload.x
+    segment.y = payload.y
+    segment.width = payload.width
+    segment.height = payload.height
+    segment.image_path = image_path
+    if segment.is_primary:
+        region.x = payload.x
+        region.y = payload.y
+        region.width = payload.width
+        region.height = payload.height
+        region.image_path = image_path
+    after = segment_state(segment)
+    return record_answer_region_correction(
+        db, region, current_user, "edit_segment_bbox", before, after
+    )
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/corrections/segments",
+    response_model=AnswerRegionCorrectionResponse,
+)
+def correct_answer_region_add_segment(
+    answer_region_id: int,
+    payload: AnswerRegionCorrectionSegmentCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionCorrectionResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    page = get_submission_page_or_404(payload.page_id, db)
+    if page.submission_id != region.submission_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Correction segment page must belong to the same submission/assessment",
+        )
+    validate_page_box(page, payload.x, payload.y, payload.width, payload.height)
+    before = {"segments": [segment_state(segment) for segment in region.segments]}
+    for segment in region.segments:
+        if segment.order_index >= payload.order_index:
+            segment.order_index += 1
+    image_path = crop_answer_region_image(
+        storage=LocalStorage(),
+        source_image_path=page.image_path,
+        submission_id=region.submission_id,
+        x=payload.x,
+        y=payload.y,
+        width=payload.width,
+        height=payload.height,
+    )
+    segment = AnswerRegionSegment(
+        answer_region_id=region.id,
+        submission_page_id=page.id,
+        order_index=payload.order_index,
+        x=payload.x,
+        y=payload.y,
+        width=payload.width,
+        height=payload.height,
+        image_path=image_path,
+        source="manual",
+        confirmed=payload.confirmed,
+        is_primary=False,
+    )
+    db.add(segment)
+    db.flush()
+    normalize_segment_orders(region)
+    update_region_primary_from_segments(region)
+    after = {"segments": [segment_state(segment) for segment in region.segments]}
+    return record_answer_region_correction(db, region, current_user, "add_segment", before, after)
+
+
+@router.delete(
+    "/answer-regions/{answer_region_id}/corrections/segments/{segment_id}",
+    response_model=AnswerRegionCorrectionResponse,
+)
+def correct_answer_region_remove_segment(
+    answer_region_id: int,
+    segment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionCorrectionResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    segment = get_region_segment_or_404(region, segment_id)
+    if len(region.segments) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "Cannot remove the only answer segment; "
+                "mark the packet partial/blank in review instead"
+            ),
+        )
+    before = {"segments": [segment_state(existing) for existing in region.segments]}
+    db.delete(segment)
+    db.flush()
+    region.segments = [existing for existing in region.segments if existing.id != segment_id]
+    normalize_segment_orders(region)
+    update_region_primary_from_segments(region)
+    after = {"segments": [segment_state(existing) for existing in region.segments]}
+    return record_answer_region_correction(
+        db, region, current_user, "remove_segment", before, after
+    )
+
+
+@router.patch(
+    "/answer-regions/{answer_region_id}/corrections/full-answer-confirmation",
+    response_model=AnswerRegionCorrectionResponse,
+)
+def correct_answer_region_full_answer_confirmation(
+    answer_region_id: int,
+    payload: AnswerRegionFullAnswerConfirmation,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionCorrectionResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    before = region_confirmation_state(region)
+    region.full_answer_confirmed = payload.full_answer_confirmed
+    for segment in region.segments:
+        segment.confirmed = payload.full_answer_confirmed or segment.confirmed
+    after = region_confirmation_state(region) | {
+        "continuation_not_needed": payload.continuation_not_needed
+    }
+    return record_answer_region_correction(
+        db, region, current_user, "full_answer_confirmation", before, after
+    )
 
 
 @router.post(
@@ -608,14 +897,18 @@ def accept_answer_region_mapping_suggestion(
     db.flush()
     for segment in ordered_segments:
         page = pages_by_id[segment.page_id]
-        segment_image_path = primary_image_path if segment.is_primary else crop_answer_region_image(
-            storage=LocalStorage(),
-            source_image_path=page.image_path,
-            submission_id=submission.id,
-            x=segment.x,
-            y=segment.y,
-            width=segment.width,
-            height=segment.height,
+        segment_image_path = (
+            primary_image_path
+            if segment.is_primary
+            else crop_answer_region_image(
+                storage=LocalStorage(),
+                source_image_path=page.image_path,
+                submission_id=submission.id,
+                x=segment.x,
+                y=segment.y,
+                width=segment.width,
+                height=segment.height,
+            )
         )
         db.add(
             AnswerRegionSegment(

@@ -257,6 +257,15 @@ export type AnswerRegion = {
   updated_at: string;
 };
 
+export type AnswerRegionCorrectionResponse = {
+  correction_type: string;
+  teacher_id: number;
+  corrected_at: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  answer_region: AnswerRegion;
+};
+
 export type AnswerRegionContinuationRisk =
   | "none"
   | "possible_continuation"
@@ -581,6 +590,11 @@ export type DraftQuestionAccept = Pick<DraftQuestion, "draft_id" | "question_no"
 };
 export type RubricCreate = Pick<Rubric, "version" | "rubric_json"> & { is_active?: boolean };
 export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height">;
+export type AnswerRegionCorrectionSegmentBox = Pick<AnswerRegionSegment, "x" | "y" | "width" | "height">;
+export type AnswerRegionCorrectionSegmentCreate = AnswerRegionCorrectionSegmentBox & {
+  page_id: number;
+  order_index: number;
+};
 
 export function createUser(payload: UserCreate) {
   return apiRequest<User>("/users", { method: "POST", body: payload });
@@ -894,6 +908,49 @@ export function getAnswerRegionImageUrl(answerRegionId: number) {
 
 export function getGradingEvidencePacket(answerRegionId: number) {
   return apiRequest<GradingEvidencePacket>(`/answer-regions/${answerRegionId}/grading-evidence-packet`);
+}
+
+export function editAnswerRegionSegment(
+  answerRegionId: number,
+  segmentId: number,
+  payload: AnswerRegionCorrectionSegmentBox,
+) {
+  return apiRequest<AnswerRegionCorrectionResponse>(
+    `/answer-regions/${answerRegionId}/corrections/segments/${segmentId}`,
+    { method: "PATCH", body: payload, token: getStoredAuthToken() },
+  );
+}
+
+export function addAnswerRegionSegment(answerRegionId: number, payload: AnswerRegionCorrectionSegmentCreate) {
+  return apiRequest<AnswerRegionCorrectionResponse>(`/answer-regions/${answerRegionId}/corrections/segments`, {
+    method: "POST",
+    body: payload,
+    token: getStoredAuthToken(),
+  });
+}
+
+export function removeAnswerRegionSegment(answerRegionId: number, segmentId: number) {
+  return apiRequest<AnswerRegionCorrectionResponse>(
+    `/answer-regions/${answerRegionId}/corrections/segments/${segmentId}`,
+    { method: "DELETE", token: getStoredAuthToken() },
+  );
+}
+
+export function reorderAnswerRegionSegments(answerRegionId: number, segmentIds: number[]) {
+  return apiRequest<AnswerRegionCorrectionResponse>(
+    `/answer-regions/${answerRegionId}/corrections/segments/reorder`,
+    { method: "PATCH", body: { segment_ids: segmentIds }, token: getStoredAuthToken() },
+  );
+}
+
+export function confirmAnswerRegionFullAnswer(
+  answerRegionId: number,
+  payload: { full_answer_confirmed: boolean; continuation_not_needed?: boolean },
+) {
+  return apiRequest<AnswerRegionCorrectionResponse>(
+    `/answer-regions/${answerRegionId}/corrections/full-answer-confirmation`,
+    { method: "PATCH", body: payload, token: getStoredAuthToken() },
+  );
 }
 
 export function gradeAnswerRegion(answerRegionId: number) {

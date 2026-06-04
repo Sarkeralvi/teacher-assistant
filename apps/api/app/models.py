@@ -266,7 +266,9 @@ class AnswerRegion(TimestampMixin, Base):
     question: Mapped[Question] = relationship(back_populates="answer_regions")
     page: Mapped[SubmissionPage] = relationship(back_populates="answer_regions")
     segments: Mapped[list[AnswerRegionSegment]] = relationship(
-        back_populates="answer_region", cascade="all, delete-orphan"
+        back_populates="answer_region",
+        cascade="all, delete-orphan",
+        order_by="AnswerRegionSegment.order_index",
     )
     grading_jobs: Mapped[list[GradingJob]] = relationship(back_populates="answer_region")
     grade_suggestions: Mapped[list[GradeSuggestion]] = relationship(back_populates="answer_region")

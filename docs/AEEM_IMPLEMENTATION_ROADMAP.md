@@ -1,3 +1,9 @@
+## TA-UI-001 completion note
+
+TA-UI-001 is implemented as the first rough correction workflow between evaluation gates and grading. Backend correction endpoints now require auth and teacher ownership, reject cross-assessment/cross-teacher segment edits, keep page/question/submission boundaries safe, maintain contiguous segment order, and write lightweight audit records. The assessment detail review queue exposes numeric controls for editing bbox values, adding/splitting a segment, removing a segment, moving segments up/down, confirming full answer, marking continuation not needed, and marking partial/needs review.
+
+This keeps real AI mapping and real OCR/vision blocked. The recommended next work should be a focused refinement task, not TA-MAP-004 by default, unless the founder explicitly wants planning only for a real provider. Good next candidates are: harden correction UX with better page/segment preview, add explicit blank/partial packet state, or improve deterministic fixture behavior where harness sanity needs it.
+
 # AEEM Implementation Roadmap
 
 Status: TA-CORE-002 bridge document. This maps the adopted Answer Evidence Extraction Machine architecture to the actual controlled implementation sequence in TAAgent.

@@ -14,6 +14,7 @@ from app.models import (
     AnswerRegion,
     AnswerRegionSegment,
     Assessment,
+    AuditLog,
     Course,
     FinalGrade,
     GradeSuggestion,
@@ -25,6 +26,7 @@ from app.models import (
 )
 
 CLEANUP_MODELS = (
+    AuditLog,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
@@ -718,3 +720,223 @@ def test_evidence_packet_sees_accepted_multisegment_mapping(
     assert evidence["continuation_check_status"] == "continuation_confirmed_included"
     assert evidence["teacher_founder_confirmed_full_answer"] is True
     assert packet_response.json()["readiness_result"]["ready_for_grading"] is True
+
+
+def register_for_correction(
+    client: TestClient, email: str
+) -> tuple[dict[str, object], dict[str, str]]:
+    response = client.post(
+        "/auth/register",
+        json={"name": "Correction Teacher", "email": email, "password": "correct horse battery"},
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    return payload["user"], {"Authorization": f"Bearer {payload['access_token']}"}
+
+
+def create_authenticated_uploaded_page(
+    client: TestClient, tmp_path: Path, email: str = "correction-teacher@example.com"
+) -> tuple[dict[str, object], dict[str, object], dict[str, str]]:
+    user, headers = register_for_correction(client, email)
+    course_response = client.post(
+        "/courses",
+        json={"teacher_id": user["id"], "code": "COR101", "title": "Corrections"},
+    )
+    assert course_response.status_code == 201
+    assessment_response = client.post(
+        f"/courses/{course_response.json()['id']}/assessments",
+        json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
+    )
+    assert assessment_response.status_code == 201
+    question_response = client.post(
+        f"/assessments/{assessment_response.json()['id']}/questions",
+        json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
+    )
+    assert question_response.status_code == 201
+    image_path = tmp_path / f"correction-{email}.png"
+    make_png(image_path, size=(120, 100))
+    with image_path.open("rb") as file_obj:
+        submission_response = client.post(
+            f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            data={"student_identifier": "S-COR"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        )
+    assert submission_response.status_code == 201
+    return question_response.json(), submission_response.json()["pages"][0], headers
+
+
+def create_correction_region(
+    client: TestClient, tmp_path: Path, email: str = "correction-teacher@example.com"
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, str]]:
+    question, page, headers = create_authenticated_uploaded_page(client, tmp_path, email=email)
+    response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 10, "y": 10, "width": 30, "height": 20},
+    )
+    assert response.status_code == 201
+    return question, page, response.json(), headers
+
+
+def test_correction_apis_require_auth(client: TestClient, tmp_path: Path) -> None:
+    _question, _page, region, _headers = create_correction_region(client, tmp_path)
+
+    response = client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/{region['segments'][0]['id']}",
+        json={"x": 12, "y": 12, "width": 25, "height": 20},
+    )
+
+    assert response.status_code == 401
+
+
+def test_edit_segment_bbox_updates_segment_safely_and_writes_audit(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, _page, region, headers = create_correction_region(client, tmp_path)
+    segment_id = region["segments"][0]["id"]
+
+    response = client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/{segment_id}",
+        headers=headers,
+        json={"x": 14, "y": 15, "width": 35, "height": 25},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["correction_type"] == "edit_segment_bbox"
+    assert payload["teacher_id"]
+    assert payload["before"]["x"] == "10.00"
+    updated_segment = payload["answer_region"]["segments"][0]
+    assert updated_segment["x"] == "14.00"
+    assert updated_segment["width"] == "35.00"
+    assert (
+        db_session.query(AuditLog)
+        .filter(AuditLog.event_type == "answer_region.edit_segment_bbox")
+        .count()
+        == 1
+    )
+
+
+def test_invalid_correction_bbox_rejected(client: TestClient, tmp_path: Path) -> None:
+    _question, _page, region, headers = create_correction_region(client, tmp_path)
+    segment_id = region["segments"][0]["id"]
+
+    response = client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/{segment_id}",
+        headers=headers,
+        json={"x": 110, "y": 90, "width": 20, "height": 20},
+    )
+
+    assert response.status_code == 422
+    assert "fit inside" in response.text
+
+
+def test_add_reorder_and_remove_segment_updates_evidence_packet(
+    client: TestClient, tmp_path: Path
+) -> None:
+    question, page, region, headers = create_correction_region(client, tmp_path)
+    add_response = client.post(
+        f"/answer-regions/{region['id']}/corrections/segments",
+        headers=headers,
+        json={"page_id": page["id"], "x": 12, "y": 40, "width": 30, "height": 20, "order_index": 2},
+    )
+    assert add_response.status_code == 200
+    assert len(add_response.json()["answer_region"]["segments"]) == 2
+
+    segments = add_response.json()["answer_region"]["segments"]
+    reorder_response = client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/reorder",
+        headers=headers,
+        json={"segment_ids": [segments[1]["id"], segments[0]["id"]]},
+    )
+    assert reorder_response.status_code == 200
+    reordered = reorder_response.json()["answer_region"]["segments"]
+    assert [segment["order_index"] for segment in reordered] == [1, 2]
+    assert reordered[0]["id"] == segments[1]["id"]
+
+    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert packet["student_answer_evidence"]["segment_count"] == 2
+    assert packet["student_answer_evidence"]["pages_covered"] == [page["page_no"]]
+
+    remove_response = client.delete(
+        f"/answer-regions/{region['id']}/corrections/segments/{segments[0]['id']}",
+        headers=headers,
+    )
+    assert remove_response.status_code == 200
+    assert len(remove_response.json()["answer_region"]["segments"]) == 1
+    assert remove_response.json()["answer_region"]["question_id"] == question["id"]
+
+
+def test_correction_rejects_cross_assessment_teacher(client: TestClient, tmp_path: Path) -> None:
+    _question, _page, region, _headers = create_correction_region(client, tmp_path)
+    _other_question, _other_page, other_headers = create_authenticated_uploaded_page(
+        client, tmp_path, email="other-correction-teacher@example.com"
+    )
+
+    response = client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/{region['segments'][0]['id']}",
+        headers=other_headers,
+        json={"x": 11, "y": 11, "width": 20, "height": 20},
+    )
+
+    assert response.status_code == 404
+
+
+def test_full_answer_and_continuation_not_needed_confirmation_clear_blocker(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, page, region, headers = create_correction_region(client, tmp_path)
+    db_session.add(
+        SubmissionPage(
+            submission_id=page["submission_id"],
+            page_no=2,
+            image_path=page["image_path"],
+            quality_score="1.00",
+        )
+    )
+    db_session.commit()
+    segment_id = region["segments"][0]["id"]
+    near_bottom = client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/{segment_id}",
+        headers=headers,
+        json={"x": 10, "y": 82, "width": 30, "height": 16},
+    )
+    assert near_bottom.status_code == 200
+    packet_before = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert (
+        "possible answer continuation not confirmed"
+        in packet_before["readiness_result"]["blockers"]
+    )
+
+    confirm = client.patch(
+        f"/answer-regions/{region['id']}/corrections/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True, "continuation_not_needed": True},
+    )
+
+    assert confirm.status_code == 200
+    packet_after = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert packet_after["student_answer_evidence"]["teacher_founder_confirmed_full_answer"] is True
+    assert (
+        packet_after["student_answer_evidence"]["continuation_check_status"]
+        == "continuation_confirmed_not_needed"
+    )
+    assert (
+        "possible answer continuation not confirmed"
+        not in packet_after["readiness_result"]["blockers"]
+    )
+
+
+def test_correction_path_does_not_create_grade_suggestion_or_final_grade(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, page, region, headers = create_correction_region(client, tmp_path)
+
+    response = client.post(
+        f"/answer-regions/{region['id']}/corrections/segments",
+        headers=headers,
+        json={"page_id": page["id"], "x": 12, "y": 40, "width": 30, "height": 20, "order_index": 2},
+    )
+
+    assert response.status_code == 200
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0

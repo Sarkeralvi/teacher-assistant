@@ -435,6 +435,30 @@ class AnswerRegionSegmentCreate(BaseModel):
 
 class AnswerRegionFullAnswerConfirmation(BaseModel):
     full_answer_confirmed: bool
+    continuation_not_needed: bool = False
+
+
+class AnswerRegionCorrectionSegmentBox(BaseModel):
+    x: Decimal = Field(ge=Decimal("0"))
+    y: Decimal = Field(ge=Decimal("0"))
+    width: Decimal = Field(gt=Decimal("0"))
+    height: Decimal = Field(gt=Decimal("0"))
+
+
+class AnswerRegionCorrectionSegmentCreate(AnswerRegionCorrectionSegmentBox):
+    page_id: int
+    order_index: int = Field(ge=1)
+    confirmed: bool = True
+
+
+class AnswerRegionCorrectionSegmentReorder(BaseModel):
+    segment_ids: list[int] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "AnswerRegionCorrectionSegmentReorder":
+        if len(self.segment_ids) != len(set(self.segment_ids)):
+            raise ValueError("segment_ids must be unique")
+        return self
 
 
 class AnswerRegionSegmentRead(ORMBase):
@@ -468,6 +492,15 @@ class AnswerRegionRead(ORMBase):
     segments: list[AnswerRegionSegmentRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class AnswerRegionCorrectionResponse(BaseModel):
+    correction_type: str
+    teacher_id: int
+    corrected_at: datetime
+    before: dict[str, Any]
+    after: dict[str, Any]
+    answer_region: AnswerRegionRead
 
 
 class DraftAnswerRegionSuggestion(BaseModel):

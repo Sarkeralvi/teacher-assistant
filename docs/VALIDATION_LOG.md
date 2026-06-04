@@ -1,3 +1,35 @@
+# TA-UI-001 — Teacher correction workflow for split/merge/reorder/confirm
+
+- Recorded at: 2026-06-04
+- Baseline commit: `a379d2b8cce1e153f871fffc38ac478e35912543`
+- Workflow type: manual controlled evidence-correction workflow
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI mapping implementation: not started
+- Real OCR/vision implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- Private files/artifacts used: no
+
+## Change made
+
+Added auth-required AnswerRegion/AnswerRegionSegment correction APIs and a rough review-queue UI for numeric bbox edit, add/split segment, remove segment, reorder segment, confirm full answer, mark continuation not needed, and mark partial/needs review. Correction audit metadata is written to `AuditLog` with correction type, before/after state, teacher id, and timestamp.
+
+## Safety result
+
+TA-UI-001 adds the correction path needed to resolve evaluation-gate blockers before grading. Corrections prepare evidence only. They do not create `GradeSuggestion`, do not create `FinalGrade`, do not run batch grading, do not start real AI mapping/OCR, and do not invoke Codex. Real AI mapping remains blocked.
+
+## Checks run
+
+- `cd apps/api && python -m pytest tests/test_answer_regions_api.py -q` — 23 passed.
+- `node tests/workflow-ui.test.mjs` — frontend workflow static checks passed.
+- `npm run build` in `apps/web` — compiled and built successfully; existing Next/ESLint flat-config warning printed but command exited 0.
+- `make lint` — backend ruff and web TypeScript checks passed.
+- `make test` — 236 passed.
+- `make e2e` — 2 passed.
+
 # TA-SCRIPT-001 — Script page sequencing and answer-boundary benchmark
 
 - Recorded at: 2026-06-04

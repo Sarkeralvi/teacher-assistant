@@ -1,3 +1,9 @@
+## TA-UI-001 grading-quality implication
+
+TA-UI-001 reinforces the evidence-first rule: split/merge/reorder/confirm corrections prepare the answer packet only. A corrected packet may become ready for grading after evidence readiness recalculates, but the correction path itself must not grade, suggest marks, finalize marks, or auto-run a batch.
+
+Critical evidence blockers exposed by TA-MAP/TA-SCRIPT gates remain blockers until resolved or explicitly confirmed by the teacher/founder: missed continuation, wrong question mapping, ambiguous boundary, blank/cover-page confusion, duplicate/missing page, multiple questions on one page, and incomplete answer packet. The correction workflow provides the controlled human path to resolve these before any grading-quality claim.
+
 # TA-SCRIPT-001 — Script processing quality benchmark
 
 Recorded at: 2026-06-04
