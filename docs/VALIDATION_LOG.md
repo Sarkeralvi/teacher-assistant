@@ -1,3 +1,33 @@
+# TA-CORE-001 — Adopt AEEM architecture and reset implementation sequence
+
+- Recorded at: 2026-06-04T11:41:53+06:00
+- Baseline commit: `451b835776de6a1f535cd9929767676bbdaa3637`
+- Workflow type: documentation/backlog-only architecture reset
+- Real Codex calls: 0
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation: 0
+- FinalGrade creation: 0
+- Product code changed: no
+- Private files/artifacts committed: no
+
+## Change made
+
+Created `docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md` and updated the mapping, supervision, grading-quality, validation, and backlog documents to adopt AEEM as the north-star pre-grading architecture.
+
+## Architecture decision
+
+The next direction is evidence-machine quality measurement, not real AI mapping, batch grading, or grading prompt tuning. The required next implementation sequence starts with mapping and reference/script extraction evaluation harnesses before any real mapping provider.
+
+## Safety result
+
+TA-CORE-001 is docs/backlog only. It does not implement follow-up tasks, does not start TA-MAP-003 implementation, does not run real providers, and does not create grading/final-grade records.
+
+## Verification results
+
+To be completed by the TA-CORE-001 commit gate: `git status --short`, `git diff --check`, `make lint`, final `git status --short`.
+
 # Validation Log
 
 ## TA-MAP-002 — Deterministic multi-segment answer-region mapping provider prototype

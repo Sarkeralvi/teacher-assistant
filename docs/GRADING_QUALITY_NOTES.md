@@ -1,3 +1,32 @@
+# TA-CORE-001 — AEEM quality pivot
+
+Recorded at: 2026-06-04T11:41:53+06:00
+
+TA-CORE-001 adopts the Answer Evidence Extraction Machine architecture as the pre-grading quality foundation. The quality rule is now explicit: grading quality cannot be interpreted until evidence quality is confirmed.
+
+Before grading is quality-evaluable, the product must confirm:
+
+1. question understanding / OCR;
+2. solution/model-answer understanding / OCR;
+3. rubric understanding / OCR;
+4. canonical grading-unit label and max marks;
+5. student script page ordering;
+6. answer-region extraction;
+7. multi-page continuation grouping;
+8. evidence packet readiness.
+
+The deterministic/mock TA-MAP-002 provider remains useful as safety plumbing, but it is not evidence of real AI mapping accuracy. Real AI mapping is therefore deferred behind TA-MAP-003 evaluation harness and benchmark work.
+
+Modified AEEM quality stance for this repo:
+
+- no real-script auto-accept yet, even at high confidence;
+- high confidence means ready for teacher review, not accepted;
+- cryptographic sealed store is future scope, not current implementation;
+- OCR/vision providers must stay abstracted;
+- claim 100% confirmed evidence before grading, not 100% AI OCR.
+
+No real Codex, batch grading, `GradeSuggestion`, `FinalGrade`, or teacher observation was run for this docs-only architecture reset.
+
 # Grading Quality Notes
 
 ## TA-MAP-002 — Deterministic mapping before grading

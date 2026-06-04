@@ -1,3 +1,34 @@
+# TA-CORE-001 current state — AEEM adopted as pre-grading architecture
+
+Recorded at: 2026-06-04T11:41:53+06:00
+Baseline: `451b835776de6a1f535cd9929767676bbdaa3637` (`Add deterministic answer mapping provider`)
+
+Founder/PM decision: adopt the Answer Evidence Extraction Machine as the north-star architecture for the pre-grading pipeline.
+
+Core rule: no grading quality claim is valid unless the evidence is confirmed complete first. The system must confirm question, solution/model-answer, rubric, canonical grading unit, student page order, answer-region extraction, multi-page continuation grouping, and evidence packet readiness before grading is quality-evaluable.
+
+Current direction:
+
+- Do not build real AI mapping next.
+- Do not build batch grading next.
+- Do not tune grading prompts next.
+- Build evidence-machine quality measurement first.
+- AI/OCR may propose, but teacher/founder confirmation is required before grading until benchmark evidence proves a narrower safe automation boundary.
+- High confidence means ready for teacher review, not auto-accepted, for real scripts.
+
+Revised next task sequence:
+
+1. TA-CORE-001: Adopt AEEM architecture and reset implementation sequence — Done when this docs/backlog commit lands.
+2. TA-MAP-003: Mapping evaluation harness and synthetic benchmark.
+3. TA-REF-001: Question/solution/rubric extraction evaluation harness.
+4. TA-SCRIPT-001: Script page sequencing and answer-boundary benchmark.
+5. TA-MAP-004: Real AI mapping provider behind evaluation gate.
+6. TA-UI-001: Teacher correction workflow for split/merge/reorder/confirm.
+7. TA-BATCH-001: Batch evidence packet preparation.
+8. TA-GRADE-001: Question-wise grading queue from confirmed packets.
+
+Manual controlled constraints remain active: no autonomous loop, no real Codex, no batch grading, no `GradeSuggestion`, no `FinalGrade`, no teacher observation, no private artifact commits, and no product code changes in TA-CORE-001.
+
 # Project Supervision Context
 
 ## TA-MAP-002 current state — deterministic mapping prototype implemented

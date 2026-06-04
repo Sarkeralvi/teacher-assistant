@@ -1236,3 +1236,108 @@ Acceptance criteria: Mock single-segment, mock multi-segment continuation, possi
 Tests required: `git status --short`; focused mapping tests; focused evidence packet/grading tests; frontend static workflow test; `make e2e`; `make test`; `make lint`; `cd apps/web && npm run build`; `git diff --check`; `make down`; final git status.
 Risks: Prototype uses deterministic boxes and synthetic test hints only; real OCR/AI layout analysis, richer visual overlay review, and production persistence of draft suggestions remain future work.
 Status: Done
+
+
+TASK-ID: TA-CORE-001
+Title: Adopt AEEM architecture and reset implementation sequence
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MAP-002
+Files affected: BACKLOG.md, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, docs/ANSWER_REGION_MAPPING_ALGORITHM.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/GRADING_QUALITY_NOTES.md, docs/VALIDATION_LOG.md
+Goal: Adopt the Answer Evidence Extraction Machine architecture as the north-star pre-grading pipeline and reset the next implementation sequence around evidence quality measurement.
+Implementation notes: Documentation/backlog only. Adapt the external AEEM reference to current repo state and founder constraints. Do not copy it verbatim. Do not implement TA-MAP-003, real AI mapping, batch grading, prompt tuning, teacher observation, autonomous loop, GradeSuggestion creation, FinalGrade creation, private artifact handling, or product-code changes.
+Acceptance criteria: AEEM doc exists with purpose, evidence-first principle, current state/pivot rationale, `1(b)(i)` evidence-boundary lesson, reference arm, script arm, evidence assembler, readiness gates, teacher correction workflow, batch behavior, evaluation strategy, risk register, and implementation phases. Existing docs and backlog reflect the revised sequence and the rule that high confidence means ready for teacher review, not real-script auto-accept.
+Tests required: `git status --short`; `git diff --check`; `make lint`; final `git status --short`. Full test not required because docs/backlog only.
+Risks: Architecture reset could be mistaken for implementation approval. Follow-up tasks remain Pending and must not be started automatically.
+Status: Done
+
+TASK-ID: TA-MAP-003
+Title: Mapping evaluation harness and synthetic benchmark
+Owner: Hermes
+Priority: P0
+Dependencies: TA-CORE-001, TA-MAP-002
+Files affected: apps/api/packages/evaluation/** or scoped equivalent, apps/api/tests/**, docs/ANSWER_REGION_MAPPING_ALGORITHM.md, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, BACKLOG.md
+Goal: Build the evaluation harness and synthetic benchmark for answer-region mapping quality before real AI mapping provider work.
+Implementation notes: No real Codex/AI mapping provider. Use synthetic/non-private fixtures. Measure single-page answers, multi-page continuation, possible-continuation false positives, wrong/partial mapping, multi-question page confusion, blank/skipped answers, inconsistent labels, and page-order anomalies.
+Acceptance criteria: Harness reports mapping metrics including question-label accuracy, segment recall/precision, bbox IoU where applicable, continuation recall/F1, false continuation rate, wrong-question assignment rate, packet-readiness false positives/negatives, and teacher correction burden proxy.
+Tests required: focused harness tests, `git diff --check`, `make lint`, scoped tests as implementation requires.
+Risks: Synthetic-only benchmark can still overfit; later founder-approved annotated real cases will be needed.
+Status: Pending
+
+TASK-ID: TA-REF-001
+Title: Question/solution/rubric extraction evaluation harness
+Owner: Hermes
+Priority: P0
+Dependencies: TA-CORE-001
+Files affected: docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, apps/api/packages/evaluation/** or scoped equivalent, apps/api/tests/**, BACKLOG.md
+Goal: Measure reference-arm extraction quality for question, solution/model-answer, rubric, canonical grading-unit labels, and max marks before relying on OCR/AI proposals.
+Implementation notes: Provider abstraction only; do not hardcode one OCR/vision vendor. Teacher/founder confirmation remains required.
+Acceptance criteria: Harness can compare extracted CGU labels/max marks/question text/model-answer/rubric criteria against expected fixtures and report field-level errors plus blocking readiness failures.
+Tests required: focused reference extraction harness tests, lint, diff check.
+Risks: Incorrect max marks or CGU labels can invalidate grading even if mapping is correct.
+Status: Pending
+
+TASK-ID: TA-SCRIPT-001
+Title: Script page sequencing and answer-boundary benchmark
+Owner: Hermes
+Priority: P0
+Dependencies: TA-CORE-001
+Files affected: docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, apps/api/packages/evaluation/** or scoped equivalent, apps/api/tests/**, BACKLOG.md
+Goal: Benchmark script page ordering and answer-boundary detection before batch evidence preparation.
+Implementation notes: Use synthetic/non-private scripts first. Include reversed pages, missing pages, duplicate pages, unnumbered pages, inserted pages, multi-question pages, and low-quality scans.
+Acceptance criteria: Benchmark reports page-sequence accuracy, unresolved sequence rate, boundary detection recall/precision, and review/blocker classifications.
+Tests required: focused benchmark tests, lint, diff check.
+Risks: Wrong page order can silently break continuation grouping and evidence completeness.
+Status: Pending
+
+TASK-ID: TA-MAP-004
+Title: Real AI mapping provider behind evaluation gate
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MAP-003, TA-REF-001, TA-SCRIPT-001
+Files affected: scoped provider/config/tests/docs only after approval
+Goal: Add a real AI/OCR/vision mapping provider only after the evaluation gates and benchmark criteria exist.
+Implementation notes: Explicit provider gate required. Real-script auto-accept remains forbidden. High confidence means ready for teacher review. No grading side effects.
+Acceptance criteria: Provider outputs strict draft suggestion groups, passes minimum benchmark thresholds or reports blocked status, and never creates AnswerRegion/GradeSuggestion/FinalGrade during suggestion generation.
+Tests required: provider contract tests, benchmark run, lint, diff check, scoped real-provider smoke only if explicitly approved.
+Risks: Provider may look good on synthetic cases while failing on real handwriting; keep claims narrow.
+Status: Pending
+
+TASK-ID: TA-UI-001
+Title: Teacher correction workflow for split/merge/reorder/confirm
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MAP-003
+Files affected: apps/web/**, apps/api/app/**, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, BACKLOG.md
+Goal: Build the teacher correction workflow for answer evidence: accept/reject/edit bbox/split/merge/reorder/add segment/reassign CGU/mark blank/mark partial/mark complete.
+Implementation notes: Teacher action remains required. Add audit trail where scoped. Do not auto-finalize or run batch grading.
+Acceptance criteria: Teacher can correct draft evidence into confirmed ordered packets, resolve continuation risk, and confirm full-answer completeness before grading readiness.
+Tests required: focused backend/frontend tests, e2e or static workflow check, lint, diff check.
+Risks: Poor correction UX can cause rubber-stamping or missed evidence gaps.
+Status: Pending
+
+TASK-ID: TA-BATCH-001
+Title: Batch evidence packet preparation
+Owner: Hermes
+Priority: P0
+Dependencies: TA-REF-001, TA-SCRIPT-001, TA-MAP-003, TA-UI-001
+Files affected: scoped backend/worker/docs/tests after approval
+Goal: Prepare evidence packets across a batch without grading side effects.
+Implementation notes: Process scripts independently, quarantine blocked scripts, never create GradeSuggestion or FinalGrade during evidence preparation, and require final teacher/founder readiness sign-off.
+Acceptance criteria: Batch job prepares or quarantines student×CGU evidence packets with clear blockers/warnings and no grading/finalization side effects.
+Tests required: focused batch evidence tests, lint, diff check.
+Risks: Batch pipeline can hide evidence failures if quarantine/review states are unclear.
+Status: Pending
+
+TASK-ID: TA-GRADE-001
+Title: Question-wise grading queue from sealed/confirmed packets
+Owner: Hermes
+Priority: P0
+Dependencies: TA-BATCH-001
+Files affected: scoped backend/frontend/docs/tests after approval
+Goal: Create a question-wise grading queue only from confirmed evidence packets.
+Implementation notes: AEEM output feeds grading. Do not expose other students' answers as grading context. Sealed/immutable store is future/hardening scope; current requirement is confirmed evidence packets and auditable release.
+Acceptance criteria: Grading queue groups confirmed packets by canonical grading unit and blocks unconfirmed/incomplete packets. Teacher review and no auto-finalization remain mandatory.
+Tests required: focused queue/readiness tests, lint, diff check.
+Risks: Premature grading queue work can bypass evidence gates; only start after batch evidence readiness is proven.
+Status: Pending

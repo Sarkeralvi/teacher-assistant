@@ -1,73 +1,61 @@
 # Answer-Region Mapping Algorithm
 
-Status: TA-MAP-002 deterministic/mock provider prototype implemented. Real AI/OCR mapping is still not implemented; batch grading, export, and finalization remain outside this subsystem.
+Status: AEEM-aligned after TA-CORE-001. TA-MAP-002 deterministic/mock provider remains Done. Real AI mapping is deliberately deferred until evaluation harnesses and benchmark datasets exist.
 
-## Current limitation
+## Role inside AEEM
 
-The current system has a useful safety foundation but not a business-grade mapping algorithm. The evidence-boundary lesson from the controlled `1(b)(i)` grading issue is that grading quality cannot be interpreted safely when the selected answer evidence may be incomplete. This document references that lesson only at the workflow level; it does not expose private student content, crops, PDFs, or provider payloads.
-
-Current limits:
-
-- manual answer-region creation remains rectangular and page-local;
-- TA-MAP-002 mock mapping suggestions are deterministic and synthetic-test-oriented, not real layout/OCR/AI understanding;
-- the submission-scoped mock provider can return single-segment, multi-segment continuation-included, and possible-continuation draft groups;
-- Codex-backed one-rectangle page suggestions remain gated separately and are not the TA-MAP-002 real mapping provider;
-- accepted mapping suggestions create `AnswerRegion` + ordered `AnswerRegionSegment` rows only after explicit teacher/founder action;
-- the page-bottom continuation check is a safety blocker, not true answer-span detection;
-- the frontend review workflow is rough-functional, not yet a polished teacher-grade visual mapping experience.
-
-## Design principle
-
-Answer-region mapping should be a review-first subsystem:
+Answer-region mapping is one subsystem inside the Answer Evidence Extraction Machine. It is not the whole pre-grading pipeline. Mapping must consume confirmed reference evidence and confirmed/ordered script pages, then produce draft answer evidence segments for teacher review.
 
 ```text
-submission pages
-  -> deterministic layout candidates
-  -> question-order-aware cross-page grouping
-  -> draft multi-segment suggestion groups
-  -> teacher/founder review and correction
+confirmed CGU registry + ordered script pages
+  -> draft question boundary candidates
+  -> draft answer evidence segments
+  -> continuation grouping
+  -> teacher correction / confirmation
   -> accepted AnswerRegion + ordered AnswerRegionSegment rows
-  -> evidence packet readiness gate
-  -> draft-only grading suggestion
-  -> teacher final grade action
+  -> EvidencePacket readiness gate
 ```
 
-The algorithm should prefer high recall with visible warnings over silent precision failures. Missing part of an answer is worse than asking the teacher to reject an extra segment.
+No mapping result is a grading-quality claim until the evidence packet is complete and confirmed.
 
-## Proposed staged algorithm
+## Current implementation baseline
 
-### Stage 1: Page preprocessing
+The current system has a useful safety foundation but not a business-grade mapping algorithm.
 
-For every `SubmissionPage` in order:
+Current state:
 
-1. Load image dimensions and normalize orientation metadata if needed.
-2. Compute simple ink-density / whitespace bands.
-3. Detect candidate text/answer blocks using deterministic CV/layout heuristics.
-4. Record page-level warnings: blank page, low contrast, dense writing, skew, or unreadable image.
+- manual answer-region creation exists;
+- multi-segment `AnswerRegionSegment` support exists;
+- evidence packet readiness fields exist;
+- TA-MAP-002 mock mapping suggestions are deterministic and synthetic-test-oriented;
+- the submission-scoped mock provider can return single-segment, multi-segment continuation-included, and possible-continuation draft groups;
+- accepted mapping suggestions create `AnswerRegion` + ordered `AnswerRegionSegment` rows only after explicit teacher/founder action;
+- suggestion/acceptance paths create no `GradeSuggestion` and no `FinalGrade`;
+- real AI/OCR mapping is not implemented;
+- Codex-backed one-rectangle page suggestions remain a separate gated dev path and are not the AEEM mapping engine.
 
-No grading or real AI runs in this stage.
+## Evidence-boundary lesson
 
-### Stage 2: Canonical question sequence
+The controlled `1(b)(i)` issue showed that a model score is not quality evidence if the selected answer region is incomplete. One logical answer can continue onto the next page before the next subpart. Therefore:
 
-Use confirmed `Question` rows for the assessment as the authoritative order:
+- page-local rectangles are insufficient as the final product model;
+- continuation risk must be explicit;
+- answer evidence may require multiple ordered segments;
+- teacher/founder full-answer confirmation is required before grading;
+- evaluation must measure missed continuations and wrong/partial mappings.
 
-- `question_id`
-- `question_no`
-- `question_text`
-- expected ordering from the database/question import confirmation
+## AEEM mapping inputs
 
-The mapping layer must not invent new canonical questions.
+Mapping should eventually depend on:
 
-### Stage 3: Candidate answer spans
+- confirmed canonical grading units: label, variants, max marks, question text;
+- confirmed solution/model-answer and active rubric availability;
+- confirmed or reviewable script page sequence;
+- rendered/preprocessed page images;
+- OCR/layout/vision output where available;
+- teacher corrections and prior accepted mapping history.
 
-For each confirmed question, build a draft answer span:
-
-- start anchor: detected label, teacher-selected point, or best layout estimate;
-- end anchor: next detected question label, next canonical question start, page end, or teacher stop marker;
-- possible continuation: if the span reaches a page break or the next question is not confidently found;
-- blank-bottom exception: if page-bottom area is visually blank and the next question starts clearly later, mark `continuation_not_needed` instead of blocking by geometry alone.
-
-### Stage 4: Draft suggestion groups
+## Draft suggestion contract
 
 Emit one `DraftAnswerRegionSuggestionGroup` per logical question answer. A group contains one or more ordered `DraftAnswerRegionSuggestionSegment` items across pages.
 
@@ -75,65 +63,57 @@ Required semantics:
 
 - suggestions are draft-only;
 - suggestions carry `needs_review=true` and `needs_teacher_confirmation=true`;
-- suggestion groups never create `AnswerRegion`, `GradeSuggestion`, or `FinalGrade` rows by themselves;
+- high confidence means ready for teacher review, not accepted;
+- suggestion generation never creates `AnswerRegion`, `GradeSuggestion`, or `FinalGrade` rows;
 - each group has exactly one primary segment;
-- segment `order_index` values are unique within a group;
+- segment `order_index` values are unique and contiguous on acceptance;
 - cross-page answers are represented as multiple ordered segments;
 - continuation risk is explicit.
 
-Initial schema contract lives in `apps/api/app/schemas.py`:
+Relevant schema contracts live in `apps/api/app/schemas.py`:
 
 - `DraftAnswerRegionSuggestionSegment`
 - `DraftAnswerRegionSuggestionGroup`
 - `AnswerRegionSuggestionGroupResponse`
 - `AnswerRegionSuggestionAcceptRequest`
 
-### Stage 5: Teacher acceptance
-
-Acceptance should eventually create exactly one logical `AnswerRegion` for the selected question and one or more ordered `AnswerRegionSegment` rows.
-
-Acceptance must require:
-
-- confirmed question ID;
-- ordered segment list;
-- teacher/founder full-answer confirmation if continuation risk is possible or ambiguous;
-- same-submission validation for all segment pages;
-- crop-bounds validation for every segment;
-- no automatic grading after acceptance.
-
-### Stage 6: Evidence packet gate
-
-The existing evidence packet remains the final readiness gate before grading. It should block provider/job creation when:
-
-- no accepted region exists;
-- no confirmed segment exists;
-- continuation risk is unresolved;
-- active rubric/model answer evidence is missing;
-- crop/context artifacts cannot be resolved.
-
 ## Continuation-risk states
 
 Use these values in the draft mapping contract:
 
 - `none`: no known continuation risk.
-- `possible_continuation`: answer likely may continue beyond the current segment/page.
+- `possible_continuation`: answer may continue beyond the current segment/page.
 - `continuation_included`: continuation was found and included in ordered segments.
-- `continuation_not_needed`: page-bottom/next-page context indicates no continuation is needed.
+- `continuation_not_needed`: context indicates no continuation is needed.
 - `ambiguous`: evidence is insufficient; teacher must decide.
 
-## Non-goals for this milestone
+Possible or ambiguous continuation must block grading readiness until resolved by teacher/founder confirmation or corrected segments.
 
-TA-MAP-001 does not build:
+## Evaluation-first next direction
 
-- real OCR;
-- real Codex/OpenAI mapping;
-- frontend crop review UI;
-- acceptance endpoint implementation;
-- migrations for persisted suggestion jobs;
-- batch grading;
-- export;
-- finalization;
-- fully automated grading.
+TA-MAP-003 should not be real Codex/AI mapping. It should build a mapping evaluation harness and synthetic benchmark first.
+
+Minimum benchmark cases:
+
+1. single-page simple answer;
+2. one answer spanning pages;
+3. near-bottom answer with possible but absent continuation;
+4. wrong/partial mapping;
+5. multi-question page confusion;
+6. skipped/blank answer;
+7. inconsistent question labels;
+8. page order anomaly affecting continuation.
+
+Minimum metrics:
+
+- question-label accuracy;
+- segment recall/precision;
+- bbox IoU where annotated;
+- continuation detection recall/F1;
+- false continuation rate;
+- wrong-question assignment rate;
+- packet readiness false-positive/false-negative rate;
+- teacher correction burden.
 
 ## Safety rules
 
@@ -143,12 +123,15 @@ TA-MAP-001 does not build:
 - Human acceptance is separate from suggestion generation.
 - Grading is separate from mapping acceptance.
 - Final grades require teacher action.
-- No raw image bytes, secrets, or provider internals should be returned in normal UI responses.
+- No raw image bytes, secrets, private files, or provider internals should be returned in normal UI responses.
+- No real-script auto-accept is allowed yet, even at high confidence.
 
-## Immediate build order after this contract
+## Revised build order
 
-1. Add a persisted or request-scoped draft suggestion-group endpoint for one submission.
-2. Add deterministic layout fixture tests for single-page and cross-page answers.
-3. Add an acceptance endpoint that creates one `AnswerRegion` plus ordered `AnswerRegionSegment` rows.
-4. Add UI for teacher review/add/remove/reorder/confirm.
-5. Reuse the evidence packet gate to block grading when mapping is incomplete.
+1. TA-MAP-003: Mapping evaluation harness and synthetic benchmark.
+2. TA-REF-001: Question/solution/rubric extraction evaluation harness.
+3. TA-SCRIPT-001: Script page sequencing and answer-boundary benchmark.
+4. TA-MAP-004: Real AI mapping provider behind evaluation gate.
+5. TA-UI-001: Teacher correction workflow for split/merge/reorder/confirm.
+6. TA-BATCH-001: Batch evidence packet preparation.
+7. TA-GRADE-001: Question-wise grading queue from confirmed packets.
