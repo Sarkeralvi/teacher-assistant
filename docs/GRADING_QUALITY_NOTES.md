@@ -1,3 +1,11 @@
+## TA-UI-001A packet readiness quality rule
+
+TA-UI-001A makes evidence packet status a grading-quality gate, not a UI label. A packet can be grading-ready only when it is explicitly complete and all other evidence checks pass. Partial packets, blank packets, unconfirmed packets, possible continuations, no-segment packets, invalid segment order, missing active rubric, and invalid crop/context are blockers.
+
+Blank is intentionally conservative: it records confirmed blank evidence but does not allow normal grading until a future explicit zero-mark blank policy exists. Continuation-not-needed clears only the continuation blocker; it cannot override partial/blank/unconfirmed status or rubric/segment blockers.
+
+Batch evidence preparation remains blocked until this status model is used in a separately approved TA-BATCH-001 plan. Corrections remain evidence-only and create no `GradeSuggestion` or `FinalGrade`.
+
 ## TA-UI-001 grading-quality implication
 
 TA-UI-001 reinforces the evidence-first rule: split/merge/reorder/confirm corrections prepare the answer packet only. A corrected packet may become ready for grading after evidence readiness recalculates, but the correction path itself must not grade, suggest marks, finalize marks, or auto-run a batch.

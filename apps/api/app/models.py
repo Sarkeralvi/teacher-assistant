@@ -261,6 +261,10 @@ class AnswerRegion(TimestampMixin, Base):
     height: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     full_answer_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evidence_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unconfirmed")
+    continuation_check_status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="not_checked"
+    )
 
     submission: Mapped[Submission] = relationship(back_populates="answer_regions")
     question: Mapped[Question] = relationship(back_populates="answer_regions")

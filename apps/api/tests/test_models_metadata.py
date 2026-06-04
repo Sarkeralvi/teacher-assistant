@@ -149,6 +149,8 @@ EXPECTED_COLUMNS = {
         "height",
         "image_path",
         "full_answer_confirmed",
+        "evidence_status",
+        "continuation_check_status",
         "created_at",
         "updated_at",
     },

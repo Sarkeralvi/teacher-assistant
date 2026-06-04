@@ -115,7 +115,18 @@ def segment_state(segment: AnswerRegionSegment) -> dict[str, Any]:
 
 
 def region_confirmation_state(region: AnswerRegion) -> dict[str, Any]:
-    return {"id": region.id, "full_answer_confirmed": region.full_answer_confirmed}
+    return {
+        "id": region.id,
+        "full_answer_confirmed": region.full_answer_confirmed,
+        "evidence_status": region.evidence_status,
+        "continuation_check_status": region.continuation_check_status,
+    }
+
+
+def reopen_answer_region_confirmation(region: AnswerRegion) -> None:
+    region.full_answer_confirmed = False
+    region.evidence_status = "unconfirmed"
+    region.continuation_check_status = "not_checked"
 
 
 def record_answer_region_correction(
@@ -606,6 +617,8 @@ def create_answer_region(page_id: int, payload: AnswerRegionCreate, db: DbSessio
         width=payload.width,
         height=payload.height,
         image_path=image_path,
+        evidence_status="complete",
+        continuation_check_status="not_checked",
     )
     db.add(region)
     db.flush()
@@ -650,6 +663,7 @@ def correct_answer_region_reorder_segments(
     for order_index, segment_id in enumerate(payload.segment_ids, start=1):
         segments_by_id[segment_id].order_index = order_index
     update_region_primary_from_segments(region)
+    reopen_answer_region_confirmation(region)
     after = {"segments": [segment_state(segment) for segment in region.segments]}
     return record_answer_region_correction(
         db, region, current_user, "reorder_segments", before, after
@@ -686,6 +700,7 @@ def correct_answer_region_segment_bbox(
     segment.width = payload.width
     segment.height = payload.height
     segment.image_path = image_path
+    reopen_answer_region_confirmation(region)
     if segment.is_primary:
         region.x = payload.x
         region.y = payload.y
@@ -746,6 +761,7 @@ def correct_answer_region_add_segment(
     db.flush()
     normalize_segment_orders(region)
     update_region_primary_from_segments(region)
+    reopen_answer_region_confirmation(region)
     after = {"segments": [segment_state(segment) for segment in region.segments]}
     return record_answer_region_correction(db, region, current_user, "add_segment", before, after)
 
@@ -776,6 +792,7 @@ def correct_answer_region_remove_segment(
     region.segments = [existing for existing in region.segments if existing.id != segment_id]
     normalize_segment_orders(region)
     update_region_primary_from_segments(region)
+    reopen_answer_region_confirmation(region)
     after = {"segments": [segment_state(existing) for existing in region.segments]}
     return record_answer_region_correction(
         db, region, current_user, "remove_segment", before, after
@@ -794,7 +811,21 @@ def correct_answer_region_full_answer_confirmation(
 ) -> AnswerRegionCorrectionResponse:
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
     before = region_confirmation_state(region)
+    if payload.continuation_not_needed:
+        region.continuation_check_status = "continuation_confirmed_not_needed"
+    elif payload.full_answer_confirmed:
+        region.continuation_check_status = (
+            "continuation_confirmed_included"
+            if len(region.segments) > 1
+            else "continuation_confirmed_not_needed"
+        )
     region.full_answer_confirmed = payload.full_answer_confirmed
+    if payload.packet_status is not None:
+        region.evidence_status = payload.packet_status
+    elif payload.full_answer_confirmed:
+        region.evidence_status = "complete"
+    elif not payload.continuation_not_needed:
+        region.evidence_status = "partial"
     for segment in region.segments:
         segment.confirmed = payload.full_answer_confirmed or segment.confirmed
     after = region_confirmation_state(region) | {
@@ -892,6 +923,10 @@ def accept_answer_region_mapping_suggestion(
         height=primary.height,
         image_path=primary_image_path,
         full_answer_confirmed=payload.full_answer_confirmed,
+        evidence_status="complete" if payload.full_answer_confirmed else "unconfirmed",
+        continuation_check_status="continuation_confirmed_included"
+        if payload.full_answer_confirmed and len(ordered_segments) > 1
+        else "not_checked",
     )
     db.add(region)
     db.flush()
@@ -1088,6 +1123,11 @@ def update_answer_region_full_answer_confirmation(
 ) -> AnswerRegion:
     region = get_answer_region_or_404(answer_region_id, db)
     region.full_answer_confirmed = payload.full_answer_confirmed
+    region.evidence_status = payload.packet_status or (
+        "complete" if payload.full_answer_confirmed else "unconfirmed"
+    )
+    if payload.continuation_not_needed:
+        region.continuation_check_status = "continuation_confirmed_not_needed"
     db.commit()
     db.refresh(region)
     return region

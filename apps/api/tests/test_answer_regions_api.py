@@ -753,6 +753,25 @@ def create_authenticated_uploaded_page(
         json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
     )
     assert question_response.status_code == 201
+    rubric_response = client.post(
+        f"/questions/{question_response.json()['id']}/rubrics",
+        json={
+            "version": 1,
+            "is_active": True,
+            "rubric_json": {
+                "total_marks": "5.00",
+                "criteria": [
+                    {
+                        "id": "answer",
+                        "name": "Answer",
+                        "description": "Synthetic correction rubric.",
+                        "max_marks": "5.00",
+                    }
+                ],
+            },
+        },
+    )
+    assert rubric_response.status_code == 201
     image_path = tmp_path / f"correction-{email}.png"
     make_png(image_path, size=(120, 100))
     with image_path.open("rb") as file_obj:
@@ -924,6 +943,174 @@ def test_full_answer_and_continuation_not_needed_confirmation_clear_blocker(
         "possible answer continuation not confirmed"
         not in packet_after["readiness_result"]["blockers"]
     )
+
+
+def test_evidence_packet_requires_explicit_complete_status_before_grading(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    region = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        json={
+            "draft_id": "unconfirmed-status",
+            "question_id": question["id"],
+            "full_answer_confirmed": False,
+            "segments": [
+                {
+                    "page_id": pages[0]["id"],
+                    "order_index": 1,
+                    "x": "20",
+                    "y": "30",
+                    "width": "200",
+                    "height": "180",
+                    "is_primary": True,
+                    "confidence": "0.70",
+                    "continuation_risk": "none",
+                }
+            ],
+        },
+    ).json()
+
+    packet_before = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert packet_before["student_answer_evidence"]["packet_status"] == "unconfirmed"
+    assert packet_before["readiness_result"]["ready_for_grading"] is False
+    assert (
+        "evidence packet is not confirmed complete"
+        in packet_before["readiness_result"]["blockers"]
+    )
+
+    db_region = db_session.get(AnswerRegion, region["id"])
+    assert db_region is not None
+    db_region.full_answer_confirmed = True
+    db_region.evidence_status = "complete"
+    for segment in db_region.segments:
+        segment.confirmed = True
+    db_session.commit()
+
+    packet_after = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert packet_after["student_answer_evidence"]["packet_status"] == "complete"
+    assert packet_after["readiness_result"]["ready_for_grading"] is True
+
+
+def test_continuation_not_needed_clears_only_continuation_blocker(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, page, region, headers = create_correction_region(client, tmp_path)
+    db_session.add(
+        SubmissionPage(
+            submission_id=page["submission_id"],
+            page_no=2,
+            image_path=page["image_path"],
+            quality_score="1.00",
+        )
+    )
+    db_session.commit()
+    segment_id = region["segments"][0]["id"]
+    assert client.patch(
+        f"/answer-regions/{region['id']}/corrections/segments/{segment_id}",
+        headers=headers,
+        json={"x": 10, "y": 82, "width": 30, "height": 16},
+    ).status_code == 200
+
+    confirm = client.patch(
+        f"/answer-regions/{region['id']}/corrections/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": False, "continuation_not_needed": True},
+    )
+
+    assert confirm.status_code == 200
+    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert (
+        packet["student_answer_evidence"]["continuation_check_status"]
+        == "continuation_confirmed_not_needed"
+    )
+    assert (
+        "possible answer continuation not confirmed"
+        not in packet["readiness_result"]["blockers"]
+    )
+    assert (
+        "evidence packet is not confirmed complete"
+        in packet["readiness_result"]["blockers"]
+    )
+    assert packet["readiness_result"]["ready_for_grading"] is False
+
+
+def test_correction_operations_reopen_confirmation_and_partial_blank_are_not_ready(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, page, region, headers = create_correction_region(client, tmp_path)
+    assert client.patch(
+        f"/answer-regions/{region['id']}/corrections/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True},
+    ).status_code == 200
+
+    add_response = client.post(
+        f"/answer-regions/{region['id']}/corrections/segments",
+        headers=headers,
+        json={"page_id": page["id"], "x": 12, "y": 40, "width": 30, "height": 20, "order_index": 2},
+    )
+    assert add_response.status_code == 200
+    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert packet["student_answer_evidence"]["packet_status"] == "unconfirmed"
+    assert (
+        "evidence packet is not confirmed complete"
+        in packet["readiness_result"]["blockers"]
+    )
+
+    partial = client.patch(
+        f"/answer-regions/{region['id']}/corrections/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": False, "packet_status": "partial"},
+    )
+    assert partial.status_code == 200
+    partial_packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert partial_packet["student_answer_evidence"]["packet_status"] == "partial"
+    assert (
+        "partial evidence packet requires teacher review"
+        in partial_packet["readiness_result"]["blockers"]
+    )
+
+    blank = client.patch(
+        f"/answer-regions/{region['id']}/corrections/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": False, "packet_status": "blank"},
+    )
+    assert blank.status_code == 200
+    blank_packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert blank_packet["student_answer_evidence"]["packet_status"] == "blank"
+    assert (
+        "confirmed blank packet is not enabled for grading"
+        in blank_packet["readiness_result"]["blockers"]
+    )
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+
+
+def test_invalid_segment_order_and_no_segment_block_readiness(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, _page, region, _headers = create_correction_region(client, tmp_path)
+    db_region = db_session.get(AnswerRegion, region["id"])
+    assert db_region is not None
+    db_region.full_answer_confirmed = True
+    db_region.evidence_status = "complete"
+    db_region.segments[0].order_index = 2
+    db_session.commit()
+
+    invalid_order_packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet"
+    ).json()
+    assert (
+        "answer segment order must be contiguous starting at 1"
+        in invalid_order_packet["readiness_result"]["blockers"]
+    )
+
+    db_session.delete(db_region.segments[0])
+    db_session.commit()
+    no_segment_packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    assert "missing confirmed answer segment" in no_segment_packet["readiness_result"]["blockers"]
+    assert no_segment_packet["student_answer_evidence"]["packet_status"] == "complete"
 
 
 def test_correction_path_does_not_create_grade_suggestion_or_final_grade(

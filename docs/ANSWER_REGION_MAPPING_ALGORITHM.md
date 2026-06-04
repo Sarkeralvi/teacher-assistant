@@ -1,3 +1,19 @@
+## TA-UI-001A packet status policy
+
+Accepted answer-region mappings are still mutable evidence packets until teacher/founder confirmation. TA-UI-001A adds explicit packet status semantics: `unconfirmed`, `complete`, `partial`, and `blank`, alongside separate continuation status.
+
+Mapping/correction policy now treats these as hard readiness facts:
+
+- complete packet: can proceed only when rubric/unit/crop/context/segment checks also pass;
+- partial packet: not ready for grading; teacher review required;
+- blank packet: confirmed blank evidence, not normal answer-ready grading evidence;
+- possible continuation: blocked until continuation is included or marked not needed;
+- continuation not needed: clears only continuation risk, not other blockers;
+- segment edit/add/remove/reorder: evidence changed, so full-answer confirmation reopens;
+- no segment or non-contiguous segment order: blocked.
+
+This does not implement real AI mapping, real OCR/vision, batch grading, or any GradeSuggestion/FinalGrade creation from correction paths.
+
 ## TA-UI-001 teacher correction policy
 
 Mapping suggestions and accepted regions are not final evidence until teacher/founder correction and confirmation can resolve known evaluation-gate failures. TA-UI-001 adds correction operations for accepted `AnswerRegion` packets: edit segment bbox, add/split a segment from user-provided boxes, remove non-final segments, reorder segments into contiguous packet order, confirm full answer, mark continuation not needed, and mark partial/needs review.

@@ -1,3 +1,18 @@
+## TA-UI-001A evidence packet state hardening
+
+TA-UI-001A makes packet status explicit before batch evidence preparation. The current source of truth is `AnswerRegion.evidence_status` with values `unconfirmed`, `complete`, `partial`, and `blank`, plus `AnswerRegion.continuation_check_status` for continuation risk/resolution. `ready_for_grading` is derived, not manually set.
+
+Readiness policy:
+
+- `complete` + active rubric + valid canonical grading unit + valid crop/context + contiguous confirmed segments may be ready.
+- `partial` is not ready for automatic grading and requires teacher review.
+- `blank` is a confirmed blank evidence packet, but it is not treated as a normal answer-ready packet; grading remains blocked until a future zero-mark blank policy is explicitly added.
+- unconfirmed packets, no segment, invalid segment order, missing active rubric, invalid crop/context, or unresolved continuation risk block readiness.
+- continuation-not-needed clears only the continuation blocker; it does not make a partial/blank/unconfirmed packet ready.
+- add/edit/remove/reorder segment operations reopen packet confirmation because the evidence changed.
+
+TA-BATCH-001 remains blocked until packet states are clear enough to plan batch evidence preparation. Real AI mapping and real OCR/vision remain blocked. Corrections prepare evidence only and do not create `GradeSuggestion` or `FinalGrade`.
+
 ## TA-UI-001 correction workflow update
 
 TA-UI-001 adds the controlled teacher/founder correction path required after evaluation gates expose blockers such as missed continuation, wrong mapping, ambiguous boundary, blank/cover-page confusion, duplicate/missing page, multiple questions on one page, and incomplete answer packets. Corrections are part of evidence preparation only: they edit, add/split, remove, reorder, and confirm `AnswerRegionSegment` evidence before grading readiness is recalculated. They do not create grades, do not invoke real AI mapping, and do not invoke real OCR/vision.

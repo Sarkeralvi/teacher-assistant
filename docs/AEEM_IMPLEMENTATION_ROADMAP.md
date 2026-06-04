@@ -1,3 +1,9 @@
+## TA-UI-001A completion note
+
+TA-UI-001A hardens the evidence packet readiness layer before batch evidence preparation. Evidence packets now distinguish `unconfirmed`, `complete`, `partial`, and `blank`; continuation status is tracked separately; and readiness is derived from explicit packet status plus active rubric, canonical grading unit, crop/context, confirmed segment count, contiguous segment order, and continuation blockers. Segment corrections reopen confirmation, while continuation-not-needed clears only the continuation blocker.
+
+This keeps TA-BATCH-001 as a planning candidate, not an automatically started task. Batch evidence preparation is safer to plan now because packet states are explicit, but it still requires a separate approved task. Real AI mapping/OCR remains blocked.
+
 ## TA-UI-001 completion note
 
 TA-UI-001 is implemented as the first rough correction workflow between evaluation gates and grading. Backend correction endpoints now require auth and teacher ownership, reject cross-assessment/cross-teacher segment edits, keep page/question/submission boundaries safe, maintain contiguous segment order, and write lightweight audit records. The assessment detail review queue exposes numeric controls for editing bbox values, adding/splitting a segment, removing a segment, moving segments up/down, confirming full answer, marking continuation not needed, and marking partial/needs review.

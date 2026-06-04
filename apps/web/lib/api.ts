@@ -252,6 +252,8 @@ export type AnswerRegion = {
   height: string | number;
   image_path: string;
   full_answer_confirmed: boolean;
+  evidence_status: string;
+  continuation_check_status: string;
   segments: AnswerRegionSegment[];
   created_at: string;
   updated_at: string;
@@ -452,6 +454,7 @@ export type GradingEvidencePacket = {
     segment_count: number;
     pages_covered: number[];
     segments: Array<Record<string, unknown>>;
+    packet_status: "unconfirmed" | "complete" | "partial" | "blank";
     continuation_check_status: string;
     next_page_context_available: boolean;
     teacher_founder_confirmed_full_answer: boolean;
@@ -945,7 +948,11 @@ export function reorderAnswerRegionSegments(answerRegionId: number, segmentIds: 
 
 export function confirmAnswerRegionFullAnswer(
   answerRegionId: number,
-  payload: { full_answer_confirmed: boolean; continuation_not_needed?: boolean },
+  payload: {
+    full_answer_confirmed: boolean;
+    continuation_not_needed?: boolean;
+    packet_status?: "unconfirmed" | "complete" | "partial" | "blank";
+  },
 ) {
   return apiRequest<AnswerRegionCorrectionResponse>(
     `/answer-regions/${answerRegionId}/corrections/full-answer-confirmation`,

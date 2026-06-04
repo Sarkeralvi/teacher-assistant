@@ -1329,11 +1329,24 @@ Tests required: focused answer-region correction tests; frontend static workflow
 Risks: This is rough numeric UI, not polished drag/drop; blank/partial packet semantics remain lightweight and can be refined after teacher trials.
 Status: Done
 
+TASK-ID: TA-UI-001A
+Title: Harden evidence packet status and correction semantics
+Owner: Hermes
+Priority: P0
+Dependencies: TA-UI-001
+Files affected: apps/api/app/models.py, apps/api/alembic/versions/0010_evidence_packet_status.py, apps/api/app/api/routes/answer_regions.py, apps/api/app/services/grading_service.py, apps/api/app/schemas.py, apps/api/tests/test_answer_regions_api.py, apps/api/tests/test_migrations.py, apps/api/tests/test_models_metadata.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, docs/**
+Goal: Make evidence packet status explicit before batch evidence preparation.
+Implementation notes: Adds explicit `evidence_status` (`unconfirmed`, `complete`, `partial`, `blank`) and `continuation_check_status` fields on AnswerRegion, derives packet readiness from those fields plus existing rubric/unit/segment/context checks, and reopens confirmation when segment corrections alter packet evidence. Partial and blank packets remain not ready for grading; continuation-not-needed clears only the continuation blocker. Correction paths remain evidence-only and create no GradeSuggestion or FinalGrade.
+Acceptance criteria: Complete packets are ready only when all other evidence is valid; possible continuation blocks until included or marked not needed; add/edit/remove/reorder transitions update readiness; partial/blank/no-segment/invalid-order/missing-rubric states block readiness; audit rows are preserved for correction operations; frontend labels show Unconfirmed/Complete/Partial/Blank/Ready/Blocked.
+Tests required: focused backend correction/evidence tests; frontend static workflow test; make test; make lint; frontend build; make e2e; git diff --check; make down.
+Risks: This remains a lightweight mutable packet state, not a sealed evidence store; batch evidence preparation should still be planned separately.
+Status: Done
+
 TASK-ID: TA-BATCH-001
 Title: Batch evidence packet preparation
 Owner: Hermes
 Priority: P0
-Dependencies: TA-REF-001, TA-SCRIPT-001, TA-MAP-003, TA-UI-001
+Dependencies: TA-REF-001, TA-SCRIPT-001, TA-MAP-003, TA-UI-001, TA-UI-001A
 Files affected: scoped backend/worker/docs/tests after approval
 Goal: Prepare evidence packets across a batch without grading side effects.
 Implementation notes: Process scripts independently, quarantine blocked scripts, never create GradeSuggestion or FinalGrade during evidence preparation, and require final teacher/founder readiness sign-off.

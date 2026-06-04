@@ -1017,6 +1017,17 @@ function formatReviewQuestion(question: ReviewQueueItem["question"]): string {
   return `${question.question_no} · out of ${question.total_marks}`;
 }
 
+function formatEvidencePacketStatus(evidencePacket: GradingEvidencePacket | null): string {
+  if (!evidencePacket) return "Loading";
+  const status = evidencePacket.student_answer_evidence.packet_status;
+  if (evidencePacket.readiness_result.ready_for_grading) return "Ready for grading";
+  if (status === "complete") return "Complete";
+  if (status === "partial") return "Partial / needs review";
+  if (status === "blank") return "Blank";
+  if (evidencePacket.readiness_result.blockers.length) return "Blocked";
+  return "Unconfirmed";
+}
+
 function ReviewQueueCard({
   item,
   draft,
@@ -1058,7 +1069,7 @@ function ReviewQueueCard({
 
       <div className="rounded border border-slate-800 bg-slate-950/40 p-3 text-sm">
         <p className={readiness?.ready_for_grading ? "font-semibold text-emerald-300" : "font-semibold text-amber-200"}>
-          Evidence packet: {readiness ? (readiness.ready_for_grading ? "ready for grading" : "not ready for grading") : "loading"}
+          Evidence packet: {formatEvidencePacketStatus(evidencePacket)}
         </p>
         {evidencePacket ? (
           <div className="text-xs text-slate-400">
@@ -1066,7 +1077,7 @@ function ReviewQueueCard({
               Grading unit {evidencePacket.canonical_grading_unit.label ?? "unknown"} · rubric present: {String(evidencePacket.rubric_evidence.criteria_max_marks.length > 0)} · padded context: {String(evidencePacket.student_answer_evidence.padded_grading_context_generated)}
             </p>
             <p>
-              Segment list: segment_count {evidencePacket.student_answer_evidence.segment_count} · pages_covered {evidencePacket.student_answer_evidence.pages_covered.join(", ") || "unknown"} · continuation_check_status {evidencePacket.student_answer_evidence.continuation_check_status}
+              Segment list: segment_count {evidencePacket.student_answer_evidence.segment_count} · pages_covered {evidencePacket.student_answer_evidence.pages_covered.join(", ") || "unknown"} · packet_status {evidencePacket.student_answer_evidence.packet_status} · continuation_check_status {evidencePacket.student_answer_evidence.continuation_check_status}
             </p>
             {evidencePacket.student_answer_evidence.continuation_check_status === "possible_continuation" ? (
               <p className="mt-1 text-amber-200">Possible continuation on next page. Confirm full answer before grading.</p>
@@ -1074,6 +1085,7 @@ function ReviewQueueCard({
             <p>
               This contains the complete answer for {evidencePacket.canonical_grading_unit.label ?? "this grading unit"}: {String(evidencePacket.student_answer_evidence.teacher_founder_confirmed_full_answer)}
             </p>
+            <p className="text-amber-200">Partial, blank, blocked, or unconfirmed continuation states are not ready for grading.</p>
           </div>
         ) : null}
         {readiness?.blockers.length ? (
@@ -1173,9 +1185,10 @@ function ReviewQueueCard({
           <button className={buttonClass} type="submit">Add segment / split answer</button>
         </form>
         <div className="flex flex-wrap gap-2">
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: true }))}>Confirm full answer</button>
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: true, continuation_not_needed: true }))}>Mark continuation not needed</button>
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false }))}>Mark partial / needs review</button>
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm full answer</button>
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Mark partial / needs review</button>
+          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
         </div>
         <p className="text-xs text-slate-400">Merge support: move/add segments into this AnswerRegion, then reorder into contiguous packet order.</p>
       </div>

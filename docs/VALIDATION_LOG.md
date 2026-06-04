@@ -1,3 +1,40 @@
+# TA-UI-001A — Harden evidence packet status and correction semantics
+
+- Recorded at: 2026-06-04
+- Baseline commit: `2a2aa87a5b87288aca89f3d6772c552331b40c80`
+- Workflow type: manual controlled evidence-state hardening
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI mapping implementation: not started
+- Real OCR/vision implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation by correction path: 0
+- FinalGrade creation by correction path: 0
+- Private files/artifacts used: no
+
+## Change made
+
+Added explicit `AnswerRegion.evidence_status` and `AnswerRegion.continuation_check_status` fields and used them in evidence packet readiness. Segment edit/add/remove/reorder operations reopen confirmation. Full-answer confirmation marks packets complete. Partial and blank packets block grading readiness. Continuation-not-needed clears only continuation risk. The review UI now shows Unconfirmed, Complete, Partial / needs review, Blank, Ready for grading, and Blocked labels plus warning text that partial/blank/blocked/continuation states affect readiness.
+
+## Safety result
+
+TA-UI-001A clarifies packet status before batch evidence preparation. Real AI mapping/OCR remains blocked. TA-BATCH-001 was not started. Corrections prepare evidence only and do not create `GradeSuggestion` or `FinalGrade`.
+
+## Checks run
+
+- `git status --short` — checked at start; clean at baseline.
+- `cd apps/api && python -m pytest tests/test_answer_regions_api.py -q` — 27 passed.
+- `node tests/workflow-ui.test.mjs` — frontend workflow static checks passed.
+- `make test` — 240 passed.
+- `make lint` — backend ruff and web TypeScript checks passed.
+- `cd apps/web && npm run build` — compiled and built successfully; existing Next/ESLint flat-config warning printed but command exited 0.
+- `git diff --check` — passed.
+- `make up`; `docker compose exec -T backend alembic upgrade head`; `make health` — services started and health passed after startup completed.
+- `make e2e` — 2 passed after services were running. The first e2e attempt failed with `ERR_CONNECTION_REFUSED` because the frontend service was not running; no product assertion failed in that attempt.
+
 # TA-UI-001 — Teacher correction workflow for split/merge/reorder/confirm
 
 - Recorded at: 2026-06-04

@@ -1,3 +1,9 @@
+## TA-UI-001A supervision record
+
+TA-UI-001A was executed in manual controlled mode to harden evidence packet state before batch evidence preparation. Backend state now distinguishes unconfirmed, complete, partial, blank, continuation-not-needed, continuation-included/confirmed, blocked, and ready-for-grading through explicit packet fields and derived readiness gates. Correction operations update readiness consistently and preserve lightweight `AuditLog` records with correction type, before/after payload, teacher id, and timestamp.
+
+No autonomous loop was enabled. Real Codex was not run. Real AI mapping and real OCR/vision remain blocked. TA-BATCH-001 and TA-MAP-004 were not started. No batch grading or teacher observation was started. Correction paths do not create `GradeSuggestion` or `FinalGrade`.
+
 ## TA-UI-001 supervision record
 
 TA-UI-001 added a manual-controlled teacher correction workflow for accepted answer-region evidence. The workflow is explicitly evidence preparation, not grading. It supports segment bbox edit, add/split, removal with invariant checks, reorder, full-answer confirmation, continuation-not-needed confirmation, and partial/needs-review marking. Backend correction APIs require auth and teacher ownership; cross-assessment/cross-teacher corrections are rejected. Audit metadata is recorded through `AuditLog` with correction type, before/after payload, teacher id, and timestamp.

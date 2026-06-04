@@ -165,7 +165,12 @@ class GradingService:
             next_page_context_available = any(
                 candidate.page_no == page.page_no + 1 for candidate in submission.pages
             ) and (page.page_no + 1 not in covered_page_numbers)
-        if region.full_answer_confirmed:
+        if region.continuation_check_status in {
+            "continuation_confirmed_included",
+            "continuation_confirmed_not_needed",
+        }:
+            continuation_check_status = region.continuation_check_status
+        elif region.full_answer_confirmed:
             continuation_check_status = (
                 "continuation_confirmed_included"
                 if len(confirmed_segments) > 1
@@ -176,9 +181,23 @@ class GradingService:
         else:
             continuation_check_status = "checked_no_continuation"
 
+        packet_status = region.evidence_status
+        if region.full_answer_confirmed and packet_status == "unconfirmed":
+            packet_status = "complete"
         crop_path = region.image_path
         if not confirmed_segments:
             blockers.append("missing confirmed answer segment")
+        ordered_indexes = [segment.order_index for segment in segments]
+        if ordered_indexes != list(range(1, len(segments) + 1)):
+            blockers.append("answer segment order must be contiguous starting at 1")
+        if packet_status == "unconfirmed":
+            blockers.append("evidence packet is not confirmed complete")
+        elif packet_status == "partial":
+            blockers.append("partial evidence packet requires teacher review")
+        elif packet_status == "blank":
+            blockers.append("confirmed blank packet is not enabled for grading")
+        elif packet_status != "complete":
+            blockers.append("unknown evidence packet status")
         for segment in confirmed_segments:
             try:
                 if not self.storage.resolve_relative(segment.image_path).is_file():
@@ -237,6 +256,7 @@ class GradingService:
                 "segment_count": len(confirmed_segments),
                 "pages_covered": pages_covered,
                 "segments": segment_payloads,
+                "packet_status": packet_status,
                 "continuation_check_status": continuation_check_status,
                 "next_page_context_available": next_page_context_available,
                 "teacher_founder_confirmed_full_answer": region.full_answer_confirmed,

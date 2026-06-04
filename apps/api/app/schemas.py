@@ -436,6 +436,7 @@ class AnswerRegionSegmentCreate(BaseModel):
 class AnswerRegionFullAnswerConfirmation(BaseModel):
     full_answer_confirmed: bool
     continuation_not_needed: bool = False
+    packet_status: Literal["unconfirmed", "complete", "partial", "blank"] | None = None
 
 
 class AnswerRegionCorrectionSegmentBox(BaseModel):
@@ -489,6 +490,8 @@ class AnswerRegionRead(ORMBase):
     height: Decimal
     image_path: str
     full_answer_confirmed: bool = False
+    evidence_status: str = "unconfirmed"
+    continuation_check_status: str = "not_checked"
     segments: list[AnswerRegionSegmentRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -637,6 +640,7 @@ class EvidencePacketStudentAnswerEvidence(BaseModel):
     segment_count: int = 0
     pages_covered: list[int] = Field(default_factory=list)
     segments: list[dict[str, Any]] = Field(default_factory=list)
+    packet_status: Literal["unconfirmed", "complete", "partial", "blank"] = "unconfirmed"
     continuation_check_status: Literal[
         "not_checked",
         "checked_no_continuation",
