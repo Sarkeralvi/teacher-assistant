@@ -1223,3 +1223,16 @@ Acceptance criteria: Draft suggestion groups can represent one logical answer wi
 Tests required: `python -m pytest tests/test_answer_region_mapping_contract.py -q`; `git diff --check`; `make lint`; focused DB-backed tests only if Postgres is safely available.
 Risks: This task defines the contract and minimal schemas only. Persistence, acceptance endpoint, deterministic CV/layout mapper, and teacher-facing segment review UI remain future work.
 Status: Done
+
+TASK-ID: TA-MAP-002
+Title: Deterministic multi-segment answer-region mapping provider prototype
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MAP-001
+Files affected: BACKLOG.md, apps/api/app/api/routes/answer_regions.py, apps/api/app/schemas.py, apps/api/tests/test_answer_regions_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, apps/web/tests/workflow-ui.test.mjs, docs/ANSWER_REGION_MAPPING_ALGORITHM.md, docs/GRADING_QUALITY_NOTES.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/VALIDATION_LOG.md
+Goal: Prove the app can generate deterministic draft answer-mapping suggestion groups, accept them only after teacher/founder action, and create real AnswerRegion/AnswerRegionSegment rows without creating GradeSuggestion or FinalGrade.
+Implementation notes: Added submission-scoped mock mapping suggestions, ordered segment groups, continuation-risk output, explicit acceptance endpoint, rough UI controls, and evidence packet integration through existing multi-segment readiness fields. Real AI mapping remains unimplemented. Manual controlled mode only; no autonomous loop, real Codex, batch grading, teacher observation, auto-acceptance, or auto-finalization.
+Acceptance criteria: Mock single-segment, mock multi-segment continuation, possible-continuation warning, acceptance, cross-assessment rejection, invalid segment order rejection, no GradeSuggestion/FinalGrade creation, frontend static markers, and evidence packet multi-segment visibility are covered by tests.
+Tests required: `git status --short`; focused mapping tests; focused evidence packet/grading tests; frontend static workflow test; `make e2e`; `make test`; `make lint`; `cd apps/web && npm run build`; `git diff --check`; `make down`; final git status.
+Risks: Prototype uses deterministic boxes and synthetic test hints only; real OCR/AI layout analysis, richer visual overlay review, and production persistence of draft suggestions remain future work.
+Status: Done

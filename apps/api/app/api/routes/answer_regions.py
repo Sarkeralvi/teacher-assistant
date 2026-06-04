@@ -18,12 +18,17 @@ from app.models import AnswerRegion, AnswerRegionSegment, Question, Submission, 
 from app.schemas import (
     AnswerRegionCreate,
     AnswerRegionFullAnswerConfirmation,
+    AnswerRegionMappingSuggestionRequest,
     AnswerRegionRead,
     AnswerRegionSegmentCreate,
     AnswerRegionSegmentRead,
+    AnswerRegionSuggestionAcceptRequest,
+    AnswerRegionSuggestionGroupResponse,
     AnswerRegionSuggestionRequest,
     AnswerRegionSuggestionResponse,
     DraftAnswerRegionSuggestion,
+    DraftAnswerRegionSuggestionGroup,
+    DraftAnswerRegionSuggestionSegment,
 )
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.storage import LocalStorage
@@ -198,6 +203,159 @@ def build_mock_answer_region_suggestions(
         )
 
 
+def get_questions_for_submission_mapping(
+    submission: Submission,
+    db: Session,
+    question_ids: list[int] | None = None,
+    question_nos: list[str] | None = None,
+) -> list[Question]:
+    page = submission.pages[0] if submission.pages else None
+    if page is None:
+        return []
+    return get_questions_for_suggestion(page, db, question_ids, question_nos)
+
+
+def get_pages_for_submission_mapping(
+    submission: Submission,
+    page_ids: list[int] | None = None,
+) -> list[SubmissionPage]:
+    pages = sorted(submission.pages, key=lambda item: item.page_no)
+    if not page_ids:
+        return pages
+    by_id = {page.id: page for page in pages}
+    selected: list[SubmissionPage] = []
+    seen_page_ids: set[int] = set()
+    for page_id in page_ids:
+        page = by_id.get(page_id)
+        if page is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Mapping page must belong to the same submission",
+            )
+        if page.id not in seen_page_ids:
+            selected.append(page)
+            seen_page_ids.add(page.id)
+    return selected
+
+
+def validate_page_box(
+    page: SubmissionPage, x: Decimal, y: Decimal, width: Decimal, height: Decimal
+) -> None:
+    path = LocalStorage().resolve_relative(page.image_path)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission page image not found",
+        )
+    with Image.open(path) as image:
+        if x + width > image.width or y + height > image.height:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Mapping segment box must fit inside its submission page",
+            )
+
+
+def build_mock_mapping_suggestion_groups(
+    submission: Submission,
+    questions: Sequence[Question],
+    pages: Sequence[SubmissionPage],
+    deterministic_case: str,
+) -> AnswerRegionSuggestionGroupResponse:
+    if not questions or not pages:
+        return AnswerRegionSuggestionGroupResponse(
+            submission_id=submission.id,
+            provider="mock",
+            source="mock",
+            needs_review=True,
+            message="No confirmed questions or pages available for draft mapping suggestions.",
+            suggestion_groups=[],
+        )
+    question = questions[0]
+    first_page = pages[0]
+    second_page = pages[1] if len(pages) > 1 else None
+    validate_page_box(first_page, Decimal("20"), Decimal("30"), Decimal("200"), Decimal("180"))
+
+    warnings = [
+        "Draft mapping suggestion only.",
+        "Teacher/founder must accept and confirm full answer evidence before grading.",
+    ]
+    segments = [
+        DraftAnswerRegionSuggestionSegment(
+            page_id=first_page.id,
+            order_index=1,
+            x=Decimal("20"),
+            y=Decimal("30"),
+            width=Decimal("200"),
+            height=Decimal("180"),
+            is_primary=True,
+            source="suggestion",
+            confidence=Decimal("0.70"),
+            continuation_risk="none",
+            warnings=[],
+            notes="Mock deterministic first answer segment.",
+        )
+    ]
+    continuation_risk = "none"
+    reason = "Mock deterministic single-segment mapping suggestion."
+    group_warnings = list(warnings)
+    if deterministic_case == "multi_segment_continuation" and second_page is not None:
+        validate_page_box(second_page, Decimal("20"), Decimal("30"), Decimal("200"), Decimal("180"))
+        segments.append(
+            DraftAnswerRegionSuggestionSegment(
+                page_id=second_page.id,
+                order_index=2,
+                x=Decimal("20"),
+                y=Decimal("30"),
+                width=Decimal("200"),
+                height=Decimal("180"),
+                is_primary=False,
+                source="suggestion",
+                confidence=Decimal("0.70"),
+                continuation_risk="continuation_included",
+                warnings=[],
+                notes="Mock deterministic continuation segment on the next page.",
+            )
+        )
+        continuation_risk = "continuation_included"
+        reason = "Mock deterministic multi-segment mapping includes next-page continuation."
+    elif deterministic_case == "possible_continuation":
+        warning = (
+            "Possible continuation on the next page; teacher/founder must confirm full "
+            "answer before grading."
+        )
+        group_warnings.append(warning)
+        segments[0].continuation_risk = "possible_continuation"
+        segments[0].warnings.append(warning)
+        continuation_risk = "possible_continuation"
+        reason = "Mock deterministic bottom-near segment with possible continuation."
+
+    return AnswerRegionSuggestionGroupResponse(
+        submission_id=submission.id,
+        provider="mock",
+        source="mock",
+        needs_review=True,
+        message="Mock deterministic mapping suggestion groups generated.",
+        provider_warnings=[],
+        suggestion_groups=[
+            DraftAnswerRegionSuggestionGroup(
+                draft_id=f"submission-{submission.id}-question-{question.id}-{deterministic_case}",
+                suggested_question_id=question.id,
+                suggested_question_no=question.question_no,
+                provider="mock",
+                source="mock",
+                confidence=Decimal("0.70"),
+                continuation_risk=continuation_risk,
+                segments=segments,
+                warnings=group_warnings,
+                reason=reason,
+                needs_review=True,
+                needs_teacher_confirmation=True,
+                requires_full_answer_confirmation=True,
+            )
+        ],
+    )
+
+
 def normalize_answer_region_suggestion_provider(
     provider: str | None, default_provider: str
 ) -> str:
@@ -353,6 +511,127 @@ def create_answer_region(
             is_primary=True,
         )
     )
+    db.commit()
+    db.refresh(region)
+    return region
+
+
+@router.post(
+    "/submissions/{submission_id}/answer-region-mapping-suggestions",
+    response_model=AnswerRegionSuggestionGroupResponse,
+)
+def suggest_answer_region_mapping_groups(
+    submission_id: int,
+    db: DbSession,
+    payload: AnswerRegionMappingSuggestionRequest | None = None,
+) -> AnswerRegionSuggestionGroupResponse:
+    submission = get_submission_or_404(submission_id, db)
+    request = payload or AnswerRegionMappingSuggestionRequest()
+    provider_name = (request.provider or "mock").strip().lower()
+    if provider_name != "mock":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only the mock deterministic mapping provider is implemented for TA-MAP-002",
+        )
+    questions = get_questions_for_submission_mapping(
+        submission, db, request.question_ids, request.question_nos
+    )
+    pages = get_pages_for_submission_mapping(submission, request.page_ids)
+    return build_mock_mapping_suggestion_groups(
+        submission, questions, pages, request.deterministic_case
+    )
+
+
+@router.post(
+    "/submissions/{submission_id}/answer-region-mapping-suggestions/accept",
+    response_model=AnswerRegionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def accept_answer_region_mapping_suggestion(
+    submission_id: int,
+    payload: AnswerRegionSuggestionAcceptRequest,
+    db: DbSession,
+) -> AnswerRegion:
+    submission = get_submission_or_404(submission_id, db)
+    question = get_question_or_404(payload.question_id, db)
+    if question.assessment_id != submission.assessment_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Question assessment must match submission assessment",
+        )
+    pages_by_id = {page.id: page for page in submission.pages}
+    ordered_segments = sorted(payload.segments, key=lambda segment: segment.order_index)
+    expected_order = list(range(1, len(ordered_segments) + 1))
+    if [segment.order_index for segment in ordered_segments] != expected_order:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Accepted mapping segment order must be contiguous starting at 1",
+        )
+    primary_count = sum(1 for segment in ordered_segments if segment.is_primary)
+    if primary_count != 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Accepted mapping suggestion must have exactly one primary segment",
+        )
+    for segment in ordered_segments:
+        page = pages_by_id.get(segment.page_id)
+        if page is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Mapping page must belong to the same submission",
+            )
+        validate_page_box(page, segment.x, segment.y, segment.width, segment.height)
+
+    primary = next(segment for segment in ordered_segments if segment.is_primary)
+    primary_page = pages_by_id[primary.page_id]
+    primary_image_path = crop_answer_region_image(
+        storage=LocalStorage(),
+        source_image_path=primary_page.image_path,
+        submission_id=submission.id,
+        x=primary.x,
+        y=primary.y,
+        width=primary.width,
+        height=primary.height,
+    )
+    region = AnswerRegion(
+        submission_id=submission.id,
+        question_id=question.id,
+        page_id=primary_page.id,
+        x=primary.x,
+        y=primary.y,
+        width=primary.width,
+        height=primary.height,
+        image_path=primary_image_path,
+        full_answer_confirmed=payload.full_answer_confirmed,
+    )
+    db.add(region)
+    db.flush()
+    for segment in ordered_segments:
+        page = pages_by_id[segment.page_id]
+        segment_image_path = primary_image_path if segment.is_primary else crop_answer_region_image(
+            storage=LocalStorage(),
+            source_image_path=page.image_path,
+            submission_id=submission.id,
+            x=segment.x,
+            y=segment.y,
+            width=segment.width,
+            height=segment.height,
+        )
+        db.add(
+            AnswerRegionSegment(
+                answer_region_id=region.id,
+                submission_page_id=page.id,
+                order_index=segment.order_index,
+                x=segment.x,
+                y=segment.y,
+                width=segment.width,
+                height=segment.height,
+                image_path=segment_image_path,
+                source="suggestion",
+                confirmed=payload.full_answer_confirmed,
+                is_primary=segment.is_primary,
+            )
+        )
     db.commit()
     db.refresh(region)
     return region

@@ -1,5 +1,29 @@
 # Validation Log
 
+## TA-MAP-002 — Deterministic multi-segment answer-region mapping provider prototype
+
+- Recorded at: 2026-06-04
+- Baseline commit: `746a59bcb5c650f92b5ed481611f32057d260911`
+- Workflow type: manual controlled deterministic/mock mapping provider prototype
+- Real Codex calls: 0
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation by mapping suggestion/acceptance path: 0, covered by focused API tests
+- FinalGrade creation by mapping suggestion/acceptance path: 0, covered by focused API tests
+
+### Change made
+
+Implemented the first deterministic/mock provider path for TA-MAP-001 draft multi-segment mapping suggestions. The backend now exposes a submission-scoped suggestion endpoint that returns draft suggestion groups with ordered page-local segments, confidence, warnings, continuation risk, review flags, and teacher/founder confirmation requirements. The acceptance endpoint creates real `AnswerRegion` plus ordered `AnswerRegionSegment` rows only after explicit acceptance.
+
+### Safety result
+
+Suggestions are draft-only and are not persisted unless accepted. Acceptance creates answer-region evidence only; it does not create `GradingJob`, `GradeSuggestion`, or `FinalGrade`, does not invoke Codex/LLMs, does not run batch grading, and does not auto-finalize. Possible continuation remains a warning/block through the existing evidence packet gate until full-answer confirmation is recorded.
+
+### Verification results
+
+Verification for the final commit is recorded in the commit task report. Focused TA-MAP-002 tests cover single-segment suggestions, multi-segment continuation, possible continuation warnings, acceptance, invalid/cross-assessment rejection, no grading/finalization side effects, and evidence-packet visibility.
+
 ## TA-W2-027 — Prepare controlled teacher workflow observation
 
 - Recorded at: 2026-06-03

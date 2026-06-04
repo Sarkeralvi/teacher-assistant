@@ -1,6 +1,6 @@
 # Answer-Region Mapping Algorithm
 
-Status: design contract for TA-MAP-001. This document defines the next mapping shape; it does not enable real AI providers, batch grading, export, or finalization.
+Status: TA-MAP-002 deterministic/mock provider prototype implemented. Real AI/OCR mapping is still not implemented; batch grading, export, and finalization remain outside this subsystem.
 
 ## Current limitation
 
@@ -8,12 +8,13 @@ The current system has a useful safety foundation but not a business-grade mappi
 
 Current limits:
 
-- manual answer-region creation is rectangular and page-local;
-- mock suggestions split a page into deterministic vertical bands;
-- Codex-backed suggestions are gated, draft-only, and currently one rectangle per question;
-- `AnswerRegionSegment` supports multi-segment evidence after acceptance, but draft suggestions do not yet express multi-page/multi-segment answers;
+- manual answer-region creation remains rectangular and page-local;
+- TA-MAP-002 mock mapping suggestions are deterministic and synthetic-test-oriented, not real layout/OCR/AI understanding;
+- the submission-scoped mock provider can return single-segment, multi-segment continuation-included, and possible-continuation draft groups;
+- Codex-backed one-rectangle page suggestions remain gated separately and are not the TA-MAP-002 real mapping provider;
+- accepted mapping suggestions create `AnswerRegion` + ordered `AnswerRegionSegment` rows only after explicit teacher/founder action;
 - the page-bottom continuation check is a safety blocker, not true answer-span detection;
-- the frontend review workflow for add/remove/reorder/full-answer confirmation is not yet a polished teacher-grade mapping experience.
+- the frontend review workflow is rough-functional, not yet a polished teacher-grade visual mapping experience.
 
 ## Design principle
 

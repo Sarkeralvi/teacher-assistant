@@ -1,5 +1,13 @@
 # Grading Quality Notes
 
+## TA-MAP-002 — Deterministic mapping before grading
+
+Recorded at: 2026-06-04
+
+The deterministic/mock mapping provider prototype reinforces the current quality rule: grading readiness depends on accepted, complete answer evidence. Draft mapping suggestions are not quality evidence until a teacher/founder accepts the ordered segments and, when needed, confirms the full answer boundary.
+
+TA-MAP-002 adds a safe pre-real-AI path for proving the product mechanics: single-segment suggestions, multi-segment continuation-included suggestions, possible-continuation warnings, acceptance into real answer-region rows, and evidence-packet visibility. It does not prove real AI mapping accuracy and does not run Codex or create grading/final-grade records.
+
 ## TA-W2-027 — Controlled teacher observation readiness framing
 
 Recorded at: 2026-06-03

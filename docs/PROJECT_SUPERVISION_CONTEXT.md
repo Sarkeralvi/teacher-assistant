@@ -1,5 +1,23 @@
 # Project Supervision Context
 
+## TA-MAP-002 current state — deterministic mapping prototype implemented
+
+TA-MAP-002 moves the mapping subsystem from contract-only to a deterministic/mock provider prototype. The system can now propose draft multi-segment answer-region mapping groups and create real answer-region evidence only after explicit teacher/founder acceptance.
+
+Current baseline after TA-MAP-002:
+
+- HEAD after TA-MAP-002: commit message `Add deterministic answer mapping provider` (see git log for exact hash).
+- TA-MAP-001R contract/design is complete at `746a59bcb5c650f92b5ed481611f32057d260911`.
+- Deterministic/mock mapping suggestions are implemented for one submission/page set at a time.
+- Suggestion groups include ordered segments, page-local boxes, confidence, warnings, continuation risk, needs-review flags, and teacher/founder confirmation requirements.
+- Acceptance creates real `AnswerRegion` plus ordered `AnswerRegionSegment` rows only after explicit action.
+- Evidence packets see accepted multi-segment regions through `segment_count`, `pages_covered`, `continuation_check_status`, and `teacher_founder_confirmed_full_answer`.
+- Real AI mapping is not implemented yet.
+- No real Codex, batch grading, autonomous loop, teacher observation, `GradeSuggestion`, or `FinalGrade` is created by the mapping suggestion/acceptance path.
+
+Allowed next step after review: TA-MAP-003 real-provider planning only, if explicitly approved. Do not start real AI mapping, autonomous grading, batch grading, or teacher observation automatically.
+
+
 ## TA-W2-027 current state — controlled teacher workflow observation may be prepared
 
 TA-W2-026 plus the controlled `1(b)(i)` multi-segment retest changed the project state: a safe in-person teacher workflow observation can be prepared, but only as a manual controlled observation.

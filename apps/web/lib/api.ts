@@ -257,6 +257,13 @@ export type AnswerRegion = {
   updated_at: string;
 };
 
+export type AnswerRegionContinuationRisk =
+  | "none"
+  | "possible_continuation"
+  | "continuation_included"
+  | "continuation_not_needed"
+  | "ambiguous";
+
 export type DraftAnswerRegionSuggestion = {
   draft_id: string;
   page_id: number;
@@ -276,10 +283,49 @@ export type DraftAnswerRegionSuggestion = {
   needs_teacher_confirmation: boolean;
 };
 
+export type DraftAnswerRegionSuggestionSegment = {
+  page_id: number;
+  order_index: number;
+  x: string | number;
+  y: string | number;
+  width: string | number;
+  height: string | number;
+  is_primary: boolean;
+  source: "manual" | "suggestion" | "imported";
+  confidence: string | number;
+  continuation_risk: AnswerRegionContinuationRisk;
+  warnings: string[];
+  notes?: string | null;
+};
+
+export type DraftAnswerRegionSuggestionGroup = {
+  draft_id: string;
+  suggested_question_id: number;
+  suggested_question_no: string;
+  provider: "mock" | "deterministic_layout" | "codex_cli_answer_region_suggester" | "codex_cli";
+  source: string;
+  confidence: string | number;
+  continuation_risk: AnswerRegionContinuationRisk;
+  segments: DraftAnswerRegionSuggestionSegment[];
+  warnings: string[];
+  reason?: string | null;
+  needs_review: boolean;
+  needs_teacher_confirmation: boolean;
+  requires_full_answer_confirmation: boolean;
+};
+
 export type AnswerRegionSuggestionRequest = {
   provider?: "mock" | "codex_cli_answer_region_suggester" | "codex_cli";
   question_ids?: number[];
   question_nos?: string[];
+};
+
+export type AnswerRegionMappingSuggestionRequest = {
+  provider?: "mock";
+  question_ids?: number[];
+  question_nos?: string[];
+  page_ids?: number[];
+  deterministic_case?: "single_segment" | "multi_segment_continuation" | "possible_continuation";
 };
 
 export type AnswerRegionSuggestionResponse = {
@@ -290,6 +336,16 @@ export type AnswerRegionSuggestionResponse = {
   message: string;
   provider_warnings: string[];
   suggestions: DraftAnswerRegionSuggestion[];
+};
+
+export type AnswerRegionMappingSuggestionResponse = {
+  submission_id: number;
+  provider: "mock" | "deterministic_layout" | "codex_cli_answer_region_suggester" | "codex_cli";
+  source: string;
+  needs_review: boolean;
+  message: string;
+  provider_warnings: string[];
+  suggestion_groups: DraftAnswerRegionSuggestionGroup[];
 };
 
 export type GradingJob = {
@@ -790,6 +846,37 @@ export function suggestAnswerRegions(pageId: number, payload: AnswerRegionSugges
     method: "POST",
     body: payload,
   });
+}
+
+export function suggestAnswerRegionMappings(
+  submissionId: number,
+  payload: AnswerRegionMappingSuggestionRequest = {},
+) {
+  return apiRequest<AnswerRegionMappingSuggestionResponse>(
+    `/submissions/${submissionId}/answer-region-mapping-suggestions`,
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+}
+
+export function acceptAnswerRegionMappingSuggestion(
+  submissionId: number,
+  payload: {
+    draft_id: string;
+    question_id: number;
+    full_answer_confirmed: boolean;
+    segments: DraftAnswerRegionSuggestionSegment[];
+  },
+) {
+  return apiRequest<AnswerRegion>(
+    `/submissions/${submissionId}/answer-region-mapping-suggestions/accept`,
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
 }
 
 export function listSubmissionAnswerRegions(submissionId: number) {

@@ -5,6 +5,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
+  acceptAnswerRegionMappingSuggestion,
   acceptQuestionImportDrafts,
   createAnswerRegion,
   createQuestion,
@@ -21,12 +22,12 @@ import {
   listAssessmentAnswerRegions,
   listQuestions,
   listSubmissions,
-  suggestAnswerRegions,
+  suggestAnswerRegionMappings,
   uploadSubmission,
   uploadSubmissionZip,
   type AnswerRegion,
   type Assessment,
-  type DraftAnswerRegionSuggestion,
+  type DraftAnswerRegionSuggestionGroup,
   type DraftQuestion,
   type FinalGrade,
   type GradingEvidencePacket,
@@ -82,10 +83,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionY, setRegionY] = useState("0");
   const [regionWidth, setRegionWidth] = useState("100");
   const [regionHeight, setRegionHeight] = useState("100");
-  const [regionSuggestions, setRegionSuggestions] = useState<DraftAnswerRegionSuggestion[]>([]);
+  const [regionSuggestions, setRegionSuggestions] = useState<DraftAnswerRegionSuggestionGroup[]>([]);
   const [regionSuggestionMessage, setRegionSuggestionMessage] = useState<string | null>(null);
   const [regionSuggestionWarnings, setRegionSuggestionWarnings] = useState<string[]>([]);
-  const [regionSuggestionProvider, setRegionSuggestionProvider] = useState<"mock" | "codex_cli_answer_region_suggester">("mock");
+  const [regionSuggestionProvider] = useState<"mock">("mock");
   const [suggestingRegions, setSuggestingRegions] = useState(false);
   const [acceptingSuggestionId, setAcceptingSuggestionId] = useState<string | null>(null);
   const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
@@ -429,7 +430,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   async function handleSuggestAnswerRegions() {
     if (!selectedPage) {
-      setError("Select a page before suggesting answer regions");
+      setError("Select a page before suggesting answer mappings");
       return;
     }
     setSuggestingRegions(true);
@@ -437,51 +438,52 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setRegionSuggestionMessage(null);
     setRegionSuggestionWarnings([]);
     try {
-      const response = await suggestAnswerRegions(selectedPage.page.id, {
+      const response = await suggestAnswerRegionMappings(selectedPage.submission.id, {
         provider: regionSuggestionProvider,
         question_ids: questions.map((question) => question.id),
+        page_ids: selectedPage.submission.pages.map((page) => page.id),
       });
       setSuggestionPageId(selectedPage.page.id);
-      setRegionSuggestions(response.suggestions);
+      setRegionSuggestions(response.suggestion_groups);
       setRegionSuggestionMessage(response.message);
       setRegionSuggestionWarnings(response.provider_warnings);
-      if (response.suggestions[0]) {
-        const first = response.suggestions[0];
+      if (response.suggestion_groups[0]?.segments[0]) {
+        const firstGroup = response.suggestion_groups[0];
+        const first = firstGroup.segments[0];
         setRegionX(String(first.x));
         setRegionY(String(first.y));
         setRegionWidth(String(first.width));
         setRegionHeight(String(first.height));
-        setSelectedQuestionId(String(first.suggested_question_id));
+        setSelectedQuestionId(String(firstGroup.suggested_question_id));
       }
     } catch (err) {
       setRegionSuggestions([]);
       setRegionSuggestionMessage(null);
       setRegionSuggestionWarnings([]);
-      setError(err instanceof Error ? err.message : "Failed to suggest answer regions");
+      setError(err instanceof Error ? err.message : "Failed to suggest answer mappings");
     } finally {
       setSuggestingRegions(false);
     }
   }
 
-  async function handleAcceptRegionSuggestion(suggestion: DraftAnswerRegionSuggestion) {
+  async function handleAcceptRegionSuggestion(suggestion: DraftAnswerRegionSuggestionGroup) {
     if (!selectedPage) {
-      setError("Select a page before accepting answer-region suggestions");
+      setError("Select a page before accepting answer-region mapping suggestions");
       return;
     }
     setAcceptingSuggestionId(suggestion.draft_id);
     setError(null);
     try {
-      await createAnswerRegion(selectedPage.page.id, {
+      await acceptAnswerRegionMappingSuggestion(selectedPage.submission.id, {
+        draft_id: suggestion.draft_id,
         question_id: suggestion.suggested_question_id,
-        x: suggestion.x,
-        y: suggestion.y,
-        width: suggestion.width,
-        height: suggestion.height,
+        full_answer_confirmed: suggestion.continuation_risk === "continuation_included",
+        segments: suggestion.segments,
       });
       setRegionSuggestions((current) => current.filter((item) => item.draft_id !== suggestion.draft_id));
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to accept answer-region suggestion");
+      setError(err instanceof Error ? err.message : "Failed to accept answer-region mapping suggestion");
     } finally {
       setAcceptingSuggestionId(null);
     }
@@ -702,21 +704,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div className="flex flex-wrap items-center gap-3">
           <label className="grid gap-1 text-sm">
             Suggestion provider
-            <select
-              className={inputClass}
-              value={regionSuggestionProvider}
-              onChange={(event) => setRegionSuggestionProvider(event.target.value as "mock" | "codex_cli_answer_region_suggester")}
-            >
-              <option value="mock">Mock/simple suggestions (default)</option>
-              <option value="codex_cli_answer_region_suggester">Codex-backed suggestions (backend flag required)</option>
+            <select className={inputClass} value={regionSuggestionProvider} disabled>
+              <option value="mock">Mock/deterministic mapping provider</option>
             </select>
           </label>
           <button className={buttonClass} disabled={suggestingRegions || !selectedPage} type="button" onClick={() => void handleSuggestAnswerRegions()}>
-            {suggestingRegions ? "Suggesting..." : "Suggest answer regions"}
+            {suggestingRegions ? "Suggesting..." : "Suggest answer mappings"}
           </button>
-          <p className="text-sm text-amber-200">AI suggestions are drafts. Teacher must confirm before grading.</p>
+          <p className="text-sm text-amber-200">Mapping suggestions are drafts until accepted. Teacher/founder must confirm full answer evidence before grading.</p>
         </div>
-        <p className="text-xs text-slate-400">Mock provider is default. Codex-backed suggestions require CODEX_ANSWER_REGION_SUGGESTIONS_ENABLED=true and backend image input enabled.</p>
+        <p className="text-xs text-slate-400">Mock deterministic mapping suggestions are draft-only. Real AI mapping is not implemented here.</p>
         {suggestionPageId === selectedPage?.page.id && regionSuggestionWarnings.length > 0 ? (
           <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
             <p className="font-semibold">Provider warnings</p>
@@ -732,17 +729,29 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         ) : null}
         {suggestionPageId === selectedPage?.page.id && regionSuggestions.length > 0 ? (
           <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm text-slate-300 md:grid-cols-2">
-            {regionSuggestions.map((suggestion) => (
+            {regionSuggestions.map((suggestion) => {
+              const primarySegment = suggestion.segments.find((segment) => segment.is_primary) ?? suggestion.segments[0];
+              const pagesCovered = Array.from(new Set(suggestion.segments.map((segment) => segment.page_id)));
+              return (
               <article key={suggestion.draft_id} className="rounded border border-slate-700 p-3">
                 <p className="font-medium">
-                  Question {suggestion.suggested_question_no} · Page {suggestion.page_id}
+                  Question {suggestion.suggested_question_no} · Segment count {suggestion.segments.length}
                 </p>
+                <p className="text-xs text-slate-500">Pages covered {pagesCovered.join(", ")}</p>
+                <p className="text-xs text-slate-500">Continuation risk: {suggestion.continuation_risk}</p>
                 <p className="text-xs text-slate-500">
-                  x {suggestion.x}, y {suggestion.y}, w {suggestion.width}, h {suggestion.height}
+                  Primary segment: page {primarySegment.page_id}, x {primarySegment.x}, y {primarySegment.y}, w {primarySegment.width}, h {primarySegment.height}
                 </p>
                 <p className="text-xs text-slate-500">
                   Confidence {suggestion.confidence} · {suggestion.provider} · needs review
                 </p>
+                <ul className="mt-1 list-disc pl-4 text-xs text-slate-400">
+                  {suggestion.segments.map((segment) => (
+                    <li key={`${suggestion.draft_id}-${segment.order_index}`}>
+                      Segment {segment.order_index}: page {segment.page_id}, continuation {segment.continuation_risk}
+                    </li>
+                  ))}
+                </ul>
                 {suggestion.warnings.length > 0 ? (
                   <ul className="mt-1 list-disc pl-4 text-xs text-amber-200">
                     {suggestion.warnings.map((warning) => (
@@ -755,14 +764,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     className="rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-200 hover:border-cyan-500"
                     type="button"
                     onClick={() => {
-                      setRegionX(String(suggestion.x));
-                      setRegionY(String(suggestion.y));
-                      setRegionWidth(String(suggestion.width));
-                      setRegionHeight(String(suggestion.height));
+                      setRegionX(String(primarySegment.x));
+                      setRegionY(String(primarySegment.y));
+                      setRegionWidth(String(primarySegment.width));
+                      setRegionHeight(String(primarySegment.height));
                       setSelectedQuestionId(String(suggestion.suggested_question_id));
                     }}
                   >
-                    Use suggestion
+                    Use suggestion values
                   </button>
                   <button
                     className="rounded border border-emerald-700 px-3 py-1 text-xs text-emerald-200 hover:border-emerald-500"
@@ -779,11 +788,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       setRegionSuggestions((current) => current.filter((item) => item.draft_id !== suggestion.draft_id))
                     }
                   >
-                    Ignore
+                    Ignore suggestion
                   </button>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         ) : null}
         {suggestionPageId === selectedPage?.page.id && regionSuggestions.length === 0 && regionSuggestionMessage ? (

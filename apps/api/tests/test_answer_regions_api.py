@@ -415,3 +415,306 @@ def test_answer_region_segment_rejects_page_from_other_submission(
 
     assert response.status_code == 422
     assert "Segment page must belong to the same submission" in response.text
+
+
+def create_mapping_fixture(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], list[dict[str, object]]]:
+    image_path = tmp_path / "mapping-page.png"
+    make_png(image_path, size=(420, 600))
+    user_response = client.post(
+        "/users", json={"name": "Mapping Teacher", "email": "mapping@example.com"}
+    )
+    assert user_response.status_code == 201
+    course_response = client.post(
+        "/courses",
+        json={
+            "teacher_id": user_response.json()["id"],
+            "code": "MAP101",
+            "title": "Mapping",
+        },
+    )
+    assert course_response.status_code == 201
+    assessment_response = client.post(
+        f"/courses/{course_response.json()['id']}/assessments",
+        json={"title": "Mapping Quiz", "assessment_type": "quiz", "total_marks": "6.00"},
+    )
+    assert assessment_response.status_code == 201
+    question_response = client.post(
+        f"/assessments/{assessment_response.json()['id']}/questions",
+        json={
+            "question_no": "1(b)(i)",
+            "question_text": "Show all working.",
+            "model_answer": "Complete answer uses both page segments.",
+            "total_marks": "6.00",
+        },
+    )
+    assert question_response.status_code == 201
+    rubric_response = client.post(
+        f"/questions/{question_response.json()['id']}/rubrics",
+        json={
+            "version": 1,
+            "is_active": True,
+            "rubric_json": {
+                "total_marks": "6.00",
+                "criteria": [
+                    {
+                        "id": "full_working",
+                        "name": "Full working",
+                        "description": "Shows the complete working.",
+                        "max_marks": "6.00",
+                    }
+                ],
+            },
+        },
+    )
+    assert rubric_response.status_code == 201
+    with image_path.open("rb") as file_obj:
+        submission_response = client.post(
+            f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            data={"student_identifier": "MAP-001"},
+            files={"file": ("mapping.png", file_obj, "image/png")},
+        )
+    assert submission_response.status_code == 201
+    submission = submission_response.json()
+    first_page = submission["pages"][0]
+    second_page = SubmissionPage(
+        submission_id=submission["id"],
+        page_no=2,
+        image_path=first_page["image_path"],
+    )
+    db_session.add(second_page)
+    db_session.commit()
+    db_session.refresh(second_page)
+    pages = [first_page, {"id": second_page.id, "submission_id": submission["id"], "page_no": 2}]
+    return assessment_response.json(), question_response.json(), submission, pages
+
+
+def test_mock_mapping_suggestion_returns_single_segment_group(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        json={
+            "provider": "mock",
+            "question_ids": [question["id"]],
+            "page_ids": [pages[0]["id"]],
+            "deterministic_case": "single_segment",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["submission_id"] == submission["id"]
+    assert body["provider"] == "mock"
+    assert body["needs_review"] is True
+    group = body["suggestion_groups"][0]
+    assert group["suggested_question_id"] == question["id"]
+    assert group["suggested_question_no"] == "1(b)(i)"
+    assert group["continuation_risk"] == "none"
+    assert group["needs_review"] is True
+    assert group["needs_teacher_confirmation"] is True
+    assert len(group["segments"]) == 1
+    assert group["segments"][0]["order_index"] == 1
+    assert group["segments"][0]["is_primary"] is True
+
+    assert db_session.query(AnswerRegion).count() == 0
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+
+
+def test_mock_mapping_suggestion_returns_multisegment_continuation_group(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        json={
+            "provider": "mock",
+            "question_ids": [question["id"]],
+            "page_ids": [pages[0]["id"], pages[1]["id"]],
+            "deterministic_case": "multi_segment_continuation",
+        },
+    )
+
+    assert response.status_code == 200
+    group = response.json()["suggestion_groups"][0]
+    assert group["continuation_risk"] == "continuation_included"
+    assert len(group["segments"]) == 2
+    assert [segment["order_index"] for segment in group["segments"]] == [1, 2]
+    assert [segment["page_id"] for segment in group["segments"]] == [pages[0]["id"], pages[1]["id"]]
+
+
+def test_mock_mapping_possible_continuation_carries_warning(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        json={
+            "provider": "mock",
+            "question_ids": [question["id"]],
+            "page_ids": [pages[0]["id"]],
+            "deterministic_case": "possible_continuation",
+        },
+    )
+
+    assert response.status_code == 200
+    group = response.json()["suggestion_groups"][0]
+    assert group["continuation_risk"] == "possible_continuation"
+    assert any("continuation" in warning.lower() for warning in group["warnings"])
+    assert group["segments"][0]["continuation_risk"] == "possible_continuation"
+
+
+def test_accepting_mapping_suggestion_creates_ordered_segments_without_grades(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    suggestions = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        json={
+            "provider": "mock",
+            "question_ids": [question["id"]],
+            "page_ids": [pages[0]["id"], pages[1]["id"]],
+            "deterministic_case": "multi_segment_continuation",
+        },
+    ).json()
+    group = suggestions["suggestion_groups"][0]
+
+    response = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        json={
+            "draft_id": group["draft_id"],
+            "question_id": question["id"],
+            "full_answer_confirmed": True,
+            "segments": group["segments"],
+        },
+    )
+
+    assert response.status_code == 201
+    region = response.json()
+    assert region["submission_id"] == submission["id"]
+    assert region["question_id"] == question["id"]
+    assert region["full_answer_confirmed"] is True
+    assert [segment["order_index"] for segment in region["segments"]] == [1, 2]
+    assert [segment["page_id"] for segment in region["segments"]] == [
+        pages[0]["id"],
+        pages[1]["id"],
+    ]
+    assert all(segment["source"] == "suggestion" for segment in region["segments"])
+    assert all(segment["confirmed"] is True for segment in region["segments"])
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+
+
+def test_accepting_mapping_suggestion_rejects_cross_assessment_question(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, _question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    other_question, _other_page = create_uploaded_page(client, tmp_path)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        json={
+            "draft_id": "bad-cross-assessment",
+            "question_id": other_question["id"],
+            "full_answer_confirmed": True,
+            "segments": [
+                {
+                    "page_id": pages[0]["id"],
+                    "order_index": 1,
+                    "x": "20",
+                    "y": "30",
+                    "width": "200",
+                    "height": "180",
+                    "is_primary": True,
+                    "confidence": "0.70",
+                    "continuation_risk": "none",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Question assessment must match submission assessment" in response.text
+    assert db_session.query(AnswerRegion).count() == 0
+
+
+def test_accepting_mapping_suggestion_rejects_invalid_segment_order(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        json={
+            "draft_id": "bad-order",
+            "question_id": question["id"],
+            "full_answer_confirmed": True,
+            "segments": [
+                {
+                    "page_id": pages[0]["id"],
+                    "order_index": 1,
+                    "x": "20",
+                    "y": "30",
+                    "width": "200",
+                    "height": "180",
+                    "is_primary": True,
+                    "confidence": "0.70",
+                    "continuation_risk": "none",
+                },
+                {
+                    "page_id": pages[1]["id"],
+                    "order_index": 1,
+                    "x": "20",
+                    "y": "30",
+                    "width": "200",
+                    "height": "180",
+                    "is_primary": False,
+                    "confidence": "0.70",
+                    "continuation_risk": "none",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert db_session.query(AnswerRegion).count() == 0
+
+
+def test_evidence_packet_sees_accepted_multisegment_mapping(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    group = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        json={
+            "provider": "mock",
+            "question_ids": [question["id"]],
+            "page_ids": [pages[0]["id"], pages[1]["id"]],
+            "deterministic_case": "multi_segment_continuation",
+        },
+    ).json()["suggestion_groups"][0]
+    region = client.post(
+        f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        json={
+            "draft_id": group["draft_id"],
+            "question_id": question["id"],
+            "full_answer_confirmed": True,
+            "segments": group["segments"],
+        },
+    ).json()
+
+    packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+
+    assert packet_response.status_code == 200
+    evidence = packet_response.json()["student_answer_evidence"]
+    assert evidence["segment_count"] == 2
+    assert evidence["pages_covered"] == [1, 2]
+    assert evidence["continuation_check_status"] == "continuation_confirmed_included"
+    assert evidence["teacher_founder_confirmed_full_answer"] is True
+    assert packet_response.json()["readiness_result"]["ready_for_grading"] is True

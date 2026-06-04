@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -388,10 +388,38 @@ class AnswerRegionCreate(BaseModel):
     height: Decimal = Field(gt=Decimal("0"))
 
 
+AnswerRegionMappingProvider: TypeAlias = Literal[
+    "mock",
+    "deterministic_layout",
+    "codex_cli_answer_region_suggester",
+    "codex_cli",
+]
+AnswerRegionContinuationRisk: TypeAlias = Literal[
+    "none",
+    "possible_continuation",
+    "continuation_included",
+    "continuation_not_needed",
+    "ambiguous",
+]
+MappingDeterministicCase: TypeAlias = Literal[
+    "single_segment",
+    "multi_segment_continuation",
+    "possible_continuation",
+]
+
+
 class AnswerRegionSuggestionRequest(BaseModel):
     provider: Literal["mock", "codex_cli_answer_region_suggester", "codex_cli"] | None = None
     question_ids: list[int] | None = None
     question_nos: list[str] | None = None
+
+
+class AnswerRegionMappingSuggestionRequest(BaseModel):
+    provider: AnswerRegionMappingProvider | None = "mock"
+    question_ids: list[int] | None = None
+    question_nos: list[str] | None = None
+    page_ids: list[int] | None = None
+    deterministic_case: MappingDeterministicCase = "single_segment"
 
 
 class AnswerRegionSegmentCreate(BaseModel):
@@ -469,21 +497,6 @@ class AnswerRegionSuggestionResponse(BaseModel):
     message: str
     provider_warnings: list[str] = Field(default_factory=list)
     suggestions: list[DraftAnswerRegionSuggestion]
-
-
-AnswerRegionMappingProvider = Literal[
-    "mock",
-    "deterministic_layout",
-    "codex_cli_answer_region_suggester",
-    "codex_cli",
-]
-AnswerRegionContinuationRisk = Literal[
-    "none",
-    "possible_continuation",
-    "continuation_included",
-    "continuation_not_needed",
-    "ambiguous",
-]
 
 
 class DraftAnswerRegionSuggestionSegment(BaseModel):
