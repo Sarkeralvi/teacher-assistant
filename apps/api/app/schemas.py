@@ -471,6 +471,86 @@ class AnswerRegionSuggestionResponse(BaseModel):
     suggestions: list[DraftAnswerRegionSuggestion]
 
 
+AnswerRegionMappingProvider = Literal[
+    "mock",
+    "deterministic_layout",
+    "codex_cli_answer_region_suggester",
+    "codex_cli",
+]
+AnswerRegionContinuationRisk = Literal[
+    "none",
+    "possible_continuation",
+    "continuation_included",
+    "continuation_not_needed",
+    "ambiguous",
+]
+
+
+class DraftAnswerRegionSuggestionSegment(BaseModel):
+    page_id: int
+    order_index: int = Field(ge=1)
+    x: Decimal = Field(ge=Decimal("0"))
+    y: Decimal = Field(ge=Decimal("0"))
+    width: Decimal = Field(gt=Decimal("0"))
+    height: Decimal = Field(gt=Decimal("0"))
+    is_primary: bool = False
+    source: Literal["manual", "suggestion", "imported"] = "suggestion"
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    continuation_risk: AnswerRegionContinuationRisk = "none"
+    warnings: list[str] = Field(default_factory=list)
+    notes: str | None = None
+
+
+class DraftAnswerRegionSuggestionGroup(BaseModel):
+    draft_id: str = Field(min_length=1)
+    suggested_question_id: int
+    suggested_question_no: str = Field(min_length=1, max_length=32)
+    provider: AnswerRegionMappingProvider = "mock"
+    source: str = "mock"
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    continuation_risk: AnswerRegionContinuationRisk = "none"
+    segments: list[DraftAnswerRegionSuggestionSegment] = Field(min_length=1)
+    warnings: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    needs_review: bool = True
+    needs_teacher_confirmation: bool = True
+    requires_full_answer_confirmation: bool = True
+
+    @model_validator(mode="after")
+    def validate_segment_order_and_primary(self) -> "DraftAnswerRegionSuggestionGroup":
+        order_indexes = [segment.order_index for segment in self.segments]
+        if len(order_indexes) != len(set(order_indexes)):
+            raise ValueError("suggestion segment order_index values must be unique")
+        primary_count = sum(1 for segment in self.segments if segment.is_primary)
+        if primary_count != 1:
+            raise ValueError("exactly one suggestion segment must be primary")
+        return self
+
+
+class AnswerRegionSuggestionGroupResponse(BaseModel):
+    submission_id: int
+    provider: AnswerRegionMappingProvider = "mock"
+    source: str = "mock"
+    needs_review: bool = True
+    message: str
+    provider_warnings: list[str] = Field(default_factory=list)
+    suggestion_groups: list[DraftAnswerRegionSuggestionGroup]
+
+
+class AnswerRegionSuggestionAcceptRequest(BaseModel):
+    draft_id: str = Field(min_length=1)
+    question_id: int
+    full_answer_confirmed: bool = False
+    segments: list[DraftAnswerRegionSuggestionSegment] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_acceptance_segment_order(self) -> "AnswerRegionSuggestionAcceptRequest":
+        order_indexes = [segment.order_index for segment in self.segments]
+        if len(order_indexes) != len(set(order_indexes)):
+            raise ValueError("accepted segment order_index values must be unique")
+        return self
+
+
 class EvidencePacketAssessmentContext(BaseModel):
     assessment_id: int
     submission_id: int

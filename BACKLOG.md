@@ -1210,3 +1210,16 @@ Acceptance criteria: Plan identifies issues, priority, safety impact, acceptance
 Tests required: Docs review; code tests only if later implementation is approved.
 Risks: Over-expanding from one observation into broad product claims or unapproved automation.
 Status: Pending
+
+TASK-ID: TA-MAP-001
+Title: Design next-generation multi-segment answer-region suggestion contract
+Owner: Hermes
+Priority: P0
+Dependencies: TA-W2-026
+Files affected: docs/ANSWER_REGION_MAPPING_ALGORITHM.md, apps/api/app/schemas.py, apps/api/tests/test_answer_region_mapping_contract.py, BACKLOG.md
+Goal: Define the draft-only multi-segment answer-region mapping contract before implementation of a business-grade mapper.
+Implementation notes: Added a design document for a staged review-first mapping algorithm and introduced schema-level contracts for draft suggestion groups, ordered suggestion segments, continuation risk, and acceptance requests. Added deterministic schema contract tests only. No real Codex/OpenAI providers, batch grading, export, finalization, autonomous loop, DB migration, acceptance endpoint, or frontend implementation was added.
+Acceptance criteria: Draft suggestion groups can represent one logical answer with ordered segments across one or more pages; suggestions remain review-only and do not create AnswerRegion/GradeSuggestion/FinalGrade rows; acceptance request shape can carry one logical question answer with ordered segments and full-answer confirmation; continuation-risk states are explicit; backend tests document the contract.
+Tests required: `python -m pytest tests/test_answer_region_mapping_contract.py -q`; `git diff --check`; `make lint`; focused DB-backed tests only if Postgres is safely available.
+Risks: This task defines the contract and minimal schemas only. Persistence, acceptance endpoint, deterministic CV/layout mapper, and teacher-facing segment review UI remain future work.
+Status: Done
