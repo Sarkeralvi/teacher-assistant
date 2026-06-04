@@ -343,6 +343,8 @@ def _calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "final_grade_created_count": 0,
             "continuation_false_negative_count": 0,
             "blank_page_false_mapping_count": 0,
+            "wrong_question_critical_failure_count": 0,
+            "mandatory_review_confirmation_gap_count": 0,
             "possible_continuation_requires_confirmation_count": 0,
         }
 
@@ -386,6 +388,17 @@ def _calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for row in rows
             if any("blank/low-content" in reason for reason in row["failure_reasons"])
         ),
+        "wrong_question_critical_failure_count": sum(
+            1
+            for row in rows
+            if row["critical_failure"]
+            and any("wrong-question" in reason for reason in row["failure_reasons"])
+        ),
+        "mandatory_review_confirmation_gap_count": sum(
+            1
+            for row in rows
+            if not row["checks"].get("full_answer_confirmation_match", True)
+        ),
         "possible_continuation_requires_confirmation_count": sum(
             1
             for row in rows
@@ -394,6 +407,59 @@ def _calculate_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             and row["checks"]["full_answer_confirmation_match"]
             and "ambiguous_possible_continuation" in row["case_id"]
         ),
+    }
+
+
+def evaluate_mapping_quality_gate(evaluation_result: dict[str, Any]) -> dict[str, Any]:
+    """Apply the TA-MAP-003A synthetic quality gate policy to an eval result.
+
+    This policy does not certify production mapping quality. It only decides whether a
+    future provider has cleared the synthetic blocker gate required before a controlled
+    real-provider trial can be planned.
+    """
+    metrics = evaluation_result.get("metrics", {})
+    cases = evaluation_result.get("cases", [])
+    blocker_reasons: list[str] = []
+    warning_reasons: list[str] = []
+
+    blocker_checks = {
+        "critical_failure_count": "critical failures must be zero",
+        "unsafe_auto_accept_count": "unsafe auto-accept count must be zero",
+        "grade_suggestion_created_count": "GradeSuggestion count must be zero during mapping",
+        "final_grade_created_count": "FinalGrade count must be zero during mapping",
+        "continuation_false_negative_count": "continuation false-negative count must be zero",
+        "wrong_question_critical_failure_count": "wrong-question critical failures must be zero",
+        "blank_page_false_mapping_count": "blank/low-content false mapping count must be zero",
+        "mandatory_review_confirmation_gap_count": (
+            "mandatory review cases must require teacher/full-answer confirmation"
+        ),
+    }
+    for metric_name, rule in blocker_checks.items():
+        value = int(metrics.get(metric_name, 0) or 0)
+        if value:
+            blocker_reasons.append(f"{metric_name}={value}; {rule}")
+
+    if not evaluation_result.get("overall_pass", False):
+        blocker_reasons.append("synthetic benchmark overall pass is required")
+
+    reviewable_case_ids = {
+        "near_bottom_no_continuation",
+        "ambiguous_possible_continuation",
+        "multiple_questions_one_page",
+    }
+    for row in cases:
+        case_id = str(row.get("case_id", ""))
+        checks = row.get("checks", {})
+        if case_id in reviewable_case_ids and checks.get("full_answer_confirmation_match", False):
+            warning_reasons.append(
+                f"{case_id} is reviewable only when teacher/full-answer confirmation is required"
+            )
+
+    return {
+        "eligible_for_real_provider_trial": not blocker_reasons,
+        "blocker_reasons": blocker_reasons,
+        "warning_reasons": warning_reasons,
+        "metrics": metrics,
     }
 
 

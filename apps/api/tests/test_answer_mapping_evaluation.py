@@ -6,6 +6,7 @@ from packages.evaluation.answer_mapping_evaluator import (
     FixtureMappingProvider,
     MappingProviderOutput,
     evaluate_answer_mapping_provider,
+    evaluate_mapping_quality_gate,
     load_answer_mapping_eval_fixtures,
 )
 
@@ -199,3 +200,86 @@ def test_evaluator_accepts_direct_provider_output_without_database_side_effects(
     assert result["overall_pass"] is True
     assert result["metrics"]["grade_suggestion_created_count"] == 0
     assert result["metrics"]["final_grade_created_count"] == 0
+
+
+def test_quality_gate_blocks_current_mock_provider_from_real_trial() -> None:
+    cases = load_answer_mapping_eval_fixtures(FIXTURE_DIR)
+    result = evaluate_answer_mapping_provider(
+        cases, FixtureMappingProvider("current_mock_provider")
+    )
+
+    policy = evaluate_mapping_quality_gate(result)
+
+    assert policy["eligible_for_real_provider_trial"] is False
+    assert any("critical_failure_count" in reason for reason in policy["blocker_reasons"])
+    assert any("synthetic benchmark overall pass" in reason for reason in policy["blocker_reasons"])
+    assert policy["metrics"]["grade_suggestion_created_count"] == 0
+    assert policy["metrics"]["final_grade_created_count"] == 0
+
+
+def test_quality_gate_allows_zero_critical_failures_and_no_unsafe_counts() -> None:
+    passing_result = {
+        "provider": "candidate_provider",
+        "overall_pass": True,
+        "metrics": {
+            "critical_failure_count": 0,
+            "unsafe_auto_accept_count": 0,
+            "grade_suggestion_created_count": 0,
+            "final_grade_created_count": 0,
+            "continuation_false_negative_count": 0,
+            "wrong_question_critical_failure_count": 0,
+            "blank_page_false_mapping_count": 0,
+            "mandatory_review_confirmation_gap_count": 0,
+        },
+        "cases": [],
+    }
+
+    policy = evaluate_mapping_quality_gate(passing_result)
+
+    assert policy["eligible_for_real_provider_trial"] is True
+    assert policy["blocker_reasons"] == []
+
+
+def test_quality_gate_reviewable_warnings_do_not_block_but_require_confirmation() -> None:
+    warning_only_result = {
+        "provider": "reviewable_provider",
+        "overall_pass": True,
+        "metrics": {
+            "critical_failure_count": 0,
+            "unsafe_auto_accept_count": 0,
+            "grade_suggestion_created_count": 0,
+            "final_grade_created_count": 0,
+            "continuation_false_negative_count": 0,
+            "wrong_question_critical_failure_count": 0,
+            "blank_page_false_mapping_count": 0,
+            "mandatory_review_confirmation_gap_count": 0,
+        },
+        "cases": [
+            {
+                "case_id": "near_bottom_no_continuation",
+                "passed": True,
+                "critical_failure": False,
+                "failure_reasons": [],
+                "checks": {
+                    "continuation_risk_match": True,
+                    "full_answer_confirmation_match": True,
+                },
+            },
+            {
+                "case_id": "ambiguous_possible_continuation",
+                "passed": True,
+                "critical_failure": False,
+                "failure_reasons": [],
+                "checks": {
+                    "continuation_risk_match": True,
+                    "full_answer_confirmation_match": True,
+                },
+            },
+        ],
+    }
+
+    policy = evaluate_mapping_quality_gate(warning_only_result)
+
+    assert policy["eligible_for_real_provider_trial"] is True
+    assert policy["blocker_reasons"] == []
+    assert any("review" in reason for reason in policy["warning_reasons"])

@@ -44,7 +44,7 @@ So the project is **not abandoning AEEM** and is **not simply continuing the old
 | 9. Multi-page continuation grouping | Multi-segment `AnswerRegionSegment` support exists; possible continuation and continuation-included states exist; evidence packet sees segment count/pages. | Benchmark for missed/extra continuation, ambiguous chains, next-page wrong-question trap, teacher correction UX. | TA-MAP-003, then TA-UI-001 | This was the discovered failure, so measure it first and make correction practical before real mapping. |
 | 10. Evidence packet readiness gate | Existing `grading-evidence-packet` endpoint and backend readiness gate block grading when evidence is missing/incomplete. | Broader AEEM gates for reference, identity, page sequencing, boundary mapping, continuations, batch sign-off, packet versioning. | TA-MAP-003/TA-REF-001/TA-SCRIPT-001 feed into gate expansion | The gate exists; now the missing inputs need measurable quality. |
 | 11. Teacher correction workflow | Manual answer-region creation and acceptance endpoint exist; rough UI can accept deterministic suggestions. | Split/merge/reorder/edit bbox/add segment/reassign CGU/mark blank/partial/complete, audit log, visual overlays. | TA-UI-001 after initial benchmarks | Correction UI should be driven by measured failure modes, not guessed UI scope. |
-| 12. Mapping evaluation harness | Implemented in TA-MAP-003 with synthetic JSON fixtures and provider-agnostic evaluator. Current mock-provider outputs are measured honestly. | Threshold policy, richer bbox/IoU scoring, annotated real cases only after approval, report artifact persistence if needed. | Use TA-MAP-003 results to decide TA-MAP-004 readiness; next likely task is TA-REF-001 or TA-SCRIPT-001. | The harness is now the first safety net before real mapping provider work. |
+| 12. Mapping evaluation harness | Implemented in TA-MAP-003 with synthetic JSON fixtures, provider-agnostic evaluator, and TA-MAP-003A quality gate policy. Current mock-provider outputs are measured honestly and remain ineligible for real-provider trial. | Richer bbox/IoU scoring, annotated real cases only after approval, report artifact persistence if needed. | TA-REF-001 or TA-SCRIPT-001 next; TA-MAP-004 only for planning unless explicitly approved. | The harness and gate are now the safety net before real mapping provider work. |
 | 13. Reference OCR/extraction evaluation harness | Not implemented as AEEM reference-arm benchmark. Some question import tests exist. | Question/solution/rubric fixtures, field metrics, CGU label/max-mark exactness, confirmation blocker reports. | TA-REF-001 | Reference evidence must be trusted before broad grading claims. |
 | 14. Script sequencing benchmark | Not implemented. | Synthetic scripts with reversed/missing/duplicate/unordered pages, metric reports, review flags. | TA-SCRIPT-001 | Page order underpins continuation grouping and batch packet preparation. |
 | 15. Real AI mapping provider | Not implemented for AEEM mapping. Existing Codex-related paths are gated dev/smoke paths, not production AEEM mapping. | Provider selection, strict schema validation, privacy rules, benchmark thresholds, no auto-accept, review-only UI. | TA-MAP-004 | Real provider comes after mapping/reference/script benchmarks so its output can be evaluated. |
@@ -112,7 +112,7 @@ Therefore TA-MAP-003, TA-REF-001, and TA-SCRIPT-001 exist to define measurement 
 
 ## Recommended next task
 
-Recommended next implementation after TA-MAP-003: **TA-REF-001 or TA-SCRIPT-001 before TA-MAP-004**, unless the founder explicitly wants to set a TA-MAP-004 threshold policy first.
+Recommended next implementation after TA-MAP-003A: **TA-REF-001 — Reference extraction evaluation harness**, with TA-SCRIPT-001 close behind. TA-MAP-004 should remain planning-only unless explicitly approved.
 
 Justification:
 
@@ -122,7 +122,7 @@ Justification:
 4. TA-MAP-003 can stay synthetic/non-private and manual controlled.
 5. It produces the metrics needed to decide whether TA-MAP-004 real provider work is justified.
 
-TA-MAP-003 now closes the first mapping-measurement gap. Real AI mapping is still not safe as the next automatic step because reference extraction and script sequencing are still unmeasured AEEM inputs. The safest next planning choice is to define the TA-MAP-004 benchmark thresholds or proceed to TA-REF-001/TA-SCRIPT-001 so mapping suggestions are evaluated against confirmed reference and page-order assumptions.
+TA-MAP-003 and TA-MAP-003A now close the first mapping-measurement and gate-policy gaps. Real AI mapping is still not safe as the next automatic step because reference extraction and script sequencing are still unmeasured AEEM inputs. TA-REF-001 is the best next task because wrong question/CGU labeling is a critical blocker and mapping cannot be evaluated correctly without trusted reference units.
 
 ## Stop conditions preserved
 

@@ -276,3 +276,8 @@ Important correction from later validation:
 TA-MAP-003 is Done as an evaluation-first implementation. It adds `apps/api/packages/evaluation/answer_mapping_evaluator.py`, seven synthetic JSON benchmark fixtures, and focused tests. It does not use VSCode/Codex, real Codex, real OCR, real AI mapping, private files, batch grading, teacher observation, `GradeSuggestion`, or `FinalGrade`.
 
 The benchmark result is intentionally conservative: current mock-provider saved outputs pass 3/7 cases and fail realistic gaps such as multi-question page confusion, wrong-question trap detection, and blank/low-content page handling. This is not a product-quality claim; it is the first executable gate before TA-MAP-004 can be planned.
+## TA-MAP-003A status — mapping quality gates
+
+TA-MAP-003A is Done as a policy layer over the synthetic mapping evaluator. It defines critical blockers, reviewable warnings, minimum synthetic gates, and aspirational later real-anonymized evaluation targets. The current mock provider remains ineligible for real-provider trial as product-quality mapping.
+
+Critical blockers are not nice-to-fix issues: wrong-question/CGU assignment, blank-page confident mapping, missed continuation, unsafe auto-accept, and any `GradeSuggestion`/`FinalGrade` creation during mapping block provider advancement. Real AI mapping remains blocked until a candidate provider satisfies the gate and the founder explicitly approves the next scope.

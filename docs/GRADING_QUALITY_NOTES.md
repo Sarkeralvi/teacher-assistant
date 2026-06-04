@@ -1,3 +1,13 @@
+# TA-MAP-003A — Mapping quality gates before real provider work
+
+Recorded at: 2026-06-04
+
+TA-MAP-003 exposed current mock-provider gaps and TA-MAP-003A defines them as gate policy rather than informal observations. A mapping provider is not eligible for a controlled real-provider trial unless synthetic critical failures are zero, unsafe auto-accept is zero, `GradeSuggestion` and `FinalGrade` creation are zero, missed continuations are zero, wrong-question critical failures are zero, blank/low-content false mappings are zero, and mandatory review cases still require teacher/full-answer confirmation.
+
+Reviewable warnings, such as low confidence, near-bottom possible continuation, ambiguous continuation, or multi-question-page review flags, may proceed only as teacher-review work. They are not auto-accept signals and cannot support grading-quality claims until evidence is confirmed complete.
+
+Aspirational later real-anonymized targets include answer-region recall/precision, continuation detection recall/precision, wrong-question mapping rate, teacher correction burden, and complete-answer packet success. These targets are not enforced yet because no founder-approved anonymized real dataset is in scope.
+
 # TA-CORE-001 — AEEM quality pivot
 
 Recorded at: 2026-06-04T11:41:53+06:00

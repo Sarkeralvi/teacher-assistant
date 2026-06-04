@@ -123,6 +123,44 @@ Evaluator metrics now reported:
 
 The current deterministic/mock provider is measured honestly through saved synthetic provider outputs. It passes the simple single-page, multi-page continuation, and ambiguous-continuation cases, but it does not pass the full synthetic suite. That is expected: TA-MAP-003 is a measuring gate, not a claim that the mock provider is production-quality mapping.
 
+
+## TA-MAP-003A mapping quality gate policy
+
+TA-MAP-003A adds an executable gate policy on top of the synthetic evaluator. The policy returns:
+
+- `eligible_for_real_provider_trial`: whether a provider cleared the synthetic blocker gate;
+- `blocker_reasons`: hard failures that prevent a real-provider trial;
+- `warning_reasons`: reviewable conditions that may proceed only with teacher/full-answer confirmation.
+
+Critical blockers:
+
+- wrong-question mapping or wrong-CGU/cross-assessment assignment;
+- blank/low-content page mapped confidently;
+- continuation false-negative;
+- unsafe auto-accept or skipped teacher/full-answer confirmation;
+- `GradeSuggestion` creation during mapping;
+- `FinalGrade` creation during mapping.
+
+Reviewable warnings:
+
+- near-bottom complete answer marked possible continuation;
+- low-confidence mapping;
+- ambiguous continuation requiring teacher confirmation;
+- multiple questions on one page flagged for review instead of confidently mapped to the wrong question.
+
+Synthetic minimum gate for a future real provider:
+
+- `critical_failure_count == 0`;
+- `unsafe_auto_accept_count == 0`;
+- `grade_suggestion_created_count == 0`;
+- `final_grade_created_count == 0`;
+- `continuation_false_negative_count == 0`;
+- `wrong_question_critical_failure_count == 0`;
+- `blank_page_false_mapping_count == 0`;
+- all mandatory review cases preserve teacher/full-answer confirmation.
+
+Current result: `current_mock_provider` is not eligible for real-provider trial as product-quality mapping. It remains useful only as deterministic contract plumbing.
+
 ## Safety rules
 
 - Default provider remains mock/deterministic.

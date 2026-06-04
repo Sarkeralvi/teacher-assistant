@@ -1264,6 +1264,19 @@ Tests required: focused harness tests, existing mapping contract/provider tests,
 Risks: Synthetic-only benchmark can still overfit; later founder-approved annotated real cases will be needed. Current mock-provider result is intentionally not a real-mapping quality claim.
 Status: Done
 
+TASK-ID: TA-MAP-003A
+Title: Define mapping quality gates and failure policy
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MAP-003
+Files affected: apps/api/packages/evaluation/answer_mapping_evaluator.py, apps/api/tests/test_answer_mapping_evaluation.py, docs/ANSWER_REGION_MAPPING_ALGORITHM.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/GRADING_QUALITY_NOTES.md, docs/VALIDATION_LOG.md, BACKLOG.md
+Goal: Define the synthetic mapping quality gate policy that decides whether a provider may proceed from benchmark evaluation to a future controlled real-provider trial.
+Implementation notes: Added an evaluator quality gate policy with `eligible_for_real_provider_trial`, `blocker_reasons`, and `warning_reasons`. The policy keeps current mock-provider gaps visible and blocks real-provider trial eligibility when critical failures, unsafe auto-accept, `GradeSuggestion`, `FinalGrade`, continuation false-negative, wrong-question critical failure, blank false mapping, or mandatory-review confirmation gaps are present. No real Codex, real AI mapping, private files, batch grading, VSCode/Codex, additional coding agent, teacher observation, `GradeSuggestion`, or `FinalGrade` was used.
+Acceptance criteria: Critical blockers and reviewable warnings are documented; synthetic minimum gates are executable; current_mock_provider remains ineligible for real-provider trial as product-quality mapping; reviewable warnings can pass only when teacher/full-answer confirmation remains required.
+Tests required: focused mapping evaluation tests, `make lint`, `git diff --check`, `make test`, final git status.
+Risks: Passing synthetic gates still does not prove classroom quality; real anonymized evaluation targets remain aspirational and require founder-approved data/privacy handling.
+Status: Done
+
 TASK-ID: TA-REF-001
 Title: Question/solution/rubric extraction evaluation harness
 Owner: Hermes

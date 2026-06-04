@@ -1,3 +1,31 @@
+# TA-MAP-003A — Define mapping quality gates and failure policy
+
+- Recorded at: 2026-06-04
+- Baseline commit: `2587be9135a81208ef80e846893731b6cd59f5cb`
+- Workflow type: manual controlled quality-gate policy over synthetic evaluator
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI/OCR mapping implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation: 0
+- FinalGrade creation: 0
+- Private files/artifacts used: no
+
+## Change made
+
+Added `evaluate_mapping_quality_gate(...)` to the mapping evaluator. The policy returns `eligible_for_real_provider_trial`, `blocker_reasons`, `warning_reasons`, and the evaluated metrics. It blocks provider advancement on critical failures, unsafe auto-accept, grading/finalization side effects, missed continuations, wrong-question critical failures, blank false mappings, and mandatory-review confirmation gaps.
+
+## Policy result
+
+`current_mock_provider` remains ineligible for a real-provider trial as product-quality mapping. Its TA-MAP-003 result is useful as a measurement baseline only: 3/7 cases passed, 2 critical failures, 0 unsafe auto-accepts, 0 `GradeSuggestion` creations, and 0 `FinalGrade` creations.
+
+## Safety result
+
+Real AI mapping remains blocked. TA-MAP-004 was not started. Critical failures are treated as blockers, not nice-to-fix issues.
+
 # TA-MAP-003 — Mapping evaluation harness and synthetic benchmark
 
 - Recorded at: 2026-06-04
