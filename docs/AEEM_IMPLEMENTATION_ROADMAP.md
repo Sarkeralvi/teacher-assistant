@@ -1,3 +1,11 @@
+## TA-BATCH-001A completion note
+
+TA-BATCH-001A strengthens the AEEM batch-prep gate before grading queue work. Batch evidence preparation now treats expected packets as the Cartesian product of submissions and canonical grading units, then marks each slot ready or quarantined. This prevents silently ignoring missing answer regions.
+
+The mixed-state backend test covers two submissions × three grading units and includes one ready packet, one missing answer region, one unconfirmed packet, one partial packet, one blank packet, one unresolved possible continuation, and missing active rubric blockers. Exact expected count is 6, with 1 ready, 5 blocked, 5 warning packets, 1 partial, and 1 blank.
+
+TA-GRADE-001 should not start automatically. It is safer to plan after this gate remains green, but it still needs explicit approval and must consume only confirmed ready packets.
+
 ## TA-UI-001A completion note
 
 TA-UI-001A hardens the evidence packet readiness layer before batch evidence preparation. Evidence packets now distinguish `unconfirmed`, `complete`, `partial`, and `blank`; continuation status is tracked separately; and readiness is derived from explicit packet status plus active rubric, canonical grading unit, crop/context, confirmed segment count, contiguous segment order, and continuation blockers. Segment corrections reopen confirmation, while continuation-not-needed clears only the continuation blocker.

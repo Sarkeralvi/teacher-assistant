@@ -311,16 +311,214 @@ def test_prep_summary_quarantines_missing_rubric_invalid_order_and_missing_regio
     assert "answer segment order must be contiguous starting at 1" in by_label["2"]["blockers"]
 
 
-def test_prep_run_requires_owner_teacher(client: TestClient, tmp_path: Path) -> None:
-    data = create_assessment_fixture(client, tmp_path)
-    _, other_token = register_teacher(client, "other-prep")
+def create_question_with_optional_rubric(
+    client: TestClient,
+    assessment_id: int,
+    question_no: str,
+    *,
+    active_rubric: bool,
+) -> dict[str, object]:
+    question = client.post(
+        f"/assessments/{assessment_id}/questions",
+        json={
+            "question_no": question_no,
+            "question_text": f"Question {question_no}.",
+            "total_marks": "5.00",
+        },
+    ).json()
+    if active_rubric:
+        client.post(
+            f"/questions/{question['id']}/rubrics",
+            json={
+                "version": 1,
+                "is_active": True,
+                "rubric_json": {
+                    "total_marks": "5.00",
+                    "criteria": [
+                        {
+                            "id": "criterion",
+                            "name": "Criterion",
+                            "description": "Synthetic criterion.",
+                            "max_marks": "5.00",
+                        }
+                    ],
+                },
+            },
+        )
+    return question
+
+
+def upload_submission(
+    client: TestClient,
+    tmp_path: Path,
+    assessment_id: int,
+    student_identifier: str,
+) -> dict[str, object]:
+    image = tmp_path / f"script-{uuid4().hex}.png"
+    make_png(image)
+    with image.open("rb") as file_obj:
+        return client.post(
+            f"/assessments/{assessment_id}/submissions/upload",
+            data={"student_identifier": student_identifier, "student_name": student_identifier},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        ).json()
+
+
+def create_region_for_packet(
+    client: TestClient,
+    submission: dict[str, object],
+    question: dict[str, object],
+) -> dict[str, object]:
+    pages = submission["pages"]
+    assert isinstance(pages, list)
+    page = pages[0]
+    return client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
+    ).json()
+
+
+def test_mixed_state_prep_accounts_for_every_expected_packet_slot(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    teacher, token = register_teacher(client, "mixed-prep")
+    course = client.post(
+        "/courses",
+        json={"teacher_id": teacher["id"], "code": "MIX101", "title": "Mixed"},
+    ).json()
+    assessment = client.post(
+        f"/courses/{course['id']}/assessments",
+        json={"title": "Mixed Midterm", "assessment_type": "exam", "total_marks": "15.00"},
+    ).json()
+    q1 = create_question_with_optional_rubric(client, assessment["id"], "1", active_rubric=True)
+    q2 = create_question_with_optional_rubric(client, assessment["id"], "2", active_rubric=True)
+    q3 = create_question_with_optional_rubric(client, assessment["id"], "3", active_rubric=False)
+    s1 = upload_submission(client, tmp_path, assessment["id"], "S-001")
+    s2 = upload_submission(client, tmp_path, assessment["id"], "S-002")
+
+    ready_region = create_region_for_packet(client, s1, q1)
+    ready_response = client.patch(
+        f"/answer-regions/{ready_region['id']}/corrections/full-answer-confirmation",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "full_answer_confirmed": True,
+            "continuation_not_needed": True,
+            "packet_status": "complete",
+        },
+    )
+    assert ready_response.status_code == 200
+
+    unconfirmed_region = create_region_for_packet(client, s1, q3)
+    partial_region = create_region_for_packet(client, s2, q1)
+    blank_region = create_region_for_packet(client, s2, q2)
+    continuation_region = create_region_for_packet(client, s2, q3)
+    for region_id, packet_status in (
+        (unconfirmed_region["id"], "unconfirmed"),
+        (partial_region["id"], "partial"),
+        (blank_region["id"], "blank"),
+        (continuation_region["id"], "complete"),
+    ):
+        region = db_session.get(AnswerRegion, region_id)
+        assert region is not None
+        region.evidence_status = packet_status
+        region.full_answer_confirmed = packet_status == "complete"
+        if packet_status in {"partial", "blank"}:
+            region.continuation_check_status = "continuation_confirmed_not_needed"
+    continuation = db_session.get(AnswerRegion, continuation_region["id"])
+    assert continuation is not None
+    continuation.full_answer_confirmed = False
+    continuation.y = 82
+    continuation.height = 15
+    s2_pages = s2["pages"]
+    assert isinstance(s2_pages, list)
+    db_session.add(
+        SubmissionPage(
+            submission_id=continuation.submission_id,
+            page_no=2,
+            image_path=s2_pages[0]["image_path"],
+        )
+    )
+    db_session.commit()
 
     response = client.post(
+        f"/assessments/{assessment['id']}/evidence-prep-runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 201
+    run = response.json()
+    assert run["status"] == "completed_with_blockers"
+    assert run["total_submissions"] == 2
+    assert run["total_expected_packets"] == 6
+    assert run["ready_packet_count"] == 1
+    assert run["blocked_packet_count"] == 5
+    assert run["partial_packet_count"] == 1
+    assert run["blank_packet_count"] == 1
+    assert run["warning_packet_count"] == 5
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+    assert db_session.query(GradingJob).count() == 0
+    assert db_session.query(GradingRun).count() == 0
+
+    packets = {
+        (packet["student_identifier"], packet["grading_unit_label"]): packet
+        for packet in run["packets"]
+    }
+    assert set(packets) == {
+        ("S-001", "1"),
+        ("S-001", "2"),
+        ("S-001", "3"),
+        ("S-002", "1"),
+        ("S-002", "2"),
+        ("S-002", "3"),
+    }
+    assert packets[("S-001", "1")]["ready_for_grading"] is True
+    missing = packets[("S-001", "2")]
+    assert missing["evidence_status"] == "missing"
+    assert missing["segment_count"] == 0
+    assert missing["pages_covered"] == []
+    assert "no answer region mapped for this submission/question" in missing["blockers"]
+    assert missing["correction_target"]["submission_id"] == s1["id"]
+    assert missing["correction_target"]["question_id"] == q2["id"]
+    assert missing["correction_target"]["answer_region_id"] is None
+    assert "evidence packet is not confirmed complete" in packets[("S-001", "3")]["blockers"]
+    assert "missing active rubric" in packets[("S-001", "3")]["blockers"]
+    assert "partial evidence packet requires teacher review" in packets[("S-002", "1")][
+        "blockers"
+    ]
+    assert "confirmed blank packet is not enabled for grading" in packets[("S-002", "2")][
+        "blockers"
+    ]
+    assert "possible answer continuation not confirmed" in packets[("S-002", "3")][
+        "blockers"
+    ]
+    assert "missing active rubric" in packets[("S-002", "3")]["blockers"]
+    assert (
+        packets[("S-002", "3")]["correction_target"]["answer_region_id"]
+        == continuation_region["id"]
+    )
+
+
+def test_prep_run_requires_owner_teacher(client: TestClient, tmp_path: Path) -> None:
+    data = create_assessment_fixture(client, tmp_path)
+    owner_response = client.post(
+        f"/assessments/{data['assessment']['id']}/evidence-prep-runs",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert owner_response.status_code == 201
+    _, other_token = register_teacher(client, "other-prep")
+
+    create_response = client.post(
         f"/assessments/{data['assessment']['id']}/evidence-prep-runs",
         headers={"Authorization": f"Bearer {other_token}"},
     )
+    read_response = client.get(
+        f"/assessments/{data['assessment']['id']}/evidence-prep-runs/{owner_response.json()['id']}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
 
-    assert response.status_code == 404
+    assert create_response.status_code == 404
+    assert read_response.status_code == 404
 
 
 def test_prep_summary_quarantines_page_order_unknown(

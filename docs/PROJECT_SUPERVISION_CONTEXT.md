@@ -1,3 +1,11 @@
+## TA-BATCH-001A supervision record
+
+TA-BATCH-001A was executed in manual controlled mode to harden batch evidence prep accounting and quarantine workflow. The important project-management result is that batch prep must account for every expected submission × canonical grading-unit packet, including missing evidence, before any grading queue is allowed.
+
+The mixed-state fixture proves six expected slots from two submissions × three grading units and covers ready, missing answer region, unconfirmed, partial, blank, unresolved continuation, and missing-rubric blockers. Quarantine summaries expose correction targets so the teacher/founder can resolve evidence gaps without grading.
+
+No autonomous loop was enabled. Real Codex was not run. Real AI mapping and real OCR/vision were not implemented. TA-GRADE-001 was not started. Batch grading and teacher observation were not started. Batch prep creates no `GradeSuggestion`, `FinalGrade`, `GradingJob`, or real Codex job.
+
 ## TA-UI-001A supervision record
 
 TA-UI-001A was executed in manual controlled mode to harden evidence packet state before batch evidence preparation. Backend state now distinguishes unconfirmed, complete, partial, blank, continuation-not-needed, continuation-included/confirmed, blocked, and ready-for-grading through explicit packet fields and derived readiness gates. Correction operations update readiness consistently and preserve lightweight `AuditLog` records with correction type, before/after payload, teacher id, and timestamp.

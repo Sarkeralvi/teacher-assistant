@@ -1355,6 +1355,19 @@ Tests required: focused batch evidence prep tests, frontend static workflow test
 Risks: Batch preparation is not batch grading. Any later grading queue must consume only confirmed/ready packets.
 Status: Done
 
+TASK-ID: TA-BATCH-001A
+Title: Harden batch evidence prep correctness and quarantine workflow
+Owner: Hermes
+Priority: P0
+Dependencies: TA-BATCH-001
+Files affected: apps/api/app/services/evidence_prep_service.py, apps/api/app/schemas.py, apps/api/tests/test_evidence_prep_runs_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, docs/tests
+Goal: Prove batch prep accounts for every expected submission × grading-unit evidence slot before any grading queue is planned.
+Implementation notes: Hardens expected-packet accounting with a mixed-state fixture covering two submissions and three grading units. Missing answer regions are explicit blocked packets, missing rubric remains a blocker, and quarantine items include correction target metadata. This remains evidence preparation only and creates no `GradeSuggestion`, `FinalGrade`, `GradingJob`, real Codex job, real AI mapping, or real OCR/vision output.
+Acceptance criteria: `total_expected_packets` equals submissions × grading units; ready/blocked/warning/partial/blank counts are exact for mixed evidence states; cross-teacher create/read access is rejected; frontend blocked-item summary shows actionable correction hints.
+Tests required: focused evidence prep tests, full test, lint, frontend static/build/e2e if frontend touched, diff check.
+Risks: TA-GRADE-001 must remain blocked until this accounting is green; future zero-mark blank handling is separate.
+Status: Done
+
 TASK-ID: TA-GRADE-001
 Title: Question-wise grading queue from sealed/confirmed packets
 Owner: Hermes

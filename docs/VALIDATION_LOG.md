@@ -1,3 +1,45 @@
+# TA-BATCH-001A — Harden batch evidence prep correctness and quarantine workflow
+
+- Recorded at: 2026-06-04
+- Baseline commit: `0bb79cf8e61c1875d0620c938610420690dcb0d6`
+- Workflow type: manual controlled evidence-prep hardening
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI mapping implementation: not started
+- Real OCR/vision implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created by prep run: 0
+- FinalGrade created by prep run: 0
+- GradingJob created by prep run: 0
+- Private files/artifacts used: no
+
+## Change made
+
+TA-BATCH-001A hardens expected-packet accounting: batch prep now treats expected evidence slots as submissions × active/canonical grading units and represents missing answer regions as blocked packets instead of omitting them. Quarantine items include submission id, student identifier, grading unit label, blocker/warning reasons, `evidence_status`, `continuation_check_status`, segment count, pages covered, answer-region/question ids, and correction target metadata.
+
+The mixed-state backend test covers two submissions × three grading units: one ready complete packet; one missing answer region; one unconfirmed packet; one partial packet; one blank packet; one unresolved possible continuation; and missing active rubric blockers. Exact expected counts are 6 total packets, 1 ready, 5 blocked, 5 warning packets, 1 partial, and 1 blank.
+
+## Safety result
+
+TA-BATCH-001A is evidence preparation only. It is not batch grading. It creates no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no real Codex job, and no real AI/OCR provider output. Partial packets are blocked from normal grading. Blank packets are blocked from normal AI grading for now; future zero-mark blank handling remains separate and was not implemented. TA-GRADE-001 remains blocked until batch prep proves no missing evidence is silently ignored and the next task is explicitly approved.
+
+## Checks run
+
+- `git status --short` — clean at baseline.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... python -m pytest tests/test_evidence_prep_runs_api.py::test_mixed_state_prep_accounts_for_every_expected_packet_slot -q` — first failed on missing `correction_target`, then passed after implementation.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... python -m pytest tests/test_evidence_prep_runs_api.py -q` — 6 passed.
+- `node tests/workflow-ui.test.mjs` — frontend workflow static checks passed.
+- `node tests/workflow-ui.test.mjs && npm run build` — static check passed; Next production build completed successfully. Existing ESLint flat-config warning printed, command exited 0.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... make test` — 246 passed.
+- `PATH=/tmp/ta-bin:$PATH make up`; `docker compose exec -T backend alembic upgrade head`; health retry via `curl` — services healthy after backend startup.
+- Playwright E2E via Windows Docker CLI with WSL path volume — 2 passed.
+- `git diff --check` — passed.
+- `PATH=/tmp/ta-bin:$PATH make down` — services stopped and removed.
+
 # TA-BATCH-001 — Batch evidence packet preparation scaffold
 
 - Recorded at: 2026-06-04

@@ -1,3 +1,11 @@
+## TA-BATCH-001A grading-quality gate
+
+TA-BATCH-001A records expected-packet accounting as a grading-quality prerequisite. A batch prep run must account for each submission × grading-unit slot; otherwise missing evidence could be silently skipped before a grading queue exists.
+
+Quarantine fields now include submission id, student identifier, grading unit label, blocker reasons, `evidence_status`, `continuation_check_status`, segment count, pages covered, and correction target metadata. Current policy blocks `partial` from normal grading and blocks `blank` from normal AI grading; future automatic zero-mark blank handling is separate and was not implemented.
+
+Batch prep is not grading and must create no `GradeSuggestion`, `FinalGrade`, `GradingJob`, or Codex job. TA-GRADE-001 remains blocked until expected-packet accounting and quarantine workflow are proven safe.
+
 ## TA-UI-001A packet readiness quality rule
 
 TA-UI-001A makes evidence packet status a grading-quality gate, not a UI label. A packet can be grading-ready only when it is explicitly complete and all other evidence checks pass. Partial packets, blank packets, unconfirmed packets, possible continuations, no-segment packets, invalid segment order, missing active rubric, and invalid crop/context are blockers.

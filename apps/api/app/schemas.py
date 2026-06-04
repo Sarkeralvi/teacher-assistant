@@ -192,6 +192,7 @@ class BatchEvidencePrepPacketSummary(BaseModel):
     pages_covered: list[int] = Field(default_factory=list)
     answer_region_id: int | None = None
     question_id: int | None = None
+    correction_target: dict[str, int | str | None] = Field(default_factory=dict)
 
 
 class BatchEvidencePrepRunRead(ORMBase):

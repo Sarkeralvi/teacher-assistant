@@ -483,6 +483,14 @@ export type EvidencePrepPacketSummary = {
   pages_covered: number[];
   answer_region_id: number | null;
   question_id: number | null;
+  correction_target: {
+    submission_id?: number | null;
+    student_identifier?: string | null;
+    question_id?: number | null;
+    grading_unit_label?: string | null;
+    answer_region_id?: number | null;
+    correction_anchor?: string | null;
+  };
 };
 
 export type EvidencePrepRun = {

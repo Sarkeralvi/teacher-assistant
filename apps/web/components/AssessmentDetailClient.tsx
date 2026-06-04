@@ -759,8 +759,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       <p className="text-slate-400">
                         evidence_status {packet.evidence_status} · continuation {packet.continuation_check_status} · segments {packet.segment_count}
                       </p>
+                      <p className="text-xs text-slate-500">Pages covered: {packet.pages_covered.length > 0 ? packet.pages_covered.join(", ") : "none yet"}</p>
                       <p className="text-amber-200">Reason: {packet.blockers.join("; ") || "blocked by policy"}</p>
-                      {packet.answer_region_id ? <a className="text-cyan-300 underline" href={`#answer-region-${packet.answer_region_id}`}>Go to correction area</a> : null}
+                      {packet.answer_region_id ? (
+                        <a className="text-cyan-300 underline" href={`#answer-region-${packet.answer_region_id}`}>Go to correction area</a>
+                      ) : (
+                        <p className="text-cyan-300">Correction target: create/map evidence for submission #{packet.correction_target.submission_id ?? packet.submission_id} and grading unit {packet.correction_target.grading_unit_label ?? packet.grading_unit_label ?? "unknown"} in the answer-region form below.</p>
+                      )}
                     </article>
                   ))}
                 </div>

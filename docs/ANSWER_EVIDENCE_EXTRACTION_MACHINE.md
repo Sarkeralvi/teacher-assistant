@@ -1,3 +1,11 @@
+## TA-BATCH-001A evidence-prep accounting hardening
+
+TA-BATCH-001A hardens batch evidence preparation so it accounts for every expected submission × active/canonical grading-unit slot, not just answer regions that already exist. Missing answer regions are now represented as explicit blocked packets with `evidence_status = missing`, zero segments, no pages covered, and correction-target metadata pointing to the relevant submission and grading unit.
+
+Current quarantine policy remains conservative: `partial` is blocked from normal grading, `blank` is blocked from normal AI grading for now, and future zero-mark blank handling is separate. Missing active rubric, unconfirmed packet status, invalid segment order, missing segment/crop/context, unresolved possible continuation, and missing answer region are blockers. Batch prep creates no `GradeSuggestion`, `FinalGrade`, `GradingJob`, real Codex job, real AI mapping, or real OCR/vision output.
+
+TA-GRADE-001 remains blocked until this accounting remains green under focused/full checks; batch prep is evidence preparation only, not grading.
+
 ## TA-UI-001A evidence packet state hardening
 
 TA-UI-001A makes packet status explicit before batch evidence preparation. The current source of truth is `AnswerRegion.evidence_status` with values `unconfirmed`, `complete`, `partial`, and `blank`, plus `AnswerRegion.continuation_check_status` for continuation risk/resolution. `ready_for_grading` is derived, not manually set.

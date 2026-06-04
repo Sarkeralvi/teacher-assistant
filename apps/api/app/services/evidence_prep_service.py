@@ -75,6 +75,11 @@ class EvidencePrepService:
                             "pages_covered": [],
                             "answer_region_id": None,
                             "question_id": question.id,
+                            "correction_target": self._correction_target(
+                                submission=submission,
+                                question=question,
+                                region=None,
+                            ),
                         }
                     )
                     continue
@@ -104,6 +109,11 @@ class EvidencePrepService:
                         "pages_covered": student_evidence["pages_covered"],
                         "answer_region_id": region.id,
                         "question_id": question.id,
+                        "correction_target": self._correction_target(
+                            submission=submission,
+                            question=question,
+                            region=region,
+                        ),
                     }
                 )
         return self._summarize_packets(assessment_id, len(submissions), packets)
@@ -141,3 +151,17 @@ class EvidencePrepService:
         if len(set(page_numbers)) != len(page_numbers):
             return "page order unknown"
         return None
+
+    def _correction_target(
+        self, *, submission: Submission, question: Question, region: AnswerRegion | None
+    ) -> dict[str, int | str | None]:
+        return {
+            "submission_id": submission.id,
+            "student_identifier": submission.student_identifier,
+            "question_id": question.id,
+            "grading_unit_label": question.question_no,
+            "answer_region_id": region.id if region else None,
+            "correction_anchor": (
+                f"answer-region-{region.id}" if region else "answer-region-create-form"
+            ),
+        }
