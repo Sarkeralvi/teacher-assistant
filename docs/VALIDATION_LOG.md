@@ -1,3 +1,41 @@
+# TA-BATCH-001 — Batch evidence packet preparation scaffold
+
+- Recorded at: 2026-06-04
+- Baseline commit: `423f4a3ed5691aa91aae20618756eae0746d0c35`
+- Workflow type: manual controlled evidence-preparation scaffold
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI mapping implementation: not started
+- Real OCR/vision implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created by prep run: 0
+- FinalGrade created by prep run: 0
+- Private files/artifacts used: no
+
+## Change made
+
+Added `BatchEvidencePrepRun` metadata, evidence prep summary/run endpoints, and a service that summarizes student×grading-unit evidence readiness. Packets are quarantined for page-order uncertainty, missing regions/segments, unconfirmed/partial/blank status, possible continuation not confirmed, missing rubric, invalid segment order, and missing crop/context. The assessment UI now shows an Evidence preparation summary with ready/blocked/warning/partial/blank counts and blocked item reasons.
+
+## Safety result
+
+TA-BATCH-001 is evidence preparation only. It is not batch grading. It creates no `GradeSuggestion`, no `FinalGrade`, no grading job, no real Codex job, and no real AI/OCR provider output. Real AI/OCR providers remain blocked.
+
+## Checks run
+
+- `git status --short` — checked at start; clean at baseline.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL='postgresql+psycopg://teacher_assistant:teacher_assistant_dev_password@localhost:5432/teacher_assistant' python -m pytest tests/test_evidence_prep_runs_api.py -q` — 5 passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL='postgresql+psycopg://teacher_assistant:teacher_assistant_dev_password@localhost:5432/teacher_assistant' python -m pytest tests/test_evidence_prep_runs_api.py tests/test_models_metadata.py tests/test_migrations.py -q` — 9 passed.
+- `node tests/workflow-ui.test.mjs` — frontend workflow static checks passed.
+- `npm run build` in `apps/web` — compiled and built successfully; existing Next/ESLint flat-config warning printed but command exited 0.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... make test` — 245 passed.
+- `PATH=/tmp/ta-bin:$PATH make up`; `docker compose exec -T backend alembic upgrade head`; `make health` — services started, migration applied, health passed after startup completed.
+- `make e2e` via the Windows Docker CLI failed to mount the WSL repo path (`/work/apps/web/package.json` missing). Re-run with the equivalent `\\wsl.localhost\\Ubuntu\\home\\newton\\teacher-assistant` volume path passed: 2 passed.
+- `git diff --check` — passed before final verification.
+
 # TA-UI-001A — Harden evidence packet status and correction semantics
 
 - Recorded at: 2026-06-04

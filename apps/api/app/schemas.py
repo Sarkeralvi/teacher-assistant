@@ -172,6 +172,46 @@ class GradingRunRead(ORMBase):
     updated_at: datetime
 
 
+BatchEvidencePrepRunStatus = Literal[
+    "pending", "running", "completed", "completed_with_blockers", "failed"
+]
+
+
+class BatchEvidencePrepPacketSummary(BaseModel):
+    submission_id: int
+    student_identifier: str | None
+    grading_unit_label: str | None
+    max_marks: Decimal | None
+    evidence_status: str
+    continuation_check_status: str
+    ready_for_grading: bool
+    quarantined: bool
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    segment_count: int
+    pages_covered: list[int] = Field(default_factory=list)
+    answer_region_id: int | None = None
+    question_id: int | None = None
+
+
+class BatchEvidencePrepRunRead(ORMBase):
+    id: int | None = None
+    assessment_id: int
+    created_by_teacher_id: int | None = None
+    status: BatchEvidencePrepRunStatus
+    total_submissions: int
+    total_expected_packets: int
+    ready_packet_count: int
+    blocked_packet_count: int
+    warning_packet_count: int
+    blank_packet_count: int
+    partial_packet_count: int
+    packets: list[BatchEvidencePrepPacketSummary] = Field(default_factory=list)
+    error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class QuestionCreate(BaseModel):
     question_no: str = Field(min_length=1, max_length=32)
     question_text: str = Field(min_length=1)

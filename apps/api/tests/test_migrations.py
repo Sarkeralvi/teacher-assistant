@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-EXPECTED_REVISION_ID = "0010_evidence_packet_status"
+EXPECTED_REVISION_ID = "0011_batch_evidence_prep_runs"
 
 
 def test_initial_alembic_migration_exists_and_is_importable() -> None:

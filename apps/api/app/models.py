@@ -46,6 +46,9 @@ class User(TimestampMixin, Base):
 
     courses: Mapped[list[Course]] = relationship(back_populates="teacher")
     grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="created_by_teacher")
+    evidence_prep_runs: Mapped[list[BatchEvidencePrepRun]] = relationship(
+        back_populates="created_by_teacher"
+    )
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="teacher")
 
 
@@ -89,6 +92,9 @@ class Assessment(TimestampMixin, Base):
     questions: Mapped[list[Question]] = relationship(back_populates="assessment")
     submissions: Mapped[list[Submission]] = relationship(back_populates="assessment")
     grading_runs: Mapped[list[GradingRun]] = relationship(back_populates="assessment")
+    evidence_prep_runs: Mapped[list[BatchEvidencePrepRun]] = relationship(
+        back_populates="assessment"
+    )
     question_import_jobs: Mapped[list[QuestionImportJob]] = relationship(
         back_populates="assessment"
     )
@@ -141,6 +147,39 @@ class GradingRun(TimestampMixin, Base):
 
     assessment: Mapped[Assessment] = relationship(back_populates="grading_runs")
     created_by_teacher: Mapped[User] = relationship(back_populates="grading_runs")
+
+
+class BatchEvidencePrepRun(TimestampMixin, Base):
+    __tablename__ = "batch_evidence_prep_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ("
+            "'pending', 'running', 'completed', 'completed_with_blockers', 'failed'"
+            ")",
+            name="ck_batch_evidence_prep_runs_status",
+        ),
+        Index("ix_batch_evidence_prep_runs_assessment_id", "assessment_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    total_submissions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_expected_packets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ready_packet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_packet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    warning_packet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blank_packet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    partial_packet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="evidence_prep_runs")
+    created_by_teacher: Mapped[User] = relationship(back_populates="evidence_prep_runs")
 
 
 class QuestionImportJob(TimestampMixin, Base):

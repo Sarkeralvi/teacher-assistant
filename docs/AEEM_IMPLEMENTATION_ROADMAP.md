@@ -138,3 +138,9 @@ TA-MAP-003, TA-MAP-003A, TA-REF-001, and TA-SCRIPT-001 now close the first mappi
 ## Stop conditions preserved
 
 This roadmap update does not start TA-MAP-004. It does not implement real AI mapping, real OCR/vision sequencing, run Codex, run batch grading, create `GradeSuggestion`, create `FinalGrade`, start teacher observation, or change grading logic.
+
+## TA-BATCH-001 completion note
+
+TA-BATCH-001 is implemented as an evidence-preparation scaffold, not grading. It adds batch prep run metadata, current assessment summary endpoints, per-student/per-question packet summaries, and quarantine counts for blocked evidence. The assessment UI shows an Evidence preparation summary with ready/blocked/warning/partial/blank counts and blocked packet reasons.
+
+This satisfies the AEEM ordering principle: batch organization can exist before grading, but only as readiness/quarantine reporting. Real AI mapping, real OCR/vision providers, real Codex, `GradeSuggestion`, `FinalGrade`, and batch grading remain blocked. The next grading-related task must consume only ready/confirmed packets and must be separately approved.

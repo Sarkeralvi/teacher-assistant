@@ -306,3 +306,9 @@ Real OCR/vision reference extraction remains blocked. Wrong reference extraction
 TA-SCRIPT-001 is Done as an evaluation-first harness over synthetic/non-private script-processing fixtures. It measures ordered/reversed pages, missing pages, duplicate pages, blank/cover pages, single-page boundaries, multi-question same-page boundaries, near-bottom continuations, near-bottom complete answers, and ambiguous low-confidence boundaries.
 
 Real OCR/vision sequencing, real AI mapping, TA-MAP-004 implementation, Codex, private files, grading, batch grading, teacher observation, `GradeSuggestion`, and `FinalGrade` remain blocked/out of scope. Script sequencing and answer-boundary detection must be measurable before real mapping providers or batch evidence packet preparation.
+
+## TA-BATCH-001 supervision note
+
+TA-BATCH-001 is evidence preparation only. It may create `BatchEvidencePrepRun` metadata and compute evidence-readiness summaries. It must not create `GradeSuggestion`, must not create `FinalGrade`, must not start batch grading, must not run real Codex, and must not invoke real AI/OCR providers.
+
+Current quarantine policy blocks packets for unknown page order, no mapped region/segment, unconfirmed/partial/blank packet status, unconfirmed possible continuation, missing active rubric, invalid segment order, and missing crop/context. The UI warning must continue saying evidence preparation does not grade.

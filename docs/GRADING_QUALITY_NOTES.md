@@ -548,3 +548,9 @@ This smoke confirms that policy metadata reaches the real Codex grading path and
 TA-MAP-003 makes answer-boundary quality measurable before grading quality is claimed. The synthetic benchmark explicitly checks for missed continuations, wrong-question mapping, blank/low-content false mappings, unsafe auto-accept behavior, and accidental `GradeSuggestion`/`FinalGrade` side effects.
 
 Current deterministic/mock provider result is intentionally limited: 3/7 cases pass, with 0 unsafe auto-accepts, 0 `GradeSuggestion` creations, and 0 `FinalGrade` creations. The failing cases are evidence that real AI mapping must be benchmark-gated, not evidence that grading can proceed.
+
+## TA-BATCH-001 quality note
+
+Batch evidence preparation now exists to expose readiness and quarantine state across many submissions before grading. Counts for ready, blocked, warnings, blank, and partial packets are evidence-quality indicators, not grading results. A `completed_with_blockers` prep run means the assessment is not ready for downstream grading queues until blocked packets are corrected or explicitly handled by policy.
+
+The current blank policy is conservative: blank packets are counted and blocked from normal grading. Partial and unconfirmed packets are blocked. Possible continuations are blocked until teacher confirmation. Missing rubric, invalid segment order, missing crop/context, and page-order uncertainty are blockers.

@@ -1347,13 +1347,13 @@ Title: Batch evidence packet preparation
 Owner: Hermes
 Priority: P0
 Dependencies: TA-REF-001, TA-SCRIPT-001, TA-MAP-003, TA-UI-001, TA-UI-001A
-Files affected: scoped backend/worker/docs/tests after approval
+Files affected: apps/api/app/models.py, apps/api/app/api/routes/evidence_prep.py, apps/api/app/services/evidence_prep_service.py, apps/api/app/schemas.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, docs/tests
 Goal: Prepare evidence packets across a batch without grading side effects.
-Implementation notes: Process scripts independently, quarantine blocked scripts, never create GradeSuggestion or FinalGrade during evidence preparation, and require final teacher/founder readiness sign-off.
-Acceptance criteria: Batch job prepares or quarantines student×CGU evidence packets with clear blockers/warnings and no grading/finalization side effects.
-Tests required: focused batch evidence tests, lint, diff check.
-Risks: Batch pipeline can hide evidence failures if quarantine/review states are unclear.
-Status: Pending
+Implementation notes: Implemented as an evidence-preparation scaffold only. It creates `BatchEvidencePrepRun` metadata, summarizes student×CGU evidence packet readiness, and quarantines blocked packets. It does not create `GradeSuggestion`, does not create `FinalGrade`, does not start a grading job, does not run real Codex, and does not invoke real AI/OCR providers.
+Acceptance criteria: Batch prep run reports ready/blocked/warning/blank/partial counts plus per-packet blockers/warnings; incomplete/problem packets are quarantined; ownership prevents another teacher from running prep on the assessment.
+Tests required: focused batch evidence prep tests, frontend static workflow test, full tests/lint/build/e2e where available, diff check.
+Risks: Batch preparation is not batch grading. Any later grading queue must consume only confirmed/ready packets.
+Status: Done
 
 TASK-ID: TA-GRADE-001
 Title: Question-wise grading queue from sealed/confirmed packets

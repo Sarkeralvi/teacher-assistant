@@ -213,3 +213,9 @@ Current result: `current_mock_provider` is not eligible for real-provider trial 
 5. TA-UI-001: Teacher correction workflow for split/merge/reorder/confirm.
 6. TA-BATCH-001: Batch evidence packet preparation.
 7. TA-GRADE-001: Question-wise grading queue from confirmed packets.
+
+## Batch evidence-preparation interaction
+
+TA-BATCH-001 consumes the existing mapped answer-region and evidence-packet readiness state without adding a real mapping provider. Mapping failures are surfaced as quarantined packets rather than hidden. Missing regions, unconfirmed/partial/blank evidence, possible continuation, bad segment order, missing crop/context, missing rubric, and unknown page order remain blockers.
+
+This keeps the current deterministic/mock mapping layer as a safe scaffold only. Batch preparation summarizes readiness; it does not grade and does not make mapping product-quality. Real AI mapping remains blocked by TA-MAP gates.

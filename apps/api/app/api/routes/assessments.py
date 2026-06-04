@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models import (
     AnswerRegion,
     Assessment,
+    BatchEvidencePrepRun,
     Course,
     FinalGrade,
     GradeSuggestion,
@@ -180,6 +181,9 @@ def delete_assessment_test_data(
     rubric_question_ids = select(Question.id).where(Question.assessment_id == assessment.id)
     db.execute(delete(Rubric).where(Rubric.question_id.in_(rubric_question_ids)))
     db.execute(delete(QuestionImportJob).where(QuestionImportJob.assessment_id == assessment.id))
+    db.execute(
+        delete(BatchEvidencePrepRun).where(BatchEvidencePrepRun.assessment_id == assessment.id)
+    )
     db.execute(delete(GradingRun).where(GradingRun.assessment_id == assessment.id))
     db.execute(delete(Question).where(Question.assessment_id == assessment.id))
     db.commit()

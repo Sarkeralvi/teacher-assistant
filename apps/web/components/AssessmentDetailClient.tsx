@@ -10,6 +10,7 @@ import {
   addAnswerRegionSegment,
   confirmAnswerRegionFullAnswer,
   createAnswerRegion,
+  createEvidencePrepRun,
   createQuestion,
   deleteSubmission,
   editAnswerRegionSegment,
@@ -18,6 +19,7 @@ import {
   getAssessment,
   getAssessmentFinalGradesExportUrl,
   getAssessmentReviewQueue,
+  getEvidencePrepSummary,
   getGradingEvidencePacket,
   getSubmissionPageImageUrl,
   gradeAnswerRegion,
@@ -34,6 +36,7 @@ import {
   type Assessment,
   type DraftAnswerRegionSuggestionGroup,
   type DraftQuestion,
+  type EvidencePrepRun,
   type FinalGrade,
   type GradingEvidencePacket,
   type Question,
@@ -65,6 +68,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
+  const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [questionNo, setQuestionNo] = useState("");
   const [questionText, setQuestionText] = useState("");
@@ -101,6 +105,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [creatingRegion, setCreatingRegion] = useState(false);
+  const [creatingEvidencePrepRun, setCreatingEvidencePrepRun] = useState(false);
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [finalizingRegionId, setFinalizingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -207,14 +212,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, questionData, submissionData, answerRegionData, reviewQueueData] =
+      const [assessmentData, questionData, submissionData, answerRegionData, reviewQueueData, evidencePrepData] =
         await Promise.all([
           getAssessment(assessmentId),
           listQuestions(assessmentId),
           listSubmissions(assessmentId),
           listAssessmentAnswerRegions(assessmentId),
           getAssessmentReviewQueue(assessmentId),
+          getEvidencePrepSummary(assessmentId).catch(() => null),
         ]);
+
       setAssessment(assessmentData);
       setQuestions(questionData);
       setSubmissions(submissionData);
@@ -224,6 +231,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       );
       setEvidencePackets(Object.fromEntries(evidenceEntries));
       setReviewQueue(reviewQueueData);
+      setEvidencePrepSummary(evidencePrepData);
       setFinalizeDrafts((current) => mergeFinalizeDrafts(current, reviewQueueData));
       if (!selectedPageId && submissionData[0]?.pages[0]) {
         setSelectedPageId(String(submissionData[0].pages[0].id));
@@ -572,6 +580,19 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }));
   }
 
+  async function handleCreateEvidencePrepRun() {
+    setCreatingEvidencePrepRun(true);
+    setError(null);
+    try {
+      const run = await createEvidencePrepRun(assessmentId);
+      setEvidencePrepSummary(run);
+    } catch (err) {
+      setError(err instanceof Error ? `Evidence preparation failed: ${err.message}` : "Evidence preparation failed");
+    } finally {
+      setCreatingEvidencePrepRun(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {loading ? <LoadingState /> : null}
@@ -702,6 +723,54 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             </article>
           ))}
         </div>
+      </section>
+
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Evidence preparation summary</h2>
+            <p className="text-sm text-amber-200">This prepares evidence only. It does not grade.</p>
+          </div>
+          <button className={buttonClass} type="button" disabled={creatingEvidencePrepRun} onClick={() => void handleCreateEvidencePrepRun()}>
+            {creatingEvidencePrepRun ? "Preparing evidence..." : "Create evidence prep run"}
+          </button>
+        </div>
+        {evidencePrepSummary ? (
+          <div className="mt-4 grid gap-4">
+            <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm md:grid-cols-6">
+              <p>ready: {evidencePrepSummary.ready_packet_count}</p>
+              <p>blocked: {evidencePrepSummary.blocked_packet_count}</p>
+              <p>warnings: {evidencePrepSummary.warning_packet_count}</p>
+              <p>partial: {evidencePrepSummary.partial_packet_count}</p>
+              <p>blank: {evidencePrepSummary.blank_packet_count}</p>
+              <p>status: {evidencePrepSummary.status}</p>
+            </div>
+            <div className="rounded border border-slate-800 p-3 text-sm">
+              <p className="font-semibold">Blocked / quarantined items</p>
+              {evidencePrepSummary.packets.filter((packet) => packet.quarantined).length === 0 ? (
+                <p className="mt-2 text-slate-400">No quarantined packets in the current summary.</p>
+              ) : (
+                <div className="mt-2 grid gap-2">
+                  {evidencePrepSummary.packets.filter((packet) => packet.quarantined).slice(0, 10).map((packet) => (
+                    <article key={`${packet.submission_id}-${packet.question_id ?? "missing"}-${packet.answer_region_id ?? "none"}`} className="rounded border border-amber-900/70 p-3">
+                      <p className="font-medium">
+                        Submission #{packet.submission_id} · {packet.student_identifier ?? "unknown student"} · {packet.grading_unit_label ?? "unknown grading unit"}
+                      </p>
+                      <p className="text-slate-400">
+                        evidence_status {packet.evidence_status} · continuation {packet.continuation_check_status} · segments {packet.segment_count}
+                      </p>
+                      <p className="text-amber-200">Reason: {packet.blockers.join("; ") || "blocked by policy"}</p>
+                      {packet.answer_region_id ? <a className="text-cyan-300 underline" href={`#answer-region-${packet.answer_region_id}`}>Go to correction area</a> : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-slate-400">Evidence preparation summary has not loaded yet.</p>
+        )}
+        <p className="mt-3 text-xs text-slate-500">No batch grade button is available here. Real AI/OCR and Codex are not invoked by evidence preparation.</p>
       </section>
 
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
@@ -865,7 +934,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const linkedQuestion = questions.find((question) => question.id === region.question_id) ?? null;
             const regionStatus = statusForRegion(region.id);
             return (
-              <a key={region.id} data-testid="answer-region-card" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
+              <a id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
                 <span className="flex items-center justify-between gap-2">
                   <span>Answer region #{region.id}</span>
                   <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">

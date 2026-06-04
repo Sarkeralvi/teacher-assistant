@@ -468,6 +468,41 @@ export type GradingEvidencePacket = {
   };
 };
 
+export type EvidencePrepPacketSummary = {
+  submission_id: number;
+  student_identifier: string | null;
+  grading_unit_label: string | null;
+  max_marks: string | number | null;
+  evidence_status: string;
+  continuation_check_status: string;
+  ready_for_grading: boolean;
+  quarantined: boolean;
+  blockers: string[];
+  warnings: string[];
+  segment_count: number;
+  pages_covered: number[];
+  answer_region_id: number | null;
+  question_id: number | null;
+};
+
+export type EvidencePrepRun = {
+  id: number | null;
+  assessment_id: number;
+  created_by_teacher_id: number | null;
+  status: string;
+  total_submissions: number;
+  total_expected_packets: number;
+  ready_packet_count: number;
+  blocked_packet_count: number;
+  warning_packet_count: number;
+  blank_packet_count: number;
+  partial_packet_count: number;
+  packets: EvidencePrepPacketSummary[];
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 export type BrowserCodexGradeResponse = {
   job: {
     id: number;
@@ -911,6 +946,16 @@ export function getAnswerRegionImageUrl(answerRegionId: number) {
 
 export function getGradingEvidencePacket(answerRegionId: number) {
   return apiRequest<GradingEvidencePacket>(`/answer-regions/${answerRegionId}/grading-evidence-packet`);
+}
+
+export function getEvidencePrepSummary(assessmentId: number) {
+  return apiRequest<EvidencePrepRun>(`/assessments/${assessmentId}/evidence-prep-summary`);
+}
+
+export function createEvidencePrepRun(assessmentId: number) {
+  return apiRequest<EvidencePrepRun>(`/assessments/${assessmentId}/evidence-prep-runs`, {
+    method: "POST",
+  });
 }
 
 export function editAnswerRegionSegment(

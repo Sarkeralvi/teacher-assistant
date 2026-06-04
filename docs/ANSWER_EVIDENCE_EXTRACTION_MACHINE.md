@@ -385,3 +385,11 @@ TA-MAP-003 adds the first executable AEEM safety net for answer-boundary evidenc
 The benchmark covers single-page complete answers, multi-page continuations, near-bottom no-continuation cases, ambiguous possible continuation, multiple questions on one page, wrong-question traps, and blank/low-content pages. Metrics include question-label, group, segment, order, page coverage, continuation-risk, wrong-question, blank-page, full-answer-confirmation, unsafe auto-accept, `GradeSuggestion`, and `FinalGrade` counts.
 
 Current result: the deterministic/mock provider is useful contract plumbing but is not a production mapper. It passes only the cases matching its deliberately simple behavior and fails realistic traps such as multi-question page confusion, wrong-question detection, and blank/low-content pages. Real AI mapping remains blocked until benchmark expectations and follow-up gates are accepted.
+
+## TA-BATCH-001 batch evidence preparation scaffold
+
+TA-BATCH-001 adds batch evidence packet preparation only. It organizes the current assessment into student × canonical-grading-unit packet summaries and reports readiness/quarantine state before any grading queue exists. The scaffold records `BatchEvidencePrepRun` metadata for assessment, teacher, status, total submissions, expected packet count, ready count, blocked count, warning count, blank count, and partial count.
+
+Per-packet summaries include submission id, student identifier, grading-unit label, max marks, packet status, continuation status, readiness, blockers, warnings, segment count, and pages covered. Quarantine blockers include unknown page order, missing answer region/segment, unconfirmed packet, partial packet, blank packet under current policy, possible continuation not confirmed, missing active rubric, invalid segment order, and missing crop/context.
+
+This is not batch grading. It creates no `GradeSuggestion`, no `FinalGrade`, no grading job, no real Codex job, and no real AI/OCR work. Real providers remain blocked behind the evaluation gates.
