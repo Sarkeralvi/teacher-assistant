@@ -1341,3 +1341,17 @@ Acceptance criteria: Grading queue groups confirmed packets by canonical grading
 Tests required: focused queue/readiness tests, lint, diff check.
 Risks: Premature grading queue work can bypass evidence gates; only start after batch evidence readiness is proven.
 Status: Pending
+
+
+TASK-ID: TA-CORE-002
+Title: Map AEEM architecture to implementation roadmap and gates
+Owner: Hermes
+Priority: P0
+Dependencies: TA-CORE-001
+Files affected: BACKLOG.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/VALIDATION_LOG.md
+Goal: Create a project-manager bridge showing how the adopted AEEM architecture maps to current TAAgent capabilities, missing pieces, implementation tasks, and ordering gates.
+Implementation notes: Documentation/backlog only. Clarify that AEEM is being implemented in controlled slices, not as a monolithic real-AI build. Do not start TA-MAP-003, real AI mapping, real Codex, batch grading, teacher observation, GradeSuggestion creation, FinalGrade creation, private-file use, or product-code changes.
+Acceptance criteria: Roadmap table maps the required AEEM layers to current status, missing pieces, next task, and why this order. Docs explain why evaluation harnesses precede real providers and recommend the next task with justification.
+Tests required: `git status --short`; `git diff --check`; `make lint`; final `git status --short`. Full test not required because docs/backlog only.
+Risks: Founder confusion could persist if TA-MAP is described as separate from AEEM; roadmap must state TA-MAP is one AEEM layer, not the whole machine.
+Status: Done

@@ -1,3 +1,34 @@
+# TA-CORE-002 — Map AEEM architecture to implementation roadmap
+
+- Recorded at: 2026-06-04T12:13:40+06:00
+- Baseline commit: `52bd4ffb0950d841a22e0bb721585b2faebb5daa`
+- Workflow type: documentation/backlog-only roadmap bridge
+- Real Codex calls: 0
+- Real AI mapping implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation: 0
+- FinalGrade creation: 0
+- Product code changed: no
+- Private files/artifacts committed: no
+
+## Change made
+
+Created `docs/AEEM_IMPLEMENTATION_ROADMAP.md` and updated AEEM/supervision/backlog/validation docs to map each AEEM layer to current TAAgent status, missing pieces, next task, and ordering rationale.
+
+## Roadmap decision
+
+Recommended next implementation is TA-MAP-003: Mapping evaluation harness and synthetic benchmark. The rationale is that mapping/continuation was the discovered evidence failure, TA-MAP-002 already provides the draft contract, and real AI mapping must wait until quality can be measured.
+
+## Safety result
+
+TA-CORE-002 is docs/backlog only. It does not start TA-MAP-003, real AI mapping, batch grading, Codex calls, teacher observation, or grading/finalization records.
+
+## Verification results
+
+To be completed by the TA-CORE-002 commit gate: `git status --short`, `git diff --check`, `make lint`, final `git status --short`.
+
 # TA-CORE-001 — Adopt AEEM architecture and reset implementation sequence
 
 - Recorded at: 2026-06-04T11:41:53+06:00

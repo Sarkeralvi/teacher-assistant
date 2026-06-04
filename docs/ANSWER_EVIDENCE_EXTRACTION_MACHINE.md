@@ -1,3 +1,9 @@
+# TA-CORE-002 implementation-roadmap bridge
+
+Recorded at: 2026-06-04T12:13:40+06:00
+
+The detailed bridge from AEEM architecture to TAAgent implementation tasks is now maintained in `docs/AEEM_IMPLEMENTATION_ROADMAP.md`. That roadmap clarifies that AEEM is being implemented in controlled slices, not as a monolithic Claude/Gemini/Codex build. The next recommended implementation remains TA-MAP-003, the mapping evaluation harness and synthetic benchmark, because real AI mapping must wait until mapping quality is measurable.
+
 # Answer Evidence Extraction Machine (AEEM)
 
 Status: Adopted as the north-star architecture for the pre-grading pipeline in TA-CORE-001. This document is adapted for the current Teacher Assistant repo state and founder constraints; it is not a verbatim copy of the external architecture reference.

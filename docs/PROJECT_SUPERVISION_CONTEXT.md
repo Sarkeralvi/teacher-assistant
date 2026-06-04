@@ -1,3 +1,20 @@
+# TA-CORE-002 current state — AEEM mapped to implementation roadmap
+
+Recorded at: 2026-06-04T12:13:40+06:00
+Baseline: `52bd4ffb0950d841a22e0bb721585b2faebb5daa` (`Adopt answer evidence extraction architecture`)
+
+TA-CORE-002 creates the project-manager bridge document `docs/AEEM_IMPLEMENTATION_ROADMAP.md`. Use it to answer founder confusion about whether the project is implementing AEEM or continuing old TA-MAP work. The answer is: AEEM is the full north-star, and TA-MAP is now one controlled slice inside it.
+
+Implementation philosophy recorded:
+
+- implement AEEM in controlled slices, not one monolithic machine;
+- evaluation harnesses before real AI/OCR providers;
+- no real AI mapping before TA-MAP-003;
+- no batch grading before evidence packet correctness is measurable;
+- no grading quality claims unless question/solution/rubric/answer evidence is confirmed complete.
+
+Recommended next task after TA-CORE-002: TA-MAP-003 — Mapping evaluation harness and synthetic benchmark. Do not start it automatically.
+
 # TA-CORE-001 current state — AEEM adopted as pre-grading architecture
 
 Recorded at: 2026-06-04T11:41:53+06:00
