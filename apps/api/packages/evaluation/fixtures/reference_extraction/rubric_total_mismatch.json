@@ -1,0 +1,81 @@
+{
+  "case_id": "rubric_total_mismatch",
+  "description": "Rubric criteria total does not match max marks.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [
+    "rubric total/max mark mismatch"
+  ],
+  "expected_canonical_grading_units": [
+    {
+      "label": "3(a)",
+      "max_marks": "5.00",
+      "question_text": "Solve the simultaneous equations.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    }
+  ],
+  "expected_rubric_criteria": {
+    "3(a)": [
+      {
+        "criterion_id": "3a-c1",
+        "description": "Elimination method",
+        "max_marks": "2.00"
+      },
+      {
+        "criterion_id": "3a-c2",
+        "description": "Correct solution pair",
+        "max_marks": "3.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "3(a)": "Eliminate one variable and solve for the ordered pair."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": false,
+  "expected_warnings": [],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [
+        "rubric total/max mark mismatch"
+      ],
+      "canonical_grading_units": [
+        {
+          "label": "3(a)",
+          "max_marks": "5.00",
+          "question_text": "Solve the simultaneous equations.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "3(a)": [
+          {
+            "criterion_id": "3a-c1",
+            "description": "Elimination method",
+            "max_marks": "2.00"
+          },
+          {
+            "criterion_id": "3a-c2",
+            "description": "Correct solution pair",
+            "max_marks": "2.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "3(a)": "Eliminate one variable and solve for the ordered pair."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": []
+    }
+  }
+}

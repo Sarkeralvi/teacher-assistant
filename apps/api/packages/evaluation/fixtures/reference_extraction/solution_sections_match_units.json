@@ -1,0 +1,107 @@
+{
+  "case_id": "solution_sections_match_units",
+  "description": "Solution/model answer sections match grading units.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [],
+  "expected_canonical_grading_units": [
+    {
+      "label": "4(a)",
+      "max_marks": "4.00",
+      "question_text": "Describe osmosis.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    },
+    {
+      "label": "4(b)",
+      "max_marks": "6.00",
+      "question_text": "Compare diffusion and osmosis.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    }
+  ],
+  "expected_rubric_criteria": {
+    "4(a)": [
+      {
+        "criterion_id": "4a-c1",
+        "description": "Definition",
+        "max_marks": "4.00"
+      }
+    ],
+    "4(b)": [
+      {
+        "criterion_id": "4b-c1",
+        "description": "Similarities",
+        "max_marks": "3.00"
+      },
+      {
+        "criterion_id": "4b-c2",
+        "description": "Differences",
+        "max_marks": "3.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "4(a)": "Osmosis is water movement through a semipermeable membrane.",
+    "4(b)": "Both are passive; osmosis concerns water across a membrane."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": true,
+  "expected_warnings": [],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [],
+      "canonical_grading_units": [
+        {
+          "label": "4(a)",
+          "max_marks": "4.00",
+          "question_text": "Describe osmosis.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        },
+        {
+          "label": "4(b)",
+          "max_marks": "6.00",
+          "question_text": "Compare diffusion and osmosis.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "4(a)": [
+          {
+            "criterion_id": "4a-c1",
+            "description": "Definition",
+            "max_marks": "4.00"
+          }
+        ],
+        "4(b)": [
+          {
+            "criterion_id": "4b-c1",
+            "description": "Similarities",
+            "max_marks": "3.00"
+          },
+          {
+            "criterion_id": "4b-c2",
+            "description": "Differences",
+            "max_marks": "3.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "4(a)": "Osmosis is water movement through a semipermeable membrane.",
+        "4(b)": "Both are passive; osmosis concerns water across a membrane."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": []
+    }
+  }
+}

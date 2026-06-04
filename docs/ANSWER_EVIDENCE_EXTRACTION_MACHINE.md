@@ -106,6 +106,27 @@ Build one scoreable unit per grading target, such as `1(b)(i)`, with:
 
 The current repo stores these as `Question` rows plus rubric/model-answer fields. AEEM can evolve this into a richer CGU registry without weakening the existing evidence packet gate.
 
+### TA-REF-001 evaluation harness
+
+TA-REF-001 adds the first executable benchmark for this reference arm. It is evaluation-first only: it does not implement real OCR/vision extraction, does not call Codex, does not create product `Question`/rubric records, and does not grade.
+
+Fixture format lives under `apps/api/packages/evaluation/fixtures/reference_extraction/`. Each synthetic case records:
+
+- `case_id` and `description`;
+- involved document types: `question`, `solution`, and/or `rubric`;
+- expected canonical grading units with labels, max marks, question text, parent labels, solution requirement, and visual-confirmation requirement;
+- expected solution/model-answer sections;
+- expected rubric criteria per grading unit;
+- expected total-mark validation result;
+- expected blockers/warnings and teacher-confirmation requirement;
+- saved deterministic provider output for `synthetic_reference_extractor`.
+
+The evaluator reports label exact-match accuracy, max-mark exact-match accuracy, parent/child structure accuracy, question-text completeness, solution-section mapping accuracy, rubric-criteria extraction accuracy, rubric-total match accuracy, duplicate-label detection, missing-solution detection, missing-rubric detection, visual-confirmation detection, unsafe auto-confirm count, `GradeSuggestion` count, and `FinalGrade` count.
+
+Critical reference blockers are max-mark mismatch, missing rubric, missing required solution/model answer, unresolved duplicate labels, extracted label mismatch, unsafe auto-confirm, and any `GradeSuggestion` or `FinalGrade` creation during reference extraction. Reviewable warnings include low OCR confidence, image-only math requiring visual confirmation, ambiguous teacher-reviewable text, and optional solution notes missing.
+
+Wrong reference extraction poisons mapping and grading: if labels, max marks, solution/model answers, or rubric criteria are wrong, later answer-region mapping can be attached to the wrong CGU and any grading-quality claim becomes invalid.
+
 ### Teacher confirmation
 
 Gate R1 blocks script-side grading readiness until the teacher/founder confirms:

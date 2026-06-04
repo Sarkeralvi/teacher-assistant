@@ -1,0 +1,117 @@
+{
+  "case_id": "clean_question_labels_marks",
+  "description": "Clean question paper with labels and max marks.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [],
+  "expected_canonical_grading_units": [
+    {
+      "label": "1(a)",
+      "max_marks": "5.00",
+      "question_text": "Differentiate x squared.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    },
+    {
+      "label": "1(b)",
+      "max_marks": "5.00",
+      "question_text": "Apply Bayes theorem to the event.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    }
+  ],
+  "expected_rubric_criteria": {
+    "1(a)": [
+      {
+        "criterion_id": "1a-c1",
+        "description": "Correct derivative setup",
+        "max_marks": "2.00"
+      },
+      {
+        "criterion_id": "1a-c2",
+        "description": "Final derivative",
+        "max_marks": "3.00"
+      }
+    ],
+    "1(b)": [
+      {
+        "criterion_id": "1b-c1",
+        "description": "Correct substitution",
+        "max_marks": "2.00"
+      },
+      {
+        "criterion_id": "1b-c2",
+        "description": "Correct posterior result",
+        "max_marks": "3.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "1(a)": "The derivative of x squared is 2x.",
+    "1(b)": "Use Bayes theorem and simplify the posterior probability."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": true,
+  "expected_warnings": [],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [],
+      "canonical_grading_units": [
+        {
+          "label": "1(a)",
+          "max_marks": "5.00",
+          "question_text": "Differentiate x squared.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        },
+        {
+          "label": "1(b)",
+          "max_marks": "5.00",
+          "question_text": "Apply Bayes theorem to the event.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "1(a)": [
+          {
+            "criterion_id": "1a-c1",
+            "description": "Correct derivative setup",
+            "max_marks": "2.00"
+          },
+          {
+            "criterion_id": "1a-c2",
+            "description": "Final derivative",
+            "max_marks": "3.00"
+          }
+        ],
+        "1(b)": [
+          {
+            "criterion_id": "1b-c1",
+            "description": "Correct substitution",
+            "max_marks": "2.00"
+          },
+          {
+            "criterion_id": "1b-c2",
+            "description": "Correct posterior result",
+            "max_marks": "3.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "1(a)": "The derivative of x squared is 2x.",
+        "1(b)": "Use Bayes theorem and simplify the posterior probability."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": []
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "case_id": "duplicate_ambiguous_labels",
+  "description": "Duplicate/ambiguous labels must be blocked.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [
+    "duplicate label unresolved"
+  ],
+  "expected_canonical_grading_units": [
+    {
+      "label": "6(a)",
+      "max_marks": "5.00",
+      "question_text": "First duplicated label item.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    },
+    {
+      "label": "6(a)",
+      "max_marks": "5.00",
+      "question_text": "Second duplicated label item.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    }
+  ],
+  "expected_rubric_criteria": {
+    "6(a)": [
+      {
+        "criterion_id": "6a-c1",
+        "description": "Ambiguous criterion",
+        "max_marks": "5.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "6(a)": "Ambiguous duplicated solution section."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": true,
+  "expected_warnings": [],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [
+        "duplicate label unresolved"
+      ],
+      "canonical_grading_units": [
+        {
+          "label": "6(a)",
+          "max_marks": "5.00",
+          "question_text": "First duplicated label item.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        },
+        {
+          "label": "6(a)",
+          "max_marks": "5.00",
+          "question_text": "Second duplicated label item.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "6(a)": [
+          {
+            "criterion_id": "6a-c1",
+            "description": "Ambiguous criterion",
+            "max_marks": "5.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "6(a)": "Ambiguous duplicated solution section."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": []
+    }
+  }
+}

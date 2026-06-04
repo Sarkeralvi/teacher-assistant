@@ -1,3 +1,13 @@
+# TA-REF-001 — Reference extraction must be measurable before mapping/grading claims
+
+Recorded at: 2026-06-04
+
+TA-REF-001 adds a synthetic reference-extraction evaluation harness for question papers, solution/model-answer sections, rubric criteria, canonical grading-unit labels, max marks, and parent/child structure. This is evaluation-first only: real OCR/vision reference extraction remains blocked.
+
+Quality rule: wrong reference extraction poisons everything downstream. A wrong CGU label, wrong max mark, missing solution/model answer, missing rubric, unresolved duplicate label, or rubric-total mismatch can make a later answer-region mapping look plausible while attaching evidence to the wrong grading unit or scoring scale.
+
+Critical blockers are max-mark mismatch, missing rubric, missing required solution/model answer, unresolved duplicate labels, extracted-label mismatch, unsafe auto-confirm, and any `GradeSuggestion` or `FinalGrade` creation during reference extraction. Reviewable warnings include low OCR confidence, image-only math requiring visual confirmation, ambiguous teacher-reviewable text, and optional solution notes missing.
+
 # TA-MAP-003A — Mapping quality gates before real provider work
 
 Recorded at: 2026-06-04

@@ -1,3 +1,39 @@
+# TA-REF-001 — Reference extraction evaluation harness
+
+- Recorded at: 2026-06-04
+- Baseline commit: `bd0c24853fdeaea8331058699e26128a9f909c58`
+- Workflow type: manual controlled evaluation harness and synthetic fixtures
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real OCR/vision reference extraction implementation: not started
+- Real AI mapping implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation: 0
+- FinalGrade creation: 0
+- Private files/artifacts used: no
+
+## Change made
+
+Added `apps/api/packages/evaluation/reference_extraction_evaluator.py`, eight tiny synthetic JSON fixtures, and focused evaluator tests. The harness loads provider-agnostic reference fixtures, replays saved deterministic extractor output, compares CGU labels/max marks/question text/parent-child structure/solution sections/rubric criteria/rubric totals, reports per-case pass/fail plus metric summaries, and applies a quality gate policy for future real-provider trial eligibility.
+
+## Synthetic reference cases
+
+1. clean question paper with labels/max marks;
+2. nested subparts such as `1(a)(i)`;
+3. rubric criteria whose totals match max marks;
+4. rubric total mismatch;
+5. solution/model answer sections matching grading units;
+6. missing solution section for one grading unit;
+7. duplicate/ambiguous labels;
+8. image-only/math placeholder requiring visual confirmation.
+
+## Safety result
+
+TA-REF-001 is evaluation-only. Real OCR/vision reference extraction remains blocked. No grading logic changed. No `GradeSuggestion` or `FinalGrade` records are created by the evaluator.
+
 # TA-MAP-003A — Define mapping quality gates and failure policy
 
 - Recorded at: 2026-06-04

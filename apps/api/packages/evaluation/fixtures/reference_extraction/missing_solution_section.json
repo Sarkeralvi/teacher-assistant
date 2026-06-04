@@ -1,0 +1,110 @@
+{
+  "case_id": "missing_solution_section",
+  "description": "Missing solution section for one grading unit.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [
+    "missing solution/model answer for 5(b)"
+  ],
+  "expected_canonical_grading_units": [
+    {
+      "label": "5(a)",
+      "max_marks": "5.00",
+      "question_text": "Find the area of the triangle.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    },
+    {
+      "label": "5(b)",
+      "max_marks": "5.00",
+      "question_text": "Find the perimeter of the triangle.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    }
+  ],
+  "expected_rubric_criteria": {
+    "5(a)": [
+      {
+        "criterion_id": "5a-c1",
+        "description": "Correct area formula",
+        "max_marks": "2.00"
+      },
+      {
+        "criterion_id": "5a-c2",
+        "description": "Correct area",
+        "max_marks": "3.00"
+      }
+    ],
+    "5(b)": [
+      {
+        "criterion_id": "5b-c1",
+        "description": "Correct perimeter sum",
+        "max_marks": "5.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "5(a)": "Use half base times height.",
+    "5(b)": "Add all side lengths."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": true,
+  "expected_warnings": [],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [
+        "missing solution/model answer for 5(b)"
+      ],
+      "canonical_grading_units": [
+        {
+          "label": "5(a)",
+          "max_marks": "5.00",
+          "question_text": "Find the area of the triangle.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        },
+        {
+          "label": "5(b)",
+          "max_marks": "5.00",
+          "question_text": "Find the perimeter of the triangle.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "5(a)": [
+          {
+            "criterion_id": "5a-c1",
+            "description": "Correct area formula",
+            "max_marks": "2.00"
+          },
+          {
+            "criterion_id": "5a-c2",
+            "description": "Correct area",
+            "max_marks": "3.00"
+          }
+        ],
+        "5(b)": [
+          {
+            "criterion_id": "5b-c1",
+            "description": "Correct perimeter sum",
+            "max_marks": "5.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "5(a)": "Use half base times height."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": []
+    }
+  }
+}

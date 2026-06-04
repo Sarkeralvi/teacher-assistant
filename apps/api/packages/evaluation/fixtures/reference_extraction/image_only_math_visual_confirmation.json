@@ -1,0 +1,81 @@
+{
+  "case_id": "image_only_math_visual_confirmation",
+  "description": "Image-only/math-style placeholder requiring visual confirmation.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [],
+  "expected_canonical_grading_units": [
+    {
+      "label": "7(a)",
+      "max_marks": "8.00",
+      "question_text": "[image-only integral expression placeholder]",
+      "requires_solution": true,
+      "requires_visual_confirmation": true
+    }
+  ],
+  "expected_rubric_criteria": {
+    "7(a)": [
+      {
+        "criterion_id": "7a-c1",
+        "description": "Correct integral setup",
+        "max_marks": "4.00"
+      },
+      {
+        "criterion_id": "7a-c2",
+        "description": "Correct evaluation",
+        "max_marks": "4.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "7(a)": "Visual math expression requires teacher confirmation before use."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": true,
+  "expected_warnings": [
+    "visual confirmation required"
+  ],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [],
+      "canonical_grading_units": [
+        {
+          "label": "7(a)",
+          "max_marks": "8.00",
+          "question_text": "[image-only integral expression placeholder]",
+          "requires_solution": true,
+          "requires_visual_confirmation": true
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "7(a)": [
+          {
+            "criterion_id": "7a-c1",
+            "description": "Correct integral setup",
+            "max_marks": "4.00"
+          },
+          {
+            "criterion_id": "7a-c2",
+            "description": "Correct evaluation",
+            "max_marks": "4.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "7(a)": "Visual math expression requires teacher confirmation before use."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": [
+        "visual confirmation required for image-only math"
+      ]
+    }
+  }
+}

@@ -281,3 +281,9 @@ The benchmark result is intentionally conservative: current mock-provider saved 
 TA-MAP-003A is Done as a policy layer over the synthetic mapping evaluator. It defines critical blockers, reviewable warnings, minimum synthetic gates, and aspirational later real-anonymized evaluation targets. The current mock provider remains ineligible for real-provider trial as product-quality mapping.
 
 Critical blockers are not nice-to-fix issues: wrong-question/CGU assignment, blank-page confident mapping, missed continuation, unsafe auto-accept, and any `GradeSuggestion`/`FinalGrade` creation during mapping block provider advancement. Real AI mapping remains blocked until a candidate provider satisfies the gate and the founder explicitly approves the next scope.
+
+## TA-REF-001 status — reference extraction evaluation harness
+
+TA-REF-001 is Done as an evaluation-first synthetic harness for the AEEM reference arm. It measures canonical grading-unit labels, max marks, parent/child structure, question text, solution/model-answer mapping, rubric criteria, rubric total validation, duplicate labels, missing solutions, visual-confirmation requirements, unsafe auto-confirm, and grading/finalization side effects.
+
+Real OCR/vision reference extraction remains blocked. Wrong reference extraction poisons both mapping and grading, so no mapping or grading quality claim should be made unless the reference side is measurable and teacher-confirmed. TA-MAP-004 remains not started.

@@ -1,0 +1,87 @@
+{
+  "case_id": "rubric_criteria_total_match",
+  "description": "Rubric criteria totals match max marks.",
+  "document_types": [
+    "question",
+    "solution",
+    "rubric"
+  ],
+  "expected_blockers": [],
+  "expected_canonical_grading_units": [
+    {
+      "label": "2(a)",
+      "max_marks": "4.00",
+      "question_text": "Explain photosynthesis.",
+      "requires_solution": true,
+      "requires_visual_confirmation": false
+    }
+  ],
+  "expected_rubric_criteria": {
+    "2(a)": [
+      {
+        "criterion_id": "2a-c1",
+        "description": "Mentions light energy",
+        "max_marks": "1.00"
+      },
+      {
+        "criterion_id": "2a-c2",
+        "description": "Mentions chlorophyll",
+        "max_marks": "1.00"
+      },
+      {
+        "criterion_id": "2a-c3",
+        "description": "Balanced process explanation",
+        "max_marks": "2.00"
+      }
+    ]
+  },
+  "expected_solution_sections": {
+    "2(a)": "Photosynthesis uses light energy and chlorophyll to make glucose."
+  },
+  "expected_teacher_confirmation_required": true,
+  "expected_total_mark_validation_result": true,
+  "expected_warnings": [],
+  "fixture_type": "synthetic",
+  "provider_outputs": {
+    "synthetic_reference_extractor": {
+      "blockers": [],
+      "canonical_grading_units": [
+        {
+          "label": "2(a)",
+          "max_marks": "4.00",
+          "question_text": "Explain photosynthesis.",
+          "requires_solution": true,
+          "requires_visual_confirmation": false
+        }
+      ],
+      "final_grade_created_count": 0,
+      "grade_suggestion_created_count": 0,
+      "needs_teacher_confirmation": true,
+      "provider": "synthetic_reference_extractor",
+      "rubric_criteria": {
+        "2(a)": [
+          {
+            "criterion_id": "2a-c1",
+            "description": "Mentions light energy",
+            "max_marks": "1.00"
+          },
+          {
+            "criterion_id": "2a-c2",
+            "description": "Mentions chlorophyll",
+            "max_marks": "1.00"
+          },
+          {
+            "criterion_id": "2a-c3",
+            "description": "Balanced process explanation",
+            "max_marks": "2.00"
+          }
+        ]
+      },
+      "solution_sections": {
+        "2(a)": "Photosynthesis uses light energy and chlorophyll to make glucose."
+      },
+      "unsafe_auto_confirm_count": 0,
+      "warnings": []
+    }
+  }
+}

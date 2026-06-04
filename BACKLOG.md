@@ -1282,13 +1282,13 @@ Title: Question/solution/rubric extraction evaluation harness
 Owner: Hermes
 Priority: P0
 Dependencies: TA-CORE-001
-Files affected: docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, apps/api/packages/evaluation/** or scoped equivalent, apps/api/tests/**, BACKLOG.md
+Files affected: apps/api/packages/evaluation/reference_extraction_evaluator.py, apps/api/packages/evaluation/fixtures/reference_extraction/*.json, apps/api/tests/test_reference_extraction_evaluation.py, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/GRADING_QUALITY_NOTES.md, docs/VALIDATION_LOG.md, BACKLOG.md
 Goal: Measure reference-arm extraction quality for question, solution/model-answer, rubric, canonical grading-unit labels, and max marks before relying on OCR/AI proposals.
-Implementation notes: Provider abstraction only; do not hardcode one OCR/vision vendor. Teacher/founder confirmation remains required.
-Acceptance criteria: Harness can compare extracted CGU labels/max marks/question text/model-answer/rubric criteria against expected fixtures and report field-level errors plus blocking readiness failures.
-Tests required: focused reference extraction harness tests, lint, diff check.
-Risks: Incorrect max marks or CGU labels can invalidate grading even if mapping is correct.
-Status: Pending
+Implementation notes: Added provider-agnostic synthetic reference-extraction fixture loading, saved deterministic extractor outputs, per-case pass/fail, metric summaries, blocker/warning reasons, and a quality gate policy for future real-provider trial eligibility. The harness is evaluation-first only. No real OCR/vision provider, real Codex, private files, grading, batch grading, teacher observation, `GradeSuggestion`, or `FinalGrade` was used or created.
+Acceptance criteria: Harness compares extracted CGU labels/max marks, parent-child structure, question text, solution/model-answer mapping, rubric criteria, rubric total validation, duplicate labels, missing solution, visual confirmation requirement, unsafe auto-confirm, and grading/finalization side-effect counts. Synthetic fixtures cover clean labels/marks, subparts, rubric total match, rubric total mismatch, solution mapping, missing solution, duplicate labels, and image-only/math visual-confirmation placeholder.
+Tests required: focused reference extraction harness tests, mapping evaluation tests if shared code touched, `make test`, `make lint`, `git diff --check`, `make down` if services started, final git status.
+Risks: Synthetic-only reference fixtures do not prove real OCR/vision quality. Wrong reference extraction poisons mapping and grading, so real OCR/vision reference extraction remains blocked until a provider clears the gate on approved datasets.
+Status: Done
 
 TASK-ID: TA-SCRIPT-001
 Title: Script page sequencing and answer-boundary benchmark
