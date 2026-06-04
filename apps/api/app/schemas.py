@@ -221,6 +221,7 @@ GradingQueueRunStatus = Literal["pending", "built", "blocked", "failed"]
 GradingQueueItemStatus = Literal[
     "pending_review", "ready_for_provider_later", "blocked"
 ]
+GradingQueueItemStaleStatus = Literal["fresh", "stale", "evidence_missing", "blocked_now"]
 
 
 class GradingQueueItemRead(ORMBase):
@@ -242,6 +243,9 @@ class GradingQueueItemRead(ORMBase):
     provider_allowed: bool
     evidence_snapshot_hash: str | None
     readiness_snapshot_json: dict[str, Any]
+    stale_status: GradingQueueItemStaleStatus = "fresh"
+    current_evidence_snapshot_hash: str | None = None
+    current_refusal_reasons: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -258,6 +262,9 @@ class GradingQueueRefusedItem(BaseModel):
     segment_count: int
     pages_covered: list[int] = Field(default_factory=list)
     refusal_reasons: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    snapshot_hash: str | None = None
     readiness_snapshot_json: dict[str, Any]
 
 

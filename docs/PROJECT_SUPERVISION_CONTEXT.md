@@ -331,3 +331,8 @@ Current quarantine policy blocks packets for unknown page order, no mapped regio
 ## TA-GRADE-001 supervision record
 
 TA-GRADE-001 was executed in manual controlled mode. The accepted TA-GRADE-000 contract is now represented by scaffold queue records and endpoints. The implementation deliberately stops at queue creation: no grading execution, no real Codex/provider calls, no `GradeSuggestion`, no `FinalGrade`, no existing provider `GradingJob`, no auto-finalization, no teacher observation, and no private files. Batch evidence prep remains separate from grading.
+
+
+## TA-GRADE-001A supervision record
+
+TA-GRADE-001A was executed in manual controlled mode. It hardens the queue scaffold only: no grading, no provider/model call, no real Codex, no `GradeSuggestion`, no `FinalGrade`, no provider `GradingJob`, no batch grading execution, no real AI mapping, no real OCR/vision provider, no teacher observation, no private files, and no additional coding agent.

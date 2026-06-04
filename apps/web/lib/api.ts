@@ -523,6 +523,9 @@ export type GradingQueueRefusedItem = {
   segment_count: number;
   pages_covered: number[];
   refusal_reasons: string[];
+  blockers: string[];
+  warnings: string[];
+  snapshot_hash: string | null;
   readiness_snapshot_json: Record<string, unknown>;
 };
 
@@ -545,6 +548,9 @@ export type GradingQueueItem = {
   provider_allowed: boolean;
   evidence_snapshot_hash: string | null;
   readiness_snapshot_json: Record<string, unknown>;
+  stale_status: "fresh" | "stale" | "evidence_missing" | "blocked_now";
+  current_evidence_snapshot_hash: string | null;
+  current_refusal_reasons: string[];
   created_at: string;
   updated_at: string;
 };

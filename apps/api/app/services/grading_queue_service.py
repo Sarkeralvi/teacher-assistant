@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import GradingQueueItem, GradingQueueRun
+from app.models import AnswerRegion, GradingQueueItem, GradingQueueRun
 from app.services.evidence_prep_service import EvidencePrepService
 
 ALLOWED_CONTINUATION_STATUSES = {
@@ -60,14 +60,15 @@ class GradingQueueService:
 
     def summarize_queue_run(
         self, run: GradingQueueRun
-    ) -> tuple[list[GradingQueueItem], list[dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         summary = self.evidence_prep_service.summarize_assessment(run.assessment_id)
+        packets = list(summary["packets"])
         refused_items = [
             self.refused_item_from_packet(packet, reasons)
-            for packet in summary["packets"]
+            for packet in packets
             if (reasons := self.refusal_reasons(packet))
         ]
-        return list(run.items), refused_items
+        return [self.queue_item_read(item, packets) for item in run.items], refused_items
 
     def summarize_assessment(self, assessment_id: int) -> dict[str, Any]:
         summary = self.evidence_prep_service.summarize_assessment(assessment_id)
@@ -89,6 +90,11 @@ class GradingQueueService:
             "refused_items": refused_items,
             "error": None,
         }
+
+    def validate_queue_run(self, run: GradingQueueRun) -> list[dict[str, Any]]:
+        summary = self.evidence_prep_service.summarize_assessment(run.assessment_id)
+        packets = list(summary["packets"])
+        return [self.queue_item_read(item, packets) for item in run.items]
 
     def refusal_reasons(self, packet: dict[str, Any]) -> list[str]:
         reasons = list(packet.get("blockers", []))
@@ -140,6 +146,7 @@ class GradingQueueService:
         self, packet: dict[str, Any], refusal_reasons: list[str]
     ) -> dict[str, Any]:
         question_id = packet.get("question_id")
+        snapshot = self.snapshot_from_packet(packet)
         return {
             "submission_id": packet["submission_id"],
             "student_identifier": packet.get("student_identifier"),
@@ -152,7 +159,10 @@ class GradingQueueService:
             "segment_count": packet["segment_count"],
             "pages_covered": packet["pages_covered"],
             "refusal_reasons": refusal_reasons,
-            "readiness_snapshot_json": self.snapshot_from_packet(packet),
+            "blockers": list(packet.get("blockers", [])),
+            "warnings": list(packet.get("warnings", [])),
+            "snapshot_hash": self.snapshot_hash(snapshot),
+            "readiness_snapshot_json": snapshot,
         }
 
     def snapshot_from_packet(self, packet: dict[str, Any]) -> dict[str, Any]:
@@ -170,7 +180,84 @@ class GradingQueueService:
             "warnings": list(packet.get("warnings", [])),
             "segment_count": packet["segment_count"],
             "pages_covered": list(packet.get("pages_covered", [])),
+            "segment_signature": self.segment_signature(packet.get("answer_region_id")),
         }
+
+    def segment_signature(self, answer_region_id: int | str | None) -> list[dict[str, Any]]:
+        if answer_region_id is None:
+            return []
+        region = self.db.get(AnswerRegion, int(answer_region_id))
+        if region is None:
+            return []
+        return [
+            {
+                "id": segment.id,
+                "page_id": segment.submission_page_id,
+                "order_index": segment.order_index,
+                "x": str(segment.x),
+                "y": str(segment.y),
+                "width": str(segment.width),
+                "height": str(segment.height),
+                "confirmed": segment.confirmed,
+                "image_path": segment.image_path,
+            }
+            for segment in sorted(region.segments, key=lambda item: item.order_index)
+        ]
+
+    def queue_item_read(
+        self, item: GradingQueueItem, current_packets: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        stale_status, current_hash, current_reasons = self.staleness_status(
+            item, current_packets
+        )
+        return {
+            "id": item.id,
+            "queue_run_id": item.queue_run_id,
+            "assessment_id": item.assessment_id,
+            "submission_id": item.submission_id,
+            "student_identifier": item.student_identifier,
+            "question_id": item.question_id,
+            "grading_unit_id": item.grading_unit_id,
+            "grading_unit_label": item.grading_unit_label,
+            "max_marks": item.max_marks,
+            "answer_region_id": item.answer_region_id,
+            "segment_count": item.segment_count,
+            "pages_covered": item.pages_covered,
+            "evidence_status": item.evidence_status,
+            "continuation_check_status": item.continuation_check_status,
+            "queue_status": item.queue_status,
+            "provider_allowed": False,
+            "evidence_snapshot_hash": item.evidence_snapshot_hash,
+            "readiness_snapshot_json": item.readiness_snapshot_json,
+            "stale_status": stale_status,
+            "current_evidence_snapshot_hash": current_hash,
+            "current_refusal_reasons": current_reasons,
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+        }
+
+    def staleness_status(
+        self, item: GradingQueueItem, current_packets: list[dict[str, Any]]
+    ) -> tuple[str, str | None, list[str]]:
+        packet = next(
+            (
+                candidate
+                for candidate in current_packets
+                if candidate.get("submission_id") == item.submission_id
+                and candidate.get("question_id") == item.question_id
+            ),
+            None,
+        )
+        if packet is None or packet.get("answer_region_id") is None:
+            return "evidence_missing", None, ["queued evidence packet is missing now"]
+        current_snapshot = self.snapshot_from_packet(packet)
+        current_hash = self.snapshot_hash(current_snapshot)
+        current_reasons = self.refusal_reasons(packet)
+        if current_reasons:
+            return "blocked_now", current_hash, current_reasons
+        if current_hash != item.evidence_snapshot_hash:
+            return "stale", current_hash, []
+        return "fresh", current_hash, []
 
     def snapshot_hash(self, snapshot: dict[str, Any]) -> str:
         payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))

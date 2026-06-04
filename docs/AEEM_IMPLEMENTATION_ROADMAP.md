@@ -163,3 +163,8 @@ This satisfies the AEEM ordering principle: batch organization can exist before 
 ## TA-GRADE-001 completion note
 
 TA-GRADE-001 is complete as a scaffold, not as grading execution. It adds queue-run/item persistence and API/UI summaries for confirmed ready evidence packets only. Provider execution remains blocked for a future explicit task; no batch grading, model calls, `GradeSuggestion`, `FinalGrade`, or existing provider `GradingJob` creation is part of this milestone.
+
+
+## TA-GRADE-001A completion note
+
+TA-GRADE-001A is complete as a queue-boundary hardening slice. It adds stale/fresh status, a validation endpoint, rebuild audit preservation, and richer refused packet audit fields. Provider execution is still not implemented and remains blocked until a future task proves it re-checks readiness immediately before model invocation.

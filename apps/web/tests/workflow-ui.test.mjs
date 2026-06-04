@@ -278,6 +278,8 @@ for (const text of [
   "queued item count",
   "refused item count",
   "Refused packet reasons",
+  "stale_status",
+  "Queue records are not grades. Stale queue items must be rebuilt before provider execution.",
   "No provider run button, no batch grade button, and no FinalGrade action",
   "createGradingQueueRun(assessmentId)",
   "getGradingQueueSummary(assessmentId)",

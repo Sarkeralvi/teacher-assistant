@@ -1395,6 +1395,20 @@ Risks: Future execution must re-check queue snapshots/readiness before any provi
 Status: Done
 
 
+
+TASK-ID: TA-GRADE-001A
+Title: Harden grading queue staleness, rebuild, and refusal auditing
+Owner: Hermes
+Priority: P0
+Dependencies: TA-GRADE-001
+Files affected: apps/api/app/services/grading_queue_service.py, apps/api/app/api/routes/grading_queue.py, apps/api/app/schemas.py, apps/api/tests/test_grading_queue_runs_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, docs/tests
+Goal: Prevent stale or changed evidence from later being consumed by provider execution.
+Implementation notes: Adds stale/fresh/blocked-now/evidence-missing status on queue items, a staleness validation endpoint, segment-aware readiness snapshot hashes, richer refused-item audit fields, and rebuild behavior that creates a new run without mutating old runs. Provider execution remains blocked and `provider_allowed` stays false.
+Acceptance criteria: Created queue items are initially fresh; segment edits become stale; evidence-status changes become blocked_now; rebuilding creates a separate auditable run with current queued/refused counts; refused reasons, blockers, warnings, and hashes remain visible; no provider/model calls or grading-side-effect rows are created.
+Tests required: focused grading queue tests, evidence prep tests if affected, full test, lint, frontend static/build/e2e if frontend touched, diff check.
+Risks: Future provider execution must call staleness validation/readiness re-check immediately before any model call and refuse any non-fresh item.
+Status: Done
+
 TASK-ID: TA-CORE-002
 Title: Map AEEM architecture to implementation roadmap and gates
 Owner: Hermes

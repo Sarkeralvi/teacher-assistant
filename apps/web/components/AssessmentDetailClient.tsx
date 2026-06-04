@@ -838,8 +838,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label}
                       </p>
                       <p className="text-slate-400">
-                        queue_status {item.queue_status} · provider_allowed {String(item.provider_allowed)} · segments {item.segment_count}
+                        queue_status {item.queue_status} · stale_status {item.stale_status} · provider_allowed {String(item.provider_allowed)} · segments {item.segment_count}
                       </p>
+                      {item.current_refusal_reasons.length > 0 ? <p className="text-amber-200">Current blockers: {item.current_refusal_reasons.join("; ")}</p> : null}
                       <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
                     </article>
                   ))}
@@ -871,6 +872,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         ) : (
           <p className="mt-3 text-sm text-slate-400">Grading queue scaffold summary has not loaded yet.</p>
         )}
+        <p className="mt-3 text-xs text-slate-500">Queue records are not grades. Stale queue items must be rebuilt before provider execution.</p>
         <p className="mt-3 text-xs text-slate-500">No provider run button, no batch grade button, and no FinalGrade action are available in this scaffold.</p>
       </section>
 

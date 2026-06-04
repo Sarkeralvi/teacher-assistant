@@ -573,3 +573,8 @@ The current blank policy is conservative: blank packets are counted and blocked 
 ## TA-GRADE-001 grading-quality boundary
 
 The grading queue scaffold is a quality gate, not a grading mechanism. It accepts only confirmed complete packets and refuses missing, unconfirmed, partial, blank, possible-continuation, not-ready, missing-rubric, no-segment, invalid-context, and otherwise blocked packets. Teacher review remains mandatory before any future `FinalGrade`; provider execution must be explicitly implemented and triggered in a later task.
+
+
+## TA-GRADE-001A stale-queue quality rule
+
+A queued item is only a historical readiness snapshot. It is not a grade and not permission to run a model. If validation returns `stale`, `evidence_missing`, or `blocked_now`, future provider execution must refuse the item and require a rebuild or teacher correction first. Refused packets now carry reasons, blockers, warnings, and snapshot hashes for audit.

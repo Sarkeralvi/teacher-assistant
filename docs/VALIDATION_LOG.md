@@ -1298,3 +1298,42 @@ No grading was run. No Codex/OpenAI/Claude/Gemini/provider call was made. No `Gr
 - Playwright Docker E2E command — first attempt failed with WSL `UtilAcceptVsock: accept4 failed 110`; retry passed with 2 tests passed.
 - `git diff --check` — passed.
 - `PATH=/tmp/ta-bin:$PATH make down` — services stopped and removed.
+
+
+# TA-GRADE-001A — Harden grading queue staleness, rebuild, and refusal auditing
+
+- Recorded at: 2026-06-04
+- Baseline commit: `67b2e694c16ed3a8cab5fc3ed931fd5fc36cf01f`
+- Workflow type: manual controlled mode
+
+## Verifier warning reconciliation
+
+Initial checks showed a clean worktree at the expected HEAD. `apps/api/tests/test_models_metadata.py` existed in HEAD and had no diff versus committed state, so the prior verifier warning was stale rather than a real repo issue.
+
+## Scope result
+
+TA-GRADE-001A adds staleness validation and richer queue/refusal audit behavior. Queue item responses now report stale/fresh status and current refusal reasons. Segment-aware snapshot hashes detect evidence edits. Rebuilding creates a new run without mutating older runs.
+
+## Safety record
+
+No grading was run. No Codex/OpenAI/Claude/Gemini/provider call was made. No `GradeSuggestion`, `FinalGrade`, or provider `GradingJob` was created by queue validation/rebuild. No batch grading execution, real AI mapping, real OCR/vision provider, auto-finalization, teacher observation, private-file access, VSCode/Codex, or additional coding agent was used.
+
+## Checks run
+
+- `git status --short` — clean at baseline.
+- `git rev-parse HEAD` — `67b2e694c16ed3a8cab5fc3ed931fd5fc36cf01f`.
+- `git ls-tree HEAD apps/api/tests/test_models_metadata.py` and `git diff --exit-code -- apps/api/tests/test_models_metadata.py` — file present and unchanged; previous verifier warning was stale.
+- Initial focused staleness test after starting infra failed RED with `KeyError: 'stale_status'`, confirming missing behavior before implementation.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... alembic upgrade head` — database migrated before focused tests.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... python -m pytest tests/test_grading_queue_runs_api.py -q` — 6 passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... python -m pytest tests/test_evidence_prep_runs_api.py -q` — 6 passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH DATABASE_URL=... make test` — 252 passed.
+- `node tests/workflow-ui.test.mjs && npm run lint` — frontend static markers and TypeScript passed.
+- `node tests/workflow-ui.test.mjs && npm run build` — frontend static markers passed and Next build completed; existing ESLint flat-config warning printed during build, exit 0.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- `PATH=/tmp/ta-bin:$PATH make up` — services built/started for E2E.
+- `PATH=/tmp/ta-bin:$PATH docker compose exec -T backend alembic upgrade head` — migration check passed in service container.
+- health checks for backend/frontend — passed.
+- Playwright Docker E2E command — 2 passed.
+- `git diff --check` — passed.
+- `PATH=/tmp/ta-bin:$PATH make down` — services stopped and removed.

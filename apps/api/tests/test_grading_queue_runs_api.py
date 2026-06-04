@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AnswerRegion,
+    AnswerRegionSegment,
     BatchEvidencePrepRun,
     FinalGrade,
     GradeSuggestion,
@@ -213,3 +214,109 @@ def test_queue_test_cleanup_models_are_present() -> None:
     # Keeps the import of delete live and documents cleanup order expectations for future tests.
     assert delete is not None
     assert BatchEvidencePrepRun.__tablename__ == "batch_evidence_prep_runs"
+
+
+def test_staleness_validation_marks_segment_edits_and_blocked_evidence(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_assessment_fixture(client, tmp_path)
+    response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert response.status_code == 201
+    run = response.json()
+    assert run["items"][0]["stale_status"] == "fresh"
+
+    fresh_response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs/{run['id']}/validate-staleness",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert fresh_response.status_code == 200
+    fresh_run = fresh_response.json()
+    assert fresh_run["items"][0]["stale_status"] == "fresh"
+
+    segment = db_session.query(AnswerRegionSegment).filter_by(
+        answer_region_id=run["items"][0]["answer_region_id"]
+    ).one()
+    segment.x = 9
+    db_session.commit()
+
+    stale_response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs/{run['id']}/validate-staleness",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert stale_response.status_code == 200
+    stale_run = stale_response.json()
+    assert stale_run["items"][0]["stale_status"] == "stale"
+    assert stale_run["items"][0]["provider_allowed"] is False
+
+    region = db_session.get(AnswerRegion, run["items"][0]["answer_region_id"])
+    assert region is not None
+    region.evidence_status = "partial"
+    region.full_answer_confirmed = False
+    db_session.commit()
+
+    blocked_response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs/{run['id']}/validate-staleness",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert blocked_response.status_code == 200
+    blocked_run = blocked_response.json()
+    assert blocked_run["items"][0]["stale_status"] == "blocked_now"
+    assert "partial evidence packet requires teacher review" in blocked_run["items"][0][
+        "current_refusal_reasons"
+    ]
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+    assert db_session.query(GradingJob).count() == 0
+
+
+def test_rebuild_keeps_old_run_auditable_and_recomputes_current_refusals(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_assessment_fixture(client, tmp_path)
+    first_response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert first_response.status_code == 201
+    first_run = first_response.json()
+    assert first_run["queued_item_count"] == 1
+    assert first_run["refused_item_count"] == 0
+
+    region = db_session.get(AnswerRegion, first_run["items"][0]["answer_region_id"])
+    assert region is not None
+    region.evidence_status = "blank"
+    region.full_answer_confirmed = True
+    region.continuation_check_status = "continuation_confirmed_not_needed"
+    db_session.commit()
+
+    second_response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert second_response.status_code == 201
+    second_run = second_response.json()
+    assert second_run["id"] != first_run["id"]
+    assert second_run["queued_item_count"] == 0
+    assert second_run["refused_item_count"] == 1
+    assert "confirmed blank packet is not enabled for grading" in second_run["refused_items"][0][
+        "refusal_reasons"
+    ]
+    assert second_run["refused_items"][0]["blockers"]
+    assert second_run["refused_items"][0]["snapshot_hash"]
+
+    old_response = client.get(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs/{first_run['id']}",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert old_response.status_code == 200
+    old_run = old_response.json()
+    assert old_run["queued_item_count"] == 1
+    assert old_run["items"][0]["stale_status"] == "blocked_now"
+    assert db_session.query(GradingQueueRun).count() == 2
+    assert db_session.query(GradingQueueItem).count() == 1
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+    assert db_session.query(GradingJob).count() == 0

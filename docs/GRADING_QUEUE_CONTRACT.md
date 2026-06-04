@@ -117,3 +117,8 @@ TA-GRADE-001 remains blocked until this contract is accepted. When TA-GRADE-001 
 ## TA-GRADE-001 scaffold implementation note
 
 TA-GRADE-001 implements this contract as a scaffold only. The backend has `GradingQueueRun` and `GradingQueueItem` records, and queue creation includes only confirmed ready packets that satisfy the contract. Refused packets are reported with refusal reasons but are not queued. Queue items snapshot readiness fields and an evidence snapshot hash so future provider execution can re-check staleness before any model call. `provider_allowed` is `false` by default. Creating a queue run does not create `GradeSuggestion`, `FinalGrade`, or existing provider `GradingJob` records and does not call Codex/OpenAI/Claude/Gemini/any model.
+
+
+## TA-GRADE-001A staleness/rebuild hardening
+
+TA-GRADE-001A hardens the queue contract with runtime staleness status. Queue item reads and validation report `fresh`, `stale`, `evidence_missing`, or `blocked_now`. Snapshot hashes now include segment signature data so edits after queue creation are detectable. Rebuilding creates a new `GradingQueueRun` and leaves old runs auditable. Provider execution remains blocked; future execution must re-check current readiness immediately before any model call and refuse every non-fresh item.

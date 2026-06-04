@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -61,8 +61,8 @@ def _verify_prep_run(
 
 def _response_from_run(
     run: GradingQueueRun,
-    items: list[object],
-    refused_items: list[dict[str, object]],
+    items: list[dict[str, Any]],
+    refused_items: list[dict[str, Any]],
 ) -> dict[str, object]:
     return {
         "id": run.id,
@@ -126,7 +126,8 @@ def create_grading_queue_run(
         created_by_teacher_id=current_user.id,
         evidence_prep_run_id=evidence_prep_run_id,
     )
-    return _response_from_run(run, list(run.items), refused_items)
+    items = GradingQueueService(db).validate_queue_run(run)
+    return _response_from_run(run, items, refused_items)
 
 
 @router.get(
@@ -134,6 +135,23 @@ def create_grading_queue_run(
     response_model=GradingQueueRunRead,
 )
 def read_grading_queue_run(
+    assessment_id: int,
+    run_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
+    run = _load_queue_run_or_404(assessment_id, run_id, db, current_user)
+    items, refused_items = GradingQueueService(db).summarize_queue_run(run)
+    return _response_from_run(run, items, refused_items)
+
+
+
+@router.post(
+    "/assessments/{assessment_id}/grading-queue-runs/{run_id}/validate-staleness",
+    response_model=GradingQueueRunRead,
+)
+def validate_grading_queue_run_staleness(
     assessment_id: int,
     run_id: int,
     db: DbSession,
