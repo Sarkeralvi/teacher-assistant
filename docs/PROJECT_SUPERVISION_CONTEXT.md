@@ -287,3 +287,10 @@ Critical blockers are not nice-to-fix issues: wrong-question/CGU assignment, bla
 TA-REF-001 is Done as an evaluation-first synthetic harness for the AEEM reference arm. It measures canonical grading-unit labels, max marks, parent/child structure, question text, solution/model-answer mapping, rubric criteria, rubric total validation, duplicate labels, missing solutions, visual-confirmation requirements, unsafe auto-confirm, and grading/finalization side effects.
 
 Real OCR/vision reference extraction remains blocked. Wrong reference extraction poisons both mapping and grading, so no mapping or grading quality claim should be made unless the reference side is measurable and teacher-confirmed. TA-MAP-004 remains not started.
+
+
+## TA-SCRIPT-001 status — script page sequencing and answer-boundary benchmark
+
+TA-SCRIPT-001 is Done as an evaluation-first harness over synthetic/non-private script-processing fixtures. It measures ordered/reversed pages, missing pages, duplicate pages, blank/cover pages, single-page boundaries, multi-question same-page boundaries, near-bottom continuations, near-bottom complete answers, and ambiguous low-confidence boundaries.
+
+Real OCR/vision sequencing, real AI mapping, TA-MAP-004 implementation, Codex, private files, grading, batch grading, teacher observation, `GradeSuggestion`, and `FinalGrade` remain blocked/out of scope. Script sequencing and answer-boundary detection must be measurable before real mapping providers or batch evidence packet preparation.

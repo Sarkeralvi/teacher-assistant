@@ -1295,13 +1295,13 @@ Title: Script page sequencing and answer-boundary benchmark
 Owner: Hermes
 Priority: P0
 Dependencies: TA-CORE-001
-Files affected: docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, apps/api/packages/evaluation/** or scoped equivalent, apps/api/tests/**, BACKLOG.md
+Files affected: apps/api/packages/evaluation/script_processing_evaluator.py, apps/api/packages/evaluation/fixtures/script_processing/*.json, apps/api/tests/test_script_processing_evaluation.py, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/GRADING_QUALITY_NOTES.md, docs/VALIDATION_LOG.md, BACKLOG.md
 Goal: Benchmark script page ordering and answer-boundary detection before batch evidence preparation.
-Implementation notes: Use synthetic/non-private scripts first. Include reversed pages, missing pages, duplicate pages, unnumbered pages, inserted pages, multi-question pages, and low-quality scans.
-Acceptance criteria: Benchmark reports page-sequence accuracy, unresolved sequence rate, boundary detection recall/precision, and review/blocker classifications.
-Tests required: focused benchmark tests, lint, diff check.
-Risks: Wrong page order can silently break continuation grouping and evidence completeness.
-Status: Pending
+Implementation notes: Added provider-agnostic synthetic script-processing fixture loading, saved deterministic processor outputs, per-case pass/fail, metric summaries, blocker/warning reasons, and a quality gate policy for future real script-processing provider trial eligibility. The harness is evaluation-first only. No real OCR/vision provider, real AI mapping, real Codex, private files, grading, batch grading, teacher observation, `GradeSuggestion`, or `FinalGrade` was used or created.
+Acceptance criteria: Benchmark covers ordered pages, reversed pages, missing page, duplicate page, blank/cover page, single-page answer boundary, multi-question same page, near-bottom continuation, near-bottom complete answer, and low-confidence/ambiguous boundary. Metrics include page-order accuracy, missing/duplicate-page detection, blank/cover classification accuracy, detected-label count accuracy, answer-boundary count accuracy, boundary page coverage/order accuracy, continuation-signal accuracy, false/missed continuation counts, unsafe auto-confirm count, `GradeSuggestion` count, and `FinalGrade` count.
+Tests required: focused script-processing evaluation tests, mapping/reference evaluation tests if shared evaluator code touched, `make test`, `make lint`, `git diff --check`, `make down` if services started, final git status.
+Risks: Synthetic-only script fixtures do not prove real OCR/vision sequencing quality. Wrong page order or missed continuation can silently poison mapping and batch evidence packets, so real script OCR/vision sequencing remains blocked until a provider clears the gate on approved datasets.
+Status: Done
 
 TASK-ID: TA-MAP-004
 Title: Real AI mapping provider behind evaluation gate

@@ -1,3 +1,53 @@
+# TA-SCRIPT-001 — Script page sequencing and answer-boundary benchmark
+
+- Recorded at: 2026-06-04
+- Baseline commit: `0eb6b2ab61f7b6c6c48fbf516d69e7aa3eb0bd3a`
+- Workflow type: manual controlled evaluation harness and synthetic fixtures
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real OCR/vision script provider implementation: not started
+- Real AI mapping implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion creation: 0
+- FinalGrade creation: 0
+- Private files/artifacts used: no
+
+## Change made
+
+Added `apps/api/packages/evaluation/script_processing_evaluator.py`, ten tiny synthetic JSON fixtures, and focused evaluator tests. The harness loads provider-agnostic script-processing fixtures, replays saved deterministic processor output, compares source/logical page order, missing/duplicate page detection, blank/cover classification, detected label counts, answer-boundary counts, boundary page coverage/order, and continuation signals, then reports metrics and a quality gate policy for future real-provider trial eligibility.
+
+## Synthetic script cases
+
+1. ordered pages;
+2. reversed pages;
+3. missing page gap;
+4. duplicate page;
+5. blank/cover page;
+6. single-page answer boundary;
+7. multi-question same page;
+8. near-bottom continuation;
+9. near-bottom complete answer;
+10. low-confidence / ambiguous boundary.
+
+## Deterministic synthetic result
+
+`synthetic_script_processor` result: overall pass false, eligible false, 10 cases, 5 passed, 5 critical failures, page-order accuracy 0.9, missing-page detection count 1, duplicate-page detection count 1, blank/cover classification accuracy 1, missed continuation count 1, false continuation count 0, unsafe auto-confirm count 0, `GradeSuggestion` count 0, and `FinalGrade` count 0. This intentionally keeps unsafe fixture failures visible instead of presenting the saved deterministic output as product-quality sequencing.
+
+## Checks run
+
+- `cd apps/api && python -m pytest tests/test_script_processing_evaluation.py tests/test_answer_mapping_evaluation.py tests/test_reference_extraction_evaluation.py -q` — 28 passed.
+- `make test` — 229 passed after starting services with `make up`.
+- `make lint` — backend ruff and web TypeScript checks passed.
+- `git diff --check` — passed.
+- `make down` — services stopped.
+
+## Safety result
+
+TA-SCRIPT-001 is evaluation-only. Real OCR/vision script sequencing remains blocked. Real AI mapping remains blocked. No grading logic changed. No `GradeSuggestion` or `FinalGrade` records are created by the evaluator.
+
 # TA-REF-001 — Reference extraction evaluation harness
 
 - Recorded at: 2026-06-04

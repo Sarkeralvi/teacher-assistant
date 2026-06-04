@@ -1,0 +1,867 @@
+{
+  "cases": [
+    {
+      "case_id": "ordered_pages",
+      "description": "Pages arrive in the correct source/logical order.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        },
+        {
+          "page_ref": "p2",
+          "source_index": 2,
+          "logical_page_no": 2
+        }
+      ],
+      "source_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_logical_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_detected_labels": [
+        "1(a)",
+        "1(b)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "1(a)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        },
+        {
+          "label": "1(b)",
+          "segments": [
+            {
+              "page_ref": "p2",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "1(a)": "none",
+        "1(b)": "none"
+      },
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1",
+            "p2"
+          ],
+          "detected_labels": [
+            "1(a)",
+            "1(b)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "1(a)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            },
+            {
+              "label": "1(b)",
+              "segments": [
+                {
+                  "page_ref": "p2",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "reversed_pages",
+      "description": "Physical/source order is reversed and uncorrected output must not be accepted as ready.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p2",
+          "source_index": 1,
+          "logical_page_no": 2
+        },
+        {
+          "page_ref": "p1",
+          "source_index": 2,
+          "logical_page_no": 1
+        }
+      ],
+      "source_order": [
+        "p2",
+        "p1"
+      ],
+      "expected_logical_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_detected_labels": [
+        "1(a)",
+        "1(b)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "1(a)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        },
+        {
+          "label": "1(b)",
+          "segments": [
+            {
+              "page_ref": "p2",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "1(a)": "none",
+        "1(b)": "none"
+      },
+      "expected_blockers": [
+        "wrong page order must be corrected"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p2",
+            "p1"
+          ],
+          "detected_labels": [
+            "1(a)",
+            "1(b)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "1(a)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            },
+            {
+              "label": "1(b)",
+              "segments": [
+                {
+                  "page_ref": "p2",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "missing_page_gap",
+      "description": "Logical page 2 is missing between pages 1 and 3.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        },
+        {
+          "page_ref": "p3",
+          "source_index": 2,
+          "logical_page_no": 3
+        }
+      ],
+      "source_order": [
+        "p1",
+        "p3"
+      ],
+      "expected_logical_order": [
+        "p1",
+        "p3"
+      ],
+      "expected_missing_page_refs": [
+        "logical_page_2"
+      ],
+      "expected_blockers": [
+        "missing page gap"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1",
+            "p3"
+          ],
+          "detected_labels": [],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [
+            "logical_page_2"
+          ],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [],
+          "warnings": [],
+          "blockers": [
+            "missing page gap detected"
+          ],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "duplicate_page",
+      "description": "Same logical page appears twice and must be quarantined/reviewed.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1a",
+          "source_index": 1,
+          "logical_page_no": 1
+        },
+        {
+          "page_ref": "p1b",
+          "source_index": 2,
+          "logical_page_no": 1
+        }
+      ],
+      "source_order": [
+        "p1a",
+        "p1b"
+      ],
+      "expected_logical_order": [
+        "p1a",
+        "p1b"
+      ],
+      "expected_duplicate_page_refs": [
+        "logical_page_1"
+      ],
+      "expected_blockers": [
+        "duplicate page"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1a",
+            "p1b"
+          ],
+          "detected_labels": [],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [
+            "logical_page_1"
+          ],
+          "answer_boundaries": [],
+          "warnings": [],
+          "blockers": [
+            "duplicate page detected"
+          ],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "blank_cover_page",
+      "description": "Cover/blank page must be non-answer and must not receive confident answer boundary.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "cover",
+          "source_index": 1,
+          "logical_page_no": 1,
+          "page_kind": "cover"
+        },
+        {
+          "page_ref": "p2",
+          "source_index": 2,
+          "logical_page_no": 2
+        }
+      ],
+      "source_order": [
+        "cover",
+        "p2"
+      ],
+      "expected_logical_order": [
+        "cover",
+        "p2"
+      ],
+      "expected_blank_cover_page_refs": [
+        "cover"
+      ],
+      "expected_detected_labels": [
+        "1(a)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "1(a)",
+          "segments": [
+            {
+              "page_ref": "p2",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "1(a)": "none"
+      },
+      "expected_blockers": [
+        "blank/cover should not map as answer"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "cover",
+            "p2"
+          ],
+          "detected_labels": [
+            "1(a)"
+          ],
+          "blank_cover_page_refs": [
+            "cover"
+          ],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "1(a)",
+              "segments": [
+                {
+                  "page_ref": "cover",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "single_page_answer_boundary",
+      "description": "One clear answer boundary on one page.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        }
+      ],
+      "source_order": [
+        "p1"
+      ],
+      "expected_logical_order": [
+        "p1"
+      ],
+      "expected_detected_labels": [
+        "2(a)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "2(a)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "2(a)": "none"
+      },
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1"
+          ],
+          "detected_labels": [
+            "2(a)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "2(a)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "multi_question_same_page",
+      "description": "Two distinct answer boundaries are present on the same page.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        }
+      ],
+      "source_order": [
+        "p1"
+      ],
+      "expected_logical_order": [
+        "p1"
+      ],
+      "expected_detected_labels": [
+        "3(a)",
+        "3(b)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "3(a)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        },
+        {
+          "label": "3(b)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "3(a)": "none",
+        "3(b)": "none"
+      },
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1"
+          ],
+          "detected_labels": [
+            "3(a)",
+            "3(b)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "3(a)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            },
+            {
+              "label": "3(b)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "near_bottom_continuation",
+      "description": "Answer starts near page bottom and continues on the next page.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        },
+        {
+          "page_ref": "p2",
+          "source_index": 2,
+          "logical_page_no": 2
+        }
+      ],
+      "source_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_logical_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_detected_labels": [
+        "1(b)(i)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "1(b)(i)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            },
+            {
+              "page_ref": "p2",
+              "order_index": 2
+            }
+          ],
+          "continuation_signal": "continuation_included",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "1(b)(i)": "continuation_included"
+      },
+      "expected_blockers": [
+        "missed continuation is critical"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1",
+            "p2"
+          ],
+          "detected_labels": [
+            "1(b)(i)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "1(b)(i)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "near_bottom_complete_answer",
+      "description": "Answer ends near bottom and next page clearly starts a new question, so no false continuation is needed.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        },
+        {
+          "page_ref": "p2",
+          "source_index": 2,
+          "logical_page_no": 2
+        }
+      ],
+      "source_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_logical_order": [
+        "p1",
+        "p2"
+      ],
+      "expected_detected_labels": [
+        "4(a)",
+        "4(b)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "4(a)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        },
+        {
+          "label": "4(b)",
+          "segments": [
+            {
+              "page_ref": "p2",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "none",
+          "confidence": "0.90",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "4(a)": "none",
+        "4(b)": "none"
+      },
+      "expected_warnings": [
+        "near-bottom complete answer may be reviewable but not false continuation"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1",
+            "p2"
+          ],
+          "detected_labels": [
+            "4(a)",
+            "4(b)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "4(a)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            },
+            {
+              "label": "4(b)",
+              "segments": [
+                {
+                  "page_ref": "p2",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "none",
+              "confidence": "0.90",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [
+            "near-bottom complete answer reviewed; no continuation confirmed"
+          ],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "low_confidence_ambiguous_boundary",
+      "description": "Low-confidence ambiguous answer boundary requires teacher confirmation.",
+      "fixture_type": "synthetic",
+      "pages": [
+        {
+          "page_ref": "p1",
+          "source_index": 1,
+          "logical_page_no": 1
+        }
+      ],
+      "source_order": [
+        "p1"
+      ],
+      "expected_logical_order": [
+        "p1"
+      ],
+      "expected_detected_labels": [
+        "5(a)"
+      ],
+      "expected_answer_boundaries": [
+        {
+          "label": "5(a)",
+          "segments": [
+            {
+              "page_ref": "p1",
+              "order_index": 1
+            }
+          ],
+          "continuation_signal": "ambiguous",
+          "confidence": "0.45",
+          "needs_teacher_confirmation": true
+        }
+      ],
+      "expected_continuation_signals": {
+        "5(a)": "ambiguous"
+      },
+      "expected_warnings": [
+        "ambiguous boundary requires teacher confirmation"
+      ],
+      "provider_outputs": {
+        "synthetic_script_processor": {
+          "provider": "synthetic_script_processor",
+          "logical_order": [
+            "p1"
+          ],
+          "detected_labels": [
+            "5(a)"
+          ],
+          "blank_cover_page_refs": [],
+          "missing_page_refs": [],
+          "duplicate_page_refs": [],
+          "answer_boundaries": [
+            {
+              "label": "5(a)",
+              "segments": [
+                {
+                  "page_ref": "p1",
+                  "order_index": 1
+                }
+              ],
+              "continuation_signal": "ambiguous",
+              "confidence": "0.45",
+              "needs_teacher_confirmation": true
+            }
+          ],
+          "warnings": [
+            "low confidence ambiguous boundary requires teacher confirmation"
+          ],
+          "blockers": [],
+          "needs_teacher_confirmation": true,
+          "unsafe_auto_confirm_count": 0,
+          "grade_suggestion_created_count": 0,
+          "final_grade_created_count": 0
+        }
+      }
+    }
+  ]
+}

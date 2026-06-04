@@ -1,3 +1,13 @@
+# TA-SCRIPT-001 — Script processing quality benchmark
+
+Recorded at: 2026-06-04
+
+TA-SCRIPT-001 defines script page sequencing and answer-boundary quality as measurable prerequisites before real AI mapping or batch evidence packets. Even correct reference extraction is not enough if pages are reversed, missing, duplicated, blank/cover pages are treated as answers, or continuation context is lost.
+
+Critical blockers are missed continuation, wrong page order accepted as ready, missing page, duplicate page, blank/cover page mapped as a confident answer, unsafe auto-confirm, and any `GradeSuggestion` or `FinalGrade` creation during script processing. Reviewable warnings include ambiguous boundaries, low-confidence labels, near-bottom complete answers flagged for review but not falsely confirmed, and non-sequential student answering patterns.
+
+The previous `1(b)(i)` failure remains the core quality lesson: missed continuation invalidates grading-quality interpretation because the evidence packet is incomplete.
+
 # TA-REF-001 — Reference extraction must be measurable before mapping/grading claims
 
 Recorded at: 2026-06-04

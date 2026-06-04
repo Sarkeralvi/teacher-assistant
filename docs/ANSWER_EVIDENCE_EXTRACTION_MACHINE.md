@@ -170,6 +170,30 @@ Future implementation should normalize page orientation, skew, contrast, and noi
 - Detect gaps, duplicates, reversed uploads, and inserted pages.
 - Teacher confirmation is required when sequence confidence is not benchmark-proven.
 
+
+### TA-SCRIPT-001 evaluation harness
+
+TA-SCRIPT-001 adds the first executable benchmark for the script-processing arm. It is evaluation-first only: it does not implement real OCR/vision page sequencing, does not call Codex, does not run real AI mapping, does not use private scripts, and does not grade.
+
+Fixture format lives under `apps/api/packages/evaluation/fixtures/script_processing/`. Each synthetic case records:
+
+- `case_id` and `description`;
+- pages with source index, expected logical page number, and page kind;
+- source order and expected logical order;
+- expected blank/cover classifications;
+- expected detected labels;
+- expected answer boundaries and ordered page segments;
+- expected continuation signals;
+- expected missing/duplicate page blockers or warnings;
+- expected teacher-confirmation requirement;
+- saved deterministic provider output for `synthetic_script_processor`.
+
+The evaluator reports page-order accuracy, missing-page detection, duplicate-page detection, blank/cover classification accuracy, detected-label count accuracy, answer-boundary count accuracy, boundary page coverage accuracy, boundary order accuracy, continuation-signal accuracy, false continuation count, missed continuation count, unsafe auto-confirm count, `GradeSuggestion` count, and `FinalGrade` count.
+
+Critical script blockers are missed continuation, wrong page order accepted as ready, missing page, duplicate page, blank/cover page mapped as a confident answer, unsafe auto-confirm, and any `GradeSuggestion` or `FinalGrade` creation during script processing. Reviewable warnings include ambiguous boundaries requiring teacher confirmation, low-confidence labels, near-bottom complete answers flagged for review but not falsely confirmed, and non-sequential student answering patterns.
+
+The previous `1(b)(i)` evidence failure proves why missed continuation is critical: if page sequencing or boundary grouping loses continuation context, grading quality cannot be interpreted even when reference extraction is correct.
+
 ### Question boundary detection
 
 - Detect question labels and content blocks.
