@@ -1,3 +1,9 @@
+## TA-GRADE-000 supervision record
+
+TA-GRADE-000 was executed in manual controlled mode as a documentation/contract task. It defines the boundary for a future confirmed-packet-only grading queue and records that batch evidence preparation is still not grading.
+
+No autonomous loop was enabled. TA-GRADE-001 implementation was not started. No grading was run. Real Codex was not run. No `GradeSuggestion`, `FinalGrade`, or `GradingJob` was created. No real AI mapping or real OCR/vision provider was implemented. Teacher observation was not started, and no private files were used.
+
 ## TA-BATCH-001A supervision record
 
 TA-BATCH-001A was executed in manual controlled mode to harden batch evidence prep accounting and quarantine workflow. The important project-management result is that batch prep must account for every expected submission × canonical grading-unit packet, including missing evidence, before any grading queue is allowed.

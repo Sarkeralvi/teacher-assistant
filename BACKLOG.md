@@ -1368,17 +1368,30 @@ Tests required: focused evidence prep tests, full test, lint, frontend static/bu
 Risks: TA-GRADE-001 must remain blocked until this accounting is green; future zero-mark blank handling is separate.
 Status: Done
 
+TASK-ID: TA-GRADE-000
+Title: Confirmed-packet-only grading queue contract
+Owner: Hermes
+Priority: P0
+Dependencies: TA-BATCH-001A
+Files affected: BACKLOG.md, docs/GRADING_QUEUE_CONTRACT.md, docs/ANSWER_EVIDENCE_EXTRACTION_MACHINE.md, docs/AEEM_IMPLEMENTATION_ROADMAP.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/GRADING_QUALITY_NOTES.md, docs/VALIDATION_LOG.md
+Goal: Define the contract for a future grading queue that consumes only confirmed ready evidence packets and refuses everything else.
+Implementation notes: Documentation/contract only. A future queue item may be created only from teacher-owned, confirmed `complete`, `ready_for_grading` packets with active rubric, valid canonical grading unit, positive max marks, valid crop/context, contiguous segments, allowed continuation status, answer region id, and no blockers. Missing, unconfirmed, partial, blank, possible-continuation, no-region/no-segment, invalid-order, missing-rubric/context, blocker-bearing, cross-assessment, and cross-teacher packets must be refused.
+Acceptance criteria: Contract records allowed criteria, refused states, future queue fields/statuses, and safety invariants: queue item creation creates no `GradeSuggestion`, `FinalGrade`, or `GradingJob`, calls no provider/model, and does not execute grading. TA-GRADE-001 remains Pending until the contract is accepted.
+Tests required: docs-only gates: `git status --short`, `git diff --check`, `make lint`, final `git status --short`.
+Risks: Any later TA-GRADE-001 implementation must not turn batch evidence prep into batch grading and must keep provider execution as a separate explicit future action.
+Status: Done
+
 TASK-ID: TA-GRADE-001
 Title: Question-wise grading queue from sealed/confirmed packets
 Owner: Hermes
 Priority: P0
-Dependencies: TA-BATCH-001
+Dependencies: TA-GRADE-000, TA-BATCH-001A
 Files affected: scoped backend/frontend/docs/tests after approval
-Goal: Create a question-wise grading queue only from confirmed evidence packets.
+Goal: Create a question-wise grading queue only from confirmed ready evidence packets under the accepted TA-GRADE-000 contract.
 Implementation notes: AEEM output feeds grading. Do not expose other students' answers as grading context. Sealed/immutable store is future/hardening scope; current requirement is confirmed evidence packets and auditable release.
 Acceptance criteria: Grading queue groups confirmed packets by canonical grading unit and blocks unconfirmed/incomplete packets. Teacher review and no auto-finalization remain mandatory.
 Tests required: focused queue/readiness tests, lint, diff check.
-Risks: Premature grading queue work can bypass evidence gates; only start after batch evidence readiness is proven.
+Risks: Premature grading queue work can bypass evidence gates; only start after the TA-GRADE-000 contract is accepted and batch evidence readiness is proven.
 Status: Pending
 
 

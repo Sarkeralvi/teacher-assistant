@@ -1,3 +1,9 @@
+## TA-GRADE-000 completion note
+
+TA-GRADE-000 defines the confirmed-packet-only grading queue contract before TA-GRADE-001. This is a documentation/contract gate, not grading implementation. It makes the AEEM boundary explicit: batch evidence preparation produces readiness/quarantine evidence, while a future grading queue may only accept confirmed ready packets and must refuse all blocked/missing/partial/blank/unconfirmed evidence.
+
+TA-GRADE-001 remains blocked until this contract is accepted. It is safe to plan only as a separate approved task, with tests proving queue creation has no grading/provider side effects and refuses every non-ready packet state.
+
 ## TA-BATCH-001A completion note
 
 TA-BATCH-001A strengthens the AEEM batch-prep gate before grading queue work. Batch evidence preparation now treats expected packets as the Cartesian product of submissions and canonical grading units, then marks each slot ready or quarantined. This prevents silently ignoring missing answer regions.

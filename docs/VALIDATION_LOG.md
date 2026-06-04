@@ -1,3 +1,36 @@
+# TA-GRADE-000 — Confirmed-packet-only grading queue contract
+
+- Recorded at: 2026-06-04
+- Baseline commit: `f64d2b4636eacf8b5402cc297569b6c1692ac00d`
+- Workflow type: manual controlled documentation/contract gate
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Real AI mapping implementation: not started
+- Real OCR/vision implementation: not started
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Private files/artifacts used: no
+
+## Change made
+
+TA-GRADE-000 defines the confirmed-packet-only grading queue contract in `docs/GRADING_QUEUE_CONTRACT.md` and records the boundary across backlog/AEEM/grading-quality supervision docs. A future queue may accept only confirmed ready evidence packets and must refuse missing, unconfirmed, partial, blank, possible-continuation, not-checked-risk, missing-rubric, no-region/no-segment, invalid-order, missing-context, blocker-bearing, cross-assessment, and cross-teacher packets.
+
+## Safety result
+
+TA-GRADE-000 is documentation/contract only. It does not implement TA-GRADE-001, does not create queue runtime behavior, does not run grading, does not call providers, and does not create `GradeSuggestion`, `FinalGrade`, or `GradingJob`. TA-GRADE-001 remains blocked until this contract is accepted.
+
+## Checks run
+
+- `git status --short` — clean at baseline.
+- `git diff --check` — passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- Full `make test` not run because TA-GRADE-000 is docs/contract only and product behavior was not changed.
+
 # TA-BATCH-001A — Harden batch evidence prep correctness and quarantine workflow
 
 - Recorded at: 2026-06-04

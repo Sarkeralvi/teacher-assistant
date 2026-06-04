@@ -1,3 +1,9 @@
+## TA-GRADE-000 confirmed-packet-only quality rule
+
+TA-GRADE-000 makes confirmed-packet-only queue entry a grading-quality rule. A future queue item may be created only from a teacher-owned packet that is `complete`, `ready_for_grading`, backed by active rubric/canonical grading unit, positive max marks, valid crop/context, at least one contiguous segment, an allowed continuation status, and zero blockers.
+
+Refused states include missing, unconfirmed, partial, blank, possible continuation, continuation risk not checked, missing active rubric, no answer region, no segment, invalid segment order, missing crop/context, any blocker, and cross-assessment/cross-teacher items. Queue item creation must create no grades, no grading jobs, and no provider calls.
+
 ## TA-BATCH-001A grading-quality gate
 
 TA-BATCH-001A records expected-packet accounting as a grading-quality prerequisite. A batch prep run must account for each submission × grading-unit slot; otherwise missing evidence could be silently skipped before a grading queue exists.

@@ -1,3 +1,11 @@
+## TA-GRADE-000 confirmed-packet-only queue boundary
+
+TA-GRADE-000 defines the grading boundary before any TA-GRADE-001 implementation. Batch evidence preparation remains evidence preparation only; it must not create queue items that execute grading, provider calls, `GradeSuggestion`, `FinalGrade`, or `GradingJob` records.
+
+A future grading queue may consume only teacher-owned confirmed packets where the expected submission × grading-unit slot exists, `answer_region_id` exists, `evidence_status = complete`, `ready_for_grading = true`, active rubric and valid canonical grading unit exist, max marks are positive, crop/context is valid, segment count is at least one, segment order is contiguous, continuation status is one of `checked_no_continuation`, `continuation_confirmed_included`, or `continuation_confirmed_not_needed`, and the packet has no blockers.
+
+Missing, unconfirmed, partial, blank, possible-continuation, not-checked-risk, missing-rubric, no-region/no-segment, invalid-order, missing-context, blocker-bearing, cross-assessment, and cross-teacher packets must remain refused/quarantined. See `docs/GRADING_QUEUE_CONTRACT.md`.
+
 ## TA-BATCH-001A evidence-prep accounting hardening
 
 TA-BATCH-001A hardens batch evidence preparation so it accounts for every expected submission × active/canonical grading-unit slot, not just answer regions that already exist. Missing answer regions are now represented as explicit blocked packets with `evidence_status = missing`, zero segments, no pages covered, and correction-target metadata pointing to the relevant submission and grading unit.
