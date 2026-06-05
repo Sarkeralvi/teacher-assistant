@@ -44,6 +44,21 @@ The UI must continue to show no provider run button and no batch grade button in
 
 ## What the founder can test
 
+The assessment page now labels the current manual path as **Founder Evidence Workflow**. Follow the page order:
+
+1. Step 0: select/log in as a demo teacher and confirm the synthetic/demo assessment.
+2. Step 1: reference materials — question paper, solution/model answer, and rubric. If upload still lives in the legacy/internal material step, use that Step 1 link and return to the assessment page.
+3. Step 2: canonical grading units & rubrics. Confirmation is blocked until a grading/evidence run exists, reference materials are uploaded/confirmed, at least one canonical question exists, and every canonical question has an active rubric.
+4. Step 3: upload synthetic/demo student scripts/submissions only. This uploads pages only; it does not grade or OCR.
+5. Step 4: create/correct answer evidence mapping. Multi-page answers must use ordered segments and be confirmed.
+6. Step 5/6: check evidence readiness and create evidence preparation summary.
+7. Step 7: create grading queue scaffold.
+8. STOP: no grading/provider execution. Queue records are not grades.
+
+Legacy/future grading, review, export, and semi-automated surfaces should be treated as **FUTURE / not part of current founder test**.
+
+Detailed checks:
+
 1. Select or log in as a demo teacher.
 2. Create or open a synthetic/demo assessment.
 3. Create grading units/questions.

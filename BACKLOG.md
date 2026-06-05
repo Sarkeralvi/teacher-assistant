@@ -1,3 +1,15 @@
+# TA-UX-001 — Founder Evidence Workflow V0
+
+- Recorded at: 2026-06-05
+- Baseline commit: `a9c11b62e72309372c9061e2e6afceb7d31c22c5`
+- Workflow type: manual controlled V0/V0.5 UX clarity task
+- Scope: assessment-page founder/internal evidence-to-queue clarity only; no grading logic changes and no backend functionality removal.
+- Files affected: `apps/web/components/AssessmentDetailClient.tsx`, `apps/web/tests/workflow-ui.test.mjs`, `BACKLOG.md`, `docs/FOUNDER_MANUAL_EVIDENCE_QUEUE_CHECKLIST.md`, `docs/PROJECT_SUPERVISION_CONTEXT.md`, `docs/VALIDATION_LOG.md`
+- Goal: make the founder evidence-to-queue path manually testable by clearly ordering reference materials, canonical grading units/rubrics, scripts, answer evidence mapping, evidence readiness/prep, queue scaffold, and the hard stop.
+- Acceptance criteria: assessment page shows the Founder Evidence Workflow safety banner, step guide, grouped Step 0–7 sections, reference-material upload callout, questions/rubrics blocker checklist, script upload warning, evidence-prep and queue-scaffold warnings, STOP banner, and FUTURE/out-of-scope labels for grading/review/export surfaces. Static workflow test asserts these markers and continues to guard against direct frontend LLM/Codex calls.
+- Safety: no autonomous loop, no provider/model call, no real Codex, no grading, no batch grading, no real AI mapping/OCR, no teacher observation, no private files, no `GradeSuggestion`, no `FinalGrade`, and no provider `GradingJob`.
+- Status: In verification
+
 # INITIAL TASK BACKLOG
 
 TASK-ID: TA-W1-001

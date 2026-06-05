@@ -634,20 +634,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p className="mt-2 text-slate-400">{assessment.assessment_type} · {assessment.total_marks} marks · {assessment.status}</p>
           <div className="mt-4 flex flex-wrap gap-3">
             <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
-              Custom Controlled Grading Run
+              Legacy/internal material-upload workflow — current test uses the Evidence Workflow below
             </Link>
             <span
               className={`${buttonClass} cursor-not-allowed opacity-60`}
               aria-disabled="true"
               data-testid="semi-automated-mode-not-ready"
             >
-              Semi-Automated: not ready for teacher workflow yet
+              FUTURE / not part of current founder test: Semi-Automated mode
             </span>
-            <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>
-              Review & export final grades
+            <Link className={`${buttonClass} opacity-70`} href={`/assessments/${assessmentId}/review`}>
+              FUTURE / not part of current founder test: review/export final grades
             </Link>
-            <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
-              Download final grades (.xlsx)
+            <a className={`${buttonClass} opacity-70`} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
+              FUTURE / not part of current founder test: download final grades (.xlsx)
             </a>
           </div>
           {reviewQueue.every((item) => !item.final_grade) ? (
@@ -657,12 +657,158 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </section>
       ) : null}
 
-      <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
+      <section className="rounded border border-emerald-700 bg-emerald-950/30 p-5">
+        <p className="text-sm font-semibold uppercase tracking-wide text-emerald-200">Founder Evidence Workflow</p>
+        <h2 className="mt-1 text-2xl font-semibold">This workflow prepares evidence only. It does not grade.</h2>
+        <p className="mt-2 text-emerald-100">Goal: confirm evidence packets → build queue scaffold → stop.</p>
+        <p className="mt-1 text-amber-100">Provider execution is disabled. Queue records are not grades.</p>
+      </section>
+
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-xl font-semibold">Evidence Preparation Workflow below</h2>
+        <p className="mt-2 text-sm text-slate-300">Use the Evidence Preparation Workflow below for the current founder test.</p>
+        <p className="text-sm text-slate-400">Custom Controlled Grading Run is legacy/internal navigation and should not be treated as a separate second workflow.</p>
+        <ol className="mt-4 grid gap-2 text-sm md:grid-cols-2">
+          {[
+            "Step 0: Teacher / assessment setup",
+            "Step 1: Reference materials",
+            "Step 2: Canonical grading units & rubrics",
+            "Step 3: Student scripts / submissions",
+            "Step 4: Answer evidence mapping",
+            "Step 5: Evidence readiness",
+            "Step 6: Evidence preparation summary",
+            "Step 7: Grading queue scaffold",
+            "STOP: No grading/provider execution",
+          ].map((step) => (
+            <li key={step} className="rounded border border-slate-800 bg-slate-950/40 p-3">{step}</li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Step 0: Current teacher / assessment context</h2>
+          <p className="text-sm text-slate-400">Select/login teacher and confirm this is the intended synthetic/demo assessment before preparing evidence.</p>
+        </div>
+        <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
+      </section>
+
+      <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Step 1: Reference materials — question paper / solution / rubric</h2>
+          <p className="text-sm text-slate-300">Upload reference materials in the Custom Controlled material step, then return here.</p>
+          <p className="text-sm text-slate-400">Reference materials mean the question paper, solution/model answer, and rubric PDFs. They must be uploaded and confirmed before questions/rubrics can be confirmed.</p>
+        </div>
+        <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
+          Open legacy/internal material-upload workflow for Step 1 only
+        </Link>
+      </section>
+
+      <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Step 2: Canonical grading units & rubrics</h2>
+          <p className="text-sm text-slate-300">Create or import canonical grading units, then open each grading unit to add one active rubric.</p>
+          <p className="text-sm text-amber-200">Confirm questions/rubrics is blocked until: grading/evidence run exists, question paper uploaded, solution/model answer uploaded, rubric uploaded, materials confirmed, at least one canonical question exists, and every canonical question has an active rubric.</p>
+          <p className="text-sm text-cyan-200">When blocked, use Step 1 for materials or this Step 2 area for questions/rubrics before trying confirmation again.</p>
+        </div>
+      </section>
+
+      <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Step 1 support: Import questions from paper</h2>
+          <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
+          <p className="text-sm text-slate-400">Default extraction is mock/simple.</p>
+          <p className="text-sm text-slate-400">Real Codex extraction must be explicitly enabled.</p>
+          <p className="text-sm text-slate-400">If real extraction is not enabled, uploaded images will not be treated as understood question papers.</p>
+          <p className="text-sm text-slate-400">Upload a question paper PDF/image to generate draft questions by question number. No real Codex extraction is enabled by default.</p>
+        </div>
+        <form onSubmit={handleQuestionImport} className="grid gap-3">
+          <label className="grid gap-2 text-sm">
+            Question paper file
+            <input
+              className={inputClass}
+              name="file"
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+              onChange={handleQuestionImportFileChange}
+            />
+          </label>
+          {selectedQuestionImportFileName ? (
+            <p className="text-sm text-emerald-300">Selected question paper file: {selectedQuestionImportFileName}</p>
+          ) : null}
+          <button className={buttonClass} disabled={importingQuestions || !questionImportFile} type="submit">
+            {importingQuestions ? "Extracting draft questions..." : "Extract draft questions"}
+          </button>
+        </form>
+        {questionImportJob ? (
+          <div className="grid gap-3 rounded border border-slate-800 p-4">
+            <p className="text-sm text-slate-300">Import job #{questionImportJob.id} · {questionImportJob.status} · provider: {questionImportJob.provider}</p>
+            {questionImportJob.provider_warnings.length > 0 ? (
+              <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
+                <p className="font-semibold">Extraction warnings</p>
+                <ul className="list-disc pl-5">
+                  {questionImportJob.provider_warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <p className="text-sm text-slate-400">{selectedDraftCount} selected draft questions</p>
+            {draftQuestions.map((draft) => {
+              const edit = draftQuestionEdits[draft.draft_id] ?? draftQuestionToEdit(draft);
+              return (
+                <article key={draft.draft_id} className="grid gap-2 rounded border border-slate-700 p-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={edit.selected}
+                      onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { selected: event.target.checked })}
+                    />
+                    Select draft question {draft.question_no}
+                  </label>
+                  <input className={inputClass} aria-label="Draft question number" value={edit.question_no} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { question_no: event.target.value })} />
+                  <textarea className={inputClass} aria-label="Draft question text" value={edit.question_text} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { question_text: event.target.value })} />
+                  <input className={inputClass} aria-label="Draft total marks" value={edit.total_marks} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { total_marks: event.target.value })} />
+                  <textarea className={inputClass} aria-label="Draft model answer optional" placeholder="Model answer optional" value={edit.model_answer} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { model_answer: event.target.value })} />
+                  <p className="text-xs text-slate-400">source page {draft.source_page} · confidence {draft.confidence} · needs_review: {String(draft.needs_review)}</p>
+                  <p className="text-xs text-slate-500">Excerpt: {draft.source_text_excerpt}</p>
+                </article>
+              );
+            })}
+            <button className={buttonClass} disabled={acceptingQuestions || selectedDraftCount === 0} type="button" onClick={() => void handleAcceptDraftQuestions()}>
+              {acceptingQuestions ? "Creating selected questions..." : "Create selected questions"}
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+        <h2 className="text-xl font-semibold">Step 2: Canonical grading units & rubrics — manual creation</h2>
+        <p className="text-sm text-slate-400">Manual question creation remains available.</p>
+        <input className={inputClass} placeholder="Question number" value={questionNo} onChange={(event) => setQuestionNo(event.target.value)} required />
+        <textarea className={inputClass} placeholder="Question text" value={questionText} onChange={(event) => setQuestionText(event.target.value)} required />
+        <textarea className={inputClass} placeholder="Model answer (optional)" value={modelAnswer} onChange={(event) => setModelAnswer(event.target.value)} />
+        <input className={inputClass} placeholder="Total marks" value={totalMarks} onChange={(event) => setTotalMarks(event.target.value)} required />
+        <button className={buttonClass} disabled={submitting} type="submit">
+          {submitting ? "Creating..." : "Create question"}
+        </button>
+      </form>
+
+      {!loading && questions.length === 0 ? <EmptyState message="No questions yet." /> : null}
+      <div className="grid gap-3">
+        {questions.map((question) => (
+          <Link key={question.id} href={`/questions/${question.id}`} className="rounded border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700">
+            <h2 className="text-lg font-semibold">Grading unit {question.question_no}</h2>
+            <p className="text-sm text-slate-400">{question.total_marks} marks · {gradingUnitType(question.question_no)}</p>
+            <p className="mt-2 line-clamp-2 text-slate-300">{question.question_text}</p>
+          </Link>
+        ))}
+      </div>
 
       <form ref={uploadFormRef} onSubmit={handleUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Upload submission</h2>
-          <p className="text-sm text-slate-400">Accepts PDF, PNG, JPG, or JPEG. This only stores pages; it does not grade or OCR.</p>
+          <h2 className="text-xl font-semibold">Step 3: Student scripts / submissions — upload one script</h2>
+          <p className="text-sm text-slate-400">Use synthetic/demo scripts only. Accepts PDF, PNG, JPG, or JPEG. This uploads pages only. It does not grade or OCR.</p>
         </div>
         <input className={inputClass} name="student_identifier" placeholder="student_identifier" value={studentIdentifier} onChange={(event) => setStudentIdentifier(event.target.value)} required />
         <input className={inputClass} placeholder="Student name (optional)" value={studentName} onChange={(event) => setStudentName(event.target.value)} />
@@ -685,8 +831,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <form onSubmit={handleZipUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Upload script ZIP</h2>
-          <p className="text-sm text-slate-400">PDF, PNG, JPG, JPEG only. Unsupported files are reported and skipped; no grading or answer-region detection is run.</p>
+          <h2 className="text-xl font-semibold">Step 3: Student scripts / submissions — upload script ZIP</h2>
+          <p className="text-sm text-slate-400">Use synthetic/demo scripts only. PDF, PNG, JPG, JPEG only. Unsupported files are reported and skipped; this uploads pages only. It does not grade or OCR, and no answer-region detection is run.</p>
         </div>
         <label className="grid gap-2 text-sm">
           Student identifier strategy
@@ -716,7 +862,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </form>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Submissions</h2>
+        <h2 className="text-xl font-semibold">Step 3: Student scripts / submissions — uploaded pages</h2>
         <p className="mt-1 text-sm text-slate-400">
           Total submissions: {submissions.length} · total pages: {pages.length} · mapped pages: {mappedPageCount} · unmapped pages: {unmappedPageCount}
         </p>
@@ -755,131 +901,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </div>
       </section>
 
-      <section className="rounded border border-slate-800 bg-slate-900 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">Evidence preparation summary</h2>
-            <p className="text-sm text-amber-200">This prepares evidence only. It does not grade.</p>
-          </div>
-          <button className={buttonClass} type="button" disabled={creatingEvidencePrepRun} onClick={() => void handleCreateEvidencePrepRun()}>
-            {creatingEvidencePrepRun ? "Preparing evidence..." : "Create evidence prep run"}
-          </button>
-        </div>
-        {evidencePrepSummary ? (
-          <div className="mt-4 grid gap-4">
-            <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm md:grid-cols-6">
-              <p>ready: {evidencePrepSummary.ready_packet_count}</p>
-              <p>blocked: {evidencePrepSummary.blocked_packet_count}</p>
-              <p>warnings: {evidencePrepSummary.warning_packet_count}</p>
-              <p>partial: {evidencePrepSummary.partial_packet_count}</p>
-              <p>blank: {evidencePrepSummary.blank_packet_count}</p>
-              <p>status: {evidencePrepSummary.status}</p>
-            </div>
-            <div className="rounded border border-slate-800 p-3 text-sm">
-              <p className="font-semibold">Blocked / quarantined items</p>
-              {evidencePrepSummary.packets.filter((packet) => packet.quarantined).length === 0 ? (
-                <p className="mt-2 text-slate-400">No quarantined packets in the current summary.</p>
-              ) : (
-                <div className="mt-2 grid gap-2">
-                  {evidencePrepSummary.packets.filter((packet) => packet.quarantined).slice(0, 10).map((packet) => (
-                    <article key={`${packet.submission_id}-${packet.question_id ?? "missing"}-${packet.answer_region_id ?? "none"}`} className="rounded border border-amber-900/70 p-3">
-                      <p className="font-medium">
-                        Submission #{packet.submission_id} · {packet.student_identifier ?? "unknown student"} · {packet.grading_unit_label ?? "unknown grading unit"}
-                      </p>
-                      <p className="text-slate-400">
-                        evidence_status {packet.evidence_status} · continuation {packet.continuation_check_status} · segments {packet.segment_count}
-                      </p>
-                      <p className="text-xs text-slate-500">Pages covered: {packet.pages_covered.length > 0 ? packet.pages_covered.join(", ") : "none yet"}</p>
-                      <p className="text-amber-200">Reason: {packet.blockers.join("; ") || "blocked by policy"}</p>
-                      {packet.answer_region_id ? (
-                        <a className="text-cyan-300 underline" href={`#answer-region-${packet.answer_region_id}`}>Go to correction area</a>
-                      ) : (
-                        <p className="text-cyan-300">Correction target: create/map evidence for submission #{packet.correction_target.submission_id ?? packet.submission_id} and grading unit {packet.correction_target.grading_unit_label ?? packet.grading_unit_label ?? "unknown"} in the answer-region form below.</p>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <p className="mt-3 text-sm text-slate-400">Evidence preparation summary has not loaded yet.</p>
-        )}
-        <p className="mt-3 text-xs text-slate-500">No batch grade button is available here. Real AI/OCR and Codex are not invoked by evidence preparation.</p>
-      </section>
-
-      <section className="rounded border border-slate-800 bg-slate-900 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">Grading queue scaffold</h2>
-            <p className="text-sm text-amber-200">This only prepares a queue from confirmed evidence. It does not grade.</p>
-          </div>
-          <button className={buttonClass} type="button" disabled={creatingGradingQueueRun} onClick={() => void handleCreateGradingQueueRun()}>
-            {creatingGradingQueueRun ? "Preparing queue..." : "Create grading queue scaffold"}
-          </button>
-        </div>
-        {gradingQueueSummary ? (
-          <div className="mt-4 grid gap-4">
-            <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm md:grid-cols-4">
-              <p>status: {gradingQueueSummary.status}</p>
-              <p>candidates: {gradingQueueSummary.total_candidate_packets}</p>
-              <p>queued item count: {gradingQueueSummary.queued_item_count}</p>
-              <p>refused item count: {gradingQueueSummary.refused_item_count}</p>
-            </div>
-            <div className="rounded border border-emerald-900/70 p-3 text-sm">
-              <p className="font-semibold">Queued confirmed packets</p>
-              {gradingQueueSummary.items.length === 0 ? (
-                <p className="mt-2 text-slate-400">No confirmed packets are queued yet.</p>
-              ) : (
-                <div className="mt-2 grid gap-2">
-                  {gradingQueueSummary.items.slice(0, 10).map((item) => (
-                    <article key={item.id} className="rounded border border-emerald-900/70 p-3">
-                      <p className="font-medium">
-                        Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label}
-                      </p>
-                      <p className="text-slate-400">
-                        queue_status {item.queue_status} · stale_status {item.stale_status} · provider_allowed {String(item.provider_allowed)} · segments {item.segment_count}
-                      </p>
-                      {item.current_refusal_reasons.length > 0 ? <p className="text-amber-200">Current blockers: {item.current_refusal_reasons.join("; ")}</p> : null}
-                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="rounded border border-amber-900/70 p-3 text-sm">
-              <p className="font-semibold">Refused packet reasons</p>
-              {gradingQueueSummary.refused_items.length === 0 ? (
-                <p className="mt-2 text-slate-400">No refused packets in the current queue summary.</p>
-              ) : (
-                <div className="mt-2 grid gap-2">
-                  {gradingQueueSummary.refused_items.slice(0, 10).map((item) => (
-                    <article key={`${item.submission_id}-${item.grading_unit_id ?? "missing"}-${item.answer_region_id ?? "none"}`} className="rounded border border-amber-900/70 p-3">
-                      <p className="font-medium">
-                        Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label ?? "unknown grading unit"}
-                      </p>
-                      <p className="text-slate-400">
-                        evidence_status {item.evidence_status} · continuation {item.continuation_check_status} · segments {item.segment_count}
-                      </p>
-                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
-                      <p className="text-amber-200">Reason: {item.refusal_reasons.join("; ") || "refused by queue contract"}</p>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <p className="mt-3 text-sm text-slate-400">Grading queue scaffold summary has not loaded yet.</p>
-        )}
-        <p className="mt-3 text-xs text-slate-500">Queue records are not grades. Stale queue items must be rebuilt before provider execution.</p>
-        <p className="mt-3 text-xs text-slate-500">No provider run button, no batch grade button, and no FinalGrade action are available in this scaffold.</p>
-      </section>
-
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Answer regions</h2>
-          <p className="text-sm text-slate-400">Map each answer region to the correct question before grading. Manual mapping remains the source of truth.</p>
+          <h2 className="text-xl font-semibold">Step 4: Answer evidence mapping</h2>
+          <p className="text-sm text-slate-400">Create or correct the answer evidence for each student × grading unit. Multi-page answers must be represented with ordered segments and confirmed before evidence can be ready.</p>
           <p className="mt-1 text-sm text-slate-400">
             Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
           </p>
@@ -1055,9 +1080,142 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </div>
       </form>
 
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Step 5/6: Evidence readiness and preparation</h2>
+            <p className="text-sm text-amber-200">This prepares evidence only. It does not grade.</p>
+            <p className="text-sm text-slate-400">Expected packets = submissions × grading units.</p>
+            <p className="text-sm text-slate-400">Missing packets are blocked, not skipped.</p>
+          </div>
+          <button className={buttonClass} type="button" disabled={creatingEvidencePrepRun} onClick={() => void handleCreateEvidencePrepRun()}>
+            {creatingEvidencePrepRun ? "Preparing evidence..." : "Create evidence prep run"}
+          </button>
+        </div>
+        {evidencePrepSummary ? (
+          <div className="mt-4 grid gap-4">
+            <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm md:grid-cols-6">
+              <p>ready: {evidencePrepSummary.ready_packet_count}</p>
+              <p>blocked: {evidencePrepSummary.blocked_packet_count}</p>
+              <p>warnings: {evidencePrepSummary.warning_packet_count}</p>
+              <p>partial: {evidencePrepSummary.partial_packet_count}</p>
+              <p>blank: {evidencePrepSummary.blank_packet_count}</p>
+              <p>status: {evidencePrepSummary.status}</p>
+            </div>
+            <div className="rounded border border-slate-800 p-3 text-sm">
+              <p className="font-semibold">Blocked / quarantined items</p>
+              {evidencePrepSummary.packets.filter((packet) => packet.quarantined).length === 0 ? (
+                <p className="mt-2 text-slate-400">No quarantined packets in the current summary.</p>
+              ) : (
+                <div className="mt-2 grid gap-2">
+                  {evidencePrepSummary.packets.filter((packet) => packet.quarantined).slice(0, 10).map((packet) => (
+                    <article key={`${packet.submission_id}-${packet.question_id ?? "missing"}-${packet.answer_region_id ?? "none"}`} className="rounded border border-amber-900/70 p-3">
+                      <p className="font-medium">
+                        Submission #{packet.submission_id} · {packet.student_identifier ?? "unknown student"} · {packet.grading_unit_label ?? "unknown grading unit"}
+                      </p>
+                      <p className="text-slate-400">
+                        evidence_status {packet.evidence_status} · continuation {packet.continuation_check_status} · segments {packet.segment_count}
+                      </p>
+                      <p className="text-xs text-slate-500">Pages covered: {packet.pages_covered.length > 0 ? packet.pages_covered.join(", ") : "none yet"}</p>
+                      <p className="text-amber-200">Reason: {packet.blockers.join("; ") || "blocked by policy"}</p>
+                      {packet.answer_region_id ? (
+                        <a className="text-cyan-300 underline" href={`#answer-region-${packet.answer_region_id}`}>Go to correction area</a>
+                      ) : (
+                        <p className="text-cyan-300">Correction target: create/map evidence for submission #{packet.correction_target.submission_id ?? packet.submission_id} and grading unit {packet.correction_target.grading_unit_label ?? packet.grading_unit_label ?? "unknown"} in the answer-region form below.</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-slate-400">Evidence preparation summary has not loaded yet.</p>
+        )}
+        <p className="mt-3 text-xs text-slate-500">No batch grade button is available here. Real AI/OCR and Codex are not invoked by evidence preparation.</p>
+      </section>
+
+      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Step 7: Grading queue scaffold</h2>
+            <p className="text-sm text-amber-200">This only prepares a queue from confirmed evidence. It does not grade.</p>
+            <p className="text-sm text-slate-400">Only confirmed complete evidence packets can enter the queue.</p>
+            <p className="text-sm text-slate-400">Queue records are not grades. Provider execution is disabled. No batch grade button is available.</p>
+          </div>
+          <button className={buttonClass} type="button" disabled={creatingGradingQueueRun} onClick={() => void handleCreateGradingQueueRun()}>
+            {creatingGradingQueueRun ? "Preparing queue..." : "Create grading queue scaffold"}
+          </button>
+        </div>
+        {gradingQueueSummary ? (
+          <div className="mt-4 grid gap-4">
+            <div className="grid gap-2 rounded border border-slate-800 p-3 text-sm md:grid-cols-4">
+              <p>status: {gradingQueueSummary.status}</p>
+              <p>candidates: {gradingQueueSummary.total_candidate_packets}</p>
+              <p>queued item count: {gradingQueueSummary.queued_item_count}</p>
+              <p>refused item count: {gradingQueueSummary.refused_item_count}</p>
+            </div>
+            <div className="rounded border border-emerald-900/70 p-3 text-sm">
+              <p className="font-semibold">Queued confirmed packets</p>
+              {gradingQueueSummary.items.length === 0 ? (
+                <p className="mt-2 text-slate-400">No confirmed packets are queued yet.</p>
+              ) : (
+                <div className="mt-2 grid gap-2">
+                  {gradingQueueSummary.items.slice(0, 10).map((item) => (
+                    <article key={item.id} className="rounded border border-emerald-900/70 p-3">
+                      <p className="font-medium">
+                        Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label}
+                      </p>
+                      <p className="text-slate-400">
+                        queue_status {item.queue_status} · stale_status {item.stale_status} · provider_allowed {String(item.provider_allowed)} · segments {item.segment_count}
+                      </p>
+                      {item.current_refusal_reasons.length > 0 ? <p className="text-amber-200">Current blockers: {item.current_refusal_reasons.join("; ")}</p> : null}
+                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="rounded border border-amber-900/70 p-3 text-sm">
+              <p className="font-semibold">Refused packet reasons</p>
+              {gradingQueueSummary.refused_items.length === 0 ? (
+                <p className="mt-2 text-slate-400">No refused packets in the current queue summary.</p>
+              ) : (
+                <div className="mt-2 grid gap-2">
+                  {gradingQueueSummary.refused_items.slice(0, 10).map((item) => (
+                    <article key={`${item.submission_id}-${item.grading_unit_id ?? "missing"}-${item.answer_region_id ?? "none"}`} className="rounded border border-amber-900/70 p-3">
+                      <p className="font-medium">
+                        Submission #{item.submission_id} · {item.student_identifier ?? "unknown student"} · {item.grading_unit_label ?? "unknown grading unit"}
+                      </p>
+                      <p className="text-slate-400">
+                        evidence_status {item.evidence_status} · continuation {item.continuation_check_status} · segments {item.segment_count}
+                      </p>
+                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
+                      <p className="text-amber-200">Reason: {item.refusal_reasons.join("; ") || "refused by queue contract"}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-slate-400">Grading queue scaffold summary has not loaded yet.</p>
+        )}
+        <p className="mt-3 text-xs text-slate-500">Queue records are not grades. Stale queue items must be rebuilt before provider execution.</p>
+        <p className="mt-3 text-xs text-slate-500">No provider run button, no batch grade button, and no FinalGrade action are available in this scaffold.</p>
+      </section>
+
+      <section className="rounded border border-red-800 bg-red-950/30 p-5">
+        <h2 className="text-xl font-semibold text-red-100">STOP — Evidence-to-Queue Test Complete.</h2>
+        <p className="mt-2 text-sm text-red-100">Do not run grading/provider execution.</p>
+        <p className="text-sm text-red-100">Do not create GradeSuggestion, FinalGrade, or GradingJob.</p>
+        <p className="text-sm text-red-100">Queue records are not grades.</p>
+      </section>
+
       <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Teacher review queue</h2>
+          <h2 className="text-xl font-semibold">FUTURE / not part of current founder test: Teacher review queue</h2>
+          <p className="text-sm text-amber-200">This grading/review area is collapsed conceptually for TA-UX-001. The current founder test stops at the queue scaffold above.</p>
           <p className="text-sm text-amber-200">MOCK grading only. Teacher review is required before any FinalGrade is created.</p>
           <p className="text-sm text-slate-300">Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.</p>
           {!selectedTeacher ? <p className="text-sm text-amber-200">Select a demo teacher first.</p> : null}
@@ -1081,97 +1239,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </div>
       </section>
 
-      <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
-        <div>
-          <h2 className="text-xl font-semibold">Import questions from paper</h2>
-          <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
-          <p className="text-sm text-slate-400">Default extraction is mock/simple.</p>
-          <p className="text-sm text-slate-400">Real Codex extraction must be explicitly enabled.</p>
-          <p className="text-sm text-slate-400">If real extraction is not enabled, uploaded images will not be treated as understood question papers.</p>
-          <p className="text-sm text-slate-400">Upload a question paper PDF/image to generate draft questions by question number. No real Codex extraction is enabled by default.</p>
-        </div>
-        <form onSubmit={handleQuestionImport} className="grid gap-3">
-          <label className="grid gap-2 text-sm">
-            Question paper file
-            <input
-              className={inputClass}
-              name="file"
-              type="file"
-              accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-              onChange={handleQuestionImportFileChange}
-            />
-          </label>
-          {selectedQuestionImportFileName ? (
-            <p className="text-sm text-emerald-300">Selected question paper file: {selectedQuestionImportFileName}</p>
-          ) : null}
-          <button className={buttonClass} disabled={importingQuestions || !questionImportFile} type="submit">
-            {importingQuestions ? "Extracting draft questions..." : "Extract draft questions"}
-          </button>
-        </form>
-        {questionImportJob ? (
-          <div className="grid gap-3 rounded border border-slate-800 p-4">
-            <p className="text-sm text-slate-300">Import job #{questionImportJob.id} · {questionImportJob.status} · provider: {questionImportJob.provider}</p>
-            {questionImportJob.provider_warnings.length > 0 ? (
-              <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
-                <p className="font-semibold">Extraction warnings</p>
-                <ul className="list-disc pl-5">
-                  {questionImportJob.provider_warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <p className="text-sm text-slate-400">{selectedDraftCount} selected draft questions</p>
-            {draftQuestions.map((draft) => {
-              const edit = draftQuestionEdits[draft.draft_id] ?? draftQuestionToEdit(draft);
-              return (
-                <article key={draft.draft_id} className="grid gap-2 rounded border border-slate-700 p-3">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={edit.selected}
-                      onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { selected: event.target.checked })}
-                    />
-                    Select draft question {draft.question_no}
-                  </label>
-                  <input className={inputClass} aria-label="Draft question number" value={edit.question_no} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { question_no: event.target.value })} />
-                  <textarea className={inputClass} aria-label="Draft question text" value={edit.question_text} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { question_text: event.target.value })} />
-                  <input className={inputClass} aria-label="Draft total marks" value={edit.total_marks} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { total_marks: event.target.value })} />
-                  <textarea className={inputClass} aria-label="Draft model answer optional" placeholder="Model answer optional" value={edit.model_answer} onChange={(event) => updateDraftQuestionEdit(draft.draft_id, { model_answer: event.target.value })} />
-                  <p className="text-xs text-slate-400">source page {draft.source_page} · confidence {draft.confidence} · needs_review: {String(draft.needs_review)}</p>
-                  <p className="text-xs text-slate-500">Excerpt: {draft.source_text_excerpt}</p>
-                </article>
-              );
-            })}
-            <button className={buttonClass} disabled={acceptingQuestions || selectedDraftCount === 0} type="button" onClick={() => void handleAcceptDraftQuestions()}>
-              {acceptingQuestions ? "Creating selected questions..." : "Create selected questions"}
-            </button>
-          </div>
-        ) : null}
-      </section>
 
-      <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Questions</h2>
-        <p className="text-sm text-slate-400">Manual question creation remains available.</p>
-        <input className={inputClass} placeholder="Question number" value={questionNo} onChange={(event) => setQuestionNo(event.target.value)} required />
-        <textarea className={inputClass} placeholder="Question text" value={questionText} onChange={(event) => setQuestionText(event.target.value)} required />
-        <textarea className={inputClass} placeholder="Model answer (optional)" value={modelAnswer} onChange={(event) => setModelAnswer(event.target.value)} />
-        <input className={inputClass} placeholder="Total marks" value={totalMarks} onChange={(event) => setTotalMarks(event.target.value)} required />
-        <button className={buttonClass} disabled={submitting} type="submit">
-          {submitting ? "Creating..." : "Create question"}
-        </button>
-      </form>
-
-      {!loading && questions.length === 0 ? <EmptyState message="No questions yet." /> : null}
-      <div className="grid gap-3">
-        {questions.map((question) => (
-          <Link key={question.id} href={`/questions/${question.id}`} className="rounded border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700">
-            <h2 className="text-lg font-semibold">Grading unit {question.question_no}</h2>
-            <p className="text-sm text-slate-400">{question.total_marks} marks · {gradingUnitType(question.question_no)}</p>
-            <p className="mt-2 line-clamp-2 text-slate-300">{question.question_text}</p>
-          </Link>
-        ))}
-      </div>
     </div>
   );
 }

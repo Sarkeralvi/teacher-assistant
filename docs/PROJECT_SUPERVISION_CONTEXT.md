@@ -1,3 +1,11 @@
+## TA-UX-001 supervision record
+
+TA-UX-001 was executed in manual controlled mode as V0/V0.5 founder/internal UX clarity for the assessment-page evidence-to-queue path. It keeps the assessment page as the main founder workflow and labels Custom Controlled Grading Run as legacy/internal material-upload navigation rather than a second workflow.
+
+The intended founder path is now explicit: Step 0 teacher/assessment context → Step 1 reference materials → Step 2 canonical grading units & rubrics → Step 3 student scripts/submissions → Step 4 answer evidence mapping → Step 5/6 evidence readiness/preparation → Step 7 grading queue scaffold → STOP. Grading/review/export/semi-automated surfaces are labelled FUTURE/not part of the current founder test.
+
+No autonomous loop was enabled. No VSCode/Codex or additional coding agent was used. No real Codex, OpenAI, Claude, Gemini, provider/model call, grading, batch grading, real AI mapping, real OCR/vision, teacher observation, private-file use, `GradeSuggestion`, `FinalGrade`, or provider `GradingJob` creation occurred.
+
 ## TA-OPS-001 supervision record
 
 TA-OPS-001 was executed in manual controlled mode as a docs/config-rules task while the founder was manually checking the already-running app. The running stack was not stopped, restarted, rebuilt, or modified.

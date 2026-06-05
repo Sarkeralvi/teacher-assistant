@@ -1,3 +1,33 @@
+# TA-UX-001 — Founder Evidence Workflow V0
+
+- Recorded at: 2026-06-05
+- Baseline commit: `a9c11b62e72309372c9061e2e6afceb7d31c22c5`
+- Workflow type: manual controlled V0/V0.5 UX clarity task
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Provider/model calls: 0
+- Real Codex grading/mapping: not run
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Private files/artifacts used: no
+
+## Change made
+
+TA-UX-001 clarifies the assessment page as the current Founder Evidence Workflow. The page now shows the evidence-only safety banner, ordered Step 0–7 guide, grouped student script upload/list sections, Step 4 answer evidence mapping, Step 5/6 evidence readiness/prep warnings, Step 7 queue scaffold warnings, and a hard STOP after queue scaffold. It labels Custom Controlled as legacy/internal material-upload navigation for Step 1 and labels review/export/semi-automated/grading surfaces as FUTURE/out-of-scope for the founder evidence-to-queue test.
+
+## Safety result
+
+This is UX clarity only. It does not change grading logic, run grading, call providers, enable real AI mapping/OCR, start teacher observation, or create grading/finalization rows. Queue records remain not grades.
+
+## Checks run
+
+To be completed by the TA-UX-001 commit gate: `git status --short`, frontend static workflow test, `make lint`, `cd apps/web && npm run build`, `make test` if backend touched, `make e2e` if stack is available, `git diff --check`, final `git status --short`.
+
 # TA-OPS-001 — Hermes/Codex operating contract
 
 - Recorded at: 2026-06-05
