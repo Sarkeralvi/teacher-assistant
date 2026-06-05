@@ -1,0 +1,15 @@
+# Example only: non-active Codex config
+#
+# This file is documentation for future controlled tasks. It is not read by
+# Codex unless copied to an active config path by an explicitly approved task.
+# Do not create .codex/config.toml without founder approval.
+# Do not use yolo/unsafe auto-approval for this repository.
+
+model = "gpt-5.5"
+sandbox_mode = "workspace-write"
+
+# Record approval/sandbox policy in the task report if Codex CLI is explicitly
+# approved for an internal implementation task.
+# Keep workspace scoped to the repo/task files.
+# Do not run provider grading/mapping or use private files unless explicitly
+# approved in the task prompt.

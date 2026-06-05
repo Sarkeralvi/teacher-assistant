@@ -1,3 +1,11 @@
+## TA-OPS-001 supervision record
+
+TA-OPS-001 was executed in manual controlled mode as a docs/config-rules task while the founder was manually checking the already-running app. The running stack was not stopped, restarted, rebuilt, or modified.
+
+It adds root `AGENTS.md`, `docs/HERMES_CODEX_OPERATING_CONTRACT.md`, `docs/HERMES_TASK_PROMPT_TEMPLATE.md`, and a non-active `.codex/config.example.toml` so future Hermes work is bounded by explicit goals, context, constraints, execution steps, done-when criteria, validation commands, final report format, and PM safety prohibitions.
+
+No product behavior was changed. No autonomous loop was enabled. No VSCode/Codex workflow was used. No real Codex grading/mapping, provider/model call, batch grading, teacher observation, private-file use, `GradeSuggestion`, `FinalGrade`, or provider `GradingJob` creation occurred. Future implementation prompts should use the new operating contract and template.
+
 ## TA-MANUAL-001A supervision record
 
 TA-MANUAL-001A was executed in manual controlled mode as a docs/backlog-only task after the TA-MANUAL-001 synthetic founder smoke passed. It creates the founder manual evidence-to-queue checklist and records the safe testing boundary: demo/synthetic evidence-to-queue only, not real grading, not provider execution, not teacher observation, and not production/pilot use.

@@ -1434,3 +1434,16 @@ Acceptance criteria: Roadmap table maps the required AEEM layers to current stat
 Tests required: `git status --short`; `git diff --check`; `make lint`; final `git status --short`. Full test not required because docs/backlog only.
 Risks: Founder confusion could persist if TA-MAP is described as separate from AEEM; roadmap must state TA-MAP is one AEEM layer, not the whole machine.
 Status: Done
+
+TASK-ID: TA-OPS-001
+Title: Add Hermes/Codex operating contract
+Owner: Hermes
+Priority: P0
+Dependencies: TA-MANUAL-001A
+Files affected: AGENTS.md, docs/HERMES_CODEX_OPERATING_CONTRACT.md, docs/HERMES_TASK_PROMPT_TEMPLATE.md, .codex/config.example.toml, BACKLOG.md, docs/PROJECT_SUPERVISION_CONTEXT.md, docs/VALIDATION_LOG.md
+Goal: Add repo-level operating instructions and a reusable task prompt contract so future Hermes work is bounded, explicit, validated, and safety-gated.
+Implementation notes: Documentation/config-rules only. Adds root AGENTS.md, a Hermes/Codex operating contract, reusable task prompt template, and non-active Codex example config. The contract records preflight, prompt structure, safe Codex CLI pattern if explicitly approved, validation loop, postflight, and forbidden actions.
+Acceptance criteria: Future implementation tasks have Goal, Context, Constraints, Execution, Done when, Validation commands, Final report format, and PM safety prohibitions. Rules preserve AEEM evidence-first/teacher-authority/no-auto-finalization principles and keep provider/model calls, real Codex grading/mapping, autonomous loop, VSCode/Codex workflow, private-file use, batch grading, and teacher observation blocked unless explicitly approved.
+Tests required: docs/config-rules gates: `git status --short`, `git diff --check`, `make lint` if safe for the running app, final `git status --short`. Full test not required because product behavior is unchanged.
+Risks: The contract improves future task quality only if future prompts actually use it and agents obey AGENTS.md.
+Status: Done

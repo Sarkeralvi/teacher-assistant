@@ -1,3 +1,38 @@
+# TA-OPS-001 — Hermes/Codex operating contract
+
+- Recorded at: 2026-06-05
+- Baseline commit: `e3b7d9bcacfff5ec437d4dd291a372ee9a77d503`
+- Workflow type: manual controlled docs/config-rules task
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Provider/model calls: 0
+- Real Codex grading/mapping: not run
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Private files/artifacts used: no
+- Running app stack stopped/restarted/rebuilt/modified: no
+
+## Change made
+
+TA-OPS-001 adds stable repo-level agent instructions and a reusable task prompt contract: root `AGENTS.md`, `docs/HERMES_CODEX_OPERATING_CONTRACT.md`, `docs/HERMES_TASK_PROMPT_TEMPLATE.md`, and non-active `.codex/config.example.toml`. It also records the task in backlog and supervision docs.
+
+## Safety result
+
+This task is docs/config-rules only. It does not implement product features, change application behavior, run providers, start manual testing, create grading/finalization rows, or touch Docker containers. The `.codex/config.example.toml` file is example-only; no active `.codex/config.toml` was created.
+
+## Checks run
+
+- `git status --short` — showed only scoped TA-OPS-001 docs/config-rules files.
+- `git diff --check` — passed.
+- `PATH=/home/newton/teacher-assistant/.venv/bin:$PATH make lint` — backend ruff and web TypeScript checks passed.
+- `ss -ltnp '( sport = :3000 or sport = :8000 )'` — ports 3000 and 8000 remained listening; no stack stop/restart/rebuild command was run.
+- Final `git status --short` — to be checked after commit.
+
 # TA-MANUAL-001A — Founder manual evidence-to-queue checklist
 
 - Recorded at: 2026-06-04
