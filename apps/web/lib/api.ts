@@ -433,13 +433,18 @@ export type GradingEvidencePacket = {
     label: string | null;
     max_marks: string | number | null;
     active_rubric_present: boolean;
+    model_answer_present: boolean;
     rubric_total_matches_grading_unit: boolean | null;
   };
   question_evidence: {
+    question_label: string | null;
+    question_text: string | null;
+    max_marks: string | number | null;
     question_text_present: boolean;
     confirmed_status: string;
   };
   solution_model_answer_evidence: {
+    solution_model_answer_text_or_reference: string | null;
     model_answer_present: boolean;
     confirmed_status: string;
   };
@@ -1017,12 +1022,17 @@ export function getGradingEvidencePacket(answerRegionId: number) {
 }
 
 export function getEvidencePrepSummary(assessmentId: number) {
-  return apiRequest<EvidencePrepRun>(`/assessments/${assessmentId}/evidence-prep-summary`);
+  return apiRequest<EvidencePrepRun>(`/assessments/${assessmentId}/evidence-prep-summary`, {
+    token: getStoredAuthToken(),
+    authErrorMessage: "Please log in again before preparing evidence.",
+  });
 }
 
 export function createEvidencePrepRun(assessmentId: number) {
   return apiRequest<EvidencePrepRun>(`/assessments/${assessmentId}/evidence-prep-runs`, {
     method: "POST",
+    token: getStoredAuthToken(),
+    authErrorMessage: "Please log in again before preparing evidence.",
   });
 }
 
@@ -1033,6 +1043,8 @@ export function getGradingQueueSummary(assessmentId: number) {
 export function createGradingQueueRun(assessmentId: number) {
   return apiRequest<GradingQueueRun>(`/assessments/${assessmentId}/grading-queue-runs`, {
     method: "POST",
+    token: getStoredAuthToken(),
+    authErrorMessage: "Please log in again before preparing the grading queue.",
   });
 }
 

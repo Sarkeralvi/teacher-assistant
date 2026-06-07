@@ -127,6 +127,16 @@ for (const symbol of [
   }
 }
 
+for (const text of [
+  "Please log in again before preparing evidence.",
+  "token: getStoredAuthToken()",
+  "authErrorMessage",
+]) {
+  if (!api.includes(text)) {
+    throw new Error(`API client missing evidence-prep auth marker: ${text}`);
+  }
+}
+
 const appShell = readFileSync(join(root, "components/AppShell.tsx"), "utf8");
 for (const text of ["Current teacher", "Logout", "Login", "Register", "getCurrentUser", "logout"]) {
   if (!appShell.includes(text)) {
@@ -240,6 +250,7 @@ for (const text of [
   "Continuation risk",
   "acceptAnswerRegionMappingSuggestion",
   "Cropped image",
+  "Selected answer region for Evidence Packet Preview",
   "Evidence Packet Preview",
   "This preview shows the evidence that would be sent for grading later. It does not grade.",
   'data-testid="evidence-packet-preview"',
@@ -254,9 +265,9 @@ for (const text of [
   "answer crop/context image:",
   "evidence_status:",
   "ready_for_grading:",
+  "Blocker: solution/model answer is missing.",
   "Not available yet",
   "Teacher review queue",
-  "Mock Grade",
   "Evidence packet:",
   "Ready for grading",
   "Unconfirmed",
@@ -320,7 +331,9 @@ for (const text of [
   "Select a demo teacher first.",
   "Current demo teacher",
   "Delete this submission? This is for demo cleanup only.",
-  "Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.",
+  'data-testid="founder-grading-actions-disabled"',
+  "Hidden for TA-DEMO-001A evidence-only testing.",
+  "No grading action is visible here.",
   "Import questions from paper",
   "Draft extraction. Teacher review required.",
   "Default extraction is mock/simple.",

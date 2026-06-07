@@ -103,6 +103,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [suggestingRegions, setSuggestingRegions] = useState(false);
   const [acceptingSuggestionId, setAcceptingSuggestionId] = useState<string | null>(null);
   const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
+  const [selectedPreviewRegionId, setSelectedPreviewRegionId] = useState("");
   const [finalizeDrafts, setFinalizeDrafts] = useState<Record<number, FinalizeDraft>>({});
   const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,6 +154,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const unmappedQuestionCount = Math.max(questions.length - mappedQuestionCount, 0);
   const unmappedPageCount = Math.max(pages.length - mappedPageCount, 0);
   const unmappedSubmissionCount = Math.max(submissions.length - mappedSubmissionCount, 0);
+  const selectedPreviewRegion =
+    answerRegions.find((region) => String(region.id) === selectedPreviewRegionId) ?? answerRegions[0] ?? null;
 
   function statusForRegion(regionId: number): "finalized" | "graded" | "mapped" {
     if (finalizedRegionIds.has(regionId)) {
@@ -240,6 +243,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setQuestions(questionData);
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
+      if (!selectedPreviewRegionId && answerRegionData[0]) {
+        setSelectedPreviewRegionId(String(answerRegionData[0].id));
+      }
       const evidenceEntries = await Promise.all(
         answerRegionData.map(async (region) => [region.id, await getGradingEvidencePacket(region.id)] as const),
       );
@@ -1055,8 +1061,23 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         </button>
 
         {!loading && answerRegions.length === 0 ? <EmptyState message="No answer regions yet." /> : null}
-        <div className="grid gap-2 md:grid-cols-2">
-          {answerRegions.map((region) => {
+        {answerRegions.length > 0 ? (
+          <label className="grid gap-2 text-sm">
+            Selected answer region for Evidence Packet Preview
+            <select className={inputClass} value={selectedPreviewRegion?.id ? String(selectedPreviewRegion.id) : ""} onChange={(event) => setSelectedPreviewRegionId(event.target.value)}>
+              {answerRegions.map((region) => {
+                const linkedQuestion = questions.find((question) => question.id === region.question_id) ?? null;
+                return (
+                  <option key={region.id} value={region.id}>
+                    Answer region #{region.id} · {linkedQuestion ? formatQuestionOption(linkedQuestion) : `Question ${region.question_id}`} · submission #{region.submission_id}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        ) : null}
+        <div className="grid gap-2">
+          {answerRegions.filter((region) => selectedPreviewRegion?.id === region.id).map((region) => {
             const linkedSubmission = submissions.find((submission) => submission.id === region.submission_id) ?? null;
             const linkedPage = linkedSubmission?.pages.find((page) => page.id === region.page_id) ?? null;
             const linkedQuestion = questions.find((question) => question.id === region.question_id) ?? null;
@@ -1067,6 +1088,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const segmentOrder = packetAnswer?.segments
               .map((segment) => `segment ${String(segment.order_index ?? "?")}: page ${String(segment.page_id ?? "?")}`)
               .join("; ");
+            const questionText = packet?.question_evidence.question_text ?? linkedQuestion?.question_text ?? "Not available yet";
+            const modelAnswer =
+              packet?.solution_model_answer_evidence.solution_model_answer_text_or_reference ??
+              linkedQuestion?.model_answer ??
+              "Not available yet";
+            const modelAnswerMissing = modelAnswer === "Not available yet";
             return (
               <article id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" className="grid gap-3 rounded border border-slate-700 p-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
@@ -1089,8 +1116,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   <div className="grid gap-2 text-xs text-slate-300 md:grid-cols-2">
                     <p>question label: {packet?.canonical_grading_unit.label ?? linkedQuestion?.question_no ?? "Not available yet"}</p>
                     <p>max marks: {packet?.canonical_grading_unit.max_marks ?? linkedQuestion?.total_marks ?? "Not available yet"}</p>
-                    <p>question text: {linkedQuestion?.question_text || (packet?.question_evidence.question_text_present ? "Available in packet" : "Not available yet")}</p>
-                    <p>solution/model answer: {linkedQuestion?.model_answer || (packet?.solution_model_answer_evidence.model_answer_present ? "Available in packet" : "Not available yet")}</p>
+                    <p>question text: {questionText}</p>
+                    <p>solution/model answer: {modelAnswer}</p>
                     <p>active rubric: {packet ? String(packet.rubric_evidence.rubric_present || packet.canonical_grading_unit.active_rubric_present) : "Not available yet"}</p>
                     <p>criteria: {packet?.rubric_evidence.criteria_max_marks.length ? JSON.stringify(packet.rubric_evidence.criteria_max_marks) : "Not available yet"}</p>
                     <p>student answer region id: {packet?.assessment_context.answer_region_id ?? region.id}</p>
@@ -1104,6 +1131,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <p>blockers: {readiness?.blockers.length ? readiness.blockers.join("; ") : "Not available yet"}</p>
                     <p>warnings: {readiness?.warnings.length ? readiness.warnings.join("; ") : "Not available yet"}</p>
                   </div>
+                  {modelAnswerMissing ? (
+                    <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-100">
+                      Blocker: solution/model answer is missing. Add a model answer in Step 2 manual question creation or import/accept reference material question data before expecting a ready packet.
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-2">
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm full answer</button>
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
@@ -1249,30 +1281,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <p className="text-sm text-red-100">Queue records are not grades.</p>
       </section>
 
-      <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
+      <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5" data-testid="founder-grading-actions-disabled">
         <div>
           <h2 className="text-xl font-semibold">FUTURE / not part of current founder test: Teacher review queue</h2>
-          <p className="text-sm text-amber-200">This grading/review area is collapsed conceptually for TA-UX-001. The current founder test stops at the queue scaffold above.</p>
-          <p className="text-sm text-amber-200">MOCK grading only. Teacher review is required before any FinalGrade is created.</p>
-          <p className="text-sm text-slate-300">Codex CLI provider is integrated in backend, but this demo button uses mock grading for safe local testing.</p>
-          {!selectedTeacher ? <p className="text-sm text-amber-200">Select a demo teacher first.</p> : null}
-        </div>
-        {!loading && reviewQueue.length === 0 ? <EmptyState message="No mapped answer regions to review yet." /> : null}
-        <div className="grid gap-4">
-          {reviewQueue.map((item) => (
-            <ReviewQueueCard
-              key={item.answer_region.id}
-              item={item}
-              draft={finalizeDrafts[item.answer_region.id] ?? defaultFinalizeDraft(item)}
-              grading={gradingRegionId === item.answer_region.id}
-              finalizing={finalizingRegionId === item.answer_region.id}
-              evidencePacket={evidencePackets[item.answer_region.id] ?? null}
-              onMockGrade={() => void handleMockGrade(item.answer_region.id)}
-              onEvidenceCorrection={(action) => void handleEvidenceCorrection(action)}
-              onDraftChange={(patch) => updateFinalizeDraft(item.answer_region.id, patch)}
-              onFinalize={(status) => void handleFinalize(item, status)}
-            />
-          ))}
+          <p className="text-sm text-amber-200">Hidden for TA-DEMO-001A evidence-only testing. The founder workflow stops at evidence packet preview/readiness.</p>
+          <p className="text-sm text-amber-200">No grading action is visible here. No GradeSuggestion, FinalGrade, GradingJob, provider, or model call is available from this founder evidence workflow.</p>
         </div>
       </section>
 
