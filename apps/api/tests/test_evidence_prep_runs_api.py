@@ -129,7 +129,12 @@ def create_assessment_fixture(client: TestClient, tmp_path: Path) -> dict[str, o
     ).json()
     question = client.post(
         f"/assessments/{assessment['id']}/questions",
-        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Explain.",
+            "model_answer": "A complete explanation states the key concept.",
+            "total_marks": "5.00",
+        },
     ).json()
     rubric = client.post(
         f"/questions/{question['id']}/rubrics",
@@ -225,6 +230,50 @@ def test_create_prep_run_summarizes_ready_packet_without_grading_side_effects(
     )
     assert detail.status_code == 200
     assert detail.json()["id"] == run["id"]
+
+
+def test_missing_model_answer_blocks_packet_prep_and_queue(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_assessment_fixture(client, tmp_path)
+    question = db_session.get(Question, data["question"]["id"])
+    assert question is not None
+    question.model_answer = None
+    db_session.commit()
+
+    packet_response = client.get(
+        f"/answer-regions/{data['region']['id']}/grading-evidence-packet"
+    )
+    assert packet_response.status_code == 200
+    packet = packet_response.json()
+    assert packet["readiness_result"]["ready_for_grading"] is False
+    assert "missing solution/model answer" in packet["readiness_result"]["blockers"]
+
+    prep_response = client.post(
+        f"/assessments/{data['assessment']['id']}/evidence-prep-runs",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert prep_response.status_code == 201
+    prep = prep_response.json()
+    assert prep["ready_packet_count"] == 0
+    assert prep["blocked_packet_count"] == 1
+    assert "missing solution/model answer" in prep["packets"][0]["blockers"]
+    assert prep["packets"][0]["pages_covered"] == [1]
+
+    queue_response = client.post(
+        f"/assessments/{data['assessment']['id']}/grading-queue-runs",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+    assert queue_response.status_code == 201
+    queue = queue_response.json()
+    assert queue["queued_item_count"] == 0
+    assert queue["refused_item_count"] == 1
+    refused = queue["refused_items"][0]
+    assert "missing solution/model answer" in refused["refusal_reasons"]
+    assert refused["pages_covered"] == [1]
+    assert db_session.query(GradeSuggestion).count() == 0
+    assert db_session.query(FinalGrade).count() == 0
+    assert db_session.query(GradingJob).count() == 0
 
 
 def test_prep_summary_quarantines_unconfirmed_partial_blank_and_continuation(
@@ -327,6 +376,7 @@ def create_question_with_optional_rubric(
         json={
             "question_no": question_no,
             "question_text": f"Question {question_no}.",
+            "model_answer": f"Model answer for question {question_no}.",
             "total_marks": "5.00",
         },
     ).json()

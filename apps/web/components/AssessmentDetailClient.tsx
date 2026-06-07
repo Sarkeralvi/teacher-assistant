@@ -668,6 +668,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <h2 className="mt-1 text-2xl font-semibold">This workflow prepares evidence only. It does not grade.</h2>
         <p className="mt-2 text-emerald-100">Goal: confirm evidence packets → build queue scaffold → stop.</p>
         <p className="mt-1 text-amber-100">Provider execution is disabled. Queue records are not grades.</p>
+        <p className="mt-1 text-amber-100">Current policy: solution/model answer evidence is required before a packet can be ready or queued.</p>
       </section>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
@@ -1118,11 +1119,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <p>max marks: {packet?.canonical_grading_unit.max_marks ?? linkedQuestion?.total_marks ?? "Not available yet"}</p>
                     <p>question text: {questionText}</p>
                     <p>solution/model answer: {modelAnswer}</p>
-                    <p>active rubric: {packet ? String(packet.rubric_evidence.rubric_present || packet.canonical_grading_unit.active_rubric_present) : "Not available yet"}</p>
+                    <p>active rubric: {packet ? String(packet.canonical_grading_unit.active_rubric_present) : "Not available yet"}</p>
                     <p>criteria: {packet?.rubric_evidence.criteria_max_marks.length ? JSON.stringify(packet.rubric_evidence.criteria_max_marks) : "Not available yet"}</p>
                     <p>student answer region id: {packet?.assessment_context.answer_region_id ?? region.id}</p>
                     <p>segment count: {packetAnswer?.segment_count ?? region.segments.length ?? "Not available yet"}</p>
-                    <p>pages covered: {packetAnswer?.pages_covered.join(", ") || (linkedPage?.page_no ? String(linkedPage.page_no) : "Not available yet")}</p>
+                    <p>packet pages covered: {packetAnswer?.pages_covered.join(", ") || (linkedPage?.page_no ? String(linkedPage.page_no) : "Not available yet")}</p>
                     <p>segment order: {segmentOrder || "Not available yet"}</p>
                     <p>answer crop/context image: {packetAnswer?.crop_path ? packetAnswer.crop_path : "Not available yet"}</p>
                     <p>evidence_status: {packetAnswer?.packet_status ?? "Not available yet"}</p>
@@ -1185,7 +1186,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       <p className="text-slate-400">
                         evidence_status {packet.evidence_status} · continuation {packet.continuation_check_status} · segments {packet.segment_count}
                       </p>
-                      <p className="text-xs text-slate-500">Pages covered: {packet.pages_covered.length > 0 ? packet.pages_covered.join(", ") : "none yet"}</p>
+                      <p className="text-xs text-slate-500">Packet pages covered: {packet.pages_covered.length > 0 ? packet.pages_covered.join(", ") : "none yet"}</p>
                       <p className="text-amber-200">Reason: {packet.blockers.join("; ") || "blocked by policy"}</p>
                       {packet.answer_region_id ? (
                         <a className="text-cyan-300 underline" href={`#answer-region-${packet.answer_region_id}`}>Go to correction area</a>
@@ -1239,7 +1240,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         queue_status {item.queue_status} · stale_status {item.stale_status} · provider_allowed {String(item.provider_allowed)} · segments {item.segment_count}
                       </p>
                       {item.current_refusal_reasons.length > 0 ? <p className="text-amber-200">Current blockers: {item.current_refusal_reasons.join("; ")}</p> : null}
-                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
+                      <p className="text-xs text-slate-500">Packet pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
                     </article>
                   ))}
                 </div>
@@ -1259,7 +1260,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       <p className="text-slate-400">
                         evidence_status {item.evidence_status} · continuation {item.continuation_check_status} · segments {item.segment_count}
                       </p>
-                      <p className="text-xs text-slate-500">Pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
+                      <p className="text-xs text-slate-500">Packet pages covered: {item.pages_covered.length > 0 ? item.pages_covered.join(", ") : "none"}</p>
                       <p className="text-amber-200">Reason: {item.refusal_reasons.join("; ") || "refused by queue contract"}</p>
                     </article>
                   ))}

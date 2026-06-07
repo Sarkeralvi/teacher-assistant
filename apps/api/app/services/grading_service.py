@@ -24,6 +24,8 @@ from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
 from packages.brain.codex_cli_provider import CodexCliProvider
 
+MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
+
 
 def _decimal_or_none(value: object) -> Decimal | None:
     if value is None:
@@ -131,6 +133,10 @@ class GradingService:
             blockers.append("missing question/grading unit")
         if max_marks is None or max_marks <= 0:
             blockers.append("missing/zero max marks")
+        # Founder/teacher-verifiable policy: solution/model-answer evidence is
+        # required before a packet can be ready or enter the queue.
+        if question is None or not question.model_answer:
+            blockers.append(MODEL_ANSWER_REQUIRED_BLOCKER)
         if rubric is None:
             blockers.append("missing active rubric")
         elif rubric_total_matches is False:

@@ -114,7 +114,12 @@ def create_answer_region_with_optional_rubric(
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
-        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Explain.",
+            "model_answer": "A complete answer explains the concept.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     if create_rubric:
@@ -167,7 +172,12 @@ def create_assessment_with_answer_regions(
     assessment_id = assessment_response.json()["id"]
     question_response = client.post(
         f"/assessments/{assessment_id}/questions",
-        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Explain.",
+            "model_answer": "A complete answer explains the concept.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     rubric_response = client.post(

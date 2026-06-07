@@ -440,18 +440,16 @@ export type GradingEvidencePacket = {
     question_label: string | null;
     question_text: string | null;
     max_marks: string | number | null;
-    question_text_present: boolean;
     confirmed_status: string;
   };
   solution_model_answer_evidence: {
     solution_model_answer_text_or_reference: string | null;
-    model_answer_present: boolean;
     confirmed_status: string;
   };
   rubric_evidence: {
-    rubric_present: boolean;
     criteria_max_marks: Array<Record<string, unknown>>;
     confirmed_status: string;
+    total_marks_match_grading_unit_max_marks: boolean | null;
   };
   student_answer_evidence: {
     answer_region_coordinates: Record<string, string | number>;

@@ -93,7 +93,12 @@ def create_uploaded_page(
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
-        json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Answer this.",
+            "model_answer": "A complete answer covers the requested points.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     image_path = tmp_path / f"answer-{len(list(tmp_path.glob('answer-*.png')))}.png"
@@ -248,7 +253,12 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
-        json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Answer this.",
+            "model_answer": "A complete answer covers the requested points.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     with image_path.open("rb") as file_obj:
@@ -750,7 +760,12 @@ def create_authenticated_uploaded_page(
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
-        json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Answer this.",
+            "model_answer": "A complete answer covers the requested points.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     rubric_response = client.post(
