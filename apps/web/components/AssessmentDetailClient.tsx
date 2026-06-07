@@ -1061,20 +1061,57 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const linkedPage = linkedSubmission?.pages.find((page) => page.id === region.page_id) ?? null;
             const linkedQuestion = questions.find((question) => question.id === region.question_id) ?? null;
             const regionStatus = statusForRegion(region.id);
+            const packet = evidencePackets[region.id] ?? null;
+            const packetAnswer = packet?.student_answer_evidence;
+            const readiness = packet?.readiness_result;
+            const segmentOrder = packetAnswer?.segments
+              .map((segment) => `segment ${String(segment.order_index ?? "?")}: page ${String(segment.page_id ?? "?")}`)
+              .join("; ");
             return (
-              <a id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
-                <span className="flex items-center justify-between gap-2">
+              <article id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" className="grid gap-3 rounded border border-slate-700 p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
                   <span>Answer region #{region.id}</span>
                   <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
                     {regionStatus}
                   </span>
-                </span>
-                <span className="mt-1 block text-xs text-slate-500">
+                </div>
+                <p className="text-xs text-slate-500">
                   {linkedQuestion ? formatQuestionOption(linkedQuestion) : `Question ${region.question_id}`} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
-                </span>
-                <span className="block text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</span>
-                <span className="block text-xs text-cyan-300 underline">Open crop preview · Cropped image</span>
-              </a>
+                </p>
+                <p className="text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</p>
+                <a className="text-xs text-cyan-300 underline" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer">Open crop preview · Cropped image</a>
+
+                <section className="grid gap-3 rounded border border-cyan-900 bg-slate-950/40 p-3" data-testid="evidence-packet-preview">
+                  <div>
+                    <h3 className="font-semibold text-cyan-200">Evidence Packet Preview</h3>
+                    <p className="text-xs text-amber-200">This preview shows the evidence that would be sent for grading later. It does not grade.</p>
+                  </div>
+                  <div className="grid gap-2 text-xs text-slate-300 md:grid-cols-2">
+                    <p>question label: {packet?.canonical_grading_unit.label ?? linkedQuestion?.question_no ?? "Not available yet"}</p>
+                    <p>max marks: {packet?.canonical_grading_unit.max_marks ?? linkedQuestion?.total_marks ?? "Not available yet"}</p>
+                    <p>question text: {linkedQuestion?.question_text || (packet?.question_evidence.question_text_present ? "Available in packet" : "Not available yet")}</p>
+                    <p>solution/model answer: {linkedQuestion?.model_answer || (packet?.solution_model_answer_evidence.model_answer_present ? "Available in packet" : "Not available yet")}</p>
+                    <p>active rubric: {packet ? String(packet.rubric_evidence.rubric_present || packet.canonical_grading_unit.active_rubric_present) : "Not available yet"}</p>
+                    <p>criteria: {packet?.rubric_evidence.criteria_max_marks.length ? JSON.stringify(packet.rubric_evidence.criteria_max_marks) : "Not available yet"}</p>
+                    <p>student answer region id: {packet?.assessment_context.answer_region_id ?? region.id}</p>
+                    <p>segment count: {packetAnswer?.segment_count ?? region.segments.length ?? "Not available yet"}</p>
+                    <p>pages covered: {packetAnswer?.pages_covered.join(", ") || (linkedPage?.page_no ? String(linkedPage.page_no) : "Not available yet")}</p>
+                    <p>segment order: {segmentOrder || "Not available yet"}</p>
+                    <p>answer crop/context image: {packetAnswer?.crop_path ? packetAnswer.crop_path : "Not available yet"}</p>
+                    <p>evidence_status: {packetAnswer?.packet_status ?? "Not available yet"}</p>
+                    <p>continuation_check_status: {packetAnswer?.continuation_check_status ?? "Not available yet"}</p>
+                    <p>ready_for_grading: {readiness ? String(readiness.ready_for_grading) : "Not available yet"}</p>
+                    <p>blockers: {readiness?.blockers.length ? readiness.blockers.join("; ") : "Not available yet"}</p>
+                    <p>warnings: {readiness?.warnings.length ? readiness.warnings.join("; ") : "Not available yet"}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm full answer</button>
+                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
+                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Mark partial / needs review</button>
+                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
+                  </div>
+                </section>
+              </article>
             );
           })}
         </div>
