@@ -115,7 +115,12 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     assessment = assessment_response.json()
     question_response = client.post(
         f"/assessments/{assessment['id']}/questions",
-        json={"question_no": "1(a)(i)", "question_text": "Explain.", "total_marks": "5.00"},
+        json={
+            "question_no": "1(a)(i)",
+            "question_text": "Explain.",
+            "model_answer": "A complete explanation earns full marks.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     question = question_response.json()
@@ -492,18 +497,19 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "reviewed_at",
         "feedback_to_student",
     ]
+    assert len(rows) == 2
     exported_text = " ".join(str(cell) for row in rows for cell in row if cell is not None)
     first_row = dict(zip(headers, rows[1], strict=True))
     assert first_row["grading_unit_label"] == "1(a)(i)"
     assert first_row["grading_unit_max_marks"] == 5
-    assert "approved" in exported_text
-    assert "edited" in exported_text
-    assert "rejected" in exported_text
+    assert first_row["approval_status"] == "approved"
+    assert "edited" not in exported_text
+    assert "rejected" not in exported_text
     assert "raw_response_json" not in exported_text
     assert "password_hash" not in exported_text
 
 
-def test_export_xlsx_includes_pending_region_with_blank_final_grade(
+def test_export_xlsx_excludes_pending_region_without_final_grade(
     client: TestClient, tmp_path: Path
 ) -> None:
     data = create_region_and_suggestion(client, tmp_path)
@@ -512,12 +518,7 @@ def test_export_xlsx_includes_pending_region_with_blank_final_grade(
 
     assert response.status_code == 200
     rows = list(load_workbook(BytesIO(response.content)).active.iter_rows(values_only=True))
-    assert len(rows) == 2
-    row = dict(zip(rows[0], rows[1], strict=True))
-    assert row["answer_region_id"] == data["region"]["id"]
-    assert row["grade_suggestion_id"] == data["suggestion"]["id"]
-    assert row["final_grade_id"] is None
-    assert row["approval_status"] is None
+    assert len(rows) == 1
 
 
 def test_batch_approve_selected_suggestions_uses_auth_teacher_and_writes_summary(

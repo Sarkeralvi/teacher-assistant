@@ -369,6 +369,8 @@ class FinalGradeService:
         for item in items:
             suggestion = item.latest_grade_suggestion
             final_grade = item.final_grade
+            if final_grade is None or final_grade.approval_status != "approved":
+                continue
             sheet.append(
                 [
                     assessment.id,
