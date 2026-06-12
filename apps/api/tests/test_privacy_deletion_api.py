@@ -14,6 +14,7 @@ from app.main import app
 from app.models import (
     AnswerRegion,
     Assessment,
+    AuditLog,
     Course,
     FinalGrade,
     GradeSuggestion,
@@ -28,6 +29,7 @@ from app.models import (
 )
 
 CLEANUP_MODELS = (
+    AuditLog,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
@@ -327,3 +329,139 @@ def test_assessment_test_data_delete_requires_authentication(
     assert response.status_code == 401
     assert count_rows(db_session, Submission) == 1
     assert count_rows(db_session, FinalGrade) == 1
+
+
+
+def auth_header(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def seed_submission_privacy_graph(
+    db: Session, assessment_id: int, storage_root: Path
+) -> dict[str, object]:
+    question = Question(
+        assessment_id=assessment_id,
+        question_no="P1",
+        question_text="Synthetic privacy question",
+        model_answer="Synthetic model answer",
+        total_marks=Decimal("5.00"),
+    )
+    db.add(question)
+    db.flush()
+
+    submission = Submission(
+        assessment_id=assessment_id,
+        student_identifier="SYN-PRIV",
+        student_name="Synthetic Privacy Student",
+        status="uploaded",
+    )
+    db.add(submission)
+    db.flush()
+
+    upload_path = f"uploads/submissions/{submission.id}/original-synthetic.png"
+    page_path = f"artifacts/pages/submission_{submission.id}/page_0001.png"
+    region_path = f"artifacts/answer_regions/submission_{submission.id}/region_synthetic.png"
+    context_path = f"artifacts/grading_context/submission_{submission.id}/context_synthetic.png"
+    for relative_path in (upload_path, page_path, region_path, context_path):
+        write_storage_file(storage_root, relative_path)
+
+    page = SubmissionPage(submission_id=submission.id, page_no=1, image_path=page_path)
+    db.add(page)
+    db.flush()
+
+    region = AnswerRegion(
+        submission_id=submission.id,
+        question_id=question.id,
+        page_id=page.id,
+        x=Decimal("1.00"),
+        y=Decimal("1.00"),
+        width=Decimal("10.00"),
+        height=Decimal("10.00"),
+        image_path=region_path,
+    )
+    db.add(region)
+    db.commit()
+
+    return {
+        "question_id": question.id,
+        "submission_id": submission.id,
+        "page_id": page.id,
+        "answer_region_id": region.id,
+        "stored_paths": [upload_path, page_path, region_path, context_path],
+    }
+
+
+def test_teacher_cannot_access_or_delete_another_teachers_submission_or_page(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    owner, owner_token = register_teacher(client, "submission-owner")
+    _other, other_token = register_teacher(client, "submission-other")
+    assessment = create_owned_assessment(client, owner_token)
+    seeded = seed_submission_privacy_graph(
+        db_session, int(assessment["id"]), tmp_path / "storage"
+    )
+
+    assert client.get(
+        f"/submissions/{seeded['submission_id']}", headers=auth_header(other_token)
+    ).status_code == 404
+    assert client.get(
+        f"/submission-pages/{seeded['page_id']}/image", headers=auth_header(other_token)
+    ).status_code == 404
+    delete_response = client.delete(
+        f"/assessments/{assessment['id']}/submissions/{seeded['submission_id']}",
+        headers=auth_header(other_token),
+    )
+
+    assert delete_response.status_code == 404
+    assert count_rows(db_session, Submission) == 1
+    assert count_rows(db_session, SubmissionPage) == 1
+    assert count_rows(db_session, AnswerRegion) == 1
+    assert owner["id"] != _other["id"]
+
+
+def test_authorized_teacher_deletes_submission_artifacts_and_audit_log(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher, token = register_teacher(client, "submission-delete")
+    assessment = create_owned_assessment(client, token)
+    storage_root = tmp_path / "storage"
+    seeded = seed_submission_privacy_graph(db_session, int(assessment["id"]), storage_root)
+    assert all((storage_root / path).exists() for path in seeded["stored_paths"])
+
+    response = client.delete(
+        f"/assessments/{assessment['id']}/submissions/{seeded['submission_id']}",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 204
+    assert count_rows(db_session, Submission) == 0
+    assert count_rows(db_session, SubmissionPage) == 0
+    assert count_rows(db_session, AnswerRegion) == 0
+    assert not any((storage_root / path).exists() for path in seeded["stored_paths"])
+    audit = db_session.scalar(select(AuditLog).where(AuditLog.event_type == "submission.deleted"))
+    assert audit is not None
+    assert audit.actor_id == teacher["id"]
+    assert audit.actor_type == "teacher"
+    assert audit.entity_type == "submission"
+    assert audit.entity_id == seeded["submission_id"]
+    assert audit.payload_json["assessment_id"] == assessment["id"]
+
+
+def test_submission_upload_requires_authentication(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _teacher, token = register_teacher(client, "upload-auth")
+    assessment = create_owned_assessment(client, token)
+    image_path = tmp_path / "answer.png"
+    write_storage_file(tmp_path, "answer.png", b"not-used")
+    from PIL import Image
+    Image.new("RGB", (32, 24), color="white").save(image_path, format="PNG")
+
+    with image_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload",
+            data={"student_identifier": "S-UNAUTH"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        )
+
+    assert response.status_code == 401

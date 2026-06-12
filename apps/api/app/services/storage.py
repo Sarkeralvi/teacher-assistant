@@ -116,6 +116,7 @@ class LocalStorage:
             self.uploads_dir / "submissions" / str(submission_id),
             self.artifacts_dir / "pages" / f"submission_{submission_id}",
             self.artifacts_dir / "answer_regions" / f"submission_{submission_id}",
+            self.artifacts_dir / "grading_context" / f"submission_{submission_id}",
         ):
             resolved_parent = parent.resolve()
             allowed_roots = (self.uploads_dir, self.artifacts_dir)

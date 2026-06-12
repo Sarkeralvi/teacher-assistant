@@ -15,6 +15,7 @@ from app.main import app
 from app.models import (
     AnswerRegion,
     Assessment,
+    AuditLog,
     Course,
     FinalGrade,
     GradeSuggestion,
@@ -27,6 +28,7 @@ from app.models import (
 )
 
 CLEANUP_MODELS = (
+    AuditLog,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
@@ -70,14 +72,25 @@ def client(
         get_settings.cache_clear()
 
 
+def auth_header(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
 def create_assessment(client: TestClient) -> dict[str, object]:
-    user_response = client.post(
-        "/users", json={"name": "Teacher", "email": f"upload-{uuid4().hex}@example.com"}
+    auth_response = client.post(
+        "/auth/register",
+        json={
+            "name": "Teacher",
+            "email": f"upload-{uuid4().hex}@example.com",
+            "password": "UploadPassword-123!",
+        },
     )
-    assert user_response.status_code == 201
+    assert auth_response.status_code == 201
+    token = auth_response.json()["access_token"]
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "BIO101", "title": "Biology"},
+        headers=auth_header(token),
+        json={"code": "BIO101", "title": "Biology"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
@@ -85,7 +98,9 @@ def create_assessment(client: TestClient) -> dict[str, object]:
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "20.00"},
     )
     assert assessment_response.status_code == 201
-    return assessment_response.json()
+    assessment = assessment_response.json()
+    assessment["auth_headers"] = auth_header(token)
+    return assessment
 
 
 def make_png(path: Path) -> None:
@@ -113,6 +128,7 @@ def test_upload_image_creates_submission_and_one_page(client: TestClient, tmp_pa
     with image_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=assessment["auth_headers"],
             data={"student_identifier": "S-001", "student_name": "Student One"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
@@ -130,16 +146,22 @@ def test_upload_image_creates_submission_and_one_page(client: TestClient, tmp_pa
     assert not page["image_path"].startswith("/")
     assert ".." not in page["image_path"]
 
-    detail = client.get(f"/submissions/{submission['id']}")
+    detail = client.get(f"/submissions/{submission['id']}", headers=assessment["auth_headers"])
     assert detail.status_code == 200
     assert detail.json()["pages"] == submission["pages"]
 
-    image_response = client.get(f"/submission-pages/{page['id']}/image")
+    image_response = client.get(
+        f"/submission-pages/{page['id']}/image",
+        headers=assessment["auth_headers"],
+    )
     assert image_response.status_code == 200
     assert image_response.headers["content-type"] == "image/png"
     assert image_response.content.startswith(b"\x89PNG")
 
-    listed = client.get(f"/assessments/{assessment['id']}/submissions")
+    listed = client.get(
+        f"/assessments/{assessment['id']}/submissions",
+        headers=assessment["auth_headers"],
+    )
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()] == [submission["id"]]
 
@@ -153,6 +175,7 @@ def test_upload_jpg_and_jpeg_images_create_single_page(client: TestClient, tmp_p
         with image_path.open("rb") as file_obj:
             response = client.post(
                 f"/assessments/{assessment['id']}/submissions/upload",
+                headers=assessment["auth_headers"],
                 data={"student_identifier": student_identifier},
                 files={"file": (f"answer.{suffix}", file_obj, "image/jpeg")},
             )
@@ -161,7 +184,10 @@ def test_upload_jpg_and_jpeg_images_create_single_page(client: TestClient, tmp_p
         submission = response.json()
         assert submission["student_identifier"] == student_identifier
         assert len(submission["pages"]) == 1
-        page_response = client.get(f"/submission-pages/{submission['pages'][0]['id']}/image")
+        page_response = client.get(
+            f"/submission-pages/{submission['pages'][0]['id']}/image",
+            headers=assessment["auth_headers"],
+        )
         assert page_response.status_code == 200
         assert page_response.headers["content-type"] == "image/png"
 
@@ -174,6 +200,7 @@ def test_upload_pdf_extracts_page_images(client: TestClient, tmp_path: Path) -> 
     with pdf_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=assessment["auth_headers"],
             data={"student_identifier": "S-002"},
             files={"file": ("answers.pdf", file_obj, "application/pdf")},
         )
@@ -187,28 +214,30 @@ def test_upload_pdf_extracts_page_images(client: TestClient, tmp_path: Path) -> 
 
 
 def test_upload_validation_errors(client: TestClient, tmp_path: Path) -> None:
+    assessment = create_assessment(client)
     image_path = tmp_path / "answer.png"
     make_png(image_path)
     with image_path.open("rb") as file_obj:
         missing_assessment = client.post(
             "/assessments/999999/submissions/upload",
+            headers=assessment["auth_headers"],
             data={"student_identifier": "S-404"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
     assert missing_assessment.status_code == 404
 
-    assessment = create_assessment(client)
     text_path = tmp_path / "answer.txt"
     text_path.write_text("not supported", encoding="utf-8")
     with text_path.open("rb") as file_obj:
         unsupported = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=assessment["auth_headers"],
             data={"student_identifier": "S-415"},
             files={"file": ("answer.txt", file_obj, "text/plain")},
         )
     assert unsupported.status_code == 415
 
-    assert client.get("/submissions/999999").status_code == 404
+    assert client.get("/submissions/999999", headers=assessment["auth_headers"]).status_code == 404
 
 
 def test_delete_submission_removes_existing_submission_and_related_rows(
@@ -225,6 +254,7 @@ def test_delete_submission_removes_existing_submission_and_related_rows(
     with image_path.open("rb") as file_obj:
         upload_response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=assessment["auth_headers"],
             data={"student_identifier": "S-DEL"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
@@ -243,11 +273,21 @@ def test_delete_submission_removes_existing_submission_and_related_rows(
     )
     assert region_response.status_code == 201
 
-    response = client.delete(f"/assessments/{assessment['id']}/submissions/{submission['id']}")
+    response = client.delete(
+        f"/assessments/{assessment['id']}/submissions/{submission['id']}",
+        headers=assessment["auth_headers"],
+    )
 
     assert response.status_code == 204
-    assert client.get(f"/submissions/{submission['id']}").status_code == 404
-    assert client.get(f"/submission-pages/{page_id}/image").status_code == 404
+    assert (
+        client.get(
+            f"/submissions/{submission['id']}", headers=assessment["auth_headers"]
+        ).status_code
+        == 404
+    )
+    assert client.get(
+        f"/submission-pages/{page_id}/image", headers=assessment["auth_headers"]
+    ).status_code == 404
     assert db_session.get(Submission, submission["id"]) is None
     assert db_session.get(SubmissionPage, page_id) is None
     assert db_session.get(AnswerRegion, region_response.json()["id"]) is None
@@ -263,15 +303,23 @@ def test_delete_submission_missing_or_wrong_assessment_returns_404(
     with image_path.open("rb") as file_obj:
         upload_response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=assessment["auth_headers"],
             data={"student_identifier": "S-WRONG"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
     assert upload_response.status_code == 201
 
-    assert client.delete(f"/assessments/{assessment['id']}/submissions/999999").status_code == 404
     assert (
         client.delete(
-            f"/assessments/{other_assessment['id']}/submissions/{upload_response.json()['id']}"
+            f"/assessments/{assessment['id']}/submissions/999999",
+            headers=assessment["auth_headers"],
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/assessments/{other_assessment['id']}/submissions/{upload_response.json()['id']}",
+            headers=other_assessment["auth_headers"],
         ).status_code
         == 404
     )
@@ -299,7 +347,10 @@ def test_delete_submission_ignores_unsafe_stored_paths(
     db_session.commit()
     submission_id = submission.id
 
-    response = client.delete(f"/assessments/{assessment['id']}/submissions/{submission_id}")
+    response = client.delete(
+        f"/assessments/{assessment['id']}/submissions/{submission_id}",
+        headers=assessment["auth_headers"],
+    )
 
     assert response.status_code == 204
     assert outside_file.read_text(encoding="utf-8") == "keep me"
@@ -342,6 +393,7 @@ def test_upload_zip_creates_multiple_submissions_and_pages(
     with zip_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload-zip",
+            headers=assessment["auth_headers"],
             data={"student_identifier_strategy": "basename"},
             files={"file": ("scripts.zip", file_obj, "application/zip")},
         )
@@ -364,11 +416,17 @@ def test_upload_zip_creates_multiple_submissions_and_pages(
         for page in submission["pages"]:
             assert not page["image_path"].startswith("/")
             assert ".." not in page["image_path"]
-            image_response = client.get(f"/submission-pages/{page['id']}/image")
+            image_response = client.get(
+        f"/submission-pages/{page['id']}/image",
+        headers=assessment["auth_headers"],
+    )
             assert image_response.status_code == 200
             assert image_response.content.startswith(b"\x89PNG")
 
-    listed = client.get(f"/assessments/{assessment['id']}/submissions")
+    listed = client.get(
+        f"/assessments/{assessment['id']}/submissions",
+        headers=assessment["auth_headers"],
+    )
     assert listed.status_code == 200
     assert [item["student_identifier"] for item in listed.json()] == [
         "student_001",
@@ -389,6 +447,7 @@ def test_upload_zip_supports_generated_sequential_identifiers(
     with zip_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload-zip",
+            headers=assessment["auth_headers"],
             data={"student_identifier_strategy": "sequential", "student_name_prefix": "Student"},
             files={"file": ("scripts.zip", file_obj, "application/zip")},
         )
@@ -420,6 +479,7 @@ def test_upload_zip_reports_unsupported_and_path_traversal_without_extracting(
     with zip_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload-zip",
+            headers=assessment["auth_headers"],
             files={"file": ("mixed.zip", file_obj, "application/zip")},
         )
 
@@ -437,19 +497,21 @@ def test_upload_zip_reports_unsupported_and_path_traversal_without_extracting(
 def test_upload_zip_invalid_zip_and_missing_assessment_errors(
     client: TestClient, tmp_path: Path
 ) -> None:
+    assessment = create_assessment(client)
     invalid_zip = tmp_path / "invalid.zip"
     invalid_zip.write_bytes(b"not a zip")
     with invalid_zip.open("rb") as file_obj:
         response = client.post(
             "/assessments/999999/submissions/upload-zip",
+            headers=assessment["auth_headers"],
             files={"file": ("invalid.zip", file_obj, "application/zip")},
         )
     assert response.status_code == 404
 
-    assessment = create_assessment(client)
     with invalid_zip.open("rb") as file_obj:
         invalid = client.post(
             f"/assessments/{assessment['id']}/submissions/upload-zip",
+            headers=assessment["auth_headers"],
             files={"file": ("invalid.zip", file_obj, "application/zip")},
         )
     assert invalid.status_code == 400

@@ -10,21 +10,27 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 from starlette.datastructures import Headers
 
-from app.api.routes.assessments import get_assessment_or_404
+from app.api.routes.assessments import get_owned_assessment_or_404
+from app.core.auth import get_current_user
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
+    Assessment,
+    AuditLog,
+    Course,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
     Submission,
     SubmissionPage,
+    User,
 )
 from app.schemas import SubmissionRead, SubmissionZipUploadResponse
 from app.services.storage import LocalStorage
 from app.services.submission_processing import classify_upload, extract_page_images
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["submissions"])
 
@@ -51,6 +57,40 @@ def get_submission_or_404(submission_id: int, db: Session) -> Submission:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
     submission.pages.sort(key=lambda page: page.page_no)
     return submission
+
+
+def get_owned_submission_or_404(submission_id: int, db: Session, teacher: User) -> Submission:
+    statement = (
+        select(Submission)
+        .join(Assessment, Assessment.id == Submission.assessment_id)
+        .join(Course, Course.id == Assessment.course_id)
+        .options(selectinload(Submission.pages))
+        .where(Submission.id == submission_id, Course.teacher_id == teacher.id)
+    )
+    submission = db.scalars(statement).first()
+    if submission is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+    submission.pages.sort(key=lambda page: page.page_no)
+    return submission
+
+
+def get_owned_submission_page_or_404(
+    page_id: int, db: Session, teacher: User
+) -> SubmissionPage:
+    statement = (
+        select(SubmissionPage)
+        .join(Submission, Submission.id == SubmissionPage.submission_id)
+        .join(Assessment, Assessment.id == Submission.assessment_id)
+        .join(Course, Course.id == Assessment.course_id)
+        .where(SubmissionPage.id == page_id, Course.teacher_id == teacher.id)
+    )
+    page = db.scalars(statement).first()
+    if page is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission page not found",
+        )
+    return page
 
 
 def create_submission_from_upload(
@@ -136,11 +176,12 @@ def zip_entry_upload(name: str, content: bytes, content_type: str) -> UploadFile
 def upload_submission(
     assessment_id: int,
     db: DbSession,
+    current_user: CurrentUser,
     student_identifier: Annotated[str, Form(min_length=1, max_length=128)],
     file: Annotated[UploadFile, File()],
     student_name: Annotated[str | None, Form(max_length=255)] = None,
 ) -> Submission:
-    get_assessment_or_404(assessment_id, db)
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     return create_submission_from_upload(
         assessment_id=assessment_id,
         db=db,
@@ -158,11 +199,12 @@ def upload_submission(
 def upload_submission_zip(
     assessment_id: int,
     db: DbSession,
+    current_user: CurrentUser,
     file: Annotated[UploadFile, File()],
     student_identifier_strategy: Annotated[IdentifierStrategy, Form()] = "basename",
     student_name_prefix: Annotated[str | None, Form(max_length=64)] = None,
 ) -> dict[str, object]:
-    get_assessment_or_404(assessment_id, db)
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     suffix = PurePosixPath(file.filename or "").suffix.lower()
     if suffix != ".zip" and file.content_type not in {
         "application/zip",
@@ -260,13 +302,15 @@ def upload_submission_zip(
 
 
 @router.get("/submissions/{submission_id}", response_model=SubmissionRead)
-def get_submission(submission_id: int, db: DbSession) -> Submission:
-    return get_submission_or_404(submission_id, db)
+def get_submission(submission_id: int, db: DbSession, current_user: CurrentUser) -> Submission:
+    return get_owned_submission_or_404(submission_id, db, current_user)
 
 
 @router.get("/assessments/{assessment_id}/submissions", response_model=list[SubmissionRead])
-def list_assessment_submissions(assessment_id: int, db: DbSession) -> Sequence[Submission]:
-    get_assessment_or_404(assessment_id, db)
+def list_assessment_submissions(
+    assessment_id: int, db: DbSession, current_user: CurrentUser
+) -> Sequence[Submission]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     statement = (
         select(Submission)
         .options(selectinload(Submission.pages))
@@ -283,8 +327,10 @@ def list_assessment_submissions(assessment_id: int, db: DbSession) -> Sequence[S
     "/assessments/{assessment_id}/submissions/{submission_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def delete_assessment_submission(assessment_id: int, submission_id: int, db: DbSession) -> Response:
-    get_assessment_or_404(assessment_id, db)
+def delete_assessment_submission(
+    assessment_id: int, submission_id: int, db: DbSession, current_user: CurrentUser
+) -> Response:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     statement = (
         select(Submission)
         .options(
@@ -318,6 +364,21 @@ def delete_assessment_submission(assessment_id: int, submission_id: int, db: DbS
 
     db.execute(delete(SubmissionPage).where(SubmissionPage.submission_id == submission_id))
     db.execute(delete(Submission).where(Submission.id == submission_id))
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="submission.deleted",
+            entity_type="submission",
+            entity_id=submission_id,
+            payload_json={
+                "assessment_id": assessment_id,
+                "submission_id": submission_id,
+                "answer_region_ids": answer_region_ids,
+                "artifact_paths_deleted": relative_paths,
+            },
+        )
+    )
     db.commit()
 
     LocalStorage().delete_submission_files(submission_id, relative_paths)
@@ -325,13 +386,10 @@ def delete_assessment_submission(assessment_id: int, submission_id: int, db: DbS
 
 
 @router.get("/submission-pages/{page_id}/image")
-def get_submission_page_image(page_id: int, db: DbSession) -> FileResponse:
-    page = db.get(SubmissionPage, page_id)
-    if page is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Submission page not found",
-        )
+def get_submission_page_image(
+    page_id: int, db: DbSession, current_user: CurrentUser
+) -> FileResponse:
+    page = get_owned_submission_page_or_404(page_id, db, current_user)
     path = LocalStorage().resolve_relative(page.image_path)
     if not path.is_file():
         raise HTTPException(
