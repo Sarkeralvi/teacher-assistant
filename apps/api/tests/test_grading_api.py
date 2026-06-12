@@ -110,7 +110,11 @@ def strict_rubric() -> dict[str, object]:
 
 
 def create_answer_region_with_optional_rubric(
-    client: TestClient, tmp_path: Path, *, create_rubric: bool = True
+    client: TestClient,
+    tmp_path: Path,
+    *,
+    create_rubric: bool = True,
+    manual_answer_text: str | None = "A complete answer explains the concept.",
 ) -> dict[str, object]:
     email = f"grade-{len(list(tmp_path.glob('*.png')))}@example.com"
     user_response = client.post("/users", json={"name": "Teacher", "email": email})
@@ -160,15 +164,14 @@ def create_answer_region_with_optional_rubric(
             "y": 2,
             "width": 20,
             "height": 25,
+            "manual_answer_text": manual_answer_text,
         },
     )
     assert region_response.status_code == 201
     return region_response.json()
 
 
-def create_owned_answer_region(
-    client: TestClient, tmp_path: Path, email: str
-) -> dict[str, object]:
+def create_owned_answer_region(client: TestClient, tmp_path: Path, email: str) -> dict[str, object]:
     auth = register_auth_teacher(client, email)
     headers = auth_header(str(auth["access_token"]))
     course_response = client.post(
@@ -301,8 +304,7 @@ def test_grade_answer_region_creates_job_and_mock_suggestion(
     assert suggestion["confidence"] == "0.0000"
     assert suggestion["needs_review"] is True
     assert (
-        suggestion["feedback"]
-        == "This is a mock grading suggestion for pipeline validation only."
+        suggestion["feedback"] == "This is a mock grading suggestion for pipeline validation only."
     )
     raw = suggestion["raw_response_json"]
     assert set(raw["review_flags"]) == {
@@ -340,9 +342,11 @@ def test_grading_uses_padded_context_crop_without_changing_region_coordinates(
 
         def __init__(self) -> None:
             self.answer_image_path: str | None = None
+            self.student_answer_text: str | None = None
 
         def grade_answer_region(self, **kwargs: object) -> GradeSuggestionOutput:
             self.answer_image_path = str(kwargs["answer_image_path"])
+            self.student_answer_text = str(kwargs["student_answer_text"])
             return GradeSuggestionOutput(
                 model_provider="mock",
                 model_name="mock-grader-v1",
@@ -376,6 +380,7 @@ def test_grading_uses_padded_context_crop_without_changing_region_coordinates(
     service.grade_answer_region(region.id)
 
     assert recording_adapter.answer_image_path is not None
+    assert recording_adapter.student_answer_text == "A complete answer explains the concept."
     assert recording_adapter.answer_image_path != original_image_path
     assert "grading_context" in recording_adapter.answer_image_path
     padded_path = service.storage.resolve_relative(recording_adapter.answer_image_path)
@@ -432,9 +437,7 @@ def test_grading_evidence_packet_reports_ready_state_and_auditable_fields(
 def test_grading_evidence_packet_blocks_when_active_rubric_is_missing(
     client: TestClient, tmp_path: Path
 ) -> None:
-    region = create_answer_region_with_optional_rubric(
-        client, tmp_path, create_rubric=False
-    )
+    region = create_answer_region_with_optional_rubric(client, tmp_path, create_rubric=False)
 
     packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
 
@@ -506,7 +509,6 @@ def test_grade_answer_region_failure_cases(client: TestClient, tmp_path: Path) -
     assert "active rubric" in no_rubric.text
 
 
-
 def test_batch_mock_grading_missing_assessment_returns_404(client: TestClient) -> None:
     response = client.post("/assessments/999999/grade-all-mock")
 
@@ -530,6 +532,7 @@ def test_grade_suggestion_and_job_read_endpoints(client: TestClient, tmp_path: P
     job_response = client.get(f"/grading-jobs/{created['job']['id']}")
     assert job_response.status_code == 200
     assert job_response.json()["status"] == "succeeded"
+
 
 def test_grade_answer_region_marks_job_failed_on_provider_error(
     client: TestClient,
@@ -559,6 +562,7 @@ def test_grade_answer_region_marks_job_failed_on_provider_error(
     assert job.status == "failed"
     assert job.error is not None
     assert "sk-secret-value" not in job.error
+
 
 def test_grade_answer_region_with_mocked_openai_image_input_creates_suggestion(
     client: TestClient,
@@ -678,9 +682,7 @@ def test_codex_dev_route_requires_authenticated_owner(
     monkeypatch.setenv("CODEX_BROWSER_GRADING_ENABLED", "true")
     get_settings.cache_clear()
     try:
-        unauthenticated = client.post(
-            f"/answer-regions/{owner['region']['id']}/grade-codex-dev"
-        )
+        unauthenticated = client.post(f"/answer-regions/{owner['region']['id']}/grade-codex-dev")
         non_owner = client.post(
             f"/answer-regions/{owner['region']['id']}/grade-codex-dev",
             headers=auth_header(str(intruder["access_token"])),
@@ -817,16 +819,12 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
             pass
 
         def grade(self, **kwargs: object) -> GradeSuggestionOutput:
-            raise RuntimeError(
-                "Codex CLI image input is not supported by this installed version."
-            )
+            raise RuntimeError("Codex CLI image input is not supported by this installed version.")
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
     monkeypatch.setenv("CODEX_CLI_IMAGE_INPUT_ENABLED", "true")
     get_settings.cache_clear()
-    monkeypatch.setattr(
-        "packages.brain.adapter.CodexCliProvider", ImageUnsupportedCodexCliProvider
-    )
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", ImageUnsupportedCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
     response = client.post(f"/answer-regions/{region['id']}/grade")
@@ -838,7 +836,6 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
     assert job.status == "failed"
     assert job.error is not None
     assert "image input is not supported" in job.error
-
 
 
 def test_evidence_packet_blocks_possible_continuation_near_page_bottom(
@@ -902,8 +899,7 @@ def test_full_answer_confirmation_clears_continuation_blocker(
         == "continuation_confirmed_not_needed"
     )
     assert (
-        "possible answer continuation not confirmed"
-        not in packet["readiness_result"]["blockers"]
+        "possible answer continuation not confirmed" not in packet["readiness_result"]["blockers"]
     )
     assert packet["readiness_result"]["ready_for_grading"] is True
 
@@ -985,3 +981,44 @@ def test_multisegment_grading_uses_composite_context_with_all_segments(
     assert "multi_segment_context" in raw["review_flags"]
     assert raw["grading_context"]["segment_count"] == 2
     assert len(raw["grading_context"]["segments"]) == 2
+
+
+def test_prompt_construction_includes_manual_student_answer_text() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    messages = build_grading_prompt(
+        question_text="What is the capital of Bangladesh?",
+        rubric_json={
+            "model_answer": "Dhaka is the capital of Bangladesh.",
+            "criteria": [{"id": "capital", "max_marks": "6"}],
+        },
+        answer_image_path="artifacts/answer_regions/example.png",
+        image_input_enabled=False,
+        student_answer_text="Dhaka is the capital of Bangladesh.",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+    assert "What is the capital of Bangladesh?" in rendered
+    assert "Dhaka is the capital of Bangladesh." in rendered
+    assert "Teacher-confirmed student answer text" in rendered
+    assert "artifacts/answer_regions/example.png" in rendered
+
+
+def test_codex_prompt_includes_manual_student_answer_text() -> None:
+    from packages.brain.codex_cli_provider import CodexCliProvider
+
+    provider = CodexCliProvider(command="codex", model_name="gpt-5.5")
+    prompt = provider._build_prompt(  # noqa: SLF001
+        question_text="What is the capital of Bangladesh?",
+        question_total_marks=Decimal("10.00"),
+        rubric_json={
+            "model_answer": "Dhaka is the capital of Bangladesh.",
+            "criteria": [{"id": "capital", "max_marks": "6"}],
+        },
+        messages=[],
+        image_input_enabled=False,
+        student_answer_text="Chittagong is the capital of Bangladesh.",
+    )
+    assert "What is the capital of Bangladesh?" in prompt
+    assert "Dhaka is the capital of Bangladesh." in prompt
+    assert "Teacher-confirmed student answer text" in prompt
+    assert "Chittagong is the capital of Bangladesh." in prompt

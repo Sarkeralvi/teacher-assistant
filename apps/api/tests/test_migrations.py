@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-EXPECTED_REVISION_ID = "0012_grading_queue_scaffold"
+EXPECTED_REVISION_ID = "0013_manual_answer_text"
 
 
 def test_initial_alembic_migration_exists_and_is_importable() -> None:

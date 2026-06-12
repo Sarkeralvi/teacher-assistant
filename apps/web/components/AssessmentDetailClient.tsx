@@ -96,6 +96,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [regionY, setRegionY] = useState("0");
   const [regionWidth, setRegionWidth] = useState("100");
   const [regionHeight, setRegionHeight] = useState("100");
+  const [manualAnswerText, setManualAnswerText] = useState("");
   const [regionSuggestions, setRegionSuggestions] = useState<DraftAnswerRegionSuggestionGroup[]>([]);
   const [regionSuggestionMessage, setRegionSuggestionMessage] = useState<string | null>(null);
   const [regionSuggestionWarnings, setRegionSuggestionWarnings] = useState<string[]>([]);
@@ -453,6 +454,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         y: regionY,
         width: regionWidth,
         height: regionHeight,
+        manual_answer_text: manualAnswerText.trim() || null,
       });
       await load();
     } catch (err) {
@@ -1056,6 +1058,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             <input className={inputClass} aria-label="Crop width" placeholder="width" value={regionWidth} onChange={(event) => setRegionWidth(event.target.value)} required />
             <input className={inputClass} aria-label="Crop height" placeholder="height" value={regionHeight} onChange={(event) => setRegionHeight(event.target.value)} required />
           </div>
+          <textarea className={inputClass} aria-label="Manual answer evidence text" placeholder="Teacher-confirmed student answer text for real grading" value={manualAnswerText} onChange={(event) => setManualAnswerText(event.target.value)} rows={3} />
         </div>
         <button className={buttonClass} disabled={creatingRegion || pages.length === 0 || questions.length === 0} type="submit">
           {creatingRegion ? "Creating..." : "Create answer region"}
@@ -1126,6 +1129,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <p>packet pages covered: {packetAnswer?.pages_covered.join(", ") || (linkedPage?.page_no ? String(linkedPage.page_no) : "Not available yet")}</p>
                     <p>segment order: {segmentOrder || "Not available yet"}</p>
                     <p>answer crop/context image: {packetAnswer?.crop_path ? packetAnswer.crop_path : "Not available yet"}</p>
+                    <p>manual answer text: {packetAnswer?.manual_answer_text_present ? packetAnswer.manual_answer_text : "Missing — required for real grading"}</p>
                     <p>evidence_status: {packetAnswer?.packet_status ?? "Not available yet"}</p>
                     <p>continuation_check_status: {packetAnswer?.continuation_check_status ?? "Not available yet"}</p>
                     <p>ready_for_grading: {readiness ? String(readiness.ready_for_grading) : "Not available yet"}</p>

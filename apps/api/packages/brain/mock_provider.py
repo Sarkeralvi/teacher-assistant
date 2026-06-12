@@ -18,6 +18,7 @@ class MockBrainProvider(BrainProvider):
         rubric_json: dict[str, Any],
         answer_image_path: str,
         prompt_version: str,
+        student_answer_text: str | None = None,
         task_name: str = "answer_region_grading",
         model_policy: object | None = None,
         messages: list[dict[str, Any]] | None = None,

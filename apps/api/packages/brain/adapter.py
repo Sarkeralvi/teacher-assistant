@@ -95,6 +95,7 @@ class BrainAdapter:
         question_total_marks: Decimal,
         rubric_json: dict[str, Any],
         answer_image_path: str,
+        student_answer_text: str | None = None,
         policy: ModelPolicy | None = None,
         marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
@@ -114,6 +115,7 @@ class BrainAdapter:
             question_text=question_text,
             rubric_json=rubric_json,
             answer_image_path=answer_image_path,
+            student_answer_text=student_answer_text,
             image_input_enabled=should_send_image,
             marking_policy=normalized_marking_policy,
         )
@@ -133,6 +135,7 @@ class BrainAdapter:
                 question_total_marks=question_total_marks,
                 rubric_json=rubric_json,
                 answer_image_path=provider_answer_image_path,
+                student_answer_text=student_answer_text,
                 prompt_version=prompt_version,
                 task_name="answer_region_grading",
                 model_policy=resolved_policy,

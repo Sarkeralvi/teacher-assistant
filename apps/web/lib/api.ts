@@ -251,6 +251,7 @@ export type AnswerRegion = {
   width: string | number;
   height: string | number;
   image_path: string;
+  manual_answer_text: string | null;
   full_answer_confirmed: boolean;
   evidence_status: string;
   continuation_check_status: string;
@@ -454,6 +455,8 @@ export type GradingEvidencePacket = {
   student_answer_evidence: {
     answer_region_coordinates: Record<string, string | number>;
     crop_path: string | null;
+    manual_answer_text: string | null;
+    manual_answer_text_present: boolean;
     segment_count: number;
     pages_covered: number[];
     segments: Array<Record<string, unknown>>;
@@ -698,7 +701,9 @@ export type DraftQuestionAccept = Pick<DraftQuestion, "draft_id" | "question_no"
   total_marks: string | number;
 };
 export type RubricCreate = Pick<Rubric, "version" | "rubric_json"> & { is_active?: boolean };
-export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height">;
+export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height"> & {
+  manual_answer_text?: string | null;
+};
 export type AnswerRegionCorrectionSegmentBox = Pick<AnswerRegionSegment, "x" | "y" | "width" | "height">;
 export type AnswerRegionCorrectionSegmentCreate = AnswerRegionCorrectionSegmentBox & {
   page_id: number;
@@ -1085,6 +1090,7 @@ export function confirmAnswerRegionFullAnswer(
     full_answer_confirmed: boolean;
     continuation_not_needed?: boolean;
     packet_status?: "unconfirmed" | "complete" | "partial" | "blank";
+    manual_answer_text?: string | null;
   },
 ) {
   return apiRequest<AnswerRegionCorrectionResponse>(

@@ -78,6 +78,7 @@ class CodexCliProvider(BrainProvider):
         rubric_json: dict[str, Any],
         answer_image_path: str,
         prompt_version: str,
+        student_answer_text: str | None = None,
         task_name: str = "answer_region_grading",
         model_policy: ModelPolicy = ModelPolicy.REAL_GRADING,
         messages: list[dict[str, Any]] | None = None,
@@ -99,6 +100,7 @@ class CodexCliProvider(BrainProvider):
                 rubric_json=rubric_json,
                 messages=messages or [],
                 image_input_enabled=use_image_input,
+                student_answer_text=student_answer_text,
                 marking_policy=marking_policy,
             )
             command = self._build_command(
@@ -243,6 +245,7 @@ class CodexCliProvider(BrainProvider):
         rubric_json: dict[str, Any],
         messages: list[dict[str, Any]],
         image_input_enabled: bool,
+        student_answer_text: str | None = None,
         marking_policy: str = "general",
     ) -> str:
         model_answer = (
@@ -265,6 +268,10 @@ class CodexCliProvider(BrainProvider):
         rendered_messages = "\n\n".join(
             f"{message.get('role', 'unknown')}: {message.get('content', '')}"
             for message in messages
+        )
+        manual_answer_text = (student_answer_text or "").strip()
+        answer_text_block = (
+            manual_answer_text or "Not supplied. Do not infer answer content from the image path."
         )
         return f"""You are producing a grade suggestion for TA Agent.
 Return ONLY valid JSON matching the GradeSuggestionOutput schema.
@@ -310,6 +317,9 @@ Marking policy: {normalized_policy}
 
 Existing prompt context:
 {rendered_messages}
+
+Teacher-confirmed student answer text:
+{answer_text_block}
 
 Output JSON schema fields:
 score, max_score, confidence, needs_review, rubric_breakdown, detected_answer_summary,
@@ -364,8 +374,7 @@ reason, evidence, confidence. Awarded marks must sum to score.
     def _classify_failure(message: str) -> str:
         lower = message.lower()
         if any(
-            token in lower
-            for token in ["not logged in", "login", "auth", "unauthorized", "401"]
+            token in lower for token in ["not logged in", "login", "auth", "unauthorized", "401"]
         ):
             return "auth"
         if any(token in lower for token in ["model", "not found", "unsupported"]):

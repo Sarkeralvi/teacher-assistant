@@ -218,9 +218,7 @@ class GradingQueueRunCreate(BaseModel):
 
 
 GradingQueueRunStatus = Literal["pending", "built", "blocked", "failed"]
-GradingQueueItemStatus = Literal[
-    "pending_review", "ready_for_provider_later", "blocked"
-]
+GradingQueueItemStatus = Literal["pending_review", "ready_for_provider_later", "blocked"]
 GradingQueueItemStaleStatus = Literal["fresh", "stale", "evidence_missing", "blocked_now"]
 
 
@@ -498,6 +496,7 @@ class AnswerRegionCreate(BaseModel):
     y: Decimal = Field(ge=Decimal("0"))
     width: Decimal = Field(gt=Decimal("0"))
     height: Decimal = Field(gt=Decimal("0"))
+    manual_answer_text: str | None = Field(default=None, max_length=10000)
 
 
 AnswerRegionMappingProvider: TypeAlias = Literal[
@@ -549,6 +548,7 @@ class AnswerRegionFullAnswerConfirmation(BaseModel):
     full_answer_confirmed: bool
     continuation_not_needed: bool = False
     packet_status: Literal["unconfirmed", "complete", "partial", "blank"] | None = None
+    manual_answer_text: str | None = Field(default=None, max_length=10000)
 
 
 class AnswerRegionCorrectionSegmentBox(BaseModel):
@@ -601,6 +601,7 @@ class AnswerRegionRead(ORMBase):
     width: Decimal
     height: Decimal
     image_path: str
+    manual_answer_text: str | None = None
     full_answer_confirmed: bool = False
     evidence_status: str = "unconfirmed"
     continuation_check_status: str = "not_checked"

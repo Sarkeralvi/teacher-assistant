@@ -205,6 +205,7 @@ EXPECTED_COLUMNS = {
         "width",
         "height",
         "image_path",
+        "manual_answer_text",
         "full_answer_confirmed",
         "evidence_status",
         "continuation_check_status",

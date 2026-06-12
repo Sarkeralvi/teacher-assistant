@@ -617,6 +617,9 @@ def create_answer_region(page_id: int, payload: AnswerRegionCreate, db: DbSessio
         width=payload.width,
         height=payload.height,
         image_path=image_path,
+        manual_answer_text=(
+            payload.manual_answer_text.strip() if payload.manual_answer_text else None
+        ),
         evidence_status="complete",
         continuation_check_status="not_checked",
     )
@@ -820,6 +823,8 @@ def correct_answer_region_full_answer_confirmation(
             else "continuation_confirmed_not_needed"
         )
     region.full_answer_confirmed = payload.full_answer_confirmed
+    if payload.manual_answer_text is not None:
+        region.manual_answer_text = payload.manual_answer_text.strip() or None
     if payload.packet_status is not None:
         region.evidence_status = payload.packet_status
     elif payload.full_answer_confirmed:
@@ -1123,6 +1128,8 @@ def update_answer_region_full_answer_confirmation(
 ) -> AnswerRegion:
     region = get_answer_region_or_404(answer_region_id, db)
     region.full_answer_confirmed = payload.full_answer_confirmed
+    if payload.manual_answer_text is not None:
+        region.manual_answer_text = payload.manual_answer_text.strip() or None
     region.evidence_status = payload.packet_status or (
         "complete" if payload.full_answer_confirmed else "unconfirmed"
     )

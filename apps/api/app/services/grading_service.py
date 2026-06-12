@@ -193,6 +193,8 @@ class GradingService:
         crop_path = region.image_path
         if not confirmed_segments:
             blockers.append("missing confirmed answer segment")
+        if not (region.manual_answer_text or "").strip():
+            blockers.append("missing manual answer text")
         ordered_indexes = [segment.order_index for segment in segments]
         if ordered_indexes != list(range(1, len(segments) + 1)):
             blockers.append("answer segment order must be contiguous starting at 1")
@@ -259,6 +261,8 @@ class GradingService:
                     "height": region.height,
                 },
                 "crop_path": crop_path,
+                "manual_answer_text": region.manual_answer_text,
+                "manual_answer_text_present": bool((region.manual_answer_text or "").strip()),
                 "segment_count": len(confirmed_segments),
                 "pages_covered": pages_covered,
                 "segments": segment_payloads,
@@ -360,11 +364,19 @@ class GradingService:
             )
         settings = get_settings()
         rubric = self._get_active_rubric(region.question_id)
+        rubric_payload = dict(rubric.rubric_json)
+        if region.question and region.question.model_answer:
+            rubric_payload["model_answer"] = region.question.model_answer
         confirmed_segments = [segment for segment in _ordered_segments(region) if segment.confirmed]
         if not confirmed_segments:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Evidence packet not ready for grading: missing confirmed answer segment",
+            )
+        if not (region.manual_answer_text or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Evidence packet not ready for grading: missing manual answer text",
             )
 
         grading_answer_image_path, grading_context, segment_metadata = (
@@ -380,8 +392,9 @@ class GradingService:
             output = adapter.grade_answer_region(
                 question_text=region.question.question_text,
                 question_total_marks=Decimal(region.question.total_marks),
-                rubric_json=rubric.rubric_json,
+                rubric_json=rubric_payload,
                 answer_image_path=grading_answer_image_path,
+                student_answer_text=region.manual_answer_text,
                 marking_policy=marking_policy,
             )
             raw_response = output.model_dump(mode="json")

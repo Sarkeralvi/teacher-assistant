@@ -107,9 +107,7 @@ def get_prompt_version(policy: ModelPolicy) -> str:
 def build_marking_policy_instruction(marking_policy: str) -> str:
     normalized_policy = marking_policy.strip().lower()
     return "\n".join(
-        MARKING_POLICY_INSTRUCTIONS.get(
-            normalized_policy, MARKING_POLICY_INSTRUCTIONS["general"]
-        )
+        MARKING_POLICY_INSTRUCTIONS.get(normalized_policy, MARKING_POLICY_INSTRUCTIONS["general"])
     )
 
 
@@ -123,6 +121,7 @@ def build_grading_prompt(
     rubric_json: dict[str, Any],
     answer_image_path: str,
     image_input_enabled: bool,
+    student_answer_text: str | None = None,
     marking_policy: str = "general",
 ) -> list[dict[str, str]]:
     model_answer = (
@@ -138,8 +137,13 @@ def build_grading_prompt(
     else:
         image_note = (
             "Image input is disabled for this provider path. "
-            "Do not claim handwriting/image understanding."
+            "Do not claim handwriting/image understanding. Use the teacher-confirmed "
+            "student answer text below as the assessable answer evidence."
         )
+    manual_answer_text = (student_answer_text or "").strip()
+    answer_text_block = (
+        manual_answer_text or "Not supplied. Do not infer answer content from the image path."
+    )
     normalized_policy = marking_policy.strip().lower()
     policy_instruction = build_marking_policy_instruction(normalized_policy)
     math_stat_guidance = build_handwritten_math_stat_guidance()
@@ -156,6 +160,9 @@ Rubric JSON:
 
 Image evidence path label:
 {answer_image_path}
+
+Teacher-confirmed student answer text:
+{answer_text_block}
 
 Image instructions:
 {image_note}

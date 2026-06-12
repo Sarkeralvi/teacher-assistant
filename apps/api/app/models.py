@@ -98,9 +98,7 @@ class Assessment(TimestampMixin, Base):
     evidence_prep_runs: Mapped[list[BatchEvidencePrepRun]] = relationship(
         back_populates="assessment"
     )
-    grading_queue_runs: Mapped[list[GradingQueueRun]] = relationship(
-        back_populates="assessment"
-    )
+    grading_queue_runs: Mapped[list[GradingQueueRun]] = relationship(back_populates="assessment")
     question_import_jobs: Mapped[list[QuestionImportJob]] = relationship(
         back_populates="assessment"
     )
@@ -159,9 +157,7 @@ class BatchEvidencePrepRun(TimestampMixin, Base):
     __tablename__ = "batch_evidence_prep_runs"
     __table_args__ = (
         CheckConstraint(
-            "status in ("
-            "'pending', 'running', 'completed', 'completed_with_blockers', 'failed'"
-            ")",
+            "status in ('pending', 'running', 'completed', 'completed_with_blockers', 'failed')",
             name="ck_batch_evidence_prep_runs_status",
         ),
         Index("ix_batch_evidence_prep_runs_assessment_id", "assessment_id"),
@@ -267,9 +263,7 @@ class GradingQueueItem(TimestampMixin, Base):
     pages_covered: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
     evidence_status: Mapped[str] = mapped_column(String(32), nullable=False)
     continuation_check_status: Mapped[str] = mapped_column(String(64), nullable=False)
-    queue_status: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="pending_review"
-    )
+    queue_status: Mapped[str] = mapped_column(String(64), nullable=False, default="pending_review")
     provider_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     evidence_snapshot_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     readiness_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -394,6 +388,7 @@ class AnswerRegion(TimestampMixin, Base):
     width: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     height: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    manual_answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     full_answer_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     evidence_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unconfirmed")
     continuation_check_status: Mapped[str] = mapped_column(
