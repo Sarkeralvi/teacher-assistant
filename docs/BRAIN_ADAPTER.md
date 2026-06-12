@@ -16,7 +16,7 @@ OPENAI_IMAGE_INPUT_ENABLED=false
 OPENAI_TIMEOUT_SECONDS=30
 
 CODEX_CLI_COMMAND=codex
-CODEX_CLI_MODEL=
+CODEX_CLI_MODEL=gpt-5.5
 CODEX_CLI_TIMEOUT_SECONDS=300
 CODEX_CLI_SANDBOX=read-only
 CODEX_CLI_APPROVAL_POLICY=never
@@ -32,7 +32,7 @@ Behavior:
 - `BRAIN_PROVIDER=openai` enables the OpenAI-compatible provider and requires `OPENAI_API_KEY`.
 - `BRAIN_PROVIDER=codex_cli` enables local Codex CLI execution and does **not** require `OPENAI_API_KEY`.
 - `CODEX_CLI_COMMAND` defaults to `codex`; it must exist on `PATH` or provider preflight fails clearly.
-- `CODEX_CLI_MODEL` is optional; when empty, stored `model_name` is `codex-cli` and no `--model` flag is passed.
+- `CODEX_CLI_MODEL` defaults to `gpt-5.5`; keep it explicit so host dev runs do not fall back to an unsupported Codex CLI default model.
 - `CODEX_CLI_TIMEOUT_SECONDS` controls subprocess timeout for preflight/execution.
 - `CODEX_CLI_SANDBOX=read-only` is the default. `danger-full-access` is refused.
 - `CODEX_CLI_APPROVAL_POLICY=never` documents the v1 behavior. `codex exec --help` for the verified local version does not expose `--ask-for-approval`, so the provider does not pass approval flags.

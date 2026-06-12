@@ -88,7 +88,7 @@ def make_provider(
 
     return CodexCliProvider(
         command="codex",
-        model_name="",
+        model_name="gpt-5.5",
         timeout_seconds=300,
         sandbox="read-only",
         use_json=True,
@@ -137,6 +137,7 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert exec_cmd[exec_cmd.index("--sandbox") + 1] == "read-only"
     assert "--output-last-message" in exec_cmd
     assert "--json" in exec_cmd
+    assert exec_cmd[exec_cmd.index("--model") + 1] == "gpt-5.5"
     assert "--image" not in exec_cmd
     assert "--skip-git-repo-check" not in exec_cmd
     assert "--dangerously-bypass-approvals-and-sandbox" not in exec_cmd
@@ -159,7 +160,7 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "Bayes" in inputs[-1]
     assert "do not automatically slash the score" in inputs[-1]
     assert result.model_provider == "codex_cli"
-    assert result.model_name == "codex-cli"
+    assert result.model_name == "gpt-5.5"
     assert result.prompt_version == "codex_cli_grading_v1"
     assert result.needs_review is True
     assert "teacher_review_required" in result.review_flags
@@ -195,7 +196,7 @@ def test_codex_cli_provider_can_skip_git_repo_check_for_host_dev_mode() -> None:
     calls.clear()
     provider = CodexCliProvider(
         command="codex",
-        model_name="",
+        model_name="gpt-5.5",
         timeout_seconds=300,
         sandbox="read-only",
         use_json=True,
@@ -421,8 +422,20 @@ def test_codex_cli_subprocess_non_zero_exit_fails_safely() -> None:
             prompt_version="ignored",
             messages=messages(),
         )
-    assert "exited with status 2" in str(exc_info.value)
-    assert "sk-secret-value" not in str(exc_info.value)
+    error = str(exc_info.value)
+    assert "exited with status 2" in error
+    assert "classification=process_exit" in error
+    assert "model=gpt-5.5" in error
+    assert "command=codex exec" in error
+    assert "stderr=failed with [REDACTED]" in error
+    assert "sk-secret-value" not in error
+
+
+def test_codex_cli_subprocess_failure_classifies_auth_model_usage_and_502() -> None:
+    assert CodexCliProvider._classify_failure("401 unauthorized login required") == "auth"
+    assert CodexCliProvider._classify_failure("unsupported model gpt-x") == "model"
+    assert CodexCliProvider._classify_failure("rate limit exceeded") == "usage_limit"
+    assert CodexCliProvider._classify_failure("502 bad gateway transient") == "transient_502"
 
 
 def test_codex_cli_validation_failure_is_not_silently_accepted() -> None:
@@ -454,6 +467,7 @@ def test_codex_cli_adapter_does_not_require_openai_api_key() -> None:
 
     assert isinstance(adapter.provider, CodexCliProvider)
     assert adapter.provider.provider_name == "codex_cli"
+    assert adapter.provider.model_name == "gpt-5.5"
 
 
 def test_codex_cli_raw_output_never_contains_image_base64() -> None:

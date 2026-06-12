@@ -121,10 +121,8 @@ class CodexCliProvider(BrainProvider):
                     f"Codex CLI grading timed out after {self.timeout_seconds:g}s"
                 ) from exc
             if completed.returncode != 0:
-                stderr = self._sanitize((completed.stderr or completed.stdout or "").strip())
                 raise CodexCliProviderError(
-                    f"Codex CLI exited with status {completed.returncode}: "
-                    f"{stderr[:_MAX_CAPTURE_CHARS]}"
+                    self._format_process_failure(completed, command=command)
                 )
             raw_payload = self._read_json_output(output_file)
         raw_payload["model_provider"] = self.provider_name
@@ -339,3 +337,45 @@ reason, evidence, confidence. Awarded marks must sum to score.
     def _sanitize(message: str) -> str:
         without_keys = _API_KEY_PATTERN.sub("[REDACTED]", message)
         return _DATA_URL_PATTERN.sub("[IMAGE_DATA_REDACTED]", without_keys)
+
+    def _format_process_failure(
+        self, completed: CompletedProcessLike, *, command: list[str]
+    ) -> str:
+        stdout = self._sanitize((completed.stdout or "").strip())
+        stderr = self._sanitize((completed.stderr or "").strip())
+        combined = "\n".join(part for part in [stderr, stdout] if part)
+        classification = self._classify_failure(combined)
+        command_display = self._redacted_command(command)
+        detail_parts = [
+            f"Codex CLI exited with status {completed.returncode}",
+            f"classification={classification}",
+            f"model={self.model_name}",
+            f"command={command_display}",
+        ]
+        if stderr:
+            detail_parts.append(f"stderr={stderr[:_MAX_CAPTURE_CHARS]}")
+        if stdout:
+            detail_parts.append(f"stdout={stdout[:_MAX_CAPTURE_CHARS]}")
+        if not stderr and not stdout:
+            detail_parts.append("no stdout/stderr captured")
+        return "; ".join(detail_parts)
+
+    @staticmethod
+    def _classify_failure(message: str) -> str:
+        lower = message.lower()
+        if any(
+            token in lower
+            for token in ["not logged in", "login", "auth", "unauthorized", "401"]
+        ):
+            return "auth"
+        if any(token in lower for token in ["model", "not found", "unsupported"]):
+            return "model"
+        if any(token in lower for token in ["rate limit", "quota", "usage limit", "429"]):
+            return "usage_limit"
+        if any(token in lower for token in ["502", "bad gateway", "temporar", "transient"]):
+            return "transient_502"
+        return "process_exit"
+
+    @classmethod
+    def _redacted_command(cls, command: list[str]) -> str:
+        return " ".join(cls._sanitize(part) for part in command)

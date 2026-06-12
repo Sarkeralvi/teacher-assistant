@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(default="dev-only-change-me", alias="JWT_SECRET_KEY")
     jwt_expire_minutes: int = Field(default=480, alias="JWT_EXPIRE_MINUTES")
     codex_cli_command: str = Field(default="codex", alias="CODEX_CLI_COMMAND")
-    codex_cli_model: str = Field(default="", alias="CODEX_CLI_MODEL")
+    codex_cli_model: str = Field(default="gpt-5.5", alias="CODEX_CLI_MODEL")
     codex_cli_timeout_seconds: float = Field(
         default=300.0, alias="CODEX_CLI_TIMEOUT_SECONDS"
     )
