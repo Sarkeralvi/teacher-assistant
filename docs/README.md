@@ -7,3 +7,11 @@ Project documentation and decisions.
 - [Custom Controlled V0 Runbook](CUSTOM_CONTROLLED_V0_RUNBOOK.md)
 - [Custom Controlled V0 Demo Checklist](CUSTOM_CONTROLLED_V0_DEMO_CHECKLIST.md)
 - [Custom Controlled V0 Failure Paths](CUSTOM_CONTROLLED_V0_FAILURE_PATHS.md)
+
+## External pilot readiness guardrails
+
+- [Non-Synthetic Data Policy](NON_SYNTHETIC_DATA_POLICY.md)
+- [Student Script Privacy and Retention](STUDENT_SCRIPT_PRIVACY_AND_RETENTION.md)
+- [Provider Usage Policy](PROVIDER_USAGE_POLICY.md)
+- [External Teacher Pilot Checklist](EXTERNAL_TEACHER_PILOT_CHECKLIST.md)
+- [Operational Failure Runbook](OPERATIONAL_FAILURE_RUNBOOK.md)
