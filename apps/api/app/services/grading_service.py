@@ -6,7 +6,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.models import (
     AnswerRegion,
     AnswerRegionSegment,
@@ -367,54 +367,16 @@ class GradingService:
                 detail="Evidence packet not ready for grading: missing confirmed answer segment",
             )
 
+        grading_answer_image_path, grading_context, segment_metadata = (
+            self._prepare_grading_context(region, confirmed_segments, settings)
+        )
+
         job = GradingJob(answer_region_id=region.id, status="running")
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
 
         try:
-            grading_context: dict[str, object] | None = None
-            segment_metadata = [_segment_payload(segment) for segment in confirmed_segments]
-            if len(confirmed_segments) > 1:
-                grading_answer_image_path = create_composite_grading_context_image(
-                    storage=self.storage,
-                    submission_id=region.submission_id,
-                    segments=[
-                        {
-                            "image_path": segment.image_path,
-                            "label": f"Segment {index} — page {segment.page.page_no}",
-                        }
-                        for index, segment in enumerate(confirmed_segments, start=1)
-                    ],
-                )
-                grading_context = {
-                    "type": "multi_segment_composite",
-                    "answer_image_path": grading_answer_image_path,
-                    "segment_count": len(confirmed_segments),
-                    "segments": segment_metadata,
-                }
-            else:
-                primary_segment = confirmed_segments[0]
-                grading_answer_image_path = primary_segment.image_path
-                if settings.answer_region_grading_crop_padding_ratio > 0:
-                    grading_answer_image_path = crop_grading_context_image(
-                        storage=self.storage,
-                        source_image_path=primary_segment.page.image_path,
-                        submission_id=region.submission_id,
-                        x=primary_segment.x,
-                        y=primary_segment.y,
-                        width=primary_segment.width,
-                        height=primary_segment.height,
-                        padding_ratio=settings.answer_region_grading_crop_padding_ratio,
-                    )
-                    grading_context = {
-                        "type": "single_segment_padded",
-                        "original_image_path": primary_segment.image_path,
-                        "answer_image_path": grading_answer_image_path,
-                        "padding_ratio": settings.answer_region_grading_crop_padding_ratio,
-                        "segment_count": 1,
-                        "segments": segment_metadata,
-                    }
             output = adapter.grade_answer_region(
                 question_text=region.question.question_text,
                 question_total_marks=Decimal(region.question.total_marks),
@@ -471,6 +433,87 @@ class GradingService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Brain provider failed: {sanitized_error}",
             ) from exc
+
+    def _prepare_grading_context(
+        self,
+        region: AnswerRegion,
+        confirmed_segments: list[AnswerRegionSegment],
+        settings: Settings,
+    ) -> tuple[str, dict[str, object] | None, list[dict[str, object]]]:
+        """Prepare local grading artifacts before opening a provider job."""
+        segment_metadata = [_segment_payload(segment) for segment in confirmed_segments]
+        try:
+            self._assert_grading_context_writable(region.submission_id)
+            if len(confirmed_segments) > 1:
+                grading_answer_image_path = create_composite_grading_context_image(
+                    storage=self.storage,
+                    submission_id=region.submission_id,
+                    segments=[
+                        {
+                            "image_path": segment.image_path,
+                            "label": f"Segment {index} — page {segment.page.page_no}",
+                        }
+                        for index, segment in enumerate(confirmed_segments, start=1)
+                    ],
+                )
+                return (
+                    grading_answer_image_path,
+                    {
+                        "type": "multi_segment_composite",
+                        "answer_image_path": grading_answer_image_path,
+                        "segment_count": len(confirmed_segments),
+                        "segments": segment_metadata,
+                    },
+                    segment_metadata,
+                )
+
+            primary_segment = confirmed_segments[0]
+            grading_answer_image_path = primary_segment.image_path
+            grading_context: dict[str, object] | None = None
+            if settings.answer_region_grading_crop_padding_ratio > 0:
+                grading_answer_image_path = crop_grading_context_image(
+                    storage=self.storage,
+                    source_image_path=primary_segment.page.image_path,
+                    submission_id=region.submission_id,
+                    x=primary_segment.x,
+                    y=primary_segment.y,
+                    width=primary_segment.width,
+                    height=primary_segment.height,
+                    padding_ratio=settings.answer_region_grading_crop_padding_ratio,
+                )
+                grading_context = {
+                    "type": "single_segment_padded",
+                    "original_image_path": primary_segment.image_path,
+                    "answer_image_path": grading_answer_image_path,
+                    "padding_ratio": settings.answer_region_grading_crop_padding_ratio,
+                    "segment_count": 1,
+                    "segments": segment_metadata,
+                }
+            return grading_answer_image_path, grading_context, segment_metadata
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Grading context preparation failed before provider call: "
+                    f"{sanitize_provider_error(str(exc))}"
+                ),
+            ) from exc
+
+    def _assert_grading_context_writable(self, submission_id: int) -> None:
+        grading_context_root = self.storage.artifacts_dir / "grading_context"
+        target_dir = grading_context_root / f"submission_{submission_id}"
+        for directory in (grading_context_root, target_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+            if not directory.is_dir():
+                raise RuntimeError(f"grading context path is not a directory: {directory}")
+            probe = directory / f".write_probe_{submission_id}"
+            try:
+                probe.write_text("ok", encoding="utf-8")
+            finally:
+                if probe.exists():
+                    probe.unlink()
 
     def _mark_job_failed(self, job_id: int, error: str) -> None:
         job = self.db.get(GradingJob, job_id)

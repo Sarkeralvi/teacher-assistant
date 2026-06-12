@@ -601,6 +601,45 @@ def codex_api_output() -> GradeSuggestionOutput:
     )
 
 
+def test_unwritable_grading_context_blocks_before_provider_call(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCodexCliProvider:
+        provider_name = "codex_cli"
+        model_name = "codex-cli"
+        calls = 0
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def grade(self, **kwargs: object) -> GradeSuggestionOutput:
+            FakeCodexCliProvider.calls += 1
+            return codex_api_output()
+
+    monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    get_settings.cache_clear()
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_context_root = tmp_path / "storage" / "artifacts" / "grading_context"
+    grading_context_root.mkdir(parents=True, exist_ok=True)
+    grading_context_root.chmod(0o500)
+    try:
+        response = client.post(f"/answer-regions/{region['id']}/grade")
+    finally:
+        grading_context_root.chmod(0o700)
+
+    assert response.status_code == 400
+    assert "Grading context preparation failed before provider call" in response.text
+    assert FakeCodexCliProvider.calls == 0
+    db_session.expire_all()
+    assert db_session.scalars(select(GradingJob)).all() == []
+    assert db_session.scalars(select(GradeSuggestion)).all() == []
+    assert db_session.scalars(select(FinalGrade)).all() == []
+
+
 def test_grade_answer_region_with_codex_cli_mocked_subprocess_creates_suggestion(
     client: TestClient,
     tmp_path: Path,
