@@ -99,12 +99,13 @@ def strict_rubric() -> dict[str, object]:
 
 def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str, object]:
     email = f"review-{len(list(tmp_path.glob('*.png')))}@example.com"
-    user_response = client.post("/users", json={"name": "Teacher", "email": email})
-    assert user_response.status_code == 201
-    teacher = user_response.json()
+    auth = register_auth_teacher(client, email)
+    headers = auth_header(str(auth["access_token"]))
+    teacher = auth["user"]
     course_response = client.post(
         "/courses",
-        json={"teacher_id": teacher["id"], "code": "REV101", "title": "Review"},
+        headers=headers,
+        json={"code": "REV101", "title": "Review"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
@@ -157,6 +158,8 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
         "submission": submission,
         "region": region,
         "suggestion": suggestion,
+        "auth": auth,
+        "headers": headers,
     }
 
 
@@ -191,11 +194,147 @@ def register_auth_teacher(
     return response.json()
 
 
+def create_owned_region_and_suggestion(
+    client: TestClient, tmp_path: Path, email: str
+) -> dict[str, object]:
+    auth = register_auth_teacher(client, email)
+    headers = auth_header(str(auth["access_token"]))
+    course_response = client.post(
+        "/courses",
+        headers=headers,
+        json={"code": "OWN101", "title": "Owned Review"},
+    )
+    assert course_response.status_code == 201
+    assessment_response = client.post(
+        f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
+        json={"title": "Owned Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
+    )
+    assert assessment_response.status_code == 201
+    assessment = assessment_response.json()
+    question_response = client.post(
+        f"/assessments/{assessment['id']}/questions",
+        json={
+            "question_no": "1(a)(i)",
+            "question_text": "Explain.",
+            "model_answer": "A complete explanation earns full marks.",
+            "total_marks": "5.00",
+        },
+    )
+    assert question_response.status_code == 201
+    question = question_response.json()
+    rubric_response = client.post(
+        f"/questions/{question['id']}/rubrics",
+        json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
+    )
+    assert rubric_response.status_code == 201
+    image_path = tmp_path / f"owned-{email}.png"
+    make_png(image_path)
+    with image_path.open("rb") as file_obj:
+        submission_response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload",
+            data={"student_identifier": "S-OWN", "student_name": "Owned Student"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        )
+    assert submission_response.status_code == 201
+    submission = submission_response.json()
+    page = submission["pages"][0]
+    region_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
+    )
+    assert region_response.status_code == 201
+    grade_response = client.post(f"/answer-regions/{region_response.json()['id']}/grade")
+    assert grade_response.status_code == 201
+    return {
+        "auth": auth,
+        "headers": headers,
+        "assessment": assessment,
+        "submission": submission,
+        "question": question,
+        "region": region_response.json(),
+        "suggestion": grade_response.json()["suggestion"],
+    }
+
+
+def test_owner_required_for_review_queue_summary_export_and_final_grade_actions(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    owner = create_owned_region_and_suggestion(client, tmp_path, "owner-review@example.com")
+    intruder = register_auth_teacher(client, "intruder-review@example.com")
+    intruder_headers = auth_header(str(intruder["access_token"]))
+
+    assert client.get(f"/assessments/{owner['assessment']['id']}/review-queue").status_code == 401
+    assert client.get(
+        f"/assessments/{owner['assessment']['id']}/review-queue", headers=intruder_headers
+    ).status_code == 404
+    assert client.get(
+        f"/assessments/{owner['assessment']['id']}/summary", headers=intruder_headers
+    ).status_code == 404
+    assert client.get(
+        f"/assessments/{owner['assessment']['id']}/export/final-grades.xlsx",
+        headers=intruder_headers,
+    ).status_code == 404
+    assert client.post(
+        f"/grade-suggestions/{owner['suggestion']['id']}/approve",
+        headers=intruder_headers,
+        json={"teacher_comment": "intruder"},
+    ).status_code == 404
+
+    owner_approve = client.post(
+        f"/grade-suggestions/{owner['suggestion']['id']}/approve",
+        headers=owner["headers"],
+        json={"teacher_id": intruder["user"]["id"], "teacher_comment": "owner approval"},
+    )
+    assert owner_approve.status_code == 201
+    assert owner_approve.json()["teacher_id"] == owner["auth"]["user"]["id"]
+    logs = db_session.query(AuditLog).filter(AuditLog.event_type == "final_grade.approved").all()
+    assert {log.actor_id for log in logs} == {owner["auth"]["user"]["id"]}
+
+
+def test_owner_export_includes_only_approved_final_grades(
+    client: TestClient, tmp_path: Path
+) -> None:
+    owner = create_owned_region_and_suggestion(client, tmp_path, "owner-export@example.com")
+    second = create_extra_region_and_suggestion(client, owner, x=30)
+
+    pending_export = client.get(
+        f"/assessments/{owner['assessment']['id']}/export/final-grades.xlsx",
+        headers=owner["headers"],
+    )
+    assert pending_export.status_code == 200
+    pending_rows = list(
+        load_workbook(BytesIO(pending_export.content)).active.iter_rows(values_only=True)
+    )
+    assert len(pending_rows) == 1
+
+    approve = client.post(
+        f"/grade-suggestions/{owner['suggestion']['id']}/approve",
+        headers=owner["headers"],
+        json={"teacher_comment": "approved"},
+    )
+    assert approve.status_code == 201
+
+    response = client.get(
+        f"/assessments/{owner['assessment']['id']}/export/final-grades.xlsx",
+        headers=owner["headers"],
+    )
+    assert response.status_code == 200
+    rows = list(load_workbook(BytesIO(response.content)).active.iter_rows(values_only=True))
+    assert len(rows) == 2
+    headers = list(rows[0])
+    row = dict(zip(headers, rows[1], strict=True))
+    assert row["grade_suggestion_id"] == owner["suggestion"]["id"]
+    assert row["answer_region_id"] == owner["region"]["id"]
+    assert second["suggestion"]["id"] not in [cell for row in rows for cell in row]
+
+
 def test_approve_grade_suggestion_creates_final_grade(client: TestClient, tmp_path: Path) -> None:
     data = create_region_and_suggestion(client, tmp_path)
 
     response = client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        headers=data["headers"],
         json={
             "teacher_id": data["teacher"]["id"],
             "teacher_comment": "Approved after review.",
@@ -217,7 +356,6 @@ def test_auth_aware_review_actions_use_current_teacher_and_require_valid_token(
     client: TestClient, tmp_path: Path
 ) -> None:
     data = create_region_and_suggestion(client, tmp_path)
-    auth = register_auth_teacher(client)
     suggestion_id = data["suggestion"]["id"]
 
     missing = client.post(
@@ -231,14 +369,14 @@ def test_auth_aware_review_actions_use_current_teacher_and_require_valid_token(
     )
     approved = client.post(
         f"/grade-suggestions/{suggestion_id}/approve",
-        headers=auth_header(str(auth["access_token"])),
+        headers=data["headers"],
         json={"teacher_comment": "Reviewed as logged-in teacher."},
     )
 
     assert missing.status_code == 401
     assert invalid.status_code == 401
     assert approved.status_code == 201
-    assert approved.json()["teacher_id"] == auth["user"]["id"]
+    assert approved.json()["teacher_id"] == data["teacher"]["id"]
     assert approved.json()["teacher_comment"] == "Reviewed as logged-in teacher."
 
 
@@ -249,6 +387,7 @@ def test_edit_grade_suggestion_creates_final_grade_with_teacher_score(
 
     response = client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/edit",
+        headers=data["headers"],
         json={
             "teacher_id": data["teacher"]["id"],
             "final_score": "4.00",
@@ -270,6 +409,7 @@ def test_reject_grade_suggestion_creates_rejected_final_grade(
 
     response = client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/reject",
+        headers=data["headers"],
         json={
             "teacher_id": data["teacher"]["id"],
             "teacher_comment": "Suggestion is not usable.",
@@ -289,6 +429,7 @@ def test_finalize_validation_failures(client: TestClient, tmp_path: Path) -> Non
 
     too_high = client.post(
         f"/grade-suggestions/{suggestion_id}/edit",
+        headers=data["headers"],
         json={
             "teacher_id": data["teacher"]["id"],
             "final_score": "6.00",
@@ -297,14 +438,17 @@ def test_finalize_validation_failures(client: TestClient, tmp_path: Path) -> Non
     assert too_high.status_code == 422
     assert "max_score" in too_high.text
 
-    missing_teacher = client.post(
+    spoofed_teacher = client.post(
         f"/grade-suggestions/{suggestion_id}/approve",
+        headers=data["headers"],
         json={"teacher_id": 999999},
     )
-    assert missing_teacher.status_code == 404
+    assert spoofed_teacher.status_code == 201
+    assert spoofed_teacher.json()["teacher_id"] == data["teacher"]["id"]
 
     missing_suggestion = client.post(
         "/grade-suggestions/999999/approve",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"]},
     )
     assert missing_suggestion.status_code == 404
@@ -315,7 +459,7 @@ def test_get_final_grade_and_review_queue_states(client: TestClient, tmp_path: P
     assessment_id = data["assessment"]["id"]
     region_id = data["region"]["id"]
 
-    before_final = client.get(f"/assessments/{assessment_id}/review-queue")
+    before_final = client.get(f"/assessments/{assessment_id}/review-queue", headers=data["headers"])
     assert before_final.status_code == 200
     queue = before_final.json()
     assert len(queue) == 1
@@ -324,20 +468,21 @@ def test_get_final_grade_and_review_queue_states(client: TestClient, tmp_path: P
     assert queue[0]["final_grade"] is None
     assert queue[0]["submission"]["student_identifier"] == "S-001"
 
-    not_found = client.get(f"/answer-regions/{region_id}/final-grade")
+    not_found = client.get(f"/answer-regions/{region_id}/final-grade", headers=data["headers"])
     assert not_found.status_code == 404
 
     finalize = client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"]},
     )
     assert finalize.status_code == 201
 
-    final_grade = client.get(f"/answer-regions/{region_id}/final-grade")
+    final_grade = client.get(f"/answer-regions/{region_id}/final-grade", headers=data["headers"])
     assert final_grade.status_code == 200
     assert final_grade.json()["id"] == finalize.json()["id"]
 
-    after_final = client.get(f"/assessments/{assessment_id}/review-queue")
+    after_final = client.get(f"/assessments/{assessment_id}/review-queue", headers=data["headers"])
     assert after_final.status_code == 200
     assert after_final.json()[0]["review_status"] == "finalized"
 
@@ -353,7 +498,7 @@ def test_review_queue_includes_ungraded_regions(client: TestClient, tmp_path: Pa
     )
     assert second_region.status_code == 201
 
-    queue = client.get(f"/assessments/{assessment_id}/review-queue")
+    queue = client.get(f"/assessments/{assessment_id}/review-queue", headers=data["headers"])
 
     assert queue.status_code == 200
     by_region = {item["answer_region"]["id"]: item for item in queue.json()}
@@ -368,12 +513,14 @@ def test_teacher_actions_replace_existing_current_final_grade(
     suggestion_id = data["suggestion"]["id"]
     first = client.post(
         f"/grade-suggestions/{suggestion_id}/approve",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"]},
     )
     assert first.status_code == 201
 
     second = client.post(
         f"/grade-suggestions/{suggestion_id}/edit",
+        headers=data["headers"],
         json={
             "teacher_id": data["teacher"]["id"],
             "final_score": "3.00",
@@ -392,6 +539,7 @@ def test_teacher_review_action_writes_audit_log(
 
     response = client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"]},
     )
 
@@ -414,18 +562,23 @@ def test_assessment_summary_returns_review_counts(client: TestClient, tmp_path: 
     assert pending_region.status_code == 201
     assert client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"]},
     ).status_code == 201
     assert client.post(
         f"/grade-suggestions/{second['suggestion']['id']}/edit",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"], "final_score": "3.00"},
     ).status_code == 201
     assert client.post(
         f"/grade-suggestions/{third['suggestion']['id']}/reject",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"], "teacher_comment": "Reject"},
     ).status_code == 201
 
-    response = client.get(f"/assessments/{data['assessment']['id']}/summary")
+    response = client.get(
+        f"/assessments/{data['assessment']['id']}/summary", headers=data["headers"]
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -452,18 +605,24 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
     third = create_extra_region_and_suggestion(client, data, x=60)
     assert client.post(
         f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"], "teacher_comment": "Approved"},
     ).status_code == 201
     assert client.post(
         f"/grade-suggestions/{second['suggestion']['id']}/edit",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"], "final_score": "3.00"},
     ).status_code == 201
     assert client.post(
         f"/grade-suggestions/{third['suggestion']['id']}/reject",
+        headers=data["headers"],
         json={"teacher_id": data["teacher"]["id"], "teacher_comment": "Rejected"},
     ).status_code == 201
 
-    response = client.get(f"/assessments/{data['assessment']['id']}/export/final-grades.xlsx")
+    response = client.get(
+        f"/assessments/{data['assessment']['id']}/export/final-grades.xlsx",
+        headers=data["headers"],
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"] == (
@@ -514,7 +673,10 @@ def test_export_xlsx_excludes_pending_region_without_final_grade(
 ) -> None:
     data = create_region_and_suggestion(client, tmp_path)
 
-    response = client.get(f"/assessments/{data['assessment']['id']}/export/final-grades.xlsx")
+    response = client.get(
+        f"/assessments/{data['assessment']['id']}/export/final-grades.xlsx",
+        headers=data["headers"],
+    )
 
     assert response.status_code == 200
     rows = list(load_workbook(BytesIO(response.content)).active.iter_rows(values_only=True))
@@ -526,11 +688,9 @@ def test_batch_approve_selected_suggestions_uses_auth_teacher_and_writes_summary
 ) -> None:
     data = create_region_and_suggestion(client, tmp_path)
     second = create_extra_region_and_suggestion(client, data, x=30)
-    auth = register_auth_teacher(client)
-
     response = client.post(
         f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
-        headers=auth_header(str(auth["access_token"])),
+        headers=data["headers"],
         json={
             "grade_suggestion_ids": [
                 data["suggestion"]["id"],
@@ -549,7 +709,7 @@ def test_batch_approve_selected_suggestions_uses_auth_teacher_and_writes_summary
     assert payload["errors"] == []
     final_grades = db_session.query(FinalGrade).order_by(FinalGrade.id).all()
     assert len(final_grades) == 2
-    assert {grade.teacher_id for grade in final_grades} == {auth["user"]["id"]}
+    assert {grade.teacher_id for grade in final_grades} == {data["teacher"]["id"]}
     assert {grade.approval_status for grade in final_grades} == {"approved"}
     audit_count = db_session.query(AuditLog).filter(
         AuditLog.event_type == "final_grade.approved"
@@ -564,11 +724,9 @@ def test_batch_approve_selected_skips_missing_and_outside_assessment_suggestions
 ) -> None:
     data = create_region_and_suggestion(client, tmp_path)
     outside = create_region_and_suggestion(client, tmp_path)
-    auth = register_auth_teacher(client)
-
     response = client.post(
         f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
-        headers=auth_header(str(auth["access_token"])),
+        headers=data["headers"],
         json={
             "grade_suggestion_ids": [
                 data["suggestion"]["id"],
@@ -594,8 +752,6 @@ def test_batch_approve_selected_requires_auth_and_does_not_duplicate_final_grade
 ) -> None:
     data = create_region_and_suggestion(client, tmp_path)
     suggestion_id = data["suggestion"]["id"]
-    auth = register_auth_teacher(client)
-
     missing_auth = client.post(
         f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
         json={"grade_suggestion_ids": [suggestion_id]},
@@ -604,12 +760,12 @@ def test_batch_approve_selected_requires_auth_and_does_not_duplicate_final_grade
 
     first = client.post(
         f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
-        headers=auth_header(str(auth["access_token"])),
+        headers=data["headers"],
         json={"grade_suggestion_ids": [suggestion_id]},
     )
     second = client.post(
         f"/assessments/{data['assessment']['id']}/final-grades/approve-selected",
-        headers=auth_header(str(auth["access_token"])),
+        headers=data["headers"],
         json={"grade_suggestion_ids": [suggestion_id]},
     )
 
@@ -623,5 +779,10 @@ def test_batch_approve_selected_requires_auth_and_does_not_duplicate_final_grade
 
 
 def test_summary_and_export_missing_assessment_returns_404(client: TestClient) -> None:
-    assert client.get("/assessments/999999/summary").status_code == 404
-    assert client.get("/assessments/999999/export/final-grades.xlsx").status_code == 404
+    auth = register_auth_teacher(client, "missing-summary@example.com")
+    headers = auth_header(str(auth["access_token"]))
+    assert client.get("/assessments/999999/summary", headers=headers).status_code == 404
+    missing_export = client.get(
+        "/assessments/999999/export/final-grades.xlsx", headers=headers
+    )
+    assert missing_export.status_code == 404

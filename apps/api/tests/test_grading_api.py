@@ -76,6 +76,19 @@ def make_png(path: Path, size: tuple[int, int] = (100, 80)) -> None:
     Image.new("RGB", size, color="white").save(path, format="PNG")
 
 
+def auth_header(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def register_auth_teacher(client: TestClient, email: str) -> dict[str, object]:
+    response = client.post(
+        "/auth/register",
+        json={"name": "Grading Auth Teacher", "email": email, "password": "grading-password"},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def strict_rubric() -> dict[str, object]:
     return {
         "total_marks": "5.00",
@@ -151,6 +164,62 @@ def create_answer_region_with_optional_rubric(
     )
     assert region_response.status_code == 201
     return region_response.json()
+
+
+def create_owned_answer_region(
+    client: TestClient, tmp_path: Path, email: str
+) -> dict[str, object]:
+    auth = register_auth_teacher(client, email)
+    headers = auth_header(str(auth["access_token"]))
+    course_response = client.post(
+        "/courses",
+        headers=headers,
+        json={"code": "OWN-GRD", "title": "Owned Grading"},
+    )
+    assert course_response.status_code == 201
+    assessment_response = client.post(
+        f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
+        json={"title": "Owned Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
+    )
+    assert assessment_response.status_code == 201
+    question_response = client.post(
+        f"/assessments/{assessment_response.json()['id']}/questions",
+        json={
+            "question_no": "1",
+            "question_text": "Explain.",
+            "model_answer": "A complete answer explains the concept.",
+            "total_marks": "5.00",
+        },
+    )
+    assert question_response.status_code == 201
+    rubric_response = client.post(
+        f"/questions/{question_response.json()['id']}/rubrics",
+        json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
+    )
+    assert rubric_response.status_code == 201
+    image_path = tmp_path / f"owned-grading-{email}.png"
+    make_png(image_path)
+    with image_path.open("rb") as file_obj:
+        submission_response = client.post(
+            f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            data={"student_identifier": "S-OWN"},
+            files={"file": ("answer.png", file_obj, "image/png")},
+        )
+    assert submission_response.status_code == 201
+    page = submission_response.json()["pages"][0]
+    region_response = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        json={
+            "question_id": question_response.json()["id"],
+            "x": 1,
+            "y": 2,
+            "width": 20,
+            "height": 25,
+        },
+    )
+    assert region_response.status_code == 201
+    return {"auth": auth, "headers": headers, "region": region_response.json()}
 
 
 def create_assessment_with_answer_regions(
@@ -599,6 +668,28 @@ def codex_api_output() -> GradeSuggestionOutput:
         prompt_version="codex_cli_grading_v1",
         cost_estimate=Decimal("0"),
     )
+
+
+def test_codex_dev_route_requires_authenticated_owner(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = create_owned_answer_region(client, tmp_path, "codex-owner@example.com")
+    intruder = register_auth_teacher(client, "codex-intruder@example.com")
+    monkeypatch.setenv("CODEX_BROWSER_GRADING_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        unauthenticated = client.post(
+            f"/answer-regions/{owner['region']['id']}/grade-codex-dev"
+        )
+        non_owner = client.post(
+            f"/answer-regions/{owner['region']['id']}/grade-codex-dev",
+            headers=auth_header(str(intruder["access_token"])),
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert unauthenticated.status_code == 401
+    assert non_owner.status_code == 404
 
 
 def test_unwritable_grading_context_blocks_before_provider_call(
