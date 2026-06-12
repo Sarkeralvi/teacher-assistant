@@ -8,6 +8,10 @@ Project documentation and decisions.
 - [Custom Controlled V0 Demo Checklist](CUSTOM_CONTROLLED_V0_DEMO_CHECKLIST.md)
 - [Custom Controlled V0 Failure Paths](CUSTOM_CONTROLLED_V0_FAILURE_PATHS.md)
 
+## Founder pilot rehearsal
+
+- [Founder Pilot Rehearsal Checklist and Demo Reset Plan](FOUNDER_PILOT_REHEARSAL.md)
+
 ## External pilot readiness guardrails
 
 - [Non-Synthetic Data Policy](NON_SYNTHETIC_DATA_POLICY.md)

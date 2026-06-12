@@ -1,3 +1,34 @@
+# TA-PILOT-003 — Submission privacy/deletion and teacher ownership hardening
+
+- Recorded at: 2026-06-12
+- Baseline commit: `258767f0cd20427da436517110c6db269d228daa`
+- Completion commit: `bd7a2702a247dd64fac66b3f9ed7a76b13186b5b`
+- Workflow type: manual controlled external-pilot hardening task
+- Scope: teacher-owned submission/page access, upload auth propagation, submission deletion artifact cleanup, and audit logging.
+- Files affected: `apps/api/app/api/routes/submissions.py`, `apps/api/app/services/storage.py`, `apps/api/tests/test_privacy_deletion_api.py`, `apps/api/tests/test_submission_upload_api.py`
+- Acceptance criteria: non-owner submission/page access and deletion return 404; owner deletion removes page, answer-region, and grading-context artifacts where safe; deletion writes audit log; upload paths require authenticated teacher ownership.
+- Safety: no Codex/provider/model call, no grading, no mock grading, no batch grading, no private files, no `GradeSuggestion`, no `FinalGrade`, and no `GradingJob` creation.
+- Status: Done
+
+# TA-PILOT-004 — Founder-safe pilot rehearsal checklist and demo reset plan
+
+- Recorded at: 2026-06-12
+- Baseline commit: `bd7a2702a247dd64fac66b3f9ed7a76b13186b5b`
+- Workflow type: docs-only founder rehearsal safety task
+- Scope: founder pilot rehearsal checklist, safety gates, known safe vertical slice, and manual demo reset guidance.
+- Files affected: `docs/FOUNDER_PILOT_REHEARSAL.md`, `docs/README.md`, `BACKLOG.md`
+- Acceptance criteria: checklist covers preflight, clean demo data, Custom Controlled V0 flow, evidence readiness, one-real-grade safety, teacher approval, export, stop conditions, automatic-action prohibitions, mock-vs-real confirmation, FinalGrade approval gate, final report capture, known safe vertical slice, and reset guidance.
+- Safety: no production grading logic changes, no provider/model call, no grading, no mock grading, no batch grading, no private files, no `GradeSuggestion`, no `FinalGrade`, and no `GradingJob` creation.
+- Status: Done
+
+# TA-PILOT-005 — Small supervised two-packet rehearsal
+
+- Planned after: TA-PILOT-004
+- Workflow type: founder-supervised rehearsal task
+- Scope: two synthetic ready packets, explicit founder approval before any real provider call, teacher review for each draft, and approved-only export inspection.
+- Safety: no batch grading or provider retry unless explicitly approved in the task prompt; same evidence, teacher-approval, and export safety gates as `docs/FOUNDER_PILOT_REHEARSAL.md`.
+- Status: Planned
+
 # TA-UX-001 — Founder Evidence Workflow V0
 
 - Recorded at: 2026-06-05
