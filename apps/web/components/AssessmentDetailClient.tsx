@@ -642,52 +642,52 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p className="mt-2 text-slate-400">{assessment.assessment_type} · {assessment.total_marks} marks · {assessment.status}</p>
           <div className="mt-4 flex flex-wrap gap-3">
             <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
-              Legacy/internal material-upload workflow — current test uses the Evidence Workflow below
+              Reference-material upload helper — use only for Step 1 materials
             </Link>
             <span
               className={`${buttonClass} cursor-not-allowed opacity-60`}
               aria-disabled="true"
               data-testid="semi-automated-mode-not-ready"
             >
-              FUTURE / not part of current founder test: Semi-Automated mode
+              FUTURE / not part of Custom Controlled V0: Semi-Automated mode
             </span>
             <Link className={`${buttonClass} opacity-70`} href={`/assessments/${assessmentId}/review`}>
-              FUTURE / not part of current founder test: review/export final grades
+              FUTURE / not part of Custom Controlled V0: review/export final grades
             </Link>
             <a className={`${buttonClass} opacity-70`} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
-              FUTURE / not part of current founder test: download final grades (.xlsx)
+              FUTURE / not part of Custom Controlled V0: download final grades (.xlsx)
             </a>
           </div>
           {reviewQueue.every((item) => !item.final_grade) ? (
             <p className="mt-3 text-sm text-slate-400">Approve or edit at least one grade before export is useful.</p>
           ) : null}
-          <p className="mt-3 text-sm text-amber-200">Grading run modes require teacher confirmation before export.</p>
+          <p className="mt-3 text-sm text-amber-200">FinalGrade/export is allowed only after explicit teacher approval.</p>
         </section>
       ) : null}
 
       <section className="rounded border border-emerald-700 bg-emerald-950/30 p-5">
-        <p className="text-sm font-semibold uppercase tracking-wide text-emerald-200">Founder Evidence Workflow</p>
-        <h2 className="mt-1 text-2xl font-semibold">This workflow prepares evidence only. It does not grade.</h2>
-        <p className="mt-2 text-emerald-100">Goal: confirm evidence packets → build queue scaffold → stop.</p>
-        <p className="mt-1 text-amber-100">Provider execution is disabled. Queue records are not grades.</p>
-        <p className="mt-1 text-amber-100">Current policy: solution/model answer evidence is required before a packet can be ready or queued.</p>
+        <p className="text-sm font-semibold uppercase tracking-wide text-emerald-200">Custom Controlled V0 — Manual Evidence Grading</p>
+        <h2 className="mt-1 text-2xl font-semibold">Founder/teacher pilot flow for ready evidence → single-packet draft grading → teacher approval.</h2>
+        <p className="mt-2 text-emerald-100">Teacher supplies question, model answer, active rubric, and student answer evidence before grading.</p>
+        <p className="mt-1 text-amber-100">Manual answer text is required for V0 reliable grading.</p>
+        <p className="mt-1 text-amber-100">Real grading is single-packet only and creates a draft GradeSuggestion only.</p>
+        <p className="mt-1 text-amber-100">Teacher review is required. No batch, autonomous mode, FinalGrade, or export without teacher approval.</p>
       </section>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Evidence Preparation Workflow below</h2>
-        <p className="mt-2 text-sm text-slate-300">Use the Evidence Preparation Workflow below for the current founder test.</p>
-        <p className="text-sm text-slate-400">Custom Controlled Grading Run is legacy/internal navigation and should not be treated as a separate second workflow.</p>
+        <h2 className="text-xl font-semibold">Custom Controlled V0 step map</h2>
+        <p className="mt-2 text-sm text-slate-300">Use this Manual Evidence Grading flow for the founder/teacher pilot.</p>
+        <p className="text-sm text-slate-400">Reference-material upload helper is support for Step 1 only; it is not a separate workflow.</p>
         <ol className="mt-4 grid gap-2 text-sm md:grid-cols-2">
           {[
-            "Step 0: Teacher / assessment setup",
             "Step 1: Reference materials",
-            "Step 2: Canonical grading units & rubrics",
-            "Step 3: Student scripts / submissions",
-            "Step 4: Answer evidence mapping",
+            "Step 2: Question, model answer, and rubric",
+            "Step 3: Student script/upload",
+            "Step 4: Answer evidence and manual answer text",
             "Step 5: Evidence readiness",
-            "Step 6: Evidence preparation summary",
-            "Step 7: Grading queue scaffold",
-            "STOP: No grading/provider execution",
+            "Step 6: Queue scaffold",
+            "Step 7: Real draft grade, teacher review, approval/export",
+            "STOP: Do not run real grading unless evidence packet is ready",
           ].map((step) => (
             <li key={step} className="rounded border border-slate-800 bg-slate-950/40 p-3">{step}</li>
           ))}
@@ -696,7 +696,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 0: Current teacher / assessment context</h2>
+          <h2 className="text-xl font-semibold">Pilot context: Current teacher / assessment</h2>
           <p className="text-sm text-slate-400">Select/login teacher and confirm this is the intended synthetic/demo assessment before preparing evidence.</p>
         </div>
         <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
@@ -704,19 +704,19 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 1: Reference materials — question paper / solution / rubric</h2>
+          <h2 className="text-xl font-semibold">Step 1: Reference materials</h2>
           <p className="text-sm text-slate-300">Upload reference materials in the Custom Controlled material step, then return here.</p>
           <p className="text-sm text-slate-400">Reference materials mean the question paper, solution/model answer, and rubric PDFs. They must be uploaded and confirmed before questions/rubrics can be confirmed.</p>
         </div>
         <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
-          Open legacy/internal material-upload workflow for Step 1 only
+          Open Reference-material upload helper for Step 1 only
         </Link>
       </section>
 
       <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 2: Canonical grading units & rubrics</h2>
-          <p className="text-sm text-slate-300">Create or import canonical grading units, then open each grading unit to add one active rubric.</p>
+          <h2 className="text-xl font-semibold">Step 2: Question, model answer, and rubric</h2>
+          <p className="text-sm text-slate-300">Create or import the question, add the model answer, then open each grading unit to add one active rubric.</p>
           <p className="text-sm text-amber-200">Confirm questions/rubrics is blocked until: grading/evidence run exists, question paper uploaded, solution/model answer uploaded, rubric uploaded, materials confirmed, at least one canonical question exists, and every canonical question has an active rubric.</p>
           <p className="text-sm text-cyan-200">When blocked, use Step 1 for materials or this Step 2 area for questions/rubrics before trying confirmation again.</p>
         </div>
@@ -724,7 +724,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 1 support: Import questions from paper</h2>
+          <h2 className="text-xl font-semibold">Step 2 helper: Import questions from reference paper</h2>
           <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
           <p className="text-sm text-slate-400">Default extraction is mock/simple.</p>
           <p className="text-sm text-slate-400">Real Codex extraction must be explicitly enabled.</p>
@@ -792,11 +792,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </section>
 
       <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Step 2: Canonical grading units & rubrics — manual creation</h2>
-        <p className="text-sm text-slate-400">Manual question creation remains available.</p>
+        <h2 className="text-xl font-semibold">Step 2: Question, model answer, and rubric — manual creation</h2>
+        <p className="text-sm text-slate-400">Manual question creation remains available. Model answer is required for Custom Controlled V0 readiness.</p>
         <input className={inputClass} placeholder="Question number" value={questionNo} onChange={(event) => setQuestionNo(event.target.value)} required />
         <textarea className={inputClass} placeholder="Question text" value={questionText} onChange={(event) => setQuestionText(event.target.value)} required />
-        <textarea className={inputClass} placeholder="Model answer (optional)" value={modelAnswer} onChange={(event) => setModelAnswer(event.target.value)} />
+        <textarea className={inputClass} placeholder="Model answer required for V0 readiness" value={modelAnswer} onChange={(event) => setModelAnswer(event.target.value)} />
         <input className={inputClass} placeholder="Total marks" value={totalMarks} onChange={(event) => setTotalMarks(event.target.value)} required />
         <button className={buttonClass} disabled={submitting} type="submit">
           {submitting ? "Creating..." : "Create question"}
@@ -816,7 +816,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <form ref={uploadFormRef} onSubmit={handleUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 3: Student scripts / submissions — upload one script</h2>
+          <h2 className="text-xl font-semibold">Step 3: Student script/upload — upload one script</h2>
           <p className="text-sm text-slate-400">Use synthetic/demo scripts only. Accepts PDF, PNG, JPG, or JPEG. This uploads pages only. It does not grade or OCR.</p>
         </div>
         <input className={inputClass} name="student_identifier" placeholder="student_identifier" value={studentIdentifier} onChange={(event) => setStudentIdentifier(event.target.value)} required />
@@ -840,7 +840,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <form onSubmit={handleZipUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 3: Student scripts / submissions — upload script ZIP</h2>
+          <h2 className="text-xl font-semibold">Step 3: Student script/upload — upload script ZIP</h2>
           <p className="text-sm text-slate-400">Use synthetic/demo scripts only. PDF, PNG, JPG, JPEG only. Unsupported files are reported and skipped; this uploads pages only. It does not grade or OCR, and no answer-region detection is run.</p>
         </div>
         <label className="grid gap-2 text-sm">
@@ -871,7 +871,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </form>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-xl font-semibold">Step 3: Student scripts / submissions — uploaded pages</h2>
+        <h2 className="text-xl font-semibold">Step 3: Student script/upload — uploaded pages</h2>
         <p className="mt-1 text-sm text-slate-400">
           Total submissions: {submissions.length} · total pages: {pages.length} · mapped pages: {mappedPageCount} · unmapped pages: {unmappedPageCount}
         </p>
@@ -912,8 +912,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 4: Answer evidence mapping</h2>
+          <h2 className="text-xl font-semibold">Step 4: Answer evidence and manual answer text</h2>
           <p className="text-sm text-slate-400">Create or correct the answer evidence for each student × grading unit. Multi-page answers must be represented with ordered segments and confirmed before evidence can be ready.</p>
+          <p className="text-sm text-red-200">Manual answer text is required before V0 real draft grading.</p>
           <p className="mt-1 text-sm text-slate-400">
             Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
           </p>
@@ -1098,6 +1099,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               linkedQuestion?.model_answer ??
               "Not available yet";
             const modelAnswerMissing = modelAnswer === "Not available yet";
+            const manualAnswerText = packetAnswer?.manual_answer_text?.trim() ?? region.manual_answer_text?.trim() ?? "";
+            const manualAnswerMissing = manualAnswerText.length === 0;
+            const readyForRealDraftGrading = Boolean(readiness?.ready_for_grading) && !manualAnswerMissing;
             return (
               <article id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" className="grid gap-3 rounded border border-slate-700 p-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
@@ -1129,18 +1133,35 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <p>packet pages covered: {packetAnswer?.pages_covered.join(", ") || (linkedPage?.page_no ? String(linkedPage.page_no) : "Not available yet")}</p>
                     <p>segment order: {segmentOrder || "Not available yet"}</p>
                     <p>answer crop/context image: {packetAnswer?.crop_path ? packetAnswer.crop_path : "Not available yet"}</p>
-                    <p>manual answer text: {packetAnswer?.manual_answer_text_present ? packetAnswer.manual_answer_text : "Missing — required for real grading"}</p>
+                    <p>Manual answer text required for V0: {manualAnswerMissing ? "missing" : "present"}</p>
                     <p>evidence_status: {packetAnswer?.packet_status ?? "Not available yet"}</p>
                     <p>continuation_check_status: {packetAnswer?.continuation_check_status ?? "Not available yet"}</p>
                     <p>ready_for_grading: {readiness ? String(readiness.ready_for_grading) : "Not available yet"}</p>
                     <p>blockers: {readiness?.blockers.length ? readiness.blockers.join("; ") : "Not available yet"}</p>
                     <p>warnings: {readiness?.warnings.length ? readiness.warnings.join("; ") : "Not available yet"}</p>
                   </div>
+                  <div className={`rounded border p-3 text-sm ${manualAnswerMissing ? "border-red-700 bg-red-950/40 text-red-100" : "border-emerald-800 bg-emerald-950/30 text-emerald-100"}`}>
+                    <p className="font-semibold">Manual answer text</p>
+                    {manualAnswerMissing ? (
+                      <p>BLOCKER: manual answer text is missing. Teacher-confirmed manual answer text is required for Custom Controlled V0 real draft grading.</p>
+                    ) : (
+                      <p className="whitespace-pre-wrap">{manualAnswerText}</p>
+                    )}
+                  </div>
                   {modelAnswerMissing ? (
                     <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-100">
                       Blocker: solution/model answer is missing. Add a model answer in Step 2 manual question creation or import/accept reference material question data before expecting a ready packet.
                     </p>
                   ) : null}
+                  {readyForRealDraftGrading ? (
+                    <p className="rounded border border-emerald-800 bg-emerald-950/30 p-2 text-xs font-semibold text-emerald-100">
+                      Ready for real draft grading: evidence packet prerequisites pass. Run only one explicitly approved single-packet real grading call.
+                    </p>
+                  ) : (
+                    <p className="rounded border border-red-800 bg-red-950/30 p-2 text-xs font-semibold text-red-100">
+                      Not ready for real draft grading. Do not run real grading unless evidence packet is ready and manual answer text is present.
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm full answer</button>
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
@@ -1157,7 +1178,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold">Step 5/6: Evidence readiness and preparation</h2>
+            <h2 className="text-xl font-semibold">Step 5: Evidence readiness</h2>
             <p className="text-sm text-amber-200">This prepares evidence only. It does not grade.</p>
             <p className="text-sm text-slate-400">Expected packets = submissions × grading units.</p>
             <p className="text-sm text-slate-400">Missing packets are blocked, not skipped.</p>
@@ -1212,7 +1233,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold">Step 7: Grading queue scaffold</h2>
+            <h2 className="text-xl font-semibold">Step 6: Queue scaffold</h2>
             <p className="text-sm text-amber-200">This only prepares a queue from confirmed evidence. It does not grade.</p>
             <p className="text-sm text-slate-400">Only confirmed complete evidence packets can enter the queue.</p>
             <p className="text-sm text-slate-400">Queue records are not grades. Provider execution is disabled. No batch grade button is available.</p>
@@ -1279,17 +1300,25 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <p className="mt-3 text-xs text-slate-500">No provider run button, no batch grade button, and no FinalGrade action are available in this scaffold.</p>
       </section>
 
+      <section className="rounded border border-amber-800 bg-amber-950/30 p-5">
+        <h2 className="text-xl font-semibold text-amber-100">Step 7: Real draft grade, teacher review, approval/export</h2>
+        <p className="mt-2 text-sm text-amber-100">This page does not run real grading. Real grading is a separately approved single-packet action only.</p>
+        <p className="text-sm text-amber-100">A real grading call creates a draft GradeSuggestion only, with teacher review required.</p>
+        <p className="text-sm text-amber-100">Teacher must approve before FinalGrade/export. Unapproved drafts must not be exported as final grades.</p>
+      </section>
+
       <section className="rounded border border-red-800 bg-red-950/30 p-5">
-        <h2 className="text-xl font-semibold text-red-100">STOP — Evidence-to-Queue Test Complete.</h2>
-        <p className="mt-2 text-sm text-red-100">Do not run grading/provider execution.</p>
-        <p className="text-sm text-red-100">Do not create GradeSuggestion, FinalGrade, or GradingJob.</p>
-        <p className="text-sm text-red-100">Queue records are not grades.</p>
+        <h2 className="text-xl font-semibold text-red-100">STOP — Custom Controlled V0 safety gate.</h2>
+        <p className="mt-2 text-sm text-red-100">Do not run real grading unless the evidence packet is ready.</p>
+        <p className="text-sm text-red-100">Real grading creates a draft GradeSuggestion only.</p>
+        <p className="text-sm text-red-100">Teacher must approve before FinalGrade/export.</p>
+        <p className="text-sm text-red-100">No batch/autonomous grading from this V0 founder flow.</p>
       </section>
 
       <section className="grid gap-4 rounded border border-amber-900 bg-slate-900 p-5" data-testid="founder-grading-actions-disabled">
         <div>
-          <h2 className="text-xl font-semibold">FUTURE / not part of current founder test: Teacher review queue</h2>
-          <p className="text-sm text-amber-200">Hidden for TA-DEMO-001A evidence-only testing. The founder workflow stops at evidence packet preview/readiness.</p>
+          <h2 className="text-xl font-semibold">FUTURE / not part of Custom Controlled V0: Teacher review queue</h2>
+          <p className="text-sm text-amber-200">Hidden in the assessment-page V0 flow. Teacher review happens only after an explicitly approved single-packet draft grade exists.</p>
           <p className="text-sm text-amber-200">No grading action is visible here. No GradeSuggestion, FinalGrade, GradingJob, provider, or model call is available from this founder evidence workflow.</p>
         </div>
       </section>
