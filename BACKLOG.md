@@ -39,11 +39,13 @@
 
 ## TA-PILOT-011 — Teacher-facing quick-start guide
 
+- Recorded at: 2026-06-13
 - Planned after: TA-PILOT-010
 - Workflow type: documentation-only teacher guide task.
-- Scope: create a concise teacher-facing guide for the allowed Custom Controlled V0 flow: manual setup, manual answer evidence text, readiness gate, single-packet draft grading, teacher review/approval, approved-only export, and stop conditions.
-- Safety: no provider/model call, no grading, no mock grading, no batch grading, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`.
-- Status: Planned
+- Scope: create a concise teacher-facing guide for the allowed Custom Controlled V0 flow: manual setup, manual answer evidence text, readiness gate, single-packet draft grading, teacher review/approval, approved-only export, troubleshooting, and stop conditions.
+- Files affected: `docs/CUSTOM_CONTROLLED_V0_TEACHER_QUICK_START.md`, `docs/README.md`, `BACKLOG.md`
+- Safety: no provider/model call, no grading, no mock grading, no batch grading, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no approval/export, no OCR/vision extraction, no answer mapping AI.
+- Status: Done
 
 ## TA-PILOT-012 — First supervised teacher test with tiny synthetic data
 
