@@ -12,6 +12,7 @@ Project documentation and decisions.
 ## Founder pilot rehearsal
 
 - [Founder Pilot Rehearsal Checklist and Demo Reset Plan](FOUNDER_PILOT_REHEARSAL.md)
+- [Batch-Safe Design and Real-Teacher Pilot Gate](BATCH_SAFE_AND_TEACHER_PILOT_GATE.md)
 
 ## External pilot readiness guardrails
 
