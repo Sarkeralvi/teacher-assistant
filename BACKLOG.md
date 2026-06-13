@@ -1,3 +1,40 @@
+# TA-PILOT-007 — Freeze Custom Controlled V0 pilot baseline
+
+- Recorded at: 2026-06-13
+- Baseline commit: `e5bac289a2e7992011f78118d2c5951247cd4edd`
+- Workflow type: docs-only Custom Controlled V0 baseline freeze.
+- Scope: record what the current V0 pilot can and cannot claim after TA-PILOT-006D grading-quality sanity passed.
+- Files affected: `docs/CUSTOM_CONTROLLED_V0_BASELINE.md`, `docs/README.md`, `BACKLOG.md`
+- Acceptance criteria: baseline document records passed workflow, milestone evidence, explicit limitations, safety invariants, founder pilot checklist, known risks, and next recommended tasks.
+- Safety: no Codex/provider/model call, no grading, no mock grading, no batch grading, no private files, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no approval/export, no OCR/vision extraction, no answer mapping AI, and no extra coding agent.
+- Status: Done
+
+# Next recommended pilot tasks
+
+## TA-PILOT-008 — UI polish for Custom Controlled V0 pilot
+
+- Planned after: TA-PILOT-007
+- Workflow type: bounded UI polish task.
+- Scope: improve founder/teacher-facing clarity for the Custom Controlled V0 pilot without changing grading authority or provider behavior.
+- Safety: no grading, no provider/model call, no batch grading, no approval/export unless separately approved.
+- Status: Planned
+
+## TA-PILOT-009 — Two-submission human-facing rehearsal
+
+- Planned after: TA-PILOT-008
+- Workflow type: founder-supervised human-facing rehearsal.
+- Scope: rehearse the Custom Controlled V0 flow with two submissions under manual control and explicit approval gates.
+- Safety: no autonomous grading, no batch grading, no export/finalization beyond explicit task approval.
+- Status: Planned
+
+## TA-PILOT-010 — Batch-safe design only
+
+- Planned after: TA-PILOT-009
+- Workflow type: design-only batch safety task.
+- Scope: design batch-safe constraints and UX states only; no batch grading implementation until separately approved.
+- Safety: no provider/model call, no grading, no batch implementation, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`.
+- Status: Planned
+
 # TA-PILOT-003 — Submission privacy/deletion and teacher ownership hardening
 
 - Recorded at: 2026-06-12
