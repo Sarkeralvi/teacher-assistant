@@ -49,10 +49,29 @@
 
 ## TA-PILOT-012 — First supervised teacher test with tiny synthetic data
 
+- Recorded at: 2026-06-13
 - Planned after: TA-PILOT-011
 - Workflow type: supervised pilot rehearsal with tiny synthetic data.
 - Scope: one teacher account, tiny synthetic assessment, observer present, explicit safety gates, and final report; real provider calls only if separately and exactly approved.
 - Safety: no private/high-stakes data, no batch grading, no autonomous grading, no autonomous `FinalGrade`, no export of unapproved drafts.
+- Status: Done
+
+## TA-PILOT-013 — Real-teacher observed synthetic pilot protocol
+
+- Recorded at: 2026-06-13
+- Planned after: TA-PILOT-012
+- Workflow type: documentation-only observation protocol task.
+- Scope: prepare the exact protocol for one real teacher to watch or try Custom Controlled V0 using tiny synthetic data only, with observer checklist, session script, pass/fail criteria, stop conditions, and final observation report template.
+- Files affected: `docs/REAL_TEACHER_OBSERVED_SYNTHETIC_PILOT_PROTOCOL.md`, `docs/README.md`, `BACKLOG.md`
+- Safety: no provider/model call, no grading, no mock grading, no batch grading, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no approval/export, no OCR/vision extraction, no answer mapping AI.
+- Status: Done
+
+## TA-PILOT-014 — Run real-teacher observed synthetic pilot session
+
+- Planned after: TA-PILOT-013
+- Workflow type: observed synthetic teacher pilot session.
+- Scope: run the protocol with one real teacher, tiny synthetic data only, observer present, bounded explicit provider calls only if separately approved, and full observation report.
+- Safety: no private/high-stakes data, no batch grading, no autonomous grading, no automatic `FinalGrade`, no hidden provider calls, no export of unapproved drafts.
 - Status: Planned
 
 # TA-PILOT-003 — Submission privacy/deletion and teacher ownership hardening
