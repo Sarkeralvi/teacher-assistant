@@ -92,6 +92,21 @@ HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE: tuple[str, ...] = (
     "- Never create a FinalGrade. Always preserve teacher review requirement.",
 )
 
+DEPENDENT_RUBRIC_GRADING_GUIDANCE: tuple[str, ...] = (
+    "Dependent rubric grading guidance",
+    "- Evaluate rubric criteria in context, not as isolated keyword checks.",
+    "- Do not award marks for a dependent criterion when its prerequisite claim is incorrect,",
+    "  unless the rubric explicitly allows unrelated partial credit.",
+    "- Phrase, detail, justification, or identifying-description marks must refer to the",
+    "  correct entity or answer required by the question and model answer.",
+    "- If a detail supports a wrong entity or wrong primary answer, do not award that detail",
+    "  as credit for the correct-answer detail criterion.",
+    "- Example: if the question asks for the capital of Bangladesh plus an identifying phrase,",
+    "  and the student says Chittagong is the capital and it is a major port city, award no",
+    "  identifying-phrase marks for describing Chittagong because the prerequisite capital",
+    "  answer is wrong; the phrase must identify or describe Dhaka.",
+)
+
 
 REAL_GRADING_SYSTEM_PROMPT = """You are a grading assistant. Produce a grade suggestion only.
 Teacher final review is always required. Do not create a final grade.
@@ -113,6 +128,10 @@ def build_marking_policy_instruction(marking_policy: str) -> str:
 
 def build_handwritten_math_stat_guidance() -> str:
     return "\n".join(HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE)
+
+
+def build_dependent_rubric_guidance() -> str:
+    return "\n".join(DEPENDENT_RUBRIC_GRADING_GUIDANCE)
 
 
 def build_grading_prompt(
@@ -147,6 +166,7 @@ def build_grading_prompt(
     normalized_policy = marking_policy.strip().lower()
     policy_instruction = build_marking_policy_instruction(normalized_policy)
     math_stat_guidance = build_handwritten_math_stat_guidance()
+    dependent_rubric_guidance = build_dependent_rubric_guidance()
     user_prompt = f"""
 Task: answer_region_grading
 Question text:
@@ -173,6 +193,10 @@ Policy instructions:
 
 Math/stat grading guidance:
 {math_stat_guidance}
+
+Dependent rubric grading guidance:
+{dependent_rubric_guidance}
+
 Do not change max_score, rubric criterion max_marks, or teacher-review requirements
 because of policy. Include marking_policy:{normalized_policy} in review_flags.
 

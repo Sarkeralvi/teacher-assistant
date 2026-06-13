@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from packages.brain.prompt_registry import (
+    build_dependent_rubric_guidance,
     build_handwritten_math_stat_guidance,
     build_marking_policy_instruction,
 )
@@ -264,6 +265,7 @@ class CodexCliProvider(BrainProvider):
             )
         policy_instruction = self._policy_instruction(marking_policy)
         math_stat_guidance = build_handwritten_math_stat_guidance()
+        dependent_rubric_guidance = build_dependent_rubric_guidance()
         normalized_policy = self._normalize_marking_policy(marking_policy)
         rendered_messages = "\n\n".join(
             f"{message.get('role', 'unknown')}: {message.get('content', '')}"
@@ -291,6 +293,10 @@ Use marking policy: {normalized_policy}.
 
 Math/stat grading guidance:
 {math_stat_guidance}
+
+Dependent rubric grading guidance:
+{dependent_rubric_guidance}
+
 Include marking_policy:{normalized_policy} in review_flags.
 Do not change max_score or criterion max_marks because of marking policy.
 If you cannot evaluate the answer, set confidence=0 and needs_review=true.

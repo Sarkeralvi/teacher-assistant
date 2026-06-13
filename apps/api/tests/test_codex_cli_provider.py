@@ -159,6 +159,12 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "notation/presentation issue" in inputs[-1]
     assert "Bayes" in inputs[-1]
     assert "do not automatically slash the score" in inputs[-1]
+    assert "Dependent rubric grading guidance" in inputs[-1]
+    assert "Evaluate rubric criteria in context, not as isolated keyword checks" in inputs[-1]
+    assert (
+        "Do not award marks for a dependent criterion when its prerequisite claim is incorrect"
+        in inputs[-1]
+    )
     assert result.model_provider == "codex_cli"
     assert result.model_name == "gpt-5.5"
     assert result.prompt_version == "codex_cli_grading_v1"
@@ -166,6 +172,37 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "teacher_review_required" in result.review_flags
     assert "codex_cli_provider" in result.review_flags
     assert "image_input_disabled" in result.review_flags
+
+
+def test_codex_cli_provider_instructs_wrong_entity_phrase_gets_no_dependent_credit() -> None:
+    provider = make_provider()
+    prompt = provider._build_prompt(  # noqa: SLF001
+        question_text="What is the capital of Bangladesh? Give one identifying phrase.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json={
+            "model_answer": (
+                "Dhaka is the capital of Bangladesh. It is the country's main "
+                "administrative and political centre."
+            ),
+            "criteria": [
+                {"id": "capital", "name": "Capital identified correctly", "max_marks": "6"},
+                {"id": "phrase", "name": "Valid identifying phrase", "max_marks": "4"},
+            ],
+        },
+        messages=[],
+        image_input_enabled=False,
+        student_answer_text="Chittagong is the capital of Bangladesh. It is a major port city.",
+    )
+
+    assert "Chittagong is the capital of Bangladesh. It is a major port city." in prompt
+    assert "the phrase must identify or describe Dhaka" in prompt
+    assert (
+        "Do not award marks for a dependent criterion when its prerequisite claim is incorrect"
+        in prompt
+    )
+    assert "If a detail supports a wrong entity or wrong primary answer" in prompt
+    assert "do not award that detail" in prompt
+    assert "unless the rubric explicitly allows unrelated partial credit" in prompt
 
 
 def test_codex_cli_provider_can_skip_git_repo_check_for_host_dev_mode() -> None:

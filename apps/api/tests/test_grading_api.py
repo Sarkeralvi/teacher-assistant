@@ -1003,6 +1003,40 @@ def test_prompt_construction_includes_manual_student_answer_text() -> None:
     assert "artifacts/answer_regions/example.png" in rendered
 
 
+def test_prompt_construction_includes_dependent_rubric_instruction() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    messages = build_grading_prompt(
+        question_text="What is the capital of Bangladesh? Give one identifying phrase.",
+        rubric_json={
+            "model_answer": (
+                "Dhaka is the capital of Bangladesh. It is the country's main "
+                "administrative and political centre."
+            ),
+            "criteria": [
+                {"id": "capital", "name": "Capital identified correctly", "max_marks": "6"},
+                {"id": "phrase", "name": "Valid identifying phrase", "max_marks": "4"},
+            ],
+        },
+        answer_image_path="artifacts/answer_regions/example.png",
+        image_input_enabled=False,
+        student_answer_text="Chittagong is the capital of Bangladesh. It is a major port city.",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+    assert "Evaluate rubric criteria in context, not as isolated keyword checks" in rendered
+    assert (
+        "Do not award marks for a dependent criterion when its prerequisite claim is incorrect"
+        in rendered
+    )
+    assert (
+        "Phrase, detail, justification, or identifying-description marks must refer to the"
+        in rendered
+    )
+    assert "correct entity or answer required by the question and model answer" in rendered
+    assert "do not award that detail" in rendered
+    assert "the phrase must identify or describe Dhaka" in rendered
+
+
 def test_codex_prompt_includes_manual_student_answer_text() -> None:
     from packages.brain.codex_cli_provider import CodexCliProvider
 
