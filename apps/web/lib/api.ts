@@ -696,11 +696,13 @@ export type AssessmentCreate = Pick<Assessment, "title" | "assessment_type" | "t
 export type QuestionCreate = Pick<Question, "question_no" | "question_text" | "total_marks"> & {
   model_answer?: string | null;
 };
+export type QuestionUpdate = Partial<QuestionCreate>;
 export type DraftQuestionAccept = Pick<DraftQuestion, "draft_id" | "question_no" | "question_text"> & {
   model_answer?: string | null;
   total_marks: string | number;
 };
 export type RubricCreate = Pick<Rubric, "version" | "rubric_json"> & { is_active?: boolean };
+export type RubricUpdate = Partial<RubricCreate>;
 export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height"> & {
   manual_answer_text?: string | null;
 };
@@ -778,6 +780,13 @@ export function getAssessment(assessmentId: number) {
 export function createQuestion(assessmentId: number, payload: QuestionCreate) {
   return apiRequest<Question>(`/assessments/${assessmentId}/questions`, {
     method: "POST",
+    body: payload,
+  });
+}
+
+export function updateQuestion(questionId: number, payload: QuestionUpdate) {
+  return apiRequest<Question>(`/questions/${questionId}`, {
+    method: "PATCH",
     body: payload,
   });
 }
@@ -899,6 +908,13 @@ export function getQuestion(questionId: number) {
 export function createRubric(questionId: number, payload: RubricCreate) {
   return apiRequest<Rubric>(`/questions/${questionId}/rubrics`, {
     method: "POST",
+    body: payload,
+  });
+}
+
+export function updateRubric(rubricId: number, payload: RubricUpdate) {
+  return apiRequest<Rubric>(`/rubrics/${rubricId}`, {
+    method: "PATCH",
     body: payload,
   });
 }

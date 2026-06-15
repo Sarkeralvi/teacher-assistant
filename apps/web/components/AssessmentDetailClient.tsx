@@ -13,6 +13,7 @@ import {
   createEvidencePrepRun,
   createGradingQueueRun,
   createQuestion,
+  createRubric,
   deleteSubmission,
   editAnswerRegionSegment,
   finalizeGradeSuggestion,
@@ -28,12 +29,15 @@ import {
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
   listQuestions,
+  listRubrics,
   listSubmissions,
   removeAnswerRegionSegment,
   reorderAnswerRegionSegments,
   suggestAnswerRegionMappings,
   uploadSubmission,
   uploadSubmissionZip,
+  updateQuestion,
+  updateRubric,
   type AnswerRegion,
   type Assessment,
   type DraftAnswerRegionSuggestionGroup,
@@ -44,6 +48,7 @@ import {
   type GradingQueueRun,
   type Question,
   type QuestionImportJob,
+  type Rubric,
   type ReviewQueueItem,
   type Submission,
   type SubmissionZipUploadResponse,
@@ -64,10 +69,47 @@ type DraftQuestionEdit = {
   total_marks: string;
 };
 
+type ManualSetupDraft = {
+  question_text: string;
+  model_answer: string;
+  criteria_name: string;
+  criteria_description: string;
+  criteria_marks: string;
+};
+
+function manualSetupDraftFor(question: Question): ManualSetupDraft {
+  return {
+    question_text: question.question_text,
+    model_answer: question.model_answer ?? "",
+    criteria_name: "Complete answer",
+    criteria_description: "Awards marks for a correct teacher-approved answer.",
+    criteria_marks: String(question.total_marks),
+  };
+}
+
+function buildSingleCriterionRubric(question: Question, draft: ManualSetupDraft) {
+  return {
+    total_marks: Number(question.total_marks),
+    criteria: [
+      {
+        id: "manual-criterion-1",
+        name: draft.criteria_name.trim(),
+        description: draft.criteria_description.trim(),
+        max_marks: Number(draft.criteria_marks),
+      },
+    ],
+  };
+}
+
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const uploadFormRef = useRef<HTMLFormElement | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [rubricsByQuestionId, setRubricsByQuestionId] = useState<Record<number, Rubric[]>>({});
+  const [manualSetupDrafts, setManualSetupDrafts] = useState<Record<number, ManualSetupDraft>>({});
+  const [savingQuestionId, setSavingQuestionId] = useState<number | null>(null);
+  const [savingModelAnswerId, setSavingModelAnswerId] = useState<number | null>(null);
+  const [savingRubricQuestionId, setSavingRubricQuestionId] = useState<number | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
@@ -242,6 +284,19 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       setAssessment(assessmentData);
       setQuestions(questionData);
+      const rubricEntries = await Promise.all(
+        questionData.map(async (question) => [question.id, await listRubrics(question.id)] as const),
+      );
+      setRubricsByQuestionId(Object.fromEntries(rubricEntries));
+      setManualSetupDrafts((current) => {
+        const next = { ...current };
+        for (const question of questionData) {
+          if (!next[question.id]) {
+            next[question.id] = manualSetupDraftFor(question);
+          }
+        }
+        return next;
+      });
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
       if (!selectedPreviewRegionId && answerRegionData[0]) {
@@ -292,6 +347,81 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function updateManualSetupDraft(questionId: number, patch: Partial<ManualSetupDraft>) {
+    setManualSetupDrafts((current) => ({
+      ...current,
+      [questionId]: {
+        ...(current[questionId] ?? manualSetupDraftFor(questions.find((question) => question.id === questionId)!)),
+        ...patch,
+      },
+    }));
+  }
+
+  async function handleSaveQuestion(question: Question) {
+    const draft = manualSetupDrafts[question.id] ?? manualSetupDraftFor(question);
+    setSavingQuestionId(question.id);
+    setError(null);
+    try {
+      await updateQuestion(question.id, { question_text: draft.question_text });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save question");
+    } finally {
+      setSavingQuestionId(null);
+    }
+  }
+
+  async function handleSaveModelAnswer(question: Question) {
+    const draft = manualSetupDrafts[question.id] ?? manualSetupDraftFor(question);
+    setSavingModelAnswerId(question.id);
+    setError(null);
+    try {
+      await updateQuestion(question.id, { model_answer: draft.model_answer.trim() || null });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save model answer");
+    } finally {
+      setSavingModelAnswerId(null);
+    }
+  }
+
+  async function handleSaveRubric(question: Question) {
+    const draft = manualSetupDrafts[question.id] ?? manualSetupDraftFor(question);
+    setSavingRubricQuestionId(question.id);
+    setError(null);
+    try {
+      const activeRubric = activeRubricFor(question.id);
+      const rubricJson = buildSingleCriterionRubric(question, draft);
+      if (activeRubric) {
+        await updateRubric(activeRubric.id, {
+          rubric_json: rubricJson,
+          is_active: true,
+        });
+      } else {
+        await createRubric(question.id, {
+          version: (rubricsByQuestionId[question.id]?.length ?? 0) + 1,
+          is_active: true,
+          rubric_json: rubricJson,
+        });
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save rubric");
+    } finally {
+      setSavingRubricQuestionId(null);
+    }
+  }
+
+  function activeRubricFor(questionId: number) {
+    return (rubricsByQuestionId[questionId] ?? []).find((rubric) => rubric.is_active) ?? null;
+  }
+
+  function activeRubricCriteria(questionId: number) {
+    const rubric = activeRubricFor(questionId);
+    const criteria = rubric?.rubric_json.criteria;
+    return Array.isArray(criteria) ? criteria : [];
   }
 
   function handleSubmissionFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -805,13 +935,61 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       {!loading && questions.length === 0 ? <EmptyState message="No questions yet." /> : null}
       <div className="grid gap-3">
-        {questions.map((question) => (
-          <Link key={question.id} href={`/questions/${question.id}`} className="rounded border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700">
-            <h2 className="text-lg font-semibold">Grading unit {question.question_no}</h2>
-            <p className="text-sm text-slate-400">{question.total_marks} marks · {gradingUnitType(question.question_no)}</p>
-            <p className="mt-2 line-clamp-2 text-slate-300">{question.question_text}</p>
-          </Link>
-        ))}
+        {questions.map((question) => {
+          const draft = manualSetupDrafts[question.id] ?? manualSetupDraftFor(question);
+          const activeRubric = activeRubricFor(question.id);
+          const criteria = activeRubricCriteria(question.id);
+          const modelAnswerMissing = !draft.model_answer.trim();
+          return (
+            <article key={question.id} className="grid gap-3 rounded border border-slate-800 bg-slate-900 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">Grading unit {question.question_no}</h2>
+                  <p className="text-sm text-slate-400">{question.total_marks} marks · {gradingUnitType(question.question_no)}</p>
+                </div>
+                <Link href={`/questions/${question.id}`} className="text-sm text-cyan-300 underline">
+                  Open full rubric editor
+                </Link>
+              </div>
+              <label className="grid gap-2 text-sm">
+                Question text
+                <textarea className={inputClass} value={draft.question_text} onChange={(event) => updateManualSetupDraft(question.id, { question_text: event.target.value })} />
+              </label>
+              <button className={buttonClass} disabled={savingQuestionId === question.id} type="button" onClick={() => void handleSaveQuestion(question)}>
+                {savingQuestionId === question.id ? "Saving question..." : "Save question"}
+              </button>
+              <label className="grid gap-2 text-sm">
+                Model answer required for grading
+                <textarea className={inputClass} value={draft.model_answer} onChange={(event) => updateManualSetupDraft(question.id, { model_answer: event.target.value })} />
+              </label>
+              <button className={buttonClass} disabled={savingModelAnswerId === question.id} type="button" onClick={() => void handleSaveModelAnswer(question)}>
+                {savingModelAnswerId === question.id ? "Saving model answer..." : "Save model answer"}
+              </button>
+              {modelAnswerMissing ? (
+                <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-sm text-amber-100">Model answer required for grading</p>
+              ) : (
+                <p className="rounded border border-emerald-800 bg-emerald-950/30 p-2 text-sm text-emerald-100">Saved model answer visible: {question.model_answer ?? draft.model_answer}</p>
+              )}
+              <div className="grid gap-3 rounded border border-slate-800 p-3">
+                <p className="text-sm font-semibold">Active rubric required for grading</p>
+                <input className={inputClass} aria-label={`Rubric criterion name for ${question.question_no}`} value={draft.criteria_name} onChange={(event) => updateManualSetupDraft(question.id, { criteria_name: event.target.value })} />
+                <textarea className={inputClass} aria-label={`Rubric criterion description for ${question.question_no}`} value={draft.criteria_description} onChange={(event) => updateManualSetupDraft(question.id, { criteria_description: event.target.value })} />
+                <input className={inputClass} aria-label={`Rubric criterion marks for ${question.question_no}`} type="number" min="0.01" step="0.01" value={draft.criteria_marks} onChange={(event) => updateManualSetupDraft(question.id, { criteria_marks: event.target.value })} />
+                <button className={buttonClass} disabled={savingRubricQuestionId === question.id} type="button" onClick={() => void handleSaveRubric(question)}>
+                  {savingRubricQuestionId === question.id ? "Saving rubric..." : "Save rubric"}
+                </button>
+                {activeRubric ? (
+                  <div className="rounded border border-emerald-800 bg-emerald-950/30 p-2 text-sm text-emerald-100">
+                    <p>Active rubric confirmed: version {activeRubric.version}</p>
+                    <p>Criteria: {criteria.length > 0 ? JSON.stringify(criteria) : "No criteria visible"}</p>
+                  </div>
+                ) : (
+                  <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-sm text-amber-100">Active rubric required for grading</p>
+                )}
+              </div>
+            </article>
+          );
+        })}
       </div>
 
       <form ref={uploadFormRef} onSubmit={handleUpload} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">

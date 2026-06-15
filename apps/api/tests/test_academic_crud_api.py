@@ -291,6 +291,17 @@ def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient)
     assert Decimal(assessment["total_marks"]) == Decimal("40.00")
     assert Decimal(question["total_marks"]) == Decimal("5.00")
 
+    updated_question = client.patch(
+        f"/questions/{question['id']}",
+        json={
+            "question_text": "Differentiate x^3.",
+            "model_answer": "3x^2",
+        },
+    )
+    assert updated_question.status_code == 200
+    assert updated_question.json()["question_text"] == "Differentiate x^3."
+    assert updated_question.json()["model_answer"] == "3x^2"
+
     rubric_json = {
         "total_marks": 5,
         "criteria": [
@@ -315,6 +326,11 @@ def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient)
     list_response = client.get(f"/questions/{question['id']}/rubrics")
     assert list_response.status_code == 200
     assert list_response.json()[0]["rubric_json"] == rubric_json
+    assert list_response.json()[0]["is_active"] is True
+
+    refreshed_question = client.get(f"/questions/{question['id']}")
+    assert refreshed_question.status_code == 200
+    assert refreshed_question.json()["model_answer"] == "3x^2"
 
 
 def test_missing_parent_and_resource_404s(client: TestClient) -> None:
