@@ -131,8 +131,7 @@ def create_submission_from_upload(
         )
 
     db.commit()
-    db.refresh(submission)
-    submission.pages.sort(key=lambda page: page.page_no)
+    submission = get_submission_or_404(submission.id, db)
     return submission
 
 

@@ -184,7 +184,24 @@ def test_update_canonical_grading_unit_rejects_duplicate_label(client: TestClien
 def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
     client: TestClient, tmp_path
 ) -> None:
-    teacher = create_user(client, email="canonical-region@example.com")
+    teacher_response = client.post(
+        "/auth/register",
+        json={
+            "name": "Canonical Region Teacher",
+            "email": "canonical-region@example.com",
+            "password": "password",
+            "role": "teacher",
+        },
+    )
+    assert teacher_response.status_code == 201
+    teacher = teacher_response.json()["user"]
+    login_response = client.post(
+        "/auth/login",
+        json={"email": "canonical-region@example.com", "password": "password"},
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    auth_headers = {"Authorization": f"Bearer {token}"}
     course = create_course(client, int(teacher["id"]))
     assessment = create_assessment(client, int(course["id"]))
     question = client.post(
@@ -223,21 +240,32 @@ def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
             f"/assessments/{assessment['id']}/submissions/upload",
             data={"student_identifier": "SYN-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
+            headers=auth_headers,
         ).json()
     region = client.post(
         f"/submission-pages/{submission['pages'][0]['id']}/answer-regions",
-        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
+        json={
+            "question_id": question["id"],
+            "x": 1,
+            "y": 2,
+            "width": 8,
+            "height": 8,
+            "manual_answer_text": "Dhaka",
+        },
     ).json()
-    suggestion = client.post(f"/answer-regions/{region['id']}/grade").json()["suggestion"]
-    review = client.get(f"/assessments/{assessment['id']}/review-queue").json()[0]
+    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
 
     assert rubric.status_code == 201
     assert region["question_id"] == question["id"]
-    assert suggestion["question_id"] == question["id"]
-    assert suggestion["max_score"] == "6.00"
-    assert review["question"]["question_no"] == "1(b)(i)"
-    assert review["question"]["total_marks"] == "6.00"
-    assert review["final_grade"] is None
+    assert packet["canonical_grading_unit"]["label"] == "1(b)(i)"
+    assert packet["canonical_grading_unit"]["max_marks"] == "6.00"
+    assert packet["canonical_grading_unit"]["active_rubric_present"] is True
+    assert packet["canonical_grading_unit"]["model_answer_present"] is True
+    assert (
+        packet["solution_model_answer_evidence"]["solution_model_answer_text_or_reference"]
+        == "Synthetic answer."
+    )
+    assert packet["rubric_evidence"]["criteria_max_marks"][0]["name"] == "Method"
 
 
 def test_create_user_response_excludes_password_hash(client: TestClient) -> None:
