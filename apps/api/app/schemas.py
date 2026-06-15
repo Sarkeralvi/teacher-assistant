@@ -352,6 +352,56 @@ class QuestionImportAcceptResponse(BaseModel):
     questions: list[QuestionRead]
 
 
+class ExtractionRunRead(ORMBase):
+    id: int
+    assessment_id: int
+    artifact_file_path: str
+    original_filename: str
+    content_type: str
+    extraction_type: str
+    provider: str
+    status: str
+    raw_output: str | None
+    normalized_output: dict[str, Any] | None
+    blockers: list[str] = Field(default_factory=list)
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class QuestionNodeRead(ORMBase):
+    id: int
+    assessment_id: int
+    extraction_run_id: int
+    question_number: str
+    parent_question_number: str | None
+    label: str
+    text: str
+    marks: Decimal | None
+    node_type: str
+    source_page: int | None
+    source_reference: dict[str, Any] | None
+    confidence: Decimal | None
+    teacher_confirmed: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class RubricExtractionCriterionRead(ORMBase):
+    id: int
+    assessment_id: int
+    extraction_run_id: int
+    question_number: str | None
+    criterion_label: str
+    description: str
+    max_marks: Decimal | None
+    confidence: Decimal | None
+    blocker: str | None
+    teacher_confirmed: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class RubricCriterionSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -6,6 +6,7 @@ from app.api.routes.assessments import router as assessments_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.courses import router as courses_router
 from app.api.routes.evidence_prep import router as evidence_prep_router
+from app.api.routes.extraction_runs import router as extraction_runs_router
 from app.api.routes.final_grades import router as final_grades_router
 from app.api.routes.grading import router as grading_router
 from app.api.routes.grading_queue import router as grading_queue_router
@@ -45,6 +46,7 @@ app.include_router(courses_router)
 app.include_router(assessments_router)
 app.include_router(questions_router)
 app.include_router(question_imports_router)
+app.include_router(extraction_runs_router)
 app.include_router(rubrics_router)
 app.include_router(submissions_router)
 app.include_router(answer_regions_router)

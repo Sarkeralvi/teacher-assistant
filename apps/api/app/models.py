@@ -102,6 +102,11 @@ class Assessment(TimestampMixin, Base):
     question_import_jobs: Mapped[list[QuestionImportJob]] = relationship(
         back_populates="assessment"
     )
+    extraction_runs: Mapped[list[ExtractionRun]] = relationship(back_populates="assessment")
+    question_nodes: Mapped[list[QuestionNode]] = relationship(back_populates="assessment")
+    rubric_extraction_criteria: Mapped[list[RubricExtractionCriterion]] = relationship(
+        back_populates="assessment"
+    )
 
 
 class GradingRun(TimestampMixin, Base):
@@ -295,6 +300,107 @@ class QuestionImportJob(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     assessment: Mapped[Assessment] = relationship(back_populates="question_import_jobs")
+
+
+class ExtractionRun(TimestampMixin, Base):
+    __tablename__ = "extraction_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "extraction_type in ('question_paper', 'rubric')",
+            name="ck_extraction_runs_type",
+        ),
+        CheckConstraint(
+            "provider in ('host_bridge_codex', 'mock', 'disabled')",
+            name="ck_extraction_runs_provider",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'succeeded', 'failed', 'blocked')",
+            name="ck_extraction_runs_status",
+        ),
+        Index("ix_extraction_runs_assessment_id", "assessment_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    artifact_file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    extraction_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_output: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    blockers: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="extraction_runs")
+    question_nodes: Mapped[list[QuestionNode]] = relationship(
+        back_populates="extraction_run", cascade="all, delete-orphan"
+    )
+    rubric_criteria: Mapped[list[RubricExtractionCriterion]] = relationship(
+        back_populates="extraction_run", cascade="all, delete-orphan"
+    )
+
+
+class QuestionNode(TimestampMixin, Base):
+    __tablename__ = "question_nodes"
+    __table_args__ = (
+        CheckConstraint(
+            "node_type in ('question', 'subquestion', 'instruction')",
+            name="ck_question_nodes_type",
+        ),
+        Index("ix_question_nodes_assessment_id", "assessment_id"),
+        Index("ix_question_nodes_extraction_run_id", "extraction_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    extraction_run_id: Mapped[int] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    question_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_question_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    marks: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    node_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_reference: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    teacher_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="question_nodes")
+    extraction_run: Mapped[ExtractionRun] = relationship(back_populates="question_nodes")
+
+
+class RubricExtractionCriterion(TimestampMixin, Base):
+    __tablename__ = "rubric_extraction_criteria"
+    __table_args__ = (
+        Index("ix_rubric_extraction_criteria_assessment_id", "assessment_id"),
+        Index("ix_rubric_extraction_criteria_extraction_run_id", "extraction_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    extraction_run_id: Mapped[int] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    question_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    criterion_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    max_marks: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    blocker: Mapped[str | None] = mapped_column(Text, nullable=True)
+    teacher_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="rubric_extraction_criteria")
+    extraction_run: Mapped[ExtractionRun] = relationship(back_populates="rubric_criteria")
 
 
 class Question(TimestampMixin, Base):

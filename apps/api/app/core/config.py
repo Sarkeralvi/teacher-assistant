@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     codex_question_extraction_enabled: bool = Field(
         default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"
     )
+    codex_extraction_enabled: bool = Field(default=False, alias="CODEX_EXTRACTION_ENABLED")
+    codex_extraction_provider: str = Field(
+        default="disabled", alias="CODEX_EXTRACTION_PROVIDER"
+    )
+    codex_extraction_bridge_command: str = Field(
+        default="", alias="CODEX_EXTRACTION_BRIDGE_COMMAND"
+    )
+    codex_extraction_host_storage_root: str = Field(
+        default="/home/newton/teacher-assistant/data",
+        alias="CODEX_EXTRACTION_HOST_STORAGE_ROOT",
+    )
     codex_browser_grading_enabled: bool = Field(
         default=False, alias="CODEX_BROWSER_GRADING_ENABLED"
     )
