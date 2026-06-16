@@ -107,6 +107,9 @@ class Assessment(TimestampMixin, Base):
     rubric_extraction_criteria: Mapped[list[RubricExtractionCriterion]] = relationship(
         back_populates="assessment"
     )
+    answer_region_mappings: Mapped[list[AnswerRegionMapping]] = relationship(
+        back_populates="assessment"
+    )
 
 
 class GradingRun(TimestampMixin, Base):
@@ -458,6 +461,9 @@ class Submission(TimestampMixin, Base):
     assessment: Mapped[Assessment] = relationship(back_populates="submissions")
     pages: Mapped[list[SubmissionPage]] = relationship(back_populates="submission")
     answer_regions: Mapped[list[AnswerRegion]] = relationship(back_populates="submission")
+    answer_region_mappings: Mapped[list[AnswerRegionMapping]] = relationship(
+        back_populates="submission"
+    )
 
 
 class SubmissionPage(TimestampMixin, Base):
@@ -486,6 +492,9 @@ class AnswerRegion(TimestampMixin, Base):
     question_id: Mapped[int] = mapped_column(
         ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
     )
+    question_node_id: Mapped[int | None] = mapped_column(
+        ForeignKey("question_nodes.id", ondelete="SET NULL"), nullable=True
+    )
     page_id: Mapped[int] = mapped_column(
         ForeignKey("submission_pages.id", ondelete="CASCADE"), nullable=False
     )
@@ -503,6 +512,7 @@ class AnswerRegion(TimestampMixin, Base):
 
     submission: Mapped[Submission] = relationship(back_populates="answer_regions")
     question: Mapped[Question] = relationship(back_populates="answer_regions")
+    question_node: Mapped[QuestionNode | None] = relationship()
     page: Mapped[SubmissionPage] = relationship(back_populates="answer_regions")
     segments: Mapped[list[AnswerRegionSegment]] = relationship(
         back_populates="answer_region",
@@ -512,6 +522,7 @@ class AnswerRegion(TimestampMixin, Base):
     grading_jobs: Mapped[list[GradingJob]] = relationship(back_populates="answer_region")
     grade_suggestions: Mapped[list[GradeSuggestion]] = relationship(back_populates="answer_region")
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="answer_region")
+    mapping_links: Mapped[list[AnswerRegionMapping]] = relationship(back_populates="answer_region")
 
 
 class AnswerRegionSegment(TimestampMixin, Base):
@@ -547,6 +558,55 @@ class AnswerRegionSegment(TimestampMixin, Base):
     @property
     def page_id(self) -> int:
         return self.submission_page_id
+
+
+class AnswerRegionMapping(TimestampMixin, Base):
+    __tablename__ = "answer_region_mappings"
+    __table_args__ = (
+        CheckConstraint(
+            "mapping_status in ('mapped', 'uncertain', 'blocked', 'teacher_confirmed')",
+            name="ck_answer_region_mappings_status",
+        ),
+        Index("ix_answer_region_mappings_assessment_id", "assessment_id"),
+        Index("ix_answer_region_mappings_submission_id", "submission_id"),
+        Index("ix_answer_region_mappings_question_node_id", "question_node_id"),
+        Index(
+            "ux_answer_region_mappings_submission_question_node",
+            "submission_id",
+            "question_node_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_node_id: Mapped[int] = mapped_column(
+        ForeignKey("question_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[int | None] = mapped_column(
+        ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
+    )
+    answer_region_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_regions.id", ondelete="SET NULL"), nullable=True
+    )
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_reference: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    mapping_status: Mapped[str] = mapped_column(String(32), nullable=False, default="blocked")
+    blocker_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="deterministic_layout")
+    teacher_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="answer_region_mappings")
+    submission: Mapped[Submission] = relationship(back_populates="answer_region_mappings")
+    question_node: Mapped[QuestionNode] = relationship()
+    question: Mapped[Question | None] = relationship()
+    answer_region: Mapped[AnswerRegion | None] = relationship(back_populates="mapping_links")
 
 
 class GradingJob(Base):

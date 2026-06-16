@@ -312,6 +312,7 @@ export type AnswerRegion = {
   id: number;
   submission_id: number;
   question_id: number;
+  question_node_id: number | null;
   page_id: number;
   x: string | number;
   y: string | number;
@@ -325,6 +326,41 @@ export type AnswerRegion = {
   segments: AnswerRegionSegment[];
   created_at: string;
   updated_at: string;
+};
+
+export type AnswerRegionMappingStatus = "mapped" | "uncertain" | "blocked" | "teacher_confirmed";
+
+export type AnswerRegionMapping = {
+  id: number;
+  assessment_id: number;
+  submission_id: number;
+  question_node_id: number;
+  question_id: number | null;
+  answer_region_id: number | null;
+  source_page: number | null;
+  source_reference: Record<string, unknown> | null;
+  confidence: string | number | null;
+  mapping_status: AnswerRegionMappingStatus;
+  blocker_reason: string | null;
+  provider: string;
+  teacher_confirmed: boolean;
+  created_at: string;
+  updated_at: string;
+  answer_region: AnswerRegion | null;
+};
+
+export type QuestionNodeMappingGroup = {
+  question_node: QuestionNode;
+  mappings: AnswerRegionMapping[];
+};
+
+export type AnswerRegionMappingRunResponse = {
+  message: string;
+  created_count: number;
+  mapped_count: number;
+  uncertain_count: number;
+  blocked_count: number;
+  mappings: AnswerRegionMapping[];
 };
 
 export type AnswerRegionCorrectionResponse = {
@@ -773,6 +809,19 @@ export type RubricUpdate = Partial<RubricCreate>;
 export type AnswerRegionCreate = Pick<AnswerRegion, "question_id" | "x" | "y" | "width" | "height"> & {
   manual_answer_text?: string | null;
 };
+export type AnswerRegionMappingUpdate = {
+  question_node_id?: number | null;
+  page_id?: number | null;
+  x?: string | number | null;
+  y?: string | number | null;
+  width?: string | number | null;
+  height?: string | number | null;
+  confidence?: string | number | null;
+  mapping_status?: AnswerRegionMappingStatus | null;
+  blocker_reason?: string | null;
+  source_reference?: Record<string, unknown> | null;
+  manual_answer_text?: string | null;
+};
 export type AnswerRegionCorrectionSegmentBox = Pick<AnswerRegionSegment, "x" | "y" | "width" | "height">;
 export type AnswerRegionCorrectionSegmentCreate = AnswerRegionCorrectionSegmentBox & {
   page_id: number;
@@ -1105,6 +1154,55 @@ export function suggestAnswerRegionMappings(
       body: payload,
     },
   );
+}
+
+export function runSubmissionQuestionNodeMappings(
+  submissionId: number,
+  payload: { replace_existing?: boolean } = {},
+) {
+  return apiRequest<AnswerRegionMappingRunResponse>(`/submissions/${submissionId}/question-node-mappings/run`, {
+    method: "POST",
+    body: payload,
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function runAssessmentQuestionNodeMappings(
+  assessmentId: number,
+  payload: { replace_existing?: boolean } = {},
+) {
+  return apiRequest<AnswerRegionMappingRunResponse[]>(`/assessments/${assessmentId}/question-node-mappings/run`, {
+    method: "POST",
+    body: payload,
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function listAssessmentQuestionNodeMappings(assessmentId: number) {
+  return apiRequest<QuestionNodeMappingGroup[]>(`/assessments/${assessmentId}/question-node-mappings`, {
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function updateQuestionNodeMapping(mappingId: number, payload: AnswerRegionMappingUpdate) {
+  return apiRequest<AnswerRegionMapping>(`/question-node-mappings/${mappingId}`, {
+    method: "PATCH",
+    body: payload,
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function confirmQuestionNodeMapping(mappingId: number, teacher_confirmed = true) {
+  return apiRequest<AnswerRegionMapping>(`/question-node-mappings/${mappingId}/confirm`, {
+    method: "POST",
+    body: { teacher_confirmed },
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
 }
 
 export function acceptAnswerRegionMappingSuggestion(

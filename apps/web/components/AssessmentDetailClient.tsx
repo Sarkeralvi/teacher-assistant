@@ -9,6 +9,7 @@ import {
   acceptQuestionImportDrafts,
   addAnswerRegionSegment,
   confirmAnswerRegionFullAnswer,
+  confirmQuestionNodeMapping,
   createAnswerRegion,
   createEvidencePrepRun,
   createGradingQueueRun,
@@ -28,6 +29,7 @@ import {
   gradeAnswerRegion,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
+  listAssessmentQuestionNodeMappings,
   listQuestionNodes,
   listQuestions,
   listRubricExtractionCriteria,
@@ -35,14 +37,17 @@ import {
   listSubmissions,
   removeAnswerRegionSegment,
   reorderAnswerRegionSegments,
+  runAssessmentQuestionNodeMappings,
   suggestAnswerRegionMappings,
   updateQuestion,
   updateQuestionNode,
+  updateQuestionNodeMapping,
   updateRubric,
   updateRubricExtractionCriterion,
   uploadSubmission,
   uploadSubmissionZip,
   type AnswerRegion,
+  type AnswerRegionMapping,
   type Assessment,
   type DraftAnswerRegionSuggestionGroup,
   type DraftQuestion,
@@ -53,6 +58,7 @@ import {
   type Question,
   type QuestionImportJob,
   type QuestionNode,
+  type QuestionNodeMappingGroup,
   type Rubric,
   type RubricExtractionCriterion,
   type ReviewQueueItem,
@@ -168,6 +174,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [savingRubricQuestionId, setSavingRubricQuestionId] = useState<number | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
+  const [questionNodeMappings, setQuestionNodeMappings] = useState<QuestionNodeMappingGroup[]>([]);
+  const [selectedMappingQuestionNodeId, setSelectedMappingQuestionNodeId] = useState("");
+  const [mappingPageId, setMappingPageId] = useState("");
+  const [mappingX, setMappingX] = useState("24");
+  const [mappingY, setMappingY] = useState("24");
+  const [mappingWidth, setMappingWidth] = useState("800");
+  const [mappingHeight, setMappingHeight] = useState("300");
+  const [mappingManualAnswerText, setMappingManualAnswerText] = useState("");
+  const [runningMappings, setRunningMappings] = useState(false);
+  const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
+  const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
   const [gradingQueueSummary, setGradingQueueSummary] = useState<GradingQueueRun | null>(null);
@@ -226,6 +243,19 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const answerRegionsByPageId = new Map<number, AnswerRegion[]>();
   const answerRegionsByQuestionId = new Map<number, AnswerRegion[]>();
   const answerRegionsBySubmissionId = new Map<number, AnswerRegion[]>();
+  const questionNodeMappingByNodeId = new Map<number, QuestionNodeMappingGroup>();
+  const flatMappings: AnswerRegionMapping[] = [];
+  for (const group of questionNodeMappings) {
+    questionNodeMappingByNodeId.set(group.question_node.id, group);
+    flatMappings.push(...group.mappings);
+  }
+  const teacherConfirmedMappingCount = flatMappings.filter((mapping) => mapping.teacher_confirmed).length;
+  const uncertainMappingCount = flatMappings.filter((mapping) => mapping.mapping_status === "uncertain").length;
+  const blockedMappingCount = flatMappings.filter((mapping) => mapping.mapping_status === "blocked").length;
+  const confirmedQuestionSubquestionNodes = questionNodes.filter(
+    (node) => node.teacher_confirmed && (node.node_type === "question" || node.node_type === "subquestion"),
+  );
+  const expectedMappingCount = confirmedQuestionSubquestionNodes.length * submissions.length;
   for (const submission of submissions) {
     pageCountBySubmissionId.set(submission.id, submission.pages.length);
   }
@@ -329,6 +359,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         rubricCriterionData,
         submissionData,
         answerRegionData,
+        questionNodeMappingData,
         reviewQueueData,
         evidencePrepData,
         gradingQueueData,
@@ -340,6 +371,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           listRubricExtractionCriteria(assessmentId),
           listSubmissions(assessmentId),
           listAssessmentAnswerRegions(assessmentId),
+          listAssessmentQuestionNodeMappings(assessmentId),
           getAssessmentReviewQueue(assessmentId),
           getEvidencePrepSummary(assessmentId).catch(() => null),
           getGradingQueueSummary(assessmentId).catch(() => null),
@@ -382,6 +414,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       });
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
+      setQuestionNodeMappings(questionNodeMappingData);
       if (!selectedPreviewRegionId && answerRegionData[0]) {
         setSelectedPreviewRegionId(String(answerRegionData[0].id));
       }
@@ -715,6 +748,60 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Failed to create selected questions");
     } finally {
       setAcceptingQuestions(false);
+    }
+  }
+
+  async function handleRunAutomaticMappings() {
+    setRunningMappings(true);
+    setError(null);
+    try {
+      await runAssessmentQuestionNodeMappings(assessmentId, { replace_existing: true });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run automatic question-node mappings");
+    } finally {
+      setRunningMappings(false);
+    }
+  }
+
+  async function handleConfirmMapping(mappingId: number) {
+    setConfirmingMappingId(mappingId);
+    setError(null);
+    try {
+      await confirmQuestionNodeMapping(mappingId, true);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to confirm mapping");
+    } finally {
+      setConfirmingMappingId(null);
+    }
+  }
+
+  async function handleSaveManualMapping(mapping: AnswerRegionMapping) {
+    if (!mappingPageId || !selectedMappingQuestionNodeId) {
+      setError("Select a question node and page before saving a manual mapping correction.");
+      return;
+    }
+    setSavingMappingId(mapping.id);
+    setError(null);
+    try {
+      await updateQuestionNodeMapping(mapping.id, {
+        question_node_id: Number(selectedMappingQuestionNodeId),
+        page_id: Number(mappingPageId),
+        x: mappingX,
+        y: mappingY,
+        width: mappingWidth,
+        height: mappingHeight,
+        manual_answer_text: mappingManualAnswerText.trim() || null,
+        confidence: 1,
+        mapping_status: "mapped",
+        blocker_reason: null,
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save manual mapping correction");
+    } finally {
+      setSavingMappingId(null);
     }
   }
 
@@ -1336,6 +1423,84 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     </span>
                     <span className="block text-xs text-slate-500">{page.image_path}</span>
                   </a>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Step 3A: Automatic answer-region mapping to confirmed question nodes</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Confirmed question/subquestion nodes: {confirmedQuestionSubquestionNodes.length} · expected mappings: {expectedMappingCount} · current mappings: {flatMappings.length} · teacher-confirmed: {teacherConfirmedMappingCount}
+          </p>
+          <p className="text-sm text-amber-200">
+            Grading must stay blocked until every required mapping is present, non-uncertain, non-blocked, and teacher-confirmed.
+          </p>
+        </div>
+        <div className="grid gap-3 rounded border border-slate-800 p-3 text-sm text-slate-300 md:grid-cols-4">
+          <p>uncertain: {uncertainMappingCount}</p>
+          <p>blocked: {blockedMappingCount}</p>
+          <p>answer regions linked: {flatMappings.filter((mapping) => mapping.answer_region_id != null).length}</p>
+          <p>workflow ready: {expectedMappingCount > 0 && teacherConfirmedMappingCount >= expectedMappingCount && uncertainMappingCount === 0 && blockedMappingCount === 0 ? "yes" : "no"}</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button className={buttonClass} type="button" disabled={runningMappings || submissions.length === 0 || confirmedQuestionSubquestionNodes.length === 0} onClick={() => void handleRunAutomaticMappings()}>
+            {runningMappings ? "Running mapping..." : "Run automatic mapping"}
+          </button>
+        </div>
+        {questionNodeMappings.length === 0 ? <EmptyState message="No question-node mappings yet." /> : null}
+        <div className="grid gap-3">
+          {questionNodeMappings.map((group) => (
+            <article key={group.question_node.id} className="rounded border border-slate-800 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-semibold">{group.question_node.label}</h3>
+                  <p className="text-xs text-slate-500">{group.question_node.text || "No extracted text"}</p>
+                </div>
+                <span className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300">
+                  {group.mappings.length} mapping(s)
+                </span>
+              </div>
+              {group.mappings.length === 0 ? <p className="mt-3 text-sm text-amber-200">No mapping created yet for this confirmed node.</p> : null}
+              <div className="mt-3 grid gap-3">
+                {group.mappings.map((mapping) => (
+                  <div key={mapping.id} className="rounded border border-slate-700 p-3 text-sm">
+                    <p className="font-medium">Submission #{mapping.submission_id} · status {mapping.mapping_status}</p>
+                    <p className="text-xs text-slate-400">page: {mapping.source_page ?? "n/a"} · confidence: {mapping.confidence ?? "n/a"} · provider: {mapping.provider}</p>
+                    <p className="text-xs text-slate-400">answer_region_id: {mapping.answer_region_id ?? "none"} · teacher_confirmed: {mapping.teacher_confirmed ? "yes" : "no"}</p>
+                    {mapping.blocker_reason ? <p className="mt-1 text-xs text-red-200">blocker: {mapping.blocker_reason}</p> : null}
+                    {mapping.source_reference ? <pre className="mt-2 overflow-x-auto rounded bg-slate-950/40 p-2 text-[11px] text-slate-300">{JSON.stringify(mapping.source_reference, null, 2)}</pre> : null}
+                    <div className="mt-3 grid gap-2 md:grid-cols-5">
+                      <select className={inputClass} value={selectedMappingQuestionNodeId} onChange={(event) => setSelectedMappingQuestionNodeId(event.target.value)}>
+                        <option value="">Question node</option>
+                        {confirmedQuestionSubquestionNodes.map((node) => (
+                          <option key={node.id} value={node.id}>{node.label}</option>
+                        ))}
+                      </select>
+                      <select className={inputClass} value={mappingPageId} onChange={(event) => setMappingPageId(event.target.value)}>
+                        <option value="">Page</option>
+                        {submissions.flatMap((submission) => submission.pages.map((page) => (
+                          <option key={page.id} value={page.id}>{formatPageLabel(submission, page)}</option>
+                        )))}
+                      </select>
+                      <input className={inputClass} placeholder="x" value={mappingX} onChange={(event) => setMappingX(event.target.value)} />
+                      <input className={inputClass} placeholder="y" value={mappingY} onChange={(event) => setMappingY(event.target.value)} />
+                      <input className={inputClass} placeholder="width" value={mappingWidth} onChange={(event) => setMappingWidth(event.target.value)} />
+                      <input className={inputClass} placeholder="height" value={mappingHeight} onChange={(event) => setMappingHeight(event.target.value)} />
+                    </div>
+                    <textarea className={`${inputClass} mt-2`} rows={2} placeholder="Manual answer text for corrected mapping" value={mappingManualAnswerText} onChange={(event) => setMappingManualAnswerText(event.target.value)} />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button className="rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-200 hover:border-cyan-500" type="button" disabled={savingMappingId === mapping.id} onClick={() => void handleSaveManualMapping(mapping)}>
+                        {savingMappingId === mapping.id ? "Saving..." : "Save manual correction"}
+                      </button>
+                      <button className="rounded border border-emerald-700 px-3 py-1 text-xs text-emerald-200 hover:border-emerald-500" type="button" disabled={confirmingMappingId === mapping.id || mapping.answer_region_id == null} onClick={() => void handleConfirmMapping(mapping.id)}>
+                        {confirmingMappingId === mapping.id ? "Confirming..." : "Confirm mapping"}
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
             </article>

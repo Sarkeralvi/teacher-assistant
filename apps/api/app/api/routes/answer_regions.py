@@ -8,9 +8,9 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.routes.assessments import get_assessment_or_404
+from app.api.routes.assessments import get_assessment_or_404, get_owned_assessment_or_404
 from app.api.routes.questions import get_question_or_404
 from app.api.routes.submissions import get_submission_or_404
 from app.core.auth import get_current_user
@@ -18,11 +18,13 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
+    AnswerRegionMapping,
     AnswerRegionSegment,
     Assessment,
     AuditLog,
     Course,
     Question,
+    QuestionNode,
     Submission,
     SubmissionPage,
     User,
@@ -34,7 +36,12 @@ from app.schemas import (
     AnswerRegionCorrectionSegmentReorder,
     AnswerRegionCreate,
     AnswerRegionFullAnswerConfirmation,
+    AnswerRegionMappingConfirmRequest,
+    AnswerRegionMappingRead,
+    AnswerRegionMappingRunRequest,
+    AnswerRegionMappingRunResponse,
     AnswerRegionMappingSuggestionRequest,
+    AnswerRegionMappingUpdate,
     AnswerRegionRead,
     AnswerRegionSegmentCreate,
     AnswerRegionSegmentRead,
@@ -45,6 +52,12 @@ from app.schemas import (
     DraftAnswerRegionSuggestion,
     DraftAnswerRegionSuggestionGroup,
     DraftAnswerRegionSuggestionSegment,
+    QuestionNodeMappingGroupRead,
+)
+from app.services.answer_region_mapping_service import (
+    build_submission_mapping_candidates,
+    ensure_primary_segment,
+    upsert_answer_region_for_mapping,
 )
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.storage import LocalStorage
@@ -79,6 +92,18 @@ def get_answer_region_or_404(answer_region_id: int, db: Session) -> AnswerRegion
     if region is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found")
     return region
+
+
+def get_answer_region_mapping_or_404(mapping_id: int, db: Session) -> AnswerRegionMapping:
+    statement = (
+        select(AnswerRegionMapping)
+        .options(selectinload(AnswerRegionMapping.answer_region).selectinload(AnswerRegion.segments))
+        .where(AnswerRegionMapping.id == mapping_id)
+    )
+    mapping = db.scalars(statement).first()
+    if mapping is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Answer region mapping not found")
+    return mapping
 
 
 def get_owned_answer_region_or_404(
@@ -968,6 +993,244 @@ def accept_answer_region_mapping_suggestion(
     db.commit()
     db.refresh(region)
     return region
+
+
+@router.post(
+    "/submissions/{submission_id}/question-node-mappings/run",
+    response_model=AnswerRegionMappingRunResponse,
+)
+def run_submission_question_node_mappings(
+    submission_id: int,
+    payload: AnswerRegionMappingRunRequest | None,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionMappingRunResponse:
+    submission = get_submission_or_404(submission_id, db)
+    get_owned_assessment_or_404(submission.assessment_id, db, current_user)
+    request = payload or AnswerRegionMappingRunRequest()
+    if request.replace_existing:
+        existing = db.scalars(
+            select(AnswerRegionMapping)
+            .options(selectinload(AnswerRegionMapping.answer_region).selectinload(AnswerRegion.segments))
+            .where(AnswerRegionMapping.submission_id == submission.id)
+        ).all()
+        for mapping in existing:
+            region = mapping.answer_region
+            db.delete(mapping)
+            if region is not None:
+                db.delete(region)
+        db.flush()
+    candidates = build_submission_mapping_candidates(db, submission)
+    created: list[AnswerRegionMapping] = []
+    for candidate in candidates:
+        mapping = AnswerRegionMapping(
+            assessment_id=submission.assessment_id,
+            submission_id=submission.id,
+            question_node_id=candidate.question_node.id,
+            question_id=candidate.question.id if candidate.question else None,
+            source_page=candidate.source_page,
+            source_reference=candidate.source_reference,
+            confidence=candidate.confidence,
+            mapping_status=candidate.status,
+            blocker_reason=candidate.blocker_reason,
+            provider="deterministic_layout",
+            teacher_confirmed=False,
+        )
+        if candidate.status == "mapped" and candidate.question is not None:
+            region = upsert_answer_region_for_mapping(candidate, submission, mapping)
+            if region is not None:
+                ensure_primary_segment(region)
+                mapping.answer_region = region
+                mapping.answer_region_id = region.id
+        db.add(mapping)
+        created.append(mapping)
+    db.commit()
+    mappings = db.scalars(
+        select(AnswerRegionMapping)
+        .options(selectinload(AnswerRegionMapping.answer_region).selectinload(AnswerRegion.segments))
+        .where(AnswerRegionMapping.submission_id == submission.id)
+        .order_by(AnswerRegionMapping.id)
+    ).all()
+    return AnswerRegionMappingRunResponse(
+        message="Deterministic question-node mapping run completed.",
+        created_count=len(mappings),
+        mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),
+        uncertain_count=sum(1 for item in mappings if item.mapping_status == "uncertain"),
+        blocked_count=sum(1 for item in mappings if item.mapping_status == "blocked"),
+        mappings=list(mappings),
+    )
+
+
+@router.post(
+    "/assessments/{assessment_id}/question-node-mappings/run",
+    response_model=list[AnswerRegionMappingRunResponse],
+)
+def run_assessment_question_node_mappings(
+    assessment_id: int,
+    payload: AnswerRegionMappingRunRequest | None,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> list[AnswerRegionMappingRunResponse]:
+    assessment = get_owned_assessment_or_404(assessment_id, db, current_user)
+    request = payload or AnswerRegionMappingRunRequest()
+    responses: list[AnswerRegionMappingRunResponse] = []
+    for submission in assessment.submissions:
+        responses.append(
+            run_submission_question_node_mappings(submission.id, request, db, current_user)
+        )
+    return responses
+
+
+@router.get(
+    "/assessments/{assessment_id}/question-node-mappings",
+    response_model=list[QuestionNodeMappingGroupRead],
+)
+def list_assessment_question_node_mappings(
+    assessment_id: int, db: DbSession, current_user: CurrentUser
+) -> list[QuestionNodeMappingGroupRead]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
+    nodes = db.scalars(
+        select(QuestionNode)
+        .where(QuestionNode.assessment_id == assessment_id)
+        .where(QuestionNode.teacher_confirmed.is_(True))
+        .where(QuestionNode.node_type.in_(["question", "subquestion"]))
+        .order_by(QuestionNode.source_page.asc().nulls_last(), QuestionNode.id.asc())
+    ).all()
+    mappings = db.scalars(
+        select(AnswerRegionMapping)
+        .options(selectinload(AnswerRegionMapping.answer_region).selectinload(AnswerRegion.segments))
+        .where(AnswerRegionMapping.assessment_id == assessment_id)
+        .order_by(AnswerRegionMapping.id)
+    ).all()
+    grouped: dict[int, list[AnswerRegionMapping]] = {}
+    for mapping in mappings:
+        grouped.setdefault(mapping.question_node_id, []).append(mapping)
+    return [QuestionNodeMappingGroupRead(question_node=node, mappings=grouped.get(node.id, [])) for node in nodes]
+
+
+@router.patch(
+    "/question-node-mappings/{mapping_id}",
+    response_model=AnswerRegionMappingRead,
+)
+def update_question_node_mapping(
+    mapping_id: int,
+    payload: AnswerRegionMappingUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionMapping:
+    mapping = get_answer_region_mapping_or_404(mapping_id, db)
+    submission = get_submission_or_404(mapping.submission_id, db)
+    get_owned_assessment_or_404(submission.assessment_id, db, current_user)
+    if payload.question_node_id is not None:
+        node = db.get(QuestionNode, payload.question_node_id)
+        if node is None or node.assessment_id != submission.assessment_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Question node must belong to the same assessment")
+        mapping.question_node_id = node.id
+        question = next((question for question in node.assessment.questions if question.question_no == node.label or question.question_no == node.question_number), None)
+        if question is not None:
+            mapping.question_id = question.id
+            if mapping.answer_region is not None:
+                mapping.answer_region.question_id = question.id
+                mapping.answer_region.question_node_id = node.id
+    if payload.confidence is not None:
+        mapping.confidence = payload.confidence
+    if payload.mapping_status is not None:
+        mapping.mapping_status = payload.mapping_status
+    if payload.source_reference is not None:
+        mapping.source_reference = payload.source_reference
+    if payload.blocker_reason is not None:
+        mapping.blocker_reason = payload.blocker_reason.strip() or None
+    if payload.page_id is not None:
+        page = get_submission_page_or_404(payload.page_id, db)
+        if page.submission_id != submission.id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Mapping page must belong to the same submission")
+        mapping.source_page = page.page_no
+    region = mapping.answer_region
+    provided_box = all(value is not None for value in (payload.page_id, payload.x, payload.y, payload.width, payload.height))
+    if provided_box:
+        page = get_submission_page_or_404(payload.page_id, db)
+        validate_page_box(page, payload.x, payload.y, payload.width, payload.height)
+        image_path = crop_answer_region_image(
+            storage=LocalStorage(),
+            source_image_path=page.image_path,
+            submission_id=submission.id,
+            x=payload.x,
+            y=payload.y,
+            width=payload.width,
+            height=payload.height,
+        )
+        if region is None:
+            if mapping.question_id is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Mapping needs a resolved grading question before creating an answer region")
+            region = AnswerRegion(
+                submission_id=submission.id,
+                question_id=mapping.question_id,
+                question_node_id=mapping.question_node_id,
+                page_id=page.id,
+                x=payload.x,
+                y=payload.y,
+                width=payload.width,
+                height=payload.height,
+                image_path=image_path,
+                evidence_status="unconfirmed",
+                continuation_check_status="not_checked",
+                manual_answer_text=payload.manual_answer_text,
+            )
+            ensure_primary_segment(region)
+            mapping.answer_region = region
+        else:
+            region.page_id = page.id
+            region.question_node_id = mapping.question_node_id
+            if mapping.question_id is not None:
+                region.question_id = mapping.question_id
+            region.x = payload.x
+            region.y = payload.y
+            region.width = payload.width
+            region.height = payload.height
+            region.image_path = image_path
+            if payload.manual_answer_text is not None:
+                region.manual_answer_text = payload.manual_answer_text
+            ensure_primary_segment(region)
+        mapping.answer_region = region
+        mapping.source_page = page.page_no
+        mapping.mapping_status = "mapped" if mapping.mapping_status == "blocked" else mapping.mapping_status
+        mapping.blocker_reason = None if mapping.mapping_status in {"mapped", "teacher_confirmed"} else mapping.blocker_reason
+    elif payload.manual_answer_text is not None and region is not None:
+        region.manual_answer_text = payload.manual_answer_text
+    mapping.teacher_confirmed = False
+    if mapping.mapping_status == "teacher_confirmed":
+        mapping.teacher_confirmed = True
+    db.commit()
+    return get_answer_region_mapping_or_404(mapping.id, db)
+
+
+@router.post(
+    "/question-node-mappings/{mapping_id}/confirm",
+    response_model=AnswerRegionMappingRead,
+)
+def confirm_question_node_mapping(
+    mapping_id: int,
+    payload: AnswerRegionMappingConfirmRequest | None,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionMapping:
+    mapping = get_answer_region_mapping_or_404(mapping_id, db)
+    submission = get_submission_or_404(mapping.submission_id, db)
+    get_owned_assessment_or_404(submission.assessment_id, db, current_user)
+    request = payload or AnswerRegionMappingConfirmRequest()
+    if request.teacher_confirmed:
+        if mapping.answer_region_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot confirm a mapping without an answer region")
+        if mapping.mapping_status not in {"mapped", "teacher_confirmed"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only mapped regions can be teacher-confirmed")
+        mapping.teacher_confirmed = True
+        mapping.mapping_status = "teacher_confirmed"
+    else:
+        mapping.teacher_confirmed = False
+        if mapping.mapping_status == "teacher_confirmed":
+            mapping.mapping_status = "mapped"
+    db.commit()
+    return get_answer_region_mapping_or_404(mapping.id, db)
 
 
 @router.post(

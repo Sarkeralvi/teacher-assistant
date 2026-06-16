@@ -137,6 +137,14 @@ class GradingRunWorkflowState(BaseModel):
     extracted_rubric_count: int
     scripts_uploaded: bool
     answer_regions_created: bool
+    confirmed_question_node_count: int
+    expected_mapping_count: int
+    mapping_count: int
+    teacher_confirmed_mapping_count: int
+    uncertain_mapping_count: int
+    blocked_mapping_count: int
+    unmapped_question_node_count: int
+    mappings_ready: bool
     grading_ready: bool
     suggestions_created: bool
     review_ready: bool
@@ -672,6 +680,7 @@ class AnswerRegionRead(ORMBase):
     id: int
     submission_id: int
     question_id: int
+    question_node_id: int | None = None
     page_id: int
     x: Decimal
     y: Decimal
@@ -685,6 +694,61 @@ class AnswerRegionRead(ORMBase):
     segments: list[AnswerRegionSegmentRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class AnswerRegionMappingRunRequest(BaseModel):
+    replace_existing: bool = True
+
+
+class AnswerRegionMappingUpdate(BaseModel):
+    question_node_id: int | None = None
+    page_id: int | None = None
+    x: Decimal | None = Field(default=None, ge=Decimal("0"))
+    y: Decimal | None = Field(default=None, ge=Decimal("0"))
+    width: Decimal | None = Field(default=None, gt=Decimal("0"))
+    height: Decimal | None = Field(default=None, gt=Decimal("0"))
+    confidence: Decimal | None = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
+    mapping_status: Literal["mapped", "uncertain", "blocked", "teacher_confirmed"] | None = None
+    blocker_reason: str | None = None
+    source_reference: dict[str, Any] | None = None
+    manual_answer_text: str | None = Field(default=None, max_length=10000)
+
+
+class AnswerRegionMappingConfirmRequest(BaseModel):
+    teacher_confirmed: bool = True
+
+
+class AnswerRegionMappingRead(ORMBase):
+    id: int
+    assessment_id: int
+    submission_id: int
+    question_node_id: int
+    question_id: int | None
+    answer_region_id: int | None
+    source_page: int | None
+    source_reference: dict[str, Any] | None
+    confidence: Decimal | None
+    mapping_status: str
+    blocker_reason: str | None
+    provider: str
+    teacher_confirmed: bool
+    created_at: datetime
+    updated_at: datetime
+    answer_region: AnswerRegionRead | None = None
+
+
+class QuestionNodeMappingGroupRead(BaseModel):
+    question_node: QuestionNodeRead
+    mappings: list[AnswerRegionMappingRead]
+
+
+class AnswerRegionMappingRunResponse(BaseModel):
+    message: str
+    created_count: int
+    mapped_count: int
+    uncertain_count: int
+    blocked_count: int
+    mappings: list[AnswerRegionMappingRead]
 
 
 class AnswerRegionCorrectionResponse(BaseModel):

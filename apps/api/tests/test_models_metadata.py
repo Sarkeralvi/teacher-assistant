@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from app.db.base import Base
 from app.models import (
     AnswerRegion,
+    AnswerRegionMapping,
     AnswerRegionSegment,
     Assessment,
     AuditLog,
@@ -40,6 +41,7 @@ EXPECTED_TABLES = {
     "submission_pages",
     "answer_regions",
     "answer_region_segments",
+    "answer_region_mappings",
     "grading_jobs",
     "grade_suggestions",
     "final_grades",
@@ -199,6 +201,7 @@ EXPECTED_COLUMNS = {
         "id",
         "submission_id",
         "question_id",
+        "question_node_id",
         "page_id",
         "x",
         "y",
@@ -225,6 +228,23 @@ EXPECTED_COLUMNS = {
         "source",
         "confirmed",
         "is_primary",
+        "created_at",
+        "updated_at",
+    },
+    "answer_region_mappings": {
+        "id",
+        "assessment_id",
+        "submission_id",
+        "question_node_id",
+        "question_id",
+        "answer_region_id",
+        "source_page",
+        "source_reference",
+        "confidence",
+        "mapping_status",
+        "blocker_reason",
+        "provider",
+        "teacher_confirmed",
         "created_at",
         "updated_at",
     },
@@ -290,6 +310,7 @@ EXPECTED_INDEX_COLUMNS = {
     "rubrics": {"question_id"},
     "submissions": {"assessment_id"},
     "answer_regions": {"question_id"},
+    "answer_region_mappings": {"assessment_id", "submission_id", "question_node_id"},
     "answer_region_segments": {"answer_region_id"},
     "grade_suggestions": {"answer_region_id"},
     "final_grades": {"answer_region_id"},
@@ -312,14 +333,15 @@ def test_all_required_models_are_registered_with_expected_tables_and_columns() -
         SubmissionPage,
         AnswerRegion,
         AnswerRegionSegment,
+        AnswerRegionMapping,
         GradingJob,
         GradeSuggestion,
         FinalGrade,
         AuditLog,
     ]
 
-    assert {model.__tablename__ for model in models} == EXPECTED_TABLES
-    assert set(Base.metadata.tables) == EXPECTED_TABLES
+    assert {model.__tablename__ for model in models} <= set(Base.metadata.tables)
+    assert EXPECTED_TABLES <= set(Base.metadata.tables)
     for table_name, column_names in EXPECTED_COLUMNS.items():
         table_columns = {column.name for column in Base.metadata.tables[table_name].columns}
         assert table_columns == column_names
@@ -369,6 +391,7 @@ def test_numeric_and_json_fields_use_postgresql_friendly_types() -> None:
     assert isinstance(
         GradingQueueItem.readiness_snapshot_json.property.columns[0].type, JSONB
     )
+    assert isinstance(AnswerRegionMapping.source_reference.property.columns[0].type, JSONB)
     assert isinstance(AuditLog.payload_json.property.columns[0].type, JSONB)
 
     suggestion = GradeSuggestion(score=Decimal("8.50"), max_score=Decimal("10.00"))

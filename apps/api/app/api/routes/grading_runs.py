@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
+    AnswerRegionMapping,
     Assessment,
     Course,
     ExtractionRun,
@@ -118,6 +119,13 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         db,
         select(func.count(QuestionNode.id)).where(QuestionNode.assessment_id == assessment_id),
     )
+    confirmed_question_node_count = scalar_count(
+        db,
+        select(func.count(QuestionNode.id))
+        .where(QuestionNode.assessment_id == assessment_id)
+        .where(QuestionNode.teacher_confirmed.is_(True))
+        .where(QuestionNode.node_type.in_(["question", "subquestion"])),
+    )
     confirmed_extracted_question_count = scalar_count(
         db,
         select(func.count(QuestionNode.id))
@@ -175,6 +183,32 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
     unmapped_question_count = max(question_count - mapped_question_count, 0)
     unmapped_page_count = max(submission_page_count - mapped_page_count, 0)
     unmapped_submission_count = max(submission_count - mapped_submission_count, 0)
+    mapping_count = scalar_count(
+        db,
+        select(func.count(AnswerRegionMapping.id)).where(
+            AnswerRegionMapping.assessment_id == assessment_id
+        ),
+    )
+    teacher_confirmed_mapping_count = scalar_count(
+        db,
+        select(func.count(AnswerRegionMapping.id))
+        .where(AnswerRegionMapping.assessment_id == assessment_id)
+        .where(AnswerRegionMapping.teacher_confirmed.is_(True)),
+    )
+    uncertain_mapping_count = scalar_count(
+        db,
+        select(func.count(AnswerRegionMapping.id))
+        .where(AnswerRegionMapping.assessment_id == assessment_id)
+        .where(AnswerRegionMapping.mapping_status == "uncertain"),
+    )
+    blocked_mapping_count = scalar_count(
+        db,
+        select(func.count(AnswerRegionMapping.id))
+        .where(AnswerRegionMapping.assessment_id == assessment_id)
+        .where(AnswerRegionMapping.mapping_status == "blocked"),
+    )
+    expected_mapping_count = confirmed_question_node_count * submission_count
+    unmapped_question_node_count = max(expected_mapping_count - mapping_count, 0)
     grade_suggestion_count = scalar_count(
         db,
         select(func.count(GradeSuggestion.id))
@@ -257,6 +291,15 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
     )
     scripts_uploaded = submission_count > 0 and submission_page_count > 0
     answer_regions_created = answer_region_count > 0
+    mappings_ready = (
+        expected_mapping_count == 0
+        or (
+            mapping_count >= expected_mapping_count
+            and teacher_confirmed_mapping_count >= expected_mapping_count
+            and uncertain_mapping_count == 0
+            and blocked_mapping_count == 0
+        )
+    )
     grading_ready = (
         materials_uploaded
         and materials_confirmed
@@ -265,6 +308,7 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         and extraction_blockers_resolved
         and scripts_uploaded
         and answer_regions_created
+        and mappings_ready
     )
     suggestions_created = grade_suggestion_count > 0
     review_ready = suggestions_created
@@ -308,6 +352,14 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         blockers.append("Upload at least one script.")
     if answer_region_count == 0:
         blockers.append("Create at least one answer region.")
+    if expected_mapping_count > 0 and mapping_count < expected_mapping_count:
+        blockers.append("Run answer-region mapping for every confirmed question node in every submission.")
+    if uncertain_mapping_count > 0:
+        blockers.append("Resolve uncertain answer-region mappings before grading.")
+    if blocked_mapping_count > 0:
+        blockers.append("Resolve blocked answer-region mappings before grading.")
+    if expected_mapping_count > 0 and teacher_confirmed_mapping_count < expected_mapping_count:
+        blockers.append("Teacher-confirm every required answer-region mapping before grading.")
     if grading_ready and not suggestions_created:
         blockers.append("Run grading before review/export.")
     if suggestions_created and not final_grades_created:
@@ -334,8 +386,14 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
                 next_actions.append("Review and confirm extracted question tree/rubric items.")
     if not scripts_uploaded:
         next_actions.append("Upload scripts.")
+    if scripts_uploaded and expected_mapping_count > 0 and mapping_count < expected_mapping_count:
+        next_actions.append("Run automatic answer-region mapping.")
     if scripts_uploaded and not answer_regions_created:
         next_actions.append("Create answer regions.")
+    if uncertain_mapping_count > 0 or blocked_mapping_count > 0:
+        next_actions.append("Correct uncertain/blocked mappings and confirm them.")
+    if expected_mapping_count > 0 and teacher_confirmed_mapping_count < expected_mapping_count:
+        next_actions.append("Teacher-confirm all required mappings.")
     if unmapped_question_count > 0 and answer_regions_created:
         next_actions.append("Map remaining questions to pages as needed.")
     if grading_ready and not suggestions_created:
@@ -370,8 +428,23 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         "drafts_confirmed": drafts_confirmed,
         "questions_confirmed": questions_confirmed,
         "rubrics_confirmed": rubrics_confirmed,
+        "extracted_questions_confirmed": extracted_questions_confirmed,
+        "extracted_rubrics_confirmed": extracted_rubrics_confirmed,
+        "extraction_blockers_resolved": extraction_blockers_resolved,
+        "question_extraction_run_id": latest_question_extraction.id if latest_question_extraction else None,
+        "rubric_extraction_run_id": latest_rubric_extraction.id if latest_rubric_extraction else None,
+        "extracted_question_count": extracted_question_count,
+        "extracted_rubric_count": extracted_rubric_count,
         "scripts_uploaded": scripts_uploaded,
         "answer_regions_created": answer_regions_created,
+        "confirmed_question_node_count": confirmed_question_node_count,
+        "expected_mapping_count": expected_mapping_count,
+        "mapping_count": mapping_count,
+        "teacher_confirmed_mapping_count": teacher_confirmed_mapping_count,
+        "uncertain_mapping_count": uncertain_mapping_count,
+        "blocked_mapping_count": blocked_mapping_count,
+        "unmapped_question_node_count": unmapped_question_node_count,
+        "mappings_ready": mappings_ready,
         "grading_ready": grading_ready,
         "suggestions_created": suggestions_created,
         "review_ready": review_ready,
@@ -382,24 +455,6 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         "submission_count": submission_count,
         "submission_page_count": submission_page_count,
         "answer_region_count": answer_region_count,
-        "extracted_question_count": extracted_question_count,
-        "confirmed_extracted_question_count": confirmed_extracted_question_count,
-        "extracted_rubric_count": extracted_rubric_count,
-        "confirmed_extracted_rubric_count": confirmed_extracted_rubric_count,
-        "extracted_questions_present": extracted_questions_present,
-        "extracted_rubrics_present": extracted_rubrics_present,
-        "extracted_questions_confirmed": extracted_questions_confirmed,
-        "extracted_rubrics_confirmed": extracted_rubrics_confirmed,
-        "rubric_blocker_count": rubric_blocker_count,
-        "extraction_blockers_resolved": extraction_blockers_resolved,
-        "question_extraction_run_id": (
-            latest_question_extraction.id if latest_question_extraction else None
-        ),
-        "rubric_extraction_run_id": (
-            latest_rubric_extraction.id if latest_rubric_extraction else None
-        ),
-        "question_extraction_blockers": extracted_question_blockers,
-        "rubric_extraction_blockers": extracted_rubric_run_blockers,
         "mapped_question_count": mapped_question_count,
         "mapped_page_count": mapped_page_count,
         "mapped_submission_count": mapped_submission_count,
