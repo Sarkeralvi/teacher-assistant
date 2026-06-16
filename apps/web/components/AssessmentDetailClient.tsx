@@ -28,16 +28,20 @@ import {
   gradeAnswerRegion,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
+  listQuestionNodes,
   listQuestions,
+  listRubricExtractionCriteria,
   listRubrics,
   listSubmissions,
   removeAnswerRegionSegment,
   reorderAnswerRegionSegments,
   suggestAnswerRegionMappings,
+  updateQuestion,
+  updateQuestionNode,
+  updateRubric,
+  updateRubricExtractionCriterion,
   uploadSubmission,
   uploadSubmissionZip,
-  updateQuestion,
-  updateRubric,
   type AnswerRegion,
   type Assessment,
   type DraftAnswerRegionSuggestionGroup,
@@ -48,7 +52,9 @@ import {
   type GradingQueueRun,
   type Question,
   type QuestionImportJob,
+  type QuestionNode,
   type Rubric,
+  type RubricExtractionCriterion,
   type ReviewQueueItem,
   type Submission,
   type SubmissionZipUploadResponse,
@@ -76,6 +82,50 @@ type ManualSetupDraft = {
   criteria_description: string;
   criteria_marks: string;
 };
+
+type ExtractedQuestionNodeDraft = {
+  question_number: string;
+  parent_question_number: string;
+  label: string;
+  text: string;
+  marks: string;
+  source_page: string;
+  teacher_confirmed: boolean;
+};
+
+type ExtractedRubricCriterionDraft = {
+  question_number: string;
+  criterion_label: string;
+  description: string;
+  max_marks: string;
+  blocker: string;
+  teacher_confirmed: boolean;
+};
+
+function questionNodeDraftFor(node: QuestionNode): ExtractedQuestionNodeDraft {
+  return {
+    question_number: node.question_number,
+    parent_question_number: node.parent_question_number ?? "",
+    label: node.label,
+    text: node.text,
+    marks: node.marks == null ? "" : String(node.marks),
+    source_page: node.source_page == null ? "" : String(node.source_page),
+    teacher_confirmed: node.teacher_confirmed,
+  };
+}
+
+function rubricCriterionDraftFor(
+  criterion: RubricExtractionCriterion,
+): ExtractedRubricCriterionDraft {
+  return {
+    question_number: criterion.question_number ?? "",
+    criterion_label: criterion.criterion_label,
+    description: criterion.description,
+    max_marks: criterion.max_marks == null ? "" : String(criterion.max_marks),
+    blocker: criterion.blocker ?? "",
+    teacher_confirmed: criterion.teacher_confirmed,
+  };
+}
 
 function manualSetupDraftFor(question: Question): ManualSetupDraft {
   return {
@@ -107,6 +157,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [questions, setQuestions] = useState<Question[]>([]);
   const [rubricsByQuestionId, setRubricsByQuestionId] = useState<Record<number, Rubric[]>>({});
   const [manualSetupDrafts, setManualSetupDrafts] = useState<Record<number, ManualSetupDraft>>({});
+  const [questionNodes, setQuestionNodes] = useState<QuestionNode[]>([]);
+  const [questionNodeDrafts, setQuestionNodeDrafts] = useState<Record<number, ExtractedQuestionNodeDraft>>({});
+  const [rubricCriteria, setRubricCriteria] = useState<RubricExtractionCriterion[]>([]);
+  const [rubricCriterionDrafts, setRubricCriterionDrafts] = useState<Record<number, ExtractedRubricCriterionDraft>>({});
+  const [savingQuestionNodeId, setSavingQuestionNodeId] = useState<number | null>(null);
+  const [savingRubricCriterionId, setSavingRubricCriterionId] = useState<number | null>(null);
   const [savingQuestionId, setSavingQuestionId] = useState<number | null>(null);
   const [savingModelAnswerId, setSavingModelAnswerId] = useState<number | null>(null);
   const [savingRubricQuestionId, setSavingRubricQuestionId] = useState<number | null>(null);
@@ -197,6 +253,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const unmappedQuestionCount = Math.max(questions.length - mappedQuestionCount, 0);
   const unmappedPageCount = Math.max(pages.length - mappedPageCount, 0);
   const unmappedSubmissionCount = Math.max(submissions.length - mappedSubmissionCount, 0);
+  const confirmedQuestionNodeCount = questionNodes.filter((node) => node.teacher_confirmed).length;
+  const confirmedRubricCriterionCount = rubricCriteria.filter((criterion) => criterion.teacher_confirmed).length;
+  const unresolvedRubricBlockerCount = rubricCriteria.filter((criterion) => criterion.blocker?.trim()).length;
   const selectedPreviewRegion =
     answerRegions.find((region) => String(region.id) === selectedPreviewRegionId) ?? answerRegions[0] ?? null;
 
@@ -266,6 +325,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       const [
         assessmentData,
         questionData,
+        questionNodeData,
+        rubricCriterionData,
         submissionData,
         answerRegionData,
         reviewQueueData,
@@ -275,6 +336,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         await Promise.all([
           getAssessment(assessmentId),
           listQuestions(assessmentId),
+          listQuestionNodes(assessmentId),
+          listRubricExtractionCriteria(assessmentId),
           listSubmissions(assessmentId),
           listAssessmentAnswerRegions(assessmentId),
           getAssessmentReviewQueue(assessmentId),
@@ -284,6 +347,26 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       setAssessment(assessmentData);
       setQuestions(questionData);
+      setQuestionNodes(questionNodeData);
+      setQuestionNodeDrafts((current) => {
+        const next = { ...current };
+        for (const node of questionNodeData) {
+          if (!next[node.id]) {
+            next[node.id] = questionNodeDraftFor(node);
+          }
+        }
+        return next;
+      });
+      setRubricCriteria(rubricCriterionData);
+      setRubricCriterionDrafts((current) => {
+        const next = { ...current };
+        for (const criterion of rubricCriterionData) {
+          if (!next[criterion.id]) {
+            next[criterion.id] = rubricCriterionDraftFor(criterion);
+          }
+        }
+        return next;
+      });
       const rubricEntries = await Promise.all(
         questionData.map(async (question) => [question.id, await listRubrics(question.id)] as const),
       );
@@ -411,6 +494,72 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Failed to save rubric");
     } finally {
       setSavingRubricQuestionId(null);
+    }
+  }
+
+  function updateQuestionNodeDraft(nodeId: number, patch: Partial<ExtractedQuestionNodeDraft>) {
+    setQuestionNodeDrafts((current) => ({
+      ...current,
+      [nodeId]: {
+        ...(current[nodeId] ?? questionNodeDraftFor(questionNodes.find((node) => node.id === nodeId)!)),
+        ...patch,
+      },
+    }));
+  }
+
+  function updateRubricCriterionDraft(
+    criterionId: number,
+    patch: Partial<ExtractedRubricCriterionDraft>,
+  ) {
+    setRubricCriterionDrafts((current) => ({
+      ...current,
+      [criterionId]: {
+        ...(current[criterionId] ?? rubricCriterionDraftFor(rubricCriteria.find((criterion) => criterion.id === criterionId)!)),
+        ...patch,
+      },
+    }));
+  }
+
+  async function handleSaveQuestionNode(node: QuestionNode) {
+    const draft = questionNodeDrafts[node.id] ?? questionNodeDraftFor(node);
+    setSavingQuestionNodeId(node.id);
+    setError(null);
+    try {
+      await updateQuestionNode(node.id, {
+        question_number: draft.question_number.trim(),
+        parent_question_number: draft.parent_question_number.trim() || null,
+        label: draft.label.trim(),
+        text: draft.text.trim(),
+        marks: draft.marks.trim() ? Number(draft.marks) : null,
+        source_page: draft.source_page.trim() ? Number(draft.source_page) : null,
+        teacher_confirmed: draft.teacher_confirmed,
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save extracted question node");
+    } finally {
+      setSavingQuestionNodeId(null);
+    }
+  }
+
+  async function handleSaveRubricCriterion(criterion: RubricExtractionCriterion) {
+    const draft = rubricCriterionDrafts[criterion.id] ?? rubricCriterionDraftFor(criterion);
+    setSavingRubricCriterionId(criterion.id);
+    setError(null);
+    try {
+      await updateRubricExtractionCriterion(criterion.id, {
+        question_number: draft.question_number.trim() || null,
+        criterion_label: draft.criterion_label.trim(),
+        description: draft.description.trim(),
+        max_marks: draft.max_marks.trim() ? Number(draft.max_marks) : null,
+        blocker: draft.blocker.trim() || null,
+        teacher_confirmed: draft.teacher_confirmed,
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save extracted rubric criterion");
+    } finally {
+      setSavingRubricCriterionId(null);
     }
   }
 
@@ -919,6 +1068,112 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             </button>
           </div>
         ) : null}
+      </section>
+
+      <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
+        <div>
+          <h2 className="text-xl font-semibold">Step 2A: Extracted question tree and rubric confirmation</h2>
+          <p className="text-sm text-slate-300">Experimental uploaded-document review. Teacher confirmation required before extracted materials are treated as grading-ready.</p>
+          <p className="text-sm text-amber-200">Unconfirmed extracted question nodes or rubric criteria will block grading-run confirmation. Unresolved extraction blockers must be shown honestly, not treated as success.</p>
+          <p className="text-sm text-slate-400">Manual question/model answer/rubric creation below still remains available and persists after refresh.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded border border-slate-800 p-3 text-sm text-slate-300">
+            <p className="font-semibold">Extracted question tree</p>
+            <p>{confirmedQuestionNodeCount}/{questionNodes.length} nodes confirmed</p>
+          </div>
+          <div className="rounded border border-slate-800 p-3 text-sm text-slate-300">
+            <p className="font-semibold">Extracted rubric</p>
+            <p>{confirmedRubricCriterionCount}/{rubricCriteria.length} criteria confirmed · blockers: {unresolvedRubricBlockerCount}</p>
+          </div>
+        </div>
+        {questionNodes.length === 0 ? (
+          <p className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">No extracted question tree yet. Upload/extract first, or use the manual creation path below.</p>
+        ) : (
+          <div className="grid gap-3">
+            {questionNodes.map((node) => {
+              const draft = questionNodeDrafts[node.id] ?? questionNodeDraftFor(node);
+              return (
+                <article key={node.id} className="grid gap-3 rounded border border-slate-800 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">{draft.question_number || node.question_number} · {node.node_type}</h3>
+                      <p className="text-xs text-slate-400">Run #{node.extraction_run_id} · page {node.source_page ?? "?"} · confidence {node.confidence ?? "n/a"}</p>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-emerald-200">
+                      <input
+                        type="checkbox"
+                        checked={draft.teacher_confirmed}
+                        onChange={(event) => updateQuestionNodeDraft(node.id, { teacher_confirmed: event.target.checked })}
+                      />
+                      Teacher confirmed
+                    </label>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <input className={inputClass} aria-label={`Extracted question number ${node.id}`} value={draft.question_number} onChange={(event) => updateQuestionNodeDraft(node.id, { question_number: event.target.value })} />
+                    <input className={inputClass} aria-label={`Extracted parent question ${node.id}`} placeholder="Parent question number if subquestion" value={draft.parent_question_number} onChange={(event) => updateQuestionNodeDraft(node.id, { parent_question_number: event.target.value })} />
+                    <input className={inputClass} aria-label={`Extracted label ${node.id}`} value={draft.label} onChange={(event) => updateQuestionNodeDraft(node.id, { label: event.target.value })} />
+                    <input className={inputClass} aria-label={`Extracted marks ${node.id}`} placeholder="Marks" value={draft.marks} onChange={(event) => updateQuestionNodeDraft(node.id, { marks: event.target.value })} />
+                    <input className={inputClass} aria-label={`Extracted source page ${node.id}`} placeholder="Source page" value={draft.source_page} onChange={(event) => updateQuestionNodeDraft(node.id, { source_page: event.target.value })} />
+                  </div>
+                  <textarea className={inputClass} aria-label={`Extracted question text ${node.id}`} value={draft.text} onChange={(event) => updateQuestionNodeDraft(node.id, { text: event.target.value })} />
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
+                    <button className={buttonClass} disabled={savingQuestionNodeId === node.id} type="button" onClick={() => void handleSaveQuestionNode(node)}>
+                      {savingQuestionNodeId === node.id ? "Saving extracted node..." : "Save extracted node"}
+                    </button>
+                    <span className={draft.teacher_confirmed ? "text-emerald-300" : "text-amber-200"}>
+                      {draft.teacher_confirmed ? "Teacher-confirmed and persisted after save." : "Teacher confirmation required before grading."}
+                    </span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+        {rubricCriteria.length === 0 ? (
+          <p className="rounded border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">No extracted rubric yet. Upload/extract first, or continue with the manual rubric path below.</p>
+        ) : (
+          <div className="grid gap-3">
+            {rubricCriteria.map((criterion) => {
+              const draft = rubricCriterionDrafts[criterion.id] ?? rubricCriterionDraftFor(criterion);
+              return (
+                <article key={criterion.id} className="grid gap-3 rounded border border-slate-800 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">{draft.question_number || criterion.question_number || "Unlinked"} · {draft.criterion_label || criterion.criterion_label}</h3>
+                      <p className="text-xs text-slate-400">Run #{criterion.extraction_run_id} · confidence {criterion.confidence ?? "n/a"}</p>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-emerald-200">
+                      <input
+                        type="checkbox"
+                        checked={draft.teacher_confirmed}
+                        onChange={(event) => updateRubricCriterionDraft(criterion.id, { teacher_confirmed: event.target.checked })}
+                      />
+                      Teacher confirmed
+                    </label>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <input className={inputClass} aria-label={`Extracted rubric question ${criterion.id}`} value={draft.question_number} onChange={(event) => updateRubricCriterionDraft(criterion.id, { question_number: event.target.value })} />
+                    <input className={inputClass} aria-label={`Extracted rubric max marks ${criterion.id}`} placeholder="Max marks" value={draft.max_marks} onChange={(event) => updateRubricCriterionDraft(criterion.id, { max_marks: event.target.value })} />
+                    <input className={inputClass} aria-label={`Extracted rubric label ${criterion.id}`} value={draft.criterion_label} onChange={(event) => updateRubricCriterionDraft(criterion.id, { criterion_label: event.target.value })} />
+                  </div>
+                  <textarea className={inputClass} aria-label={`Extracted rubric description ${criterion.id}`} value={draft.description} onChange={(event) => updateRubricCriterionDraft(criterion.id, { description: event.target.value })} />
+                  <textarea className={inputClass} aria-label={`Extracted rubric blocker ${criterion.id}`} placeholder="Leave blank when resolved. Any saved blocker will continue to block grading readiness." value={draft.blocker} onChange={(event) => updateRubricCriterionDraft(criterion.id, { blocker: event.target.value })} />
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
+                    <button className={buttonClass} disabled={savingRubricCriterionId === criterion.id} type="button" onClick={() => void handleSaveRubricCriterion(criterion)}>
+                      {savingRubricCriterionId === criterion.id ? "Saving extracted rubric..." : "Save extracted rubric"}
+                    </button>
+                    <span className={draft.teacher_confirmed && !draft.blocker.trim() ? "text-emerald-300" : "text-amber-200"}>
+                      {draft.teacher_confirmed && !draft.blocker.trim()
+                        ? "Teacher-confirmed rubric criterion ready for grading gate checks."
+                        : "Teacher confirmation required. Saved blockers remain visible and block grading readiness."}
+                    </span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">

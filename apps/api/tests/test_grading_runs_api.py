@@ -15,13 +15,16 @@ from app.models import (
     AnswerRegion,
     Assessment,
     Course,
+    ExtractionRun,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
     GradingRun,
     Question,
     QuestionImportJob,
+    QuestionNode,
     Rubric,
+    RubricExtractionCriterion,
     Submission,
     SubmissionPage,
     User,
@@ -36,6 +39,9 @@ CLEANUP_MODELS = (
     Submission,
     Rubric,
     Question,
+    RubricExtractionCriterion,
+    QuestionNode,
+    ExtractionRun,
     QuestionImportJob,
     GradingRun,
     Assessment,
@@ -296,15 +302,17 @@ def create_question_and_active_rubric(client: TestClient, assessment_id: int) ->
 
 
 def upload_script_and_create_region(
-    client: TestClient, tmp_path: Path, assessment_id: int, question_id: int
+    client: TestClient, token: str, tmp_path: Path, assessment_id: int, question_id: int
 ) -> dict[str, object]:
     image_path = tmp_path / "script.png"
     Image.new("RGB", (160, 120), color="white").save(image_path, format="PNG")
+    headers = {"Authorization": f"Bearer {token}"}
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment_id}/submissions/upload",
             data={"student_identifier": "S-001"},
             files={"file": ("script.png", file_obj, "image/png")},
+            headers=headers,
         )
     assert submission_response.status_code == 201
     submission = submission_response.json()
@@ -312,9 +320,22 @@ def upload_script_and_create_region(
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
         json={"question_id": question_id, "x": 1, "y": 1, "width": 80, "height": 80},
+        headers=headers,
     )
     assert region_response.status_code == 201
-    return {"submission": submission, "page": page, "region": region_response.json()}
+    region = region_response.json()
+    confirmation_response = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        json={
+            "full_answer_confirmed": True,
+            "continuation_not_needed": True,
+            "manual_answer_text": "Synthetic confirmed answer text.",
+            "packet_status": "complete",
+        },
+        headers=headers,
+    )
+    assert confirmation_response.status_code == 200
+    return {"submission": submission, "page": page, "region": confirmation_response.json()}
 
 
 def get_run(client: TestClient, token: str, run_id: int) -> dict[str, object]:
@@ -410,7 +431,7 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
     assert "Upload at least one script." in after_confirm["blockers"]
 
     created = upload_script_and_create_region(
-        client, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
+        client, token, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
     )
     ready = get_run(client, token, run_id)["workflow_state"]
     assert ready["submission_count"] == 1
@@ -425,6 +446,102 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
     assert ready["grading_ready"] is True
     assert ready["review_ready"] is False
     assert created["region"]["id"]
+
+
+
+def test_confirm_questions_rubrics_blocks_unconfirmed_extracted_nodes_and_rubrics(
+    client: TestClient,
+) -> None:
+    teacher, token = register_teacher(client, "extract-gate")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    run_id = int(
+        client.post(
+            f"/assessments/{assessment['id']}/grading-runs/custom",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()["id"]
+    )
+    upload_all_materials(client, token, run_id)
+    assert client.post(
+        f"/grading-runs/{run_id}/confirm-materials",
+        headers={"Authorization": f"Bearer {token}"},
+    ).status_code == 200
+    create_question_and_active_rubric(client, int(assessment["id"]))
+
+    extraction_run = ExtractionRun(
+        assessment_id=int(assessment["id"]),
+        artifact_file_path="uploads/extractions/question.pdf",
+        original_filename="question.pdf",
+        content_type="application/pdf",
+        extraction_type="question_paper",
+        provider="mock",
+        status="succeeded",
+        blockers=[],
+    )
+    db = SessionLocal()
+    try:
+        db.add(extraction_run)
+        db.flush()
+        db.add(
+            QuestionNode(
+                assessment_id=int(assessment["id"]),
+                extraction_run_id=extraction_run.id,
+                question_number="Q1",
+                parent_question_number=None,
+                label="Q1",
+                text="Synthetic extracted question",
+                marks="10.00",
+                node_type="question",
+                source_page=1,
+                source_reference={"page": 1},
+                confidence="0.90",
+                teacher_confirmed=False,
+            )
+        )
+        db.add(
+            RubricExtractionCriterion(
+                assessment_id=int(assessment["id"]),
+                extraction_run_id=extraction_run.id,
+                question_number="Q1",
+                criterion_label="Criterion",
+                description="Synthetic extracted rubric",
+                max_marks="10.00",
+                confidence="0.80",
+                blocker=None,
+                teacher_confirmed=False,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    blocked = client.post(
+        f"/grading-runs/{run_id}/confirm-questions-rubrics",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert blocked.status_code == 409
+    assert "Confirm every extracted question node" in blocked.json()["detail"]
+
+    node = client.get(f"/assessments/{assessment['id']}/question-nodes").json()[0]
+    criterion = client.get(f"/assessments/{assessment['id']}/rubric-extraction-criteria").json()[0]
+    assert client.patch(
+        f"/question-nodes/{node['id']}",
+        json={"teacher_confirmed": True},
+    ).status_code == 200
+    assert client.patch(
+        f"/rubric-extraction-criteria/{criterion['id']}",
+        json={"teacher_confirmed": True, "blocker": None},
+    ).status_code == 200
+
+    confirmed = client.post(
+        f"/grading-runs/{run_id}/confirm-questions-rubrics",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert confirmed.status_code == 200
+    workflow = confirmed.json()["workflow_state"]
+    assert workflow["extracted_questions_confirmed"] is True
+    assert workflow["extracted_rubrics_confirmed"] is True
+    assert workflow["question_extraction_run_id"] is not None
+
 
 
 def test_semi_automated_run_rejected_by_default(client: TestClient) -> None:
@@ -531,7 +648,7 @@ def test_custom_controlled_full_v0_api_workflow_and_no_auto_finalization(
         == 200
     )
     upload_script_and_create_region(
-        client, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
+        client, token, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
     )
 
     grade_response = client.post(
@@ -547,7 +664,10 @@ def test_custom_controlled_full_v0_api_workflow_and_no_auto_finalization(
     assert after_grading["final_grade_count"] == 0
     assert after_grading["export_ready"] is False
 
-    review_queue = client.get(f"/assessments/{assessment['id']}/review-queue").json()
+    review_queue = client.get(
+        f"/assessments/{assessment['id']}/review-queue",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
     suggestion_id = review_queue[0]["latest_grade_suggestion"]["id"]
     approve_response = client.post(
         f"/grade-suggestions/{suggestion_id}/approve",
@@ -561,7 +681,10 @@ def test_custom_controlled_full_v0_api_workflow_and_no_auto_finalization(
     assert final_state["export_ready"] is True
     assert final_state["derived_status"] == "completed"
 
-    export_response = client.get(f"/assessments/{assessment['id']}/export/final-grades.xlsx")
+    export_response = client.get(
+        f"/assessments/{assessment['id']}/export/final-grades.xlsx",
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert export_response.status_code == 200
     assert export_response.headers["content-type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -590,6 +713,7 @@ def test_custom_controlled_workflow_state_counts_zip_imported_submissions(
         upload = client.post(
             f"/assessments/{assessment['id']}/submissions/upload-zip",
             files={"file": ("scripts.zip", file_obj, "application/zip")},
+            headers={"Authorization": f"Bearer {token}"},
         )
     assert upload.status_code == 201
     assert upload.json()["imported_count"] == 2
@@ -671,7 +795,7 @@ def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
         headers={"Authorization": f"Bearer {token}"},
     ).status_code == 200
     upload_script_and_create_region(
-        client, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
+        client, token, tmp_path, int(assessment["id"]), int(question_data["question"]["id"])
     )
 
     grade_response = client.post(
@@ -689,7 +813,10 @@ def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
     assert suggestion_body["raw_response_json"]["marking_policy"] == "tough"
     assert "marking_policy:tough" in suggestion_body["raw_response_json"]["review_flags"]
 
-    review_queue = client.get(f"/assessments/{assessment['id']}/review-queue").json()
+    review_queue = client.get(
+        f"/assessments/{assessment['id']}/review-queue",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
     assert review_queue[0]["latest_grade_suggestion"]["marking_policy"] == "tough"
     approve_response = client.post(
         f"/grade-suggestions/{suggestion_id}/approve",
@@ -698,7 +825,10 @@ def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
     )
     assert approve_response.status_code == 201
 
-    export_response = client.get(f"/assessments/{assessment['id']}/export/final-grades.xlsx")
+    export_response = client.get(
+        f"/assessments/{assessment['id']}/export/final-grades.xlsx",
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert export_response.status_code == 200
     workbook = load_workbook(BytesIO(export_response.content))
     rows = list(workbook.active.iter_rows(values_only=True))

@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import Assessment, ExtractionRun, QuestionNode, RubricExtractionCriterion
-from app.schemas import ExtractionRunRead, QuestionNodeRead, RubricExtractionCriterionRead
+from app.schemas import (
+    ExtractionRunRead,
+    QuestionNodeRead,
+    QuestionNodeUpdate,
+    RubricExtractionCriterionRead,
+    RubricExtractionCriterionUpdate,
+)
 from app.services.document_extraction import (
     BridgeUnavailableError,
     DocumentExtractionError,
@@ -132,3 +138,70 @@ def list_rubric_extraction_criteria(
         )
     )
     return list(db.scalars(statement).all())
+
+
+@router.patch("/question-nodes/{node_id}", response_model=QuestionNodeRead)
+def update_question_node(node_id: int, payload: QuestionNodeUpdate, db: DbSession):
+    node = db.get(QuestionNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question node not found")
+    provided_fields = payload.model_fields_set
+    if payload.question_number is not None:
+        node.question_number = payload.question_number.strip()
+    if payload.parent_question_number is not None:
+        cleaned_parent = payload.parent_question_number.strip()
+        node.parent_question_number = cleaned_parent or None
+    elif "parent_question_number" in provided_fields:
+        node.parent_question_number = None
+    if payload.label is not None:
+        node.label = payload.label.strip()
+    if payload.text is not None:
+        node.text = payload.text.strip()
+    if "marks" in provided_fields:
+        node.marks = payload.marks
+    if "source_page" in provided_fields:
+        node.source_page = payload.source_page
+    if "source_reference" in provided_fields:
+        node.source_reference = payload.source_reference
+    if payload.teacher_confirmed is not None:
+        node.teacher_confirmed = payload.teacher_confirmed
+    db.commit()
+    db.refresh(node)
+    return node
+
+
+@router.patch(
+    "/rubric-extraction-criteria/{criterion_id}",
+    response_model=RubricExtractionCriterionRead,
+)
+def update_rubric_extraction_criterion(
+    criterion_id: int, payload: RubricExtractionCriterionUpdate, db: DbSession
+):
+    criterion = db.get(RubricExtractionCriterion, criterion_id)
+    if criterion is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Rubric extraction criterion not found",
+        )
+    provided_fields = payload.model_fields_set
+    if payload.question_number is not None:
+        cleaned_question_number = payload.question_number.strip()
+        criterion.question_number = cleaned_question_number or None
+    elif "question_number" in provided_fields:
+        criterion.question_number = None
+    if payload.criterion_label is not None:
+        criterion.criterion_label = payload.criterion_label.strip()
+    if payload.description is not None:
+        criterion.description = payload.description.strip()
+    if "max_marks" in provided_fields:
+        criterion.max_marks = payload.max_marks
+    if payload.blocker is not None:
+        cleaned_blocker = payload.blocker.strip()
+        criterion.blocker = cleaned_blocker or None
+    elif "blocker" in provided_fields:
+        criterion.blocker = None
+    if payload.teacher_confirmed is not None:
+        criterion.teacher_confirmed = payload.teacher_confirmed
+    db.commit()
+    db.refresh(criterion)
+    return criterion

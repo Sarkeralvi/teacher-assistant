@@ -148,6 +148,20 @@ export type GradingRunWorkflowState = {
   submission_count: number;
   submission_page_count: number;
   answer_region_count: number;
+  extracted_question_count: number;
+  confirmed_extracted_question_count: number;
+  extracted_rubric_count: number;
+  confirmed_extracted_rubric_count: number;
+  extracted_questions_present: boolean;
+  extracted_rubrics_present: boolean;
+  extracted_questions_confirmed: boolean;
+  extracted_rubrics_confirmed: boolean;
+  rubric_blocker_count: number;
+  extraction_blockers_resolved: boolean;
+  question_extraction_run_id: number | null;
+  rubric_extraction_run_id: number | null;
+  question_extraction_blockers: string[];
+  rubric_extraction_blockers: string[];
   mapped_question_count: number;
   mapped_page_count: number;
   mapped_submission_count: number;
@@ -201,6 +215,59 @@ export type Rubric = {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type QuestionNode = {
+  id: number;
+  assessment_id: number;
+  extraction_run_id: number;
+  question_number: string;
+  parent_question_number: string | null;
+  label: string;
+  text: string;
+  marks: string | number | null;
+  node_type: string;
+  source_page: number | null;
+  source_reference: Record<string, unknown> | null;
+  confidence: string | number | null;
+  teacher_confirmed: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QuestionNodeUpdate = {
+  question_number?: string;
+  parent_question_number?: string | null;
+  label?: string;
+  text?: string;
+  marks?: string | number | null;
+  source_page?: number | null;
+  source_reference?: Record<string, unknown> | null;
+  teacher_confirmed?: boolean;
+};
+
+export type RubricExtractionCriterion = {
+  id: number;
+  assessment_id: number;
+  extraction_run_id: number;
+  question_number: string | null;
+  criterion_label: string;
+  description: string;
+  max_marks: string | number | null;
+  confidence: string | number | null;
+  blocker: string | null;
+  teacher_confirmed: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RubricExtractionCriterionUpdate = {
+  question_number?: string | null;
+  criterion_label?: string;
+  description?: string;
+  max_marks?: string | number | null;
+  blocker?: string | null;
+  teacher_confirmed?: boolean;
 };
 
 export type SubmissionPage = {
@@ -878,6 +945,41 @@ export function confirmGradingRunMaterials(gradingRunId: number) {
 export function confirmGradingRunQuestionsRubrics(gradingRunId: number) {
   return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}/confirm-questions-rubrics`, {
     method: "POST",
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function listQuestionNodes(assessmentId: number) {
+  return apiRequest<QuestionNode[]>(`/assessments/${assessmentId}/question-nodes`, {
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function updateQuestionNode(nodeId: number, payload: QuestionNodeUpdate) {
+  return apiRequest<QuestionNode>(`/question-nodes/${nodeId}`, {
+    method: "PATCH",
+    body: payload,
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function listRubricExtractionCriteria(assessmentId: number) {
+  return apiRequest<RubricExtractionCriterion[]>(`/assessments/${assessmentId}/rubric-extraction-criteria`, {
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function updateRubricExtractionCriterion(
+  criterionId: number,
+  payload: RubricExtractionCriterionUpdate,
+) {
+  return apiRequest<RubricExtractionCriterion>(`/rubric-extraction-criteria/${criterionId}`, {
+    method: "PATCH",
+    body: payload,
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });

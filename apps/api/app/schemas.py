@@ -128,6 +128,13 @@ class GradingRunWorkflowState(BaseModel):
     drafts_confirmed: bool
     questions_confirmed: bool
     rubrics_confirmed: bool
+    extracted_questions_confirmed: bool
+    extracted_rubrics_confirmed: bool
+    extraction_blockers_resolved: bool
+    question_extraction_run_id: int | None = None
+    rubric_extraction_run_id: int | None = None
+    extracted_question_count: int
+    extracted_rubric_count: int
     scripts_uploaded: bool
     answer_regions_created: bool
     grading_ready: bool
@@ -387,6 +394,17 @@ class QuestionNodeRead(ORMBase):
     updated_at: datetime
 
 
+class QuestionNodeUpdate(BaseModel):
+    question_number: str | None = Field(default=None, min_length=1, max_length=64)
+    parent_question_number: str | None = Field(default=None, max_length=64)
+    label: str | None = Field(default=None, min_length=1, max_length=128)
+    text: str | None = Field(default=None, min_length=1)
+    marks: Decimal | None = None
+    source_page: int | None = None
+    source_reference: dict[str, Any] | None = None
+    teacher_confirmed: bool | None = None
+
+
 class RubricExtractionCriterionRead(ORMBase):
     id: int
     assessment_id: int
@@ -400,6 +418,15 @@ class RubricExtractionCriterionRead(ORMBase):
     teacher_confirmed: bool
     created_at: datetime
     updated_at: datetime
+
+
+class RubricExtractionCriterionUpdate(BaseModel):
+    question_number: str | None = Field(default=None, max_length=64)
+    criterion_label: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, min_length=1)
+    max_marks: Decimal | None = None
+    blocker: str | None = None
+    teacher_confirmed: bool | None = None
 
 
 class RubricCriterionSchema(BaseModel):

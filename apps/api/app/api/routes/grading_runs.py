@@ -14,12 +14,15 @@ from app.models import (
     AnswerRegion,
     Assessment,
     Course,
+    ExtractionRun,
     FinalGrade,
     GradeSuggestion,
     GradingRun,
     Question,
     QuestionImportJob,
+    QuestionNode,
     Rubric,
+    RubricExtractionCriterion,
     Submission,
     SubmissionPage,
     User,
@@ -111,6 +114,46 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         .join(Submission, AnswerRegion.submission_id == Submission.id)
         .where(Submission.assessment_id == assessment_id),
     )
+    extracted_question_count = scalar_count(
+        db,
+        select(func.count(QuestionNode.id)).where(QuestionNode.assessment_id == assessment_id),
+    )
+    confirmed_extracted_question_count = scalar_count(
+        db,
+        select(func.count(QuestionNode.id))
+        .where(QuestionNode.assessment_id == assessment_id)
+        .where(QuestionNode.teacher_confirmed.is_(True)),
+    )
+    extracted_rubric_count = scalar_count(
+        db,
+        select(func.count(RubricExtractionCriterion.id)).where(
+            RubricExtractionCriterion.assessment_id == assessment_id
+        ),
+    )
+    confirmed_extracted_rubric_count = scalar_count(
+        db,
+        select(func.count(RubricExtractionCriterion.id))
+        .where(RubricExtractionCriterion.assessment_id == assessment_id)
+        .where(RubricExtractionCriterion.teacher_confirmed.is_(True)),
+    )
+    rubric_blocker_count = scalar_count(
+        db,
+        select(func.count(RubricExtractionCriterion.id))
+        .where(RubricExtractionCriterion.assessment_id == assessment_id)
+        .where(RubricExtractionCriterion.blocker.is_not(None)),
+    )
+    latest_question_extraction = db.scalars(
+        select(ExtractionRun)
+        .where(ExtractionRun.assessment_id == assessment_id)
+        .where(ExtractionRun.extraction_type == "question_paper")
+        .order_by(ExtractionRun.created_at.desc(), ExtractionRun.id.desc())
+    ).first()
+    latest_rubric_extraction = db.scalars(
+        select(ExtractionRun)
+        .where(ExtractionRun.assessment_id == assessment_id)
+        .where(ExtractionRun.extraction_type == "rubric")
+        .order_by(ExtractionRun.created_at.desc(), ExtractionRun.id.desc())
+    ).first()
     mapped_question_count = scalar_count(
         db,
         select(func.count(func.distinct(AnswerRegion.question_id)))
@@ -173,6 +216,39 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         and question_count > 0
         and active_rubric_count >= question_count
     )
+    extracted_questions_present = extracted_question_count > 0
+    extracted_rubrics_present = extracted_rubric_count > 0
+    extracted_question_blockers = (
+        latest_question_extraction.blockers if latest_question_extraction else []
+    )
+    extracted_rubric_run_blockers = (
+        latest_rubric_extraction.blockers if latest_rubric_extraction else []
+    )
+    extracted_questions_confirmed = (
+        not extracted_questions_present
+        or confirmed_extracted_question_count == extracted_question_count
+    )
+    extracted_rubrics_confirmed = (
+        not extracted_rubrics_present
+        or confirmed_extracted_rubric_count == extracted_rubric_count
+    )
+    extraction_blockers_resolved = (
+        (
+            not extracted_questions_present
+            or (
+                extracted_questions_confirmed
+                and len(extracted_question_blockers) == 0
+            )
+        )
+        and (
+            not extracted_rubrics_present
+            or (
+                extracted_rubrics_confirmed
+                and rubric_blocker_count == 0
+                and len(extracted_rubric_run_blockers) == 0
+            )
+        )
+    )
     drafts_confirmed = (
         grading_run.mode == "semi_automated"
         and drafts_created
@@ -186,6 +262,7 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         and materials_confirmed
         and questions_confirmed
         and rubrics_confirmed
+        and extraction_blockers_resolved
         and scripts_uploaded
         and answer_regions_created
     )
@@ -217,10 +294,16 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         blockers.append("Create or confirm at least one question.")
     elif not questions_confirmed:
         blockers.append("Confirm questions/model answers.")
+    if extracted_questions_present and not extracted_questions_confirmed:
+        blockers.append("Confirm every extracted question node before grading.")
     if question_count > 0 and active_rubric_count < question_count:
         blockers.append("Create active rubric for each selected question.")
     elif question_count > 0 and not rubrics_confirmed:
         blockers.append("Confirm rubrics.")
+    if extracted_rubrics_present and not extracted_rubrics_confirmed:
+        blockers.append("Confirm every extracted rubric criterion before grading.")
+    if rubric_blocker_count > 0 or extracted_question_blockers or extracted_rubric_run_blockers:
+        blockers.append("Resolve extraction blockers before grading extracted materials.")
     if submission_count == 0:
         blockers.append("Upload at least one script.")
     if answer_region_count == 0:
@@ -247,6 +330,8 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
             next_actions.append("Confirm uploaded materials.")
         if not (questions_confirmed and rubrics_confirmed):
             next_actions.append("Confirm questions and rubrics.")
+            if extracted_questions_present or extracted_rubrics_present:
+                next_actions.append("Review and confirm extracted question tree/rubric items.")
     if not scripts_uploaded:
         next_actions.append("Upload scripts.")
     if scripts_uploaded and not answer_regions_created:
@@ -297,6 +382,24 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         "submission_count": submission_count,
         "submission_page_count": submission_page_count,
         "answer_region_count": answer_region_count,
+        "extracted_question_count": extracted_question_count,
+        "confirmed_extracted_question_count": confirmed_extracted_question_count,
+        "extracted_rubric_count": extracted_rubric_count,
+        "confirmed_extracted_rubric_count": confirmed_extracted_rubric_count,
+        "extracted_questions_present": extracted_questions_present,
+        "extracted_rubrics_present": extracted_rubrics_present,
+        "extracted_questions_confirmed": extracted_questions_confirmed,
+        "extracted_rubrics_confirmed": extracted_rubrics_confirmed,
+        "rubric_blocker_count": rubric_blocker_count,
+        "extraction_blockers_resolved": extraction_blockers_resolved,
+        "question_extraction_run_id": (
+            latest_question_extraction.id if latest_question_extraction else None
+        ),
+        "rubric_extraction_run_id": (
+            latest_rubric_extraction.id if latest_rubric_extraction else None
+        ),
+        "question_extraction_blockers": extracted_question_blockers,
+        "rubric_extraction_blockers": extracted_rubric_run_blockers,
         "mapped_question_count": mapped_question_count,
         "mapped_page_count": mapped_page_count,
         "mapped_submission_count": mapped_submission_count,
@@ -526,6 +629,24 @@ def confirm_grading_run_questions_rubrics(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Create one active rubric for each canonical question before confirmation",
+        )
+    if workflow_state.get("extracted_questions_confirmed") is False:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Confirm every extracted question node before confirming questions and rubrics",
+        )
+    if workflow_state.get("extracted_rubrics_confirmed") is False:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Confirm every extracted rubric criterion before confirming "
+                "questions and rubrics"
+            ),
+        )
+    if workflow_state.get("extraction_blockers_resolved") is False:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resolve extraction blockers before confirming questions and rubrics",
         )
     now = datetime.now(UTC)
     grading_run.questions_confirmed_at = now

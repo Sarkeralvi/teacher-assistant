@@ -186,3 +186,90 @@ def test_mock_rubric_extraction_run_stores_linked_criteria(
     criteria = client.get(f"/assessments/{assessment['id']}/rubric-extraction-criteria")
     assert criteria.status_code == 200
     assert [item["question_number"] for item in criteria.json()] == ["Q1(a)", "Q1(b)"]
+
+
+def test_extracted_question_nodes_can_be_edited_and_confirmed(
+    client: TestClient,
+    assessment: dict[str, object],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "true")
+    monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "mock")
+    get_settings.cache_clear()
+    paper_path = tmp_path / "paper.pdf"
+    make_pdf(paper_path, QUESTION_TEXT)
+
+    with paper_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/extraction-runs",
+            data={"extraction_type": "question_paper", "provider": "mock"},
+            files={"file": ("paper.pdf", file_obj, "application/pdf")},
+        )
+    assert response.status_code == 201
+
+    node = client.get(f"/assessments/{assessment['id']}/question-nodes").json()[0]
+    updated = client.patch(
+        f"/question-nodes/{node['id']}",
+        json={
+            "question_number": "Q1-main",
+            "label": "Edited Q1",
+            "text": "Edited question text",
+            "marks": 12,
+            "source_page": 2,
+            "teacher_confirmed": True,
+        },
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["question_number"] == "Q1-main"
+    assert body["label"] == "Edited Q1"
+    assert body["text"] == "Edited question text"
+    assert body["marks"] in ("12", "12.00")
+    assert body["source_page"] == 2
+    assert body["teacher_confirmed"] is True
+
+    refreshed = client.get(f"/assessments/{assessment['id']}/question-nodes").json()[0]
+    assert refreshed["teacher_confirmed"] is True
+
+
+
+def test_extracted_rubric_criteria_can_be_edited_confirmed_and_blockers_cleared(
+    client: TestClient,
+    assessment: dict[str, object],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "true")
+    monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "mock")
+    get_settings.cache_clear()
+    rubric_path = tmp_path / "rubric.pdf"
+    make_pdf(rubric_path, RUBRIC_TEXT)
+
+    with rubric_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/extraction-runs",
+            data={"extraction_type": "rubric", "provider": "mock"},
+            files={"file": ("rubric.pdf", file_obj, "application/pdf")},
+        )
+    assert response.status_code == 201
+
+    criterion = client.get(f"/assessments/{assessment['id']}/rubric-extraction-criteria").json()[0]
+    updated = client.patch(
+        f"/rubric-extraction-criteria/{criterion['id']}",
+        json={
+            "question_number": "Q1(a)",
+            "criterion_label": "Edited criterion",
+            "description": "Teacher-approved description",
+            "max_marks": 5,
+            "blocker": None,
+            "teacher_confirmed": True,
+        },
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["criterion_label"] == "Edited criterion"
+    assert body["description"] == "Teacher-approved description"
+    assert body["max_marks"] in ("5", "5.00")
+    assert body["blocker"] is None
+    assert body["teacher_confirmed"] is True
