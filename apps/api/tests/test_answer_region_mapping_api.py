@@ -2,14 +2,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
-from alembic import command
-from alembic.config import Config
 import fitz
 import pytest
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from alembic import command
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
@@ -68,7 +68,9 @@ def db_session() -> Iterator[Session]:
 
 
 @pytest.fixture()
-def client(db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def client(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
     get_settings.cache_clear()
     monkeypatch.setenv("LOCAL_STORAGE_ROOT", str(tmp_path / "storage"))
     monkeypatch.setenv("UPLOADS_DIR", str(tmp_path / "storage" / "uploads"))
@@ -79,7 +81,9 @@ def client(db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         get_settings.cache_clear()
 
 
-def register_teacher(client: TestClient, email_prefix: str = "mapping") -> tuple[dict[str, object], str]:
+def register_teacher(
+    client: TestClient, email_prefix: str = "mapping"
+) -> tuple[dict[str, object], str]:
     response = client.post(
         "/auth/register",
         json={
@@ -282,7 +286,11 @@ def test_ambiguous_mapping_creates_uncertain_blocker(
     )
     assert response.status_code == 200, response.text
     mappings = response.json()["mappings"]
-    q1a = next(item for item in mappings if item["source_reference"] and "Q1(a)" in str(item["source_reference"]))
+    q1a = next(
+        item
+        for item in mappings
+        if item["source_reference"] and "Q1(a)" in str(item["source_reference"])
+    )
     assert q1a["mapping_status"] == "uncertain"
     assert "Multiple visible label matches" in (q1a["blocker_reason"] or "")
 
@@ -364,7 +372,9 @@ def test_workflow_state_blocks_unconfirmed_or_uncertain_mappings(
     )
     assert run_response.status_code == 200
 
-    detail = client.get(f"/grading-runs/{grading_run['id']}", headers={"Authorization": f"Bearer {token}"})
+    detail = client.get(
+        f"/grading-runs/{grading_run['id']}", headers={"Authorization": f"Bearer {token}"}
+    )
     assert detail.status_code == 200
     workflow_state = detail.json()["workflow_state"]
     assert workflow_state["mappings_ready"] is False

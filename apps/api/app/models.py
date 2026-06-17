@@ -599,7 +599,9 @@ class AnswerRegionMapping(TimestampMixin, Base):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
     mapping_status: Mapped[str] = mapped_column(String(32), nullable=False, default="blocked")
     blocker_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="deterministic_layout")
+    provider: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="deterministic_layout"
+    )
     teacher_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     assessment: Mapped[Assessment] = relationship(back_populates="answer_region_mappings")

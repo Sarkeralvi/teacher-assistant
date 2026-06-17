@@ -435,13 +435,20 @@ def create_mapping_fixture(
     image_path = tmp_path / "mapping-page.png"
     make_png(image_path, size=(420, 600))
     user_response = client.post(
-        "/users", json={"name": "Mapping Teacher", "email": "mapping@example.com"}
+        "/auth/register",
+        json={
+            "name": "Mapping Teacher",
+            "email": "mapping@example.com",
+            "password": "mapping-password",
+        },
     )
     assert user_response.status_code == 201
+    token = user_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
     course_response = client.post(
         "/courses",
+        headers=headers,
         json={
-            "teacher_id": user_response.json()["id"],
             "code": "MAP101",
             "title": "Mapping",
         },
@@ -449,11 +456,13 @@ def create_mapping_fixture(
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Mapping Quiz", "assessment_type": "quiz", "total_marks": "6.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1(b)(i)",
             "question_text": "Show all working.",
@@ -464,6 +473,7 @@ def create_mapping_fixture(
     assert question_response.status_code == 201
     rubric_response = client.post(
         f"/questions/{question_response.json()['id']}/rubrics",
+        headers=headers,
         json={
             "version": 1,
             "is_active": True,
@@ -484,6 +494,7 @@ def create_mapping_fixture(
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            headers=headers,
             data={"student_identifier": "MAP-001"},
             files={"file": ("mapping.png", file_obj, "image/png")},
         )
@@ -998,12 +1009,14 @@ def test_evidence_packet_requires_explicit_complete_status_before_grading(
     assert db_region is not None
     db_region.full_answer_confirmed = True
     db_region.evidence_status = "complete"
+    db_region.manual_answer_text = "Confirmed answer text."
     for segment in db_region.segments:
         segment.confirmed = True
     db_session.commit()
 
     packet_after = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
     assert packet_after["student_answer_evidence"]["packet_status"] == "complete"
+    assert packet_after["student_answer_evidence"]["manual_answer_text"] == "Confirmed answer text."
     assert packet_after["readiness_result"]["ready_for_grading"] is True
 
 

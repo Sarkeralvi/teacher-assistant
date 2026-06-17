@@ -262,6 +262,7 @@ class GradingService:
                 },
                 "crop_path": crop_path,
                 "manual_answer_text": region.manual_answer_text,
+                "extracted_student_answer_text": region.manual_answer_text,
                 "manual_answer_text_present": bool((region.manual_answer_text or "").strip()),
                 "segment_count": len(confirmed_segments),
                 "pages_covered": pages_covered,

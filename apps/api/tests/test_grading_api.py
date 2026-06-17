@@ -117,20 +117,28 @@ def create_answer_region_with_optional_rubric(
     manual_answer_text: str | None = "A complete answer explains the concept.",
 ) -> dict[str, object]:
     email = f"grade-{len(list(tmp_path.glob('*.png')))}@example.com"
-    user_response = client.post("/users", json={"name": "Teacher", "email": email})
+    user_response = client.post(
+        "/auth/register",
+        json={"name": "Teacher", "email": email, "password": "grading-password"},
+    )
     assert user_response.status_code == 201
+    token = user_response.json()["access_token"]
+    headers = auth_header(token)
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "GRD101", "title": "Grading"},
+        headers=headers,
+        json={"code": "GRD101", "title": "Grading"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Explain.",
@@ -142,6 +150,7 @@ def create_answer_region_with_optional_rubric(
     if create_rubric:
         rubric_response = client.post(
             f"/questions/{question_response.json()['id']}/rubrics",
+            headers=headers,
             json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
         )
         assert rubric_response.status_code == 201
@@ -151,6 +160,7 @@ def create_answer_region_with_optional_rubric(
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            headers=headers,
             data={"student_identifier": "S-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
@@ -158,6 +168,7 @@ def create_answer_region_with_optional_rubric(
     page = submission_response.json()["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question_response.json()["id"],
             "x": 1,

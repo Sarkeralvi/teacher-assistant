@@ -230,9 +230,7 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         .where(QuestionImportJob.assessment_id == assessment_id)
         .order_by(QuestionImportJob.created_at.desc(), QuestionImportJob.id.desc())
     ).first()
-    drafts_created = bool(
-        latest_question_import_job and latest_question_import_job.draft_questions
-    )
+    drafts_created = bool(latest_question_import_job and latest_question_import_job.draft_questions)
     if grading_run.mode == "semi_automated":
         materials_uploaded = question_paper_uploaded
     else:
@@ -263,24 +261,17 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         or confirmed_extracted_question_count == extracted_question_count
     )
     extracted_rubrics_confirmed = (
-        not extracted_rubrics_present
-        or confirmed_extracted_rubric_count == extracted_rubric_count
+        not extracted_rubrics_present or confirmed_extracted_rubric_count == extracted_rubric_count
     )
     extraction_blockers_resolved = (
-        (
-            not extracted_questions_present
-            or (
-                extracted_questions_confirmed
-                and len(extracted_question_blockers) == 0
-            )
-        )
-        and (
-            not extracted_rubrics_present
-            or (
-                extracted_rubrics_confirmed
-                and rubric_blocker_count == 0
-                and len(extracted_rubric_run_blockers) == 0
-            )
+        not extracted_questions_present
+        or (extracted_questions_confirmed and len(extracted_question_blockers) == 0)
+    ) and (
+        not extracted_rubrics_present
+        or (
+            extracted_rubrics_confirmed
+            and rubric_blocker_count == 0
+            and len(extracted_rubric_run_blockers) == 0
         )
     )
     drafts_confirmed = (
@@ -291,14 +282,11 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
     )
     scripts_uploaded = submission_count > 0 and submission_page_count > 0
     answer_regions_created = answer_region_count > 0
-    mappings_ready = (
-        expected_mapping_count == 0
-        or (
-            mapping_count >= expected_mapping_count
-            and teacher_confirmed_mapping_count >= expected_mapping_count
-            and uncertain_mapping_count == 0
-            and blocked_mapping_count == 0
-        )
+    mappings_ready = expected_mapping_count == 0 or (
+        mapping_count >= expected_mapping_count
+        and teacher_confirmed_mapping_count >= expected_mapping_count
+        and uncertain_mapping_count == 0
+        and blocked_mapping_count == 0
     )
     grading_ready = (
         materials_uploaded
@@ -353,7 +341,9 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
     if answer_region_count == 0:
         blockers.append("Create at least one answer region.")
     if expected_mapping_count > 0 and mapping_count < expected_mapping_count:
-        blockers.append("Run answer-region mapping for every confirmed question node in every submission.")
+        blockers.append(
+            "Run answer-region mapping for every confirmed question node in every submission."
+        )
     if uncertain_mapping_count > 0:
         blockers.append("Resolve uncertain answer-region mappings before grading.")
     if blocked_mapping_count > 0:
@@ -431,8 +421,12 @@ def build_workflow_state(grading_run: GradingRun, db: Session) -> dict[str, obje
         "extracted_questions_confirmed": extracted_questions_confirmed,
         "extracted_rubrics_confirmed": extracted_rubrics_confirmed,
         "extraction_blockers_resolved": extraction_blockers_resolved,
-        "question_extraction_run_id": latest_question_extraction.id if latest_question_extraction else None,
-        "rubric_extraction_run_id": latest_rubric_extraction.id if latest_rubric_extraction else None,
+        "question_extraction_run_id": latest_question_extraction.id
+        if latest_question_extraction
+        else None,
+        "rubric_extraction_run_id": latest_rubric_extraction.id
+        if latest_rubric_extraction
+        else None,
         "extracted_question_count": extracted_question_count,
         "extracted_rubric_count": extracted_rubric_count,
         "scripts_uploaded": scripts_uploaded,
@@ -548,9 +542,7 @@ def list_assessment_grading_runs(
 def get_grading_run(
     grading_run_id: int, db: DbSession, current_user: CurrentUser
 ) -> dict[str, object]:
-    return serialize_grading_run(
-        get_owned_grading_run_or_404(grading_run_id, db, current_user), db
-    )
+    return serialize_grading_run(get_owned_grading_run_or_404(grading_run_id, db, current_user), db)
 
 
 @router.patch("/grading-runs/{grading_run_id}", response_model=GradingRunRead)
@@ -694,8 +686,7 @@ def confirm_grading_run_questions_rubrics(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Confirm every extracted rubric criterion before confirming "
-                "questions and rubrics"
+                "Confirm every extracted rubric criterion before confirming questions and rubrics"
             ),
         )
     if workflow_state.get("extraction_blockers_resolved") is False:

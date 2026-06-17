@@ -891,6 +891,8 @@ class EvidencePacketRubricEvidence(BaseModel):
 class EvidencePacketStudentAnswerEvidence(BaseModel):
     answer_region_coordinates: dict[str, Decimal]
     crop_path: str | None
+    manual_answer_text: str | None = None
+    extracted_student_answer_text: str | None = None
     segment_count: int = 0
     pages_covered: list[int] = Field(default_factory=list)
     segments: list[dict[str, Any]] = Field(default_factory=list)

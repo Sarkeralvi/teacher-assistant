@@ -12,7 +12,14 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AnswerRegion, AnswerRegionMapping, AnswerRegionSegment, Question, QuestionNode, Submission
+from app.models import (
+    AnswerRegion,
+    AnswerRegionMapping,
+    AnswerRegionSegment,
+    Question,
+    QuestionNode,
+    Submission,
+)
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.storage import LocalStorage
 
@@ -82,7 +89,10 @@ def _find_original_upload_path(storage: LocalStorage, submission_id: int) -> Pat
 def _extract_pdf_page_texts(pdf_path: Path) -> list[tuple[int, str]]:
     doc = fitz.open(pdf_path)
     try:
-        return [(index + 1, _normalize_space(doc.load_page(index).get_text("text"))) for index in range(len(doc))]
+        return [
+            (index + 1, _normalize_space(doc.load_page(index).get_text("text")))
+            for index in range(len(doc))
+        ]
     finally:
         doc.close()
 
@@ -92,7 +102,9 @@ def _find_matches(page_texts: list[tuple[int, str]], variants: list[str]) -> lis
     seen: set[tuple[int, int, int]] = set()
     for page_index, (page_no, page_text) in enumerate(page_texts):
         for label in variants:
-            pattern = re.compile(LABEL_PATTERN_TEMPLATE.format(label=re.escape(label)), re.IGNORECASE)
+            pattern = re.compile(
+                LABEL_PATTERN_TEMPLATE.format(label=re.escape(label)), re.IGNORECASE
+            )
             for match in pattern.finditer(page_text):
                 key = (page_no, match.start(), match.end())
                 if key in seen:
@@ -112,7 +124,9 @@ def _find_matches(page_texts: list[tuple[int, str]], variants: list[str]) -> lis
     return matches
 
 
-def _resolve_question_for_node(db: Session, assessment_id: int, node: QuestionNode) -> Question | None:
+def _resolve_question_for_node(
+    db: Session, assessment_id: int, node: QuestionNode
+) -> Question | None:
     questions = db.scalars(
         select(Question).where(Question.assessment_id == assessment_id).order_by(Question.id)
     ).all()
@@ -129,21 +143,27 @@ def _resolve_question_for_node(db: Session, assessment_id: int, node: QuestionNo
     return questions[0] if len(questions) == 1 else None
 
 
-def _estimate_box(submission: Submission, page_id: int, ordinal_index: int, total_count: int) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+def _estimate_box(
+    submission: Submission, page_id: int, ordinal_index: int, total_count: int
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
     page = next(page for page in submission.pages if page.id == page_id)
     with Image.open(LocalStorage().resolve_relative(page.image_path)) as image:
         width = Decimal(str(image.width))
         height = Decimal(str(image.height))
     margin_x = Decimal("24")
     usable_width = max(width - (margin_x * 2), Decimal("120"))
-    section_height = max((height - Decimal("48")) / Decimal(str(max(total_count, 1))), Decimal("120"))
+    section_height = max(
+        (height - Decimal("48")) / Decimal(str(max(total_count, 1))), Decimal("120")
+    )
     y = Decimal("24") + (section_height * Decimal(str(ordinal_index)))
     if y + section_height > height - Decimal("12"):
         section_height = max(height - y - Decimal("12"), Decimal("80"))
     return (margin_x, y, usable_width, section_height)
 
 
-def build_submission_mapping_candidates(db: Session, submission: Submission) -> list[DeterministicMappingCandidate]:
+def build_submission_mapping_candidates(
+    db: Session, submission: Submission
+) -> list[DeterministicMappingCandidate]:
     confirmed_nodes = db.scalars(
         select(QuestionNode)
         .where(QuestionNode.assessment_id == submission.assessment_id)
@@ -162,7 +182,10 @@ def build_submission_mapping_candidates(db: Session, submission: Submission) -> 
                 question_node=node,
                 question=_resolve_question_for_node(db, submission.assessment_id, node),
                 status="blocked",
-                blocker_reason="Automatic mapping currently requires a text-based PDF upload for deterministic label detection.",
+                blocker_reason=(
+                    "Automatic mapping currently requires a text-based PDF upload "
+                    "for deterministic label detection."
+                ),
                 confidence=None,
                 source_page=None,
                 source_reference=None,
@@ -199,7 +222,10 @@ def build_submission_mapping_candidates(db: Session, submission: Submission) -> 
                     question_node=node,
                     question=None,
                     status="blocked",
-                    blocker_reason="No confirmed grading question matches this confirmed question node yet.",
+                    blocker_reason=(
+                        "No confirmed grading question matches this confirmed "
+                        "question node yet."
+                    ),
                     confidence=None,
                     source_page=None,
                     source_reference=None,
@@ -217,7 +243,10 @@ def build_submission_mapping_candidates(db: Session, submission: Submission) -> 
                     question_node=node,
                     question=question,
                     status="blocked",
-                    blocker_reason=f"No visible label match found for {node.label} in the uploaded script.",
+                    blocker_reason=(
+                        f"No visible label match found for {node.label} in the "
+                        "uploaded script."
+                    ),
                     confidence=Decimal("0.00"),
                     source_page=None,
                     source_reference={"label_variants": _label_variants(node)},
@@ -235,13 +264,21 @@ def build_submission_mapping_candidates(db: Session, submission: Submission) -> 
                     question_node=node,
                     question=question,
                     status="uncertain",
-                    blocker_reason=f"Multiple visible label matches found for {node.label}; teacher confirmation/correction required.",
+                    blocker_reason=(
+                        f"Multiple visible label matches found for {node.label}; "
+                        "teacher confirmation/correction required."
+                    ),
                     confidence=Decimal("0.45"),
                     source_page=matches[0].page_no,
                     source_reference={
                         "label_variants": _label_variants(node),
                         "matches": [
-                            {"page_no": match.page_no, "start": match.start, "end": match.end, "label": match.label}
+                            {
+                                "page_no": match.page_no,
+                                "start": match.start,
+                                "end": match.end,
+                                "label": match.label,
+                            }
                             for match in matches
                         ],
                     },
@@ -288,7 +325,9 @@ def build_submission_mapping_candidates(db: Session, submission: Submission) -> 
                     "label": match.label,
                     "start": match.start,
                     "end": match.end,
-                    "page_text_excerpt": match.page_text[max(0, match.start - 40): min(len(match.page_text), match.end + 120)],
+                    "page_text_excerpt": match.page_text[
+                        max(0, match.start - 40) : min(len(match.page_text), match.end + 120)
+                    ],
                     "bbox_strategy": "estimated_page_partition",
                 },
                 page_id=page_id,
@@ -301,8 +340,16 @@ def build_submission_mapping_candidates(db: Session, submission: Submission) -> 
     return candidates
 
 
-def upsert_answer_region_for_mapping(candidate: DeterministicMappingCandidate, submission: Submission, mapping: AnswerRegionMapping) -> AnswerRegion | None:
-    if candidate.page_id is None or candidate.x is None or candidate.y is None or candidate.width is None or candidate.height is None:
+def upsert_answer_region_for_mapping(
+    candidate: DeterministicMappingCandidate, submission: Submission, mapping: AnswerRegionMapping
+) -> AnswerRegion | None:
+    if (
+        candidate.page_id is None
+        or candidate.x is None
+        or candidate.y is None
+        or candidate.width is None
+        or candidate.height is None
+    ):
         return None
     storage = LocalStorage()
     page = next(page for page in submission.pages if page.id == candidate.page_id)
