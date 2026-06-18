@@ -33,6 +33,12 @@ def load_source_text(path: Path, content_type: str) -> str:
         return "\n\n".join(chunks)
     return ""
 
+def has_image_input(content_type: str, path: Path) -> bool:
+    return content_type.startswith("image/") or path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+
+def pdf_needs_image_input(path: Path, content_type: str, source_text: str) -> bool:
+    return (content_type == "application/pdf" or path.suffix.lower() == ".pdf") and not source_text.strip()
+
 
 def build_prompt(extraction_type: str, file_path: Path, content_type: str, source_text: str) -> str:
     if extraction_type == "question_paper":
@@ -94,7 +100,9 @@ Required JSON schema:
 """
 
 
-def run_codex(model: str, prompt: str, output_file: Path, repo_root: Path) -> str:
+def run_codex(
+    model: str, prompt: str, output_file: Path, repo_root: Path, image_paths: list[Path] | None = None
+) -> str:
     codex_path = shutil.which("codex") or "/usr/local/bin/codex"
     command = [
         codex_path,
@@ -110,6 +118,8 @@ def run_codex(model: str, prompt: str, output_file: Path, repo_root: Path) -> st
         "--model",
         model,
     ]
+    for image_path in image_paths or []:
+        command.extend(["--image", str(image_path)])
     completed = subprocess.run(
         command,
         input=prompt,
@@ -146,7 +156,14 @@ def main() -> int:
     prompt = build_prompt(args.extraction_type, input_path, args.content_type, source_text)
     try:
         with tempfile.TemporaryDirectory(prefix="ta-codex-bridge-"):
-            raw_output = run_codex(args.model, prompt, output_path, repo_root)
+            if has_image_input(args.content_type, input_path) or pdf_needs_image_input(
+                input_path, args.content_type, source_text
+            ):
+                raw_output = run_codex(
+                    args.model, prompt, output_path, repo_root, image_paths=[input_path]
+                )
+            else:
+                raw_output = run_codex(args.model, prompt, output_path, repo_root)
         payload = json.loads(raw_output)
     except Exception as exc:
         print(sanitize(str(exc)), file=sys.stderr)

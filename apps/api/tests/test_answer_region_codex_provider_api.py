@@ -17,6 +17,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     AnswerRegion,
+    AnswerRegionSegment,
     Assessment,
     Course,
     FinalGrade,
@@ -43,6 +44,7 @@ def db_session() -> Iterator[Session]:
     db = SessionLocal()
     try:
         for model in (
+            AnswerRegionSegment,
             SubmissionPage,
             Submission,
             Question,
@@ -58,6 +60,7 @@ def db_session() -> Iterator[Session]:
         yield db
     finally:
         for model in (
+            AnswerRegionSegment,
             SubmissionPage,
             Submission,
             Question,

@@ -115,6 +115,32 @@ def test_host_bridge_command_is_built_safely(tmp_path: Path) -> None:
     assert command[command.index("--extraction-type") + 1] == "question_paper"
 
 
+def test_host_bridge_uses_image_flag_for_image_inputs(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def runner(cmd: list[str], **_kwargs: object) -> FakeCompletedProcess:
+        calls.append(cmd)
+        output_file = Path(cmd[cmd.index("--output-file") + 1])
+        output_file.write_text(json.dumps(RUBRIC_PAYLOAD), encoding="utf-8")
+        return FakeCompletedProcess(stdout="ok")
+
+    extractor = HostBridgeCodexDocumentExtractor(
+        bridge_command="python scripts/codex_extract_document.py",
+        timeout_seconds=30,
+        runner=runner,
+    )
+    file_path = tmp_path / "fixture.png"
+    file_path.write_bytes(b"not-a-real-image-but-sufficient-for-command-assembly")
+
+    result = extractor.extract(file_path, "rubric", "image/png")
+
+    assert result.normalized_output["criteria"][0]["question_number"] == "Q1(a)"
+    command = calls[-1]
+    assert "--input-file" in command
+    assert str(file_path) == command[command.index("--input-file") + 1]
+    assert command[command.index("--extraction-type") + 1] == "rubric"
+
+
 def test_host_bridge_malformed_json_fails_cleanly(tmp_path: Path) -> None:
     def runner(cmd: list[str], **_kwargs: object) -> FakeCompletedProcess:
         output_file = Path(cmd[cmd.index("--output-file") + 1])

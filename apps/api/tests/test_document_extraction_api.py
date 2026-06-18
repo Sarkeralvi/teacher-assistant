@@ -12,15 +12,23 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
+    AnswerRegion,
+    AnswerRegionSegment,
     Assessment,
     Course,
     ExtractionRun,
     QuestionNode,
     RubricExtractionCriterion,
+    Submission,
+    SubmissionPage,
     User,
 )
 
 CLEANUP_MODELS = (
+    AnswerRegionSegment,
+    AnswerRegion,
+    SubmissionPage,
+    Submission,
     QuestionNode,
     RubricExtractionCriterion,
     ExtractionRun,

@@ -39,7 +39,12 @@ def run_host_extraction(run_id: int, model: str) -> int:
         prompt = build_prompt(run.extraction_type, host_file, run.content_type, source_text)
         output_path = REPO_ROOT / ".tmp" / f"extraction_run_{run_id}.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_output = run_codex(model, prompt, output_path, REPO_ROOT)
+        if host_file.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} or (
+            run.content_type == "application/pdf" and not source_text.strip()
+        ):
+            raw_output = run_codex(model, prompt, output_path, REPO_ROOT, image_paths=[host_file])
+        else:
+            raw_output = run_codex(model, prompt, output_path, REPO_ROOT)
         normalized_output = validate_normalized_output(run.extraction_type, json.loads(raw_output))
         result = ExtractionProviderResult(
             raw_output=raw_output,
