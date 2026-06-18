@@ -136,6 +136,7 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=headers,
             data={"student_identifier": "S-001", "student_name": "Student One"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
@@ -144,7 +145,14 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     page = submission["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
-        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
+        json={
+            "question_id": question["id"],
+            "x": 1,
+            "y": 2,
+            "width": 20,
+            "height": 25,
+            "manual_answer_text": "2 + 2 = 4",
+        },
     )
     assert region_response.status_code == 201
     region = region_response.json()
@@ -171,7 +179,14 @@ def create_extra_region_and_suggestion(
     page = submission["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
-        json={"question_id": question["id"], "x": x, "y": 2, "width": 20, "height": 25},
+        json={
+            "question_id": question["id"],
+            "x": x,
+            "y": 2,
+            "width": 20,
+            "height": 25,
+            "manual_answer_text": "2 + 2 = 4",
+        },
     )
     assert region_response.status_code == 201
     grade_response = client.post(f"/answer-regions/{region_response.json()['id']}/grade")
@@ -233,6 +248,7 @@ def create_owned_region_and_suggestion(
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment['id']}/submissions/upload",
+            headers=headers,
             data={"student_identifier": "S-OWN", "student_name": "Owned Student"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
@@ -241,7 +257,14 @@ def create_owned_region_and_suggestion(
     page = submission["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
-        json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
+        json={
+            "question_id": question["id"],
+            "x": 1,
+            "y": 2,
+            "width": 20,
+            "height": 25,
+            "manual_answer_text": "2 + 2 = 4",
+        },
     )
     assert region_response.status_code == 201
     grade_response = client.post(f"/answer-regions/{region_response.json()['id']}/grade")
