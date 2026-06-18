@@ -32,7 +32,12 @@ health:
 	curl -fsS http://localhost:8000/health
 
 frontend-health:
-	curl -fsS http://localhost:3000 >/dev/null
+	curl -fsS http://localhost:3000/health >/dev/null
+
+frontend-repair:
+	rm -rf apps/web/.next
+	cd apps/web && npm run build
+	$(COMPOSE) up -d --no-deps --force-recreate frontend
 
 backend-test:
 	cd apps/api && python -m pytest -q
