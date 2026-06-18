@@ -2,14 +2,12 @@
 
 ## Passed workflow
 
-Synthetic document workflow verified end-to-end:
+Verified pieces of the synthetic document workflow:
 
-1. Evidence extraction and readiness gating were already in place from TA-FULL-004.
-2. Synthetic grading produced a draft GradeSuggestion.
-3. Teacher review queue exposed the draft suggestion.
-4. Explicit teacher approval created a FinalGrade.
-5. Approved-only export produced an XLSX containing the FinalGrade row.
-6. Duplicate approval was idempotent and updated the existing FinalGrade instead of duplicating it.
+1. Question extraction provider smoke completed with live Codex CLI.
+2. Answer-region provider smoke/test coverage requires authenticated teacher uploads and now passes.
+3. Review queue, explicit approval, FinalGrade creation, duplicate approval safety, and approved-only export focused tests pass.
+4. The review/export path continues to keep draft GradeSuggestions separate from FinalGrades.
 
 ## Synthetic fixture used
 

@@ -96,20 +96,28 @@ def create_uploaded_page(
 ) -> tuple[dict[str, object], dict[str, object]]:
     image_path = tmp_path / f"answer-{len(list(tmp_path.glob('answer-*.png')))}.png"
     email = f"codex-{image_path.stem}@example.com"
-    user_response = client.post("/users", json={"name": "Teacher", "email": email})
-    assert user_response.status_code == 201
+    auth_response = client.post(
+        "/auth/register",
+        json={"name": "Teacher", "email": email, "password": "codex-password"},
+    )
+    assert auth_response.status_code == 201
+    auth = auth_response.json()
+    headers = {"Authorization": f"Bearer {auth['access_token']}"}
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "COD101", "title": "Codex"},
+        headers=headers,
+        json={"code": "COD101", "title": "Codex"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={"question_no": "1", "question_text": "Answer this.", "total_marks": "5.00"},
     )
     assert question_response.status_code == 201
@@ -117,6 +125,7 @@ def create_uploaded_page(
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            headers=headers,
             data={"student_identifier": "COD-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
