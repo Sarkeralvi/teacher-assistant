@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import fitz
@@ -72,22 +73,42 @@ def client(
         get_settings.cache_clear()
 
 
-def create_assessment(client: TestClient) -> dict[str, object]:
-    user_response = client.post(
-        "/users", json={"name": "Teacher", "email": f"qimport-{uuid4().hex}@example.com"}
+def auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def create_teacher(client: TestClient, name: str = "Teacher") -> dict[str, Any]:
+    response = client.post(
+        "/auth/register",
+        json={
+            "name": name,
+            "email": f"qimport-{uuid4().hex}@example.com",
+            "password": "question-import-pass",
+        },
     )
-    assert user_response.status_code == 201
+    assert response.status_code == 201
+    return response.json()
+
+
+def create_assessment(client: TestClient) -> dict[str, Any]:
+    teacher = create_teacher(client)
+    token = str(teacher["access_token"])
+    user = teacher["user"]
+    assert isinstance(user, dict)
+    headers = auth_headers(token)
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "PHY101", "title": "Physics"},
+        headers=headers,
+        json={"teacher_id": user["id"], "code": "PHY101", "title": "Physics"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "20.00"},
     )
     assert assessment_response.status_code == 201
-    return assessment_response.json()
+    return {"assessment": assessment_response.json(), "headers": headers, "teacher": user}
 
 
 def make_question_pdf(path: Path) -> None:
@@ -104,16 +125,77 @@ def make_png(path: Path) -> None:
     Image.new("RGB", (80, 40), color="white").save(path, format="PNG")
 
 
-def test_upload_question_paper_creates_import_job_and_drafts(
+def test_question_import_rejects_unauthenticated_request(
     client: TestClient, tmp_path: Path
 ) -> None:
-    assessment = create_assessment(client)
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
     paper_path = tmp_path / "question-paper.pdf"
     make_question_pdf(paper_path)
 
     with paper_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/question-imports",
+            files={"file": ("question-paper.pdf", file_obj, "application/pdf")},
+        )
+
+    assert response.status_code == 401
+
+
+def test_question_import_rejects_authenticated_non_owner(
+    client: TestClient, tmp_path: Path
+) -> None:
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    other_teacher = create_teacher(client, name="Other Teacher")
+    other_headers = auth_headers(str(other_teacher["access_token"]))
+    paper_path = tmp_path / "question-paper.pdf"
+    make_question_pdf(paper_path)
+
+    with paper_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            headers=other_headers,
+            files={"file": ("question-paper.pdf", file_obj, "application/pdf")},
+        )
+
+    assert response.status_code == 404
+
+
+def test_owner_unsupported_question_import_provider_preserves_provider_error(
+    client: TestClient, tmp_path: Path
+) -> None:
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
+    image_path = tmp_path / "paper.png"
+    make_png(image_path)
+
+    with image_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
+            data={"provider": "gpt-5.5"},
+            files={"file": ("paper.png", file_obj, "image/png")},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Unsupported question import provider: gpt-5.5"
+
+
+def test_upload_question_paper_creates_import_job_and_drafts(
+    client: TestClient, tmp_path: Path
+) -> None:
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
+    paper_path = tmp_path / "question-paper.pdf"
+    make_question_pdf(paper_path)
+
+    with paper_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
             files={"file": ("question-paper.pdf", file_obj, "application/pdf")},
         )
 
@@ -146,12 +228,15 @@ def test_upload_question_paper_creates_import_job_and_drafts(
 def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
     client: TestClient, tmp_path: Path
 ) -> None:
-    assessment = create_assessment(client)
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
     paper_path = tmp_path / "question-paper.pdf"
     make_question_pdf(paper_path)
     with paper_path.open("rb") as file_obj:
         job_response = client.post(
             f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
             files={"file": ("question-paper.pdf", file_obj, "application/pdf")},
         )
     assert job_response.status_code == 201
@@ -197,15 +282,19 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
 
 
 def test_question_import_validation_errors(client: TestClient, tmp_path: Path) -> None:
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
     missing = client.post(
         "/assessments/999999/question-imports",
+        headers=headers,
         files={"file": ("question-paper.pdf", b"%PDF-1.4", "application/pdf")},
     )
     assert missing.status_code == 404
 
-    assessment = create_assessment(client)
     unsupported = client.post(
         f"/assessments/{assessment['id']}/question-imports",
+        headers=headers,
         files={"file": ("question-paper.txt", b"Q1 text", "text/plain")},
     )
     assert unsupported.status_code == 415
@@ -215,6 +304,7 @@ def test_question_import_validation_errors(client: TestClient, tmp_path: Path) -
     with image_path.open("rb") as file_obj:
         image_response = client.post(
             f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
             files={"file": ("paper.png", file_obj, "image/png")},
         )
     assert image_response.status_code == 201
@@ -227,12 +317,15 @@ def test_question_import_validation_errors(client: TestClient, tmp_path: Path) -
 def test_question_import_does_not_expose_sensitive_or_call_codex(
     client: TestClient, tmp_path: Path
 ) -> None:
-    assessment = create_assessment(client)
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
     paper_path = tmp_path / "question-paper.pdf"
     make_question_pdf(paper_path)
     with paper_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
             files={"file": ("question-paper.pdf", file_obj, "application/pdf")},
         )
 
@@ -246,13 +339,16 @@ def test_question_import_does_not_expose_sensitive_or_call_codex(
 def test_real_codex_provider_request_rejected_when_not_enabled(
     client: TestClient, tmp_path: Path
 ) -> None:
-    assessment = create_assessment(client)
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
     image_path = tmp_path / "paper.png"
     make_png(image_path)
 
     with image_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
             data={"provider": "codex_cli_question_extractor"},
             files={"file": ("paper.png", file_obj, "image/png")},
         )
@@ -299,13 +395,16 @@ def test_image_upload_routed_to_enabled_codex_provider_with_warnings(
     monkeypatch.setenv("CODEX_QUESTION_EXTRACTION_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr(question_imports, "build_question_extractor", fake_build_question_extractor)
-    assessment = create_assessment(client)
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
     image_path = tmp_path / "paper.png"
     make_png(image_path)
 
     with image_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
             data={"provider": "codex_cli_question_extractor"},
             files={"file": ("paper.png", file_obj, "image/png")},
         )

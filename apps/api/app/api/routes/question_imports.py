@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.routes.assessments import get_owned_assessment_or_404
+from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import Assessment, Question, QuestionImportJob
+from app.models import Question, QuestionImportJob, User
 from app.schemas import (
     DraftQuestionAccept,
     QuestionImportAcceptRequest,
@@ -22,6 +24,7 @@ from app.services.question_import_extractor import (
 from app.services.storage import LocalStorage
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 QuestionImportFile = Annotated[UploadFile, File(...)]
 QuestionImportProvider = Annotated[str | None, Form()]
 
@@ -42,12 +45,11 @@ ALLOWED_CONTENT_TYPES = {
 def create_question_import(
     assessment_id: int,
     db: DbSession,
+    current_user: CurrentUser,
     file: QuestionImportFile,
     provider: QuestionImportProvider = None,
 ) -> QuestionImportJob:
-    assessment = db.get(Assessment, assessment_id)
-    if assessment is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     suffix = ALLOWED_CONTENT_TYPES.get(file.content_type or "")
     if suffix is None:
         raise HTTPException(
