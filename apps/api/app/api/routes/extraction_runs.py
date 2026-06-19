@@ -60,9 +60,13 @@ def create_extraction_run(
             status_code=422, detail="extraction_type must be question_paper or rubric"
         )
 
+    try:
+        extractor = build_document_extractor(requested_provider=provider)
+    except DocumentExtractionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
     storage = LocalStorage()
     stored = storage.save_question_import(file, assessment_id, suffix)
-    extractor = build_document_extractor(requested_provider=provider)
     run = ExtractionRun(
         assessment_id=assessment_id,
         artifact_file_path=stored.relative_path,

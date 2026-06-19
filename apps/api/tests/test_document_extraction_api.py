@@ -134,6 +134,25 @@ def test_provider_disabled_blocks_extraction_run(
     assert "disabled" in payload["blockers"][0].lower()
 
 
+def test_invalid_extraction_provider_returns_clean_http_error(
+    client: TestClient,
+    assessment: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    rubric_path = tmp_path / "rubric.pdf"
+    make_pdf(rubric_path, RUBRIC_TEXT)
+
+    with rubric_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/extraction-runs",
+            data={"extraction_type": "rubric", "provider": "gpt-5.5"},
+            files={"file": ("rubric.pdf", file_obj, "application/pdf")},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Unsupported extraction provider: gpt-5.5"
+
+
 def test_mock_question_extraction_run_stores_raw_and_normalized_output(
     client: TestClient,
     assessment: dict[str, object],
