@@ -34,6 +34,10 @@ _IMAGE_FLAGS = ("--image", "-i")
 _API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
 _DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+")
 _MAX_CAPTURE_CHARS = 4000
+_JSON_FENCE_PATTERN = re.compile(
+    r"^\s*```(?:json)?\s*(?P<body>.*?)\s*```\s*$", re.IGNORECASE | re.DOTALL
+)
+_TEXT_PREVIEW_CHARS = 3000
 
 
 class CompletedProcessLike(Protocol):
@@ -211,7 +215,7 @@ class CodexQuestionExtractor:
             validated = CodexExtractionPayload.model_validate(payload)
         except ValidationError as exc:
             raise CodexQuestionExtractionError(
-                "Codex question extraction output schema validation failed"
+                self._schema_error_detail(payload, exc)
             ) from exc
         drafts = [
             DraftQuestion(
@@ -317,15 +321,44 @@ class CodexQuestionExtractor:
         text = output_file.read_text(encoding="utf-8")
         if not text.strip():
             raise CodexQuestionExtractionError("Codex CLI --output-last-message file was empty")
+        json_text = self._strip_markdown_json_fence(text)
         try:
-            payload = json.loads(text)
+            payload = json.loads(json_text)
         except json.JSONDecodeError as exc:
             raise CodexQuestionExtractionError(
-                "Codex CLI output-last-message did not contain exact valid JSON"
+                "Codex CLI output-last-message did not contain exact valid JSON; "
+                f"preview={self._sanitize(text.strip())[:500]!r}"
             ) from exc
         if not isinstance(payload, dict):
-            raise CodexQuestionExtractionError("Codex CLI JSON output must be an object")
+            raise CodexQuestionExtractionError(
+                f"Codex CLI JSON output must be an object; got {type(payload).__name__}"
+            )
         return payload
+
+    @staticmethod
+    def _strip_markdown_json_fence(text: str) -> str:
+        match = _JSON_FENCE_PATTERN.match(text)
+        if match:
+            return match.group("body").strip()
+        return text
+
+    def _schema_error_detail(self, payload: dict[str, Any], exc: ValidationError) -> str:
+        error_summaries = []
+        for error in exc.errors()[:5]:
+            location = ".".join(str(part) for part in error.get("loc", ())) or "<root>"
+            error_summaries.append(f"{location}: {error.get('type')} - {error.get('msg')}")
+        keys = ", ".join(sorted(payload.keys())) or "<none>"
+        questions = payload.get("questions")
+        question_shape = (
+            f"questions type={type(questions).__name__}"
+            if not isinstance(questions, list)
+            else f"questions count={len(questions)}"
+        )
+        return (
+            "Codex question extraction output schema validation failed; "
+            f"top-level keys: {keys}; {question_shape}; "
+            f"validation errors: {'; '.join(error_summaries)}"
+        )
 
     def _build_prompt(self, *, file_path: Path, content_type: str) -> str:
         image_note = (
@@ -336,9 +369,10 @@ class CodexQuestionExtractor:
                 "return no invented content and add a warning."
             )
         )
+        text_preview = self._uploaded_text_preview(file_path=file_path, content_type=content_type)
         return f"""You are extracting teacher-reviewed draft questions for Teacher Assistant.
 Return ONLY valid JSON. Do not write markdown or prose outside JSON.
-Do not modify files. Do not run commands. Do not ask for approval.
+Do not modify files. Do not ask for approval.
 This is draft extraction only; teacher review is mandatory.
 Every extracted question MUST set needs_review=true.
 If unsure, keep needs_review=true, lower confidence, and add a warning.
@@ -346,6 +380,8 @@ If unsure, keep needs_review=true, lower confidence, and add a warning.
 Uploaded file path: {file_path}
 Uploaded content type: {content_type}
 {image_note}
+
+{text_preview}
 
 Detect question numbers and separate questions. Detect simple marks when visible.
 Do not create final Questions. Produce only this JSON schema:
@@ -365,6 +401,24 @@ Do not create final Questions. Produce only this JSON schema:
   "warnings": []
 }}
 """
+
+    def _uploaded_text_preview(self, *, file_path: Path, content_type: str) -> str:
+        if content_type != "application/pdf":
+            return "Extracted text preview from uploaded file: unavailable for this content type."
+        try:
+            lines = extract_text_lines(file_path, content_type)
+        except Exception:
+            return (
+                "Extracted text preview from uploaded file: unavailable; "
+                "PDF text extraction failed."
+            )
+        if not lines:
+            return "Extracted text preview from uploaded file: unavailable; no embedded text found."
+        rendered = "\n".join(f"page {page}: {line}" for page, line in lines)
+        return (
+            "Extracted text preview from uploaded file:\n"
+            f"{rendered[:_TEXT_PREVIEW_CHARS]}"
+        )
 
     @staticmethod
     def _sanitize(message: str) -> str:

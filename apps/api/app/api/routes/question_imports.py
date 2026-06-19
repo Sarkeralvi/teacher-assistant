@@ -85,6 +85,7 @@ def create_question_import(
     except CodexQuestionExtractionError as exc:
         job.status = "failed"
         job.error = str(exc)
+        job.provider_warnings = [str(exc)]
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

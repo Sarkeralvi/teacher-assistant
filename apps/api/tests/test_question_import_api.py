@@ -416,3 +416,50 @@ def test_image_upload_routed_to_enabled_codex_provider_with_warnings(
     assert len(job["draft_questions"]) == 1
     assert job["draft_questions"][0]["needs_review"] is True
     assert client.get(f"/assessments/{assessment['id']}/questions").json() == []
+
+
+def test_provider_failure_stores_actionable_job_error(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routes import question_imports
+    from app.services.question_import_extractor import CodexQuestionExtractionError
+
+    class FailingCodexExtractor:
+        provider = "codex_cli_question_extractor"
+
+        def extract(self, file_path: Path, content_type: str):
+            raise CodexQuestionExtractionError(
+                "Codex question extraction output schema validation failed; "
+                "top-level keys: questions, warnings; questions count=0; "
+                "validation errors: questions: too_short - List should have at least 1 item"
+            )
+
+    def fake_build_question_extractor(*, settings, requested_provider=None):
+        assert requested_provider == "codex_cli_question_extractor"
+        return FailingCodexExtractor()
+
+    monkeypatch.setenv("CODEX_QUESTION_EXTRACTION_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(question_imports, "build_question_extractor", fake_build_question_extractor)
+    owned = create_assessment(client)
+    assessment = owned["assessment"]
+    headers = owned["headers"]
+    image_path = tmp_path / "paper.png"
+    make_png(image_path)
+
+    with image_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/question-imports",
+            headers=headers,
+            data={"provider": "codex_cli_question_extractor"},
+            files={"file": ("paper.png", file_obj, "image/png")},
+        )
+
+    assert response.status_code == 502
+    assert "questions count=0" in response.json()["detail"]
+
+    with SessionLocal() as db:
+        job = db.query(QuestionImportJob).filter_by(assessment_id=assessment["id"]).one()
+        assert job.status == "failed"
+        assert "questions count=0" in str(job.error)
+        assert job.provider_warnings == [job.error]
