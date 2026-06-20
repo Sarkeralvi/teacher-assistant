@@ -310,7 +310,12 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
     )
     assert retry.status_code == 201
     with SessionLocal() as db:
-        assert db.query(QuestionNode).filter(QuestionNode.assessment_id == assessment["id"]).count() == 2
+        node_count = (
+            db.query(QuestionNode)
+            .filter(QuestionNode.assessment_id == assessment["id"])
+            .count()
+        )
+        assert node_count == 2
 
 
 def test_question_import_validation_errors(client: TestClient, tmp_path: Path) -> None:
