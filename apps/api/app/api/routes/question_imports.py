@@ -10,7 +10,7 @@ from app.api.routes.assessments import get_owned_assessment_or_404
 from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import Question, QuestionImportJob, User
+from app.models import ExtractionRun, Question, QuestionImportJob, QuestionNode, User
 from app.schemas import (
     DraftQuestionAccept,
     QuestionImportAcceptRequest,
@@ -126,11 +126,14 @@ def accept_question_import(
                 detail=f"Draft question {draft.draft_id} does not belong to this import job",
             )
     ensure_unique_question_labels(job.assessment_id, payload.draft_questions, db)
-    questions = [
-        create_question_from_draft(job.assessment_id, draft)
-        for draft in payload.draft_questions
-    ]
-    db.add_all(questions)
+    extraction_run = ensure_acceptance_extraction_run(job.id, job.assessment_id, db)
+    questions: list[Question] = []
+    for draft in payload.draft_questions:
+        question = upsert_question_from_draft(job.assessment_id, draft, db)
+        questions.append(question)
+        upsert_question_node_from_question(
+            extraction_run.id, job.assessment_id, question, draft, db
+        )
     job.status = "accepted"
     db.commit()
     for question in questions:
@@ -162,22 +165,7 @@ def ensure_unique_question_labels(
                 + ", ".join(duplicate_payload_labels)
             ),
         )
-    existing_labels = set(
-        db.scalars(
-            select(Question.question_no).where(
-                Question.assessment_id == assessment_id,
-                Question.question_no.in_(labels),
-            )
-        ).all()
-    )
-    if existing_labels:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Canonical grading unit label already exists in this assessment: "
-                + ", ".join(sorted(existing_labels))
-            ),
-        )
+    # Existing questions are intentionally allowed so the accept flow is idempotent.
 
 
 def create_question_from_draft(assessment_id: int, draft: DraftQuestionAccept) -> Question:
@@ -188,3 +176,104 @@ def create_question_from_draft(assessment_id: int, draft: DraftQuestionAccept) -
         model_answer=draft.model_answer,
         total_marks=draft.total_marks,
     )
+
+
+def upsert_question_from_draft(
+    assessment_id: int, draft: DraftQuestionAccept, db: Session
+) -> Question:
+    question_no = draft.question_no.strip()
+    existing = db.scalar(
+        select(Question).where(
+            Question.assessment_id == assessment_id, Question.question_no == question_no
+        )
+    )
+    if existing is not None:
+        existing.question_text = draft.question_text
+        existing.model_answer = draft.model_answer
+        existing.total_marks = draft.total_marks
+        return existing
+    question = create_question_from_draft(assessment_id, draft)
+    db.add(question)
+    db.flush()
+    return question
+
+
+def upsert_question_node_from_question(
+    extraction_run_id: int,
+    assessment_id: int,
+    question: Question,
+    draft: DraftQuestionAccept,
+    db: Session,
+) -> QuestionNode:
+    normalized_question_no = question.question_no.strip()
+    existing = db.scalar(
+        select(QuestionNode).where(
+            QuestionNode.assessment_id == assessment_id,
+            QuestionNode.question_number == normalized_question_no,
+            QuestionNode.teacher_confirmed.is_(True),
+            QuestionNode.node_type.in_(["question", "subquestion"]),
+        )
+    )
+    if existing is not None:
+        existing.label = normalized_question_no
+        existing.text = draft.question_text
+        existing.marks = draft.total_marks
+        existing.parent_question_number = normalize_parent_question_number(normalized_question_no)
+        existing.node_type = infer_question_node_type(normalized_question_no)
+        existing.teacher_confirmed = True
+        return existing
+    node = QuestionNode(
+        assessment_id=assessment_id,
+        extraction_run_id=extraction_run_id,
+        question_number=normalized_question_no,
+        parent_question_number=normalize_parent_question_number(normalized_question_no),
+        label=normalized_question_no,
+        text=draft.question_text,
+        marks=draft.total_marks,
+        node_type=infer_question_node_type(normalized_question_no),
+        source_page=None,
+        source_reference={"source": "question_import_accept"},
+        confidence=None,
+        teacher_confirmed=True,
+    )
+    db.add(node)
+    db.flush()
+    return node
+
+
+def infer_question_node_type(question_no: str) -> str:
+    return "subquestion" if "(" in question_no and question_no.endswith(")") else "question"
+
+
+def normalize_parent_question_number(question_no: str) -> str | None:
+    if "(" not in question_no or not question_no.endswith(")"):
+        return None
+    return question_no.split("(", 1)[0].strip() or None
+
+
+def ensure_acceptance_extraction_run(job_id: int, assessment_id: int, db: Session) -> ExtractionRun:
+    existing = db.scalar(
+        select(ExtractionRun).where(
+            ExtractionRun.assessment_id == assessment_id,
+            ExtractionRun.extraction_type == "question_paper",
+            ExtractionRun.artifact_file_path == f"question-imports/{job_id}/accepted",
+        )
+    )
+    if existing is not None:
+        return existing
+    extraction_run = ExtractionRun(
+        assessment_id=assessment_id,
+        artifact_file_path=f"question-imports/{job_id}/accepted",
+        original_filename=f"question-import-{job_id}-accepted.json",
+        content_type="application/json",
+        extraction_type="question_paper",
+        provider="mock",
+        status="succeeded",
+        raw_output="{}",
+        normalized_output={"question_nodes": []},
+        blockers=[],
+        error=None,
+    )
+    db.add(extraction_run)
+    db.flush()
+    return extraction_run

@@ -266,6 +266,30 @@ def test_text_script_mapping_maps_q1a_and_q1b_without_creating_grading_records(
     assert db_session.scalar(select(func.count(GradingJob.id))) == 0
 
 
+def test_mapping_run_returns_empty_when_no_confirmed_question_nodes_exist(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher, token = register_teacher(client, "map-empty")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    create_question(client, int(assessment["id"]), "Q1(a)")
+    create_question(client, int(assessment["id"]), "Q1(b)")
+
+    pdf_path = tmp_path / "script.pdf"
+    make_text_pdf(pdf_path, ["Q1(a) answer only"])
+    submission = upload_submission_pdf(client, int(assessment["id"]), pdf_path, token)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"replace_existing": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mapped_count"] == 0
+    assert body["blocked_count"] == 0
+    assert body["uncertain_count"] == 0
+
+
 def test_ambiguous_mapping_creates_uncertain_blocker(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:

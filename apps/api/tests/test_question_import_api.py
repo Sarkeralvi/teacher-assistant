@@ -22,6 +22,7 @@ from app.models import (
     GradingJob,
     Question,
     QuestionImportJob,
+    QuestionNode,
     Rubric,
     Submission,
     SubmissionPage,
@@ -279,6 +280,37 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
     assert [question["question_no"] for question in listed] == ["1A", "3"]
     detail = client.get(f"/question-imports/{job['id']}").json()
     assert detail["status"] == "accepted"
+
+    with SessionLocal() as db:
+        nodes = db.query(QuestionNode).filter(QuestionNode.assessment_id == assessment["id"]).all()
+        assert [node.question_number for node in nodes] == ["1A", "3"]
+        assert all(node.teacher_confirmed for node in nodes)
+        assert {node.node_type for node in nodes} == {"question"}
+
+    retry = client.post(
+        f"/question-imports/{job['id']}/accept",
+        json={
+            "draft_questions": [
+                {
+                    "draft_id": "draft-1",
+                    "question_no": "1A",
+                    "question_text": "Edited velocity question",
+                    "model_answer": "Rate of displacement change.",
+                    "total_marks": "6.00",
+                },
+                {
+                    "draft_id": "draft-3",
+                    "question_no": "3",
+                    "question_text": "State Newton's first law.",
+                    "model_answer": None,
+                    "total_marks": "2.00",
+                },
+            ]
+        },
+    )
+    assert retry.status_code == 201
+    with SessionLocal() as db:
+        assert db.query(QuestionNode).filter(QuestionNode.assessment_id == assessment["id"]).count() == 2
 
 
 def test_question_import_validation_errors(client: TestClient, tmp_path: Path) -> None:
