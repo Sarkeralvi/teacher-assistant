@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import shlex
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -12,23 +11,22 @@ from pathlib import Path
 from typing import Any, Literal
 
 import fitz
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models import ExtractionRun, QuestionNode, RubricExtractionCriterion
+from app.providers.contracts import get_provider
 
 QUESTION_PAPER_EXTRACTION_TYPE = "question_paper"
 RUBRIC_EXTRACTION_TYPE = "rubric"
-EXTRACTION_TYPES = {QUESTION_PAPER_EXTRACTION_TYPE, RUBRIC_EXTRACTION_TYPE}
 
-HOST_BRIDGE_CODEX_PROVIDER = "host_bridge_codex"
 MOCK_EXTRACTION_PROVIDER = "mock"
 DISABLED_EXTRACTION_PROVIDER = "disabled"
 
 _NODE_TYPES = {"question", "subquestion", "instruction"}
 _ALLOWED_PROVIDERS = {
-    HOST_BRIDGE_CODEX_PROVIDER,
     MOCK_EXTRACTION_PROVIDER,
     DISABLED_EXTRACTION_PROVIDER,
 }
@@ -66,16 +64,13 @@ class QuestionNodePayload(BaseModel):
 
 
 class RubricCriterionPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     question_number: str | None = Field(default=None, max_length=64)
     criterion_label: str = Field(min_length=1, max_length=255)
     description: str = Field(min_length=1)
     max_marks: Decimal | None = Field(default=None, ge=Decimal("0"))
     confidence: Decimal | None = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
-    blocker: str | None = None
-    teacher_confirmed: bool = False
-
 
 class QuestionPaperExtractionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -114,7 +109,7 @@ class DisabledDocumentExtractor(DocumentExtractor):
         self, file_path: Path, extraction_type: str, content_type: str
     ) -> ExtractionProviderResult:
         raise BridgeUnavailableError(
-            "Experimental real Codex extraction is disabled. "
+            "Experimental real extraction is disabled. "
             "Set CODEX_EXTRACTION_ENABLED=true and choose a provider."
         )
 
@@ -138,87 +133,80 @@ class MockDocumentExtractor(DocumentExtractor):
         )
 
 
-class HostBridgeCodexDocumentExtractor(DocumentExtractor):
-    provider = HOST_BRIDGE_CODEX_PROVIDER
-
-    def __init__(
-        self,
-        *,
-        bridge_command: str,
-        timeout_seconds: float,
-        runner=subprocess.run,
-    ) -> None:
-        self.bridge_command = bridge_command.strip()
-        self.timeout_seconds = timeout_seconds
-        self._runner = runner
+class ProviderDocumentExtractor(DocumentExtractor):
+    provider = "gemini"
 
     def extract(
         self, file_path: Path, extraction_type: str, content_type: str
     ) -> ExtractionProviderResult:
-        if not self.bridge_command:
-            raise BridgeUnavailableError(
-                "Host bridge Codex extraction is configured, but "
-                "CODEX_EXTRACTION_BRIDGE_COMMAND is empty. "
-                "Use the host runner script from WSL or configure a bridge command explicitly."
-            )
-        base_command = shlex.split(self.bridge_command)
-        if not base_command:
-            raise BridgeUnavailableError(
-                "CODEX_EXTRACTION_BRIDGE_COMMAND did not parse into a runnable command"
-            )
-        executable = shutil.which(base_command[0])
-        if executable is None:
-            raise BridgeUnavailableError(
-                f"Host bridge command is not available from this runtime: {base_command[0]}"
-            )
-        with tempfile.TemporaryDirectory(prefix="ta-host-bridge-") as tmp_dir:
-            output_path = Path(tmp_dir) / "codex-output.json"
-            command = [
-                executable,
-                *base_command[1:],
-                "--input-file",
-                str(file_path),
-                "--content-type",
-                content_type,
-                "--extraction-type",
-                extraction_type,
-                "--output-file",
-                str(output_path),
-            ]
-            try:
-                completed = self._runner(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise DocumentExtractionError(
-                    f"Host bridge Codex extraction timed out after {self.timeout_seconds:g}s"
-                ) from exc
-            if completed.returncode != 0:
-                detail = _sanitize((completed.stderr or completed.stdout or "").strip())
-                raise DocumentExtractionError(
-                    f"Host bridge Codex extraction failed with status {completed.returncode}: "
-                    f"{detail[:_MAX_CAPTURE_CHARS]}"
-                )
-            if not output_path.is_file():
-                raise DocumentExtractionError(
-                    "Host bridge command did not write an output JSON file"
-                )
-            raw_output = output_path.read_text(encoding="utf-8")
+        provider = get_provider()
+        pdf_path = str(file_path)
         try:
-            normalized_output = json.loads(raw_output)
+            ai_result = provider.extract_rubric_from_pdf(pdf_path)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=422, detail=f"AI returned malformed JSON: {e}") from e
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"AI provider unavailable: {e}") from e
+        if not ai_result.get("criteria"):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "AI extracted zero rubric criteria. Check the PDF quality or "
+                    "page content."
+                ),
+            )
+        return ExtractionProviderResult(
+            raw_output=json.dumps(ai_result),
+            normalized_output=ai_result,
+            blockers=ai_result.get("warnings", []),
+        )
+
+
+class HostBridgeCodexDocumentExtractor(DocumentExtractor):
+    provider = "host_bridge_codex"
+
+    def __init__(
+        self,
+        *,
+        bridge_command: str = "",
+        timeout_seconds: float = 300.0,
+        runner=None,
+    ) -> None:
+        self.bridge_command = bridge_command
+        self.timeout_seconds = timeout_seconds
+        self.runner = runner or subprocess.run
+
+    def extract(
+        self, file_path: Path, extraction_type: str, content_type: str
+    ) -> ExtractionProviderResult:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as output:
+            output_path = Path(output.name)
+        command = shlex.split(self.bridge_command) if self.bridge_command else []
+        command += [
+            "--input-file",
+            str(file_path),
+            "--output-file",
+            str(output_path),
+            "--extraction-type",
+            extraction_type,
+            "--content-type",
+            content_type,
+        ]
+        result = self.runner(command, timeout=self.timeout_seconds)
+        if getattr(result, "returncode", 0) != 0:
+            raise DocumentExtractionError("Document extraction bridge failed")
+        try:
+            raw_output = output_path.read_text(encoding="utf-8")
+            payload = json.loads(raw_output)
         except json.JSONDecodeError as exc:
-            raise DocumentExtractionError("Host bridge command returned malformed JSON") from exc
-        blockers = normalized_output.get("blockers", [])
-        if not isinstance(blockers, list):
-            blockers = []
+            raise DocumentExtractionError("Document extraction bridge returned malformed JSON") from exc
+        normalized = validate_normalized_output(extraction_type, payload)
         return ExtractionProviderResult(
             raw_output=raw_output,
-            normalized_output=normalized_output,
-            blockers=[str(blocker) for blocker in blockers],
+            normalized_output=normalized,
+            blockers=normalized.get("blockers", []),
         )
 
 
@@ -230,21 +218,21 @@ def build_document_extractor(
     *, settings: Settings | None = None, requested_provider: str | None = None
 ) -> DocumentExtractor:
     resolved_settings = settings or get_settings()
-    provider = (
-        requested_provider
-        or resolved_settings.codex_extraction_provider
-        or DISABLED_EXTRACTION_PROVIDER
-    ).strip()
-    if provider not in _ALLOWED_PROVIDERS:
-        raise DocumentExtractionError(f"Unsupported extraction provider: {provider}")
+    provider = (requested_provider or resolved_settings.codex_extraction_provider or DISABLED_EXTRACTION_PROVIDER).strip()
     if provider == MOCK_EXTRACTION_PROVIDER:
         return MockDocumentExtractor()
-    if provider == DISABLED_EXTRACTION_PROVIDER or not resolved_settings.codex_extraction_enabled:
+    if provider == DISABLED_EXTRACTION_PROVIDER:
         return DisabledDocumentExtractor()
-    return HostBridgeCodexDocumentExtractor(
-        bridge_command=resolved_settings.codex_extraction_bridge_command,
-        timeout_seconds=resolved_settings.codex_cli_timeout_seconds,
-    )
+    if provider == "host_bridge_codex":
+        if not resolved_settings.codex_extraction_enabled:
+            return DisabledDocumentExtractor()
+        return HostBridgeCodexDocumentExtractor(
+            bridge_command=resolved_settings.codex_extraction_bridge_command,
+            timeout_seconds=resolved_settings.codex_cli_timeout_seconds,
+        )
+    if provider == "gemini":
+        return ProviderDocumentExtractor()
+    raise DocumentExtractionError(f"Unsupported extraction provider: {provider}")
 
 
 def validate_normalized_output(extraction_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -319,17 +307,6 @@ def mark_extraction_run_failed(run: ExtractionRun, message: str) -> ExtractionRu
     return run
 
 
-def resolve_host_artifact_path(relative_path: str, *, settings: Settings | None = None) -> Path:
-    resolved_settings = settings or get_settings()
-    root = Path(resolved_settings.codex_extraction_host_storage_root).resolve()
-    candidate = (root / relative_path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise DocumentExtractionError(
-            "Extraction artifact escaped configured host storage root"
-        ) from exc
-    return candidate
 
 
 def _build_mock_question_payload(file_path: Path, content_type: str) -> dict[str, Any]:

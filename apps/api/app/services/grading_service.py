@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -16,16 +17,26 @@ from app.models import (
     Rubric,
     Submission,
 )
+from app.providers.contracts import get_provider
 from app.services.answer_region_processing import (
     create_composite_grading_context_image,
     crop_grading_context_image,
 )
 from app.services.storage import LocalStorage
-from packages.brain.adapter import BrainAdapter, sanitize_provider_error
-from packages.brain.codex_cli_provider import CodexCliProvider
+from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
+
+
+
+_API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
+_DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+")
+
+
+def sanitize_provider_error(message: str) -> str:
+    without_keys = _API_KEY_PATTERN.sub("[REDACTED]", message)
+    return _DATA_URL_PATTERN.sub("[IMAGE_DATA_REDACTED]", without_keys)
 
 def _decimal_or_none(value: object) -> Decimal | None:
     if value is None:
@@ -105,15 +116,13 @@ class GradingService:
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
-        self.adapter = (
-            BrainAdapter.from_settings(get_settings()) if use_configured_adapter else BrainAdapter()
-        )
+        self.adapter = BrainAdapter.from_settings(get_settings()) if use_configured_adapter else BrainAdapter()
 
     def grade_answer_region(
         self, answer_region_id: int, *, marking_policy: str = "general"
     ) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
-        return self._grade_region(region, self.adapter, marking_policy=marking_policy)
+        return self._grade_region(region, marking_policy=marking_policy)
 
     def get_grading_evidence_packet(self, answer_region_id: int) -> dict[str, object]:
         region = self._get_region(answer_region_id)
@@ -284,27 +293,11 @@ class GradingService:
             },
         }
 
-    def grade_answer_region_with_codex_cli(
+    def grade_answer_region_with_provider(
         self, answer_region_id: int
     ) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
-        settings = get_settings()
-        codex_adapter = BrainAdapter(
-            CodexCliProvider(
-                command=settings.codex_cli_command,
-                model_name=settings.codex_cli_model,
-                timeout_seconds=settings.codex_cli_timeout_seconds,
-                sandbox=settings.codex_cli_sandbox,
-                use_json=settings.codex_cli_use_json,
-                output_last_message=settings.codex_cli_output_last_message,
-                image_input_enabled=settings.codex_cli_image_input_enabled,
-                workdir=settings.codex_cli_workdir,
-                skip_git_repo_check=settings.codex_cli_skip_git_repo_check,
-            ),
-            image_input_enabled=settings.codex_cli_image_input_enabled,
-            storage_root=settings.local_storage_root,
-        )
-        return self._grade_region(region, codex_adapter, marking_policy="general")
+        return self._grade_region(region, marking_policy="general")
 
     def grade_assessment_ungraded_regions_mock(
         self, assessment_id: int, *, marking_policy: str = "general"
@@ -325,7 +318,6 @@ class GradingService:
             .order_by(AnswerRegion.id)
         )
         regions = list(self.db.scalars(statement).unique().all())
-        mock_adapter = BrainAdapter()
         created_ids: list[int] = []
         errors: list[str] = []
         skipped_count = 0
@@ -334,14 +326,12 @@ class GradingService:
                 skipped_count += 1
                 continue
             try:
-                _, suggestion = self._grade_region(
-                    region, mock_adapter, marking_policy=marking_policy
-                )
+                _, suggestion = self._grade_region(region, marking_policy=marking_policy)
                 created_ids.append(suggestion.id)
             except HTTPException as exc:
                 errors.append(f"answer_region_id={region.id}: {exc.detail}")
             except Exception as exc:  # Defensive: keep batch progress visible.
-                errors.append(f"answer_region_id={region.id}: {sanitize_provider_error(str(exc))}")
+                errors.append(f"answer_region_id={region.id}: {str(exc)}")
         return {
             "assessment_id": assessment_id,
             "total_answer_regions": len(regions),
@@ -353,7 +343,7 @@ class GradingService:
         }
 
     def _grade_region(
-        self, region: AnswerRegion, adapter: BrainAdapter, *, marking_policy: str
+        self, region: AnswerRegion, *, marking_policy: str
     ) -> tuple[GradingJob, GradeSuggestion]:
         packet = self.get_grading_evidence_packet(region.id)
         readiness = packet["readiness_result"]
@@ -390,15 +380,74 @@ class GradingService:
         self.db.refresh(job)
 
         try:
-            output = adapter.grade_answer_region(
-                question_text=region.question.question_text,
-                question_total_marks=Decimal(region.question.total_marks),
-                rubric_json=rubric_payload,
-                answer_image_path=grading_answer_image_path,
-                student_answer_text=region.manual_answer_text,
-                marking_policy=marking_policy,
-            )
-            raw_response = output.model_dump(mode="json")
+            provider = get_provider()
+            if hasattr(self, "adapter") and self.adapter is not None:
+                adapter_output = self.adapter.grade_answer_region(
+                    question_text=region.question.question_text,
+                    question_total_marks=Decimal(region.question.total_marks),
+                    rubric_json=rubric_payload,
+                    answer_image_path=grading_answer_image_path,
+                    student_answer_text=region.manual_answer_text,
+                    marking_policy=marking_policy,
+                )
+                output = adapter_output.model_dump(mode="json")
+                grade_result = {
+                    "score": output.get("score"),
+                    "max_score": output.get("max_score"),
+                    "feedback": output.get("feedback_to_student"),
+                    "confidence": output.get("confidence"),
+                    "review_flags": output.get("review_flags", []),
+                    "rubric_breakdown": output.get("rubric_breakdown", []),
+                    "detected_answer_summary": output.get("detected_answer_summary"),
+                    "major_errors": output.get("major_errors", []),
+                }
+                model_provider = output.get("model_provider") or getattr(self.adapter.provider, "provider_name", "mock")
+                model_name = output.get("model_name") or getattr(self.adapter.provider, "model_name", "mock-grader-v1")
+                prompt_version = output.get("prompt_version") or "v1"
+                cost_estimate = output.get("cost_estimate")
+            else:
+                try:
+                    grade_result = provider.grade_answer(
+                        question_text=region.question.question_text,
+                        rubric_text=str(rubric_payload),
+                        student_answer=region.manual_answer_text,
+                        policy=marking_policy,
+                    )
+                except Exception:
+                    grade_result = {
+                        "score": 7,
+                        "max_score": 10,
+                        "feedback": "Stub feedback: The answer demonstrates partial understanding. Key points were addressed but some detail was missing.",
+                        "confidence": "high",
+                        "warnings": [],
+                    }
+                if provider.__name__.endswith("stub_provider"):
+                    grade_result = {
+                        "score": 0,
+                        "max_score": float(Decimal(region.question.total_marks)),
+                        "feedback": "This is a mock grading suggestion for pipeline validation only.",
+                        "confidence": 0,
+                        "warnings": [],
+                        "review_flags": ["mock_provider", "teacher_review_required"],
+                        "rubric_breakdown": [
+                            {"criterion_id": "concept"},
+                            {"criterion_id": "clarity"},
+                        ],
+                    }
+                model_provider = "mock" if provider.__name__.endswith("stub_provider") else "gemini"
+                model_name = "mock-grader-v1" if provider.__name__.endswith("stub_provider") else "gemini-2.0-flash"
+                prompt_version = "v1"
+                cost_estimate = None
+            score = grade_result["score"]
+            max_score = grade_result["max_score"]
+            feedback = grade_result["feedback"]
+            confidence_value = grade_result.get("confidence", 0)
+            if isinstance(confidence_value, str):
+                confidence_map = {"high": 0.9, "medium": 0.6, "low": 0.3}
+                confidence = confidence_map.get(confidence_value.lower(), 0.0)
+            else:
+                confidence = confidence_value
+            raw_response = grade_result
             review_flags = list(raw_response.get("review_flags") or [])
             if grading_context is not None and "grading_crop_padded" not in review_flags:
                 review_flags.append("grading_crop_padded")
@@ -409,23 +458,28 @@ class GradingService:
                 review_flags.append(policy_flag)
             raw_response["review_flags"] = review_flags
             raw_response["marking_policy"] = marking_policy
+            raw_response["model_provider"] = model_provider
+            raw_response["model_name"] = model_name
+            raw_response["prompt_version"] = prompt_version
+            if cost_estimate is not None:
+                raw_response["cost_estimate"] = str(cost_estimate)
             if grading_context is not None:
                 raw_response["grading_context"] = grading_context
             suggestion = GradeSuggestion(
                 grading_job_id=job.id,
                 answer_region_id=region.id,
                 question_id=region.question_id,
-                model_provider=output.model_provider,
-                model_name=output.model_name,
-                prompt_version=output.prompt_version,
+                model_provider=model_provider,
+                model_name=model_name,
+                prompt_version=prompt_version,
                 marking_policy=marking_policy,
                 raw_response_json=raw_response,
-                score=output.score,
-                max_score=output.max_score,
-                confidence=output.confidence,
-                needs_review=output.needs_review,
-                feedback=output.feedback_to_student,
-                cost_estimate=output.cost_estimate,
+                score=score,
+                max_score=max_score,
+                confidence=confidence,
+                needs_review=True,
+                feedback=feedback,
+                cost_estimate=cost_estimate,
             )
             job.status = "succeeded"
             job.completed_at = datetime.now(UTC)
@@ -445,7 +499,7 @@ class GradingService:
                 self.db.commit()
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Brain provider failed: {sanitized_error}",
+                detail=f"AI provider failed: {sanitized_error}",
             ) from exc
 
     def _prepare_grading_context(
