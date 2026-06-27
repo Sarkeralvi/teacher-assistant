@@ -29,6 +29,9 @@ services:
     build:
       context: ./apps/api
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - USE_STUB_PROVIDER=${USE_STUB_PROVIDER:-false}
     env_file:
       - .env
     depends_on:
