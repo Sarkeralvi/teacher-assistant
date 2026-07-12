@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -18,6 +18,7 @@ from app.models import (
     AnswerRegion,
     Assessment,
     Course,
+    GradeSuggestion,
     Question,
     Rubric,
     Submission,
@@ -26,7 +27,7 @@ from app.models import (
 )
 from app.services.grading_service import GradingService
 from app.services.storage import LocalStorage
-from packages.brain.schemas import GradeSuggestionOutput
+from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 
 _FALSE_CONFIDENT_THRESHOLD = Decimal("0.8")
 _FALSE_CONFIDENT_ERROR_MARKS = Decimal("1")
@@ -110,8 +111,7 @@ class GradingEvaluationRunner:
                 job, suggestion = service.grade_answer_region(
                     eval_case.answer_region_id, marking_policy=self.marking_policy
                 )
-                raw = suggestion.raw_response_json or {}
-                output = GradeSuggestionOutput.model_validate(raw)
+                output = _suggestion_output_from_record(suggestion)
                 absolute_error = abs(Decimal(suggestion.score or 0) - eval_case.expected_score)
                 rows.append(
                     {
@@ -171,6 +171,47 @@ class GradingEvaluationRunner:
             raise GradingEvaluationError(
                 f"Case {eval_case.case_id} max_score does not match active rubric total_marks"
             )
+
+
+def _suggestion_output_from_record(suggestion: GradeSuggestion) -> GradeSuggestionOutput:
+    """Normalize a stored grade suggestion into the strict provider output schema.
+
+    Providers currently persist a loose grade_result dict in raw_response_json, so
+    fall back to the structured GradeSuggestion columns when strict validation fails.
+    """
+    raw = suggestion.raw_response_json or {}
+    try:
+        return GradeSuggestionOutput.model_validate(raw)
+    except ValidationError:
+        pass
+    score = Decimal(str(suggestion.score or 0))
+    max_score = Decimal(str(suggestion.max_score or 0))
+    confidence = Decimal(str(suggestion.confidence or 0))
+    review_flags = list(dict.fromkeys(str(flag) for flag in raw.get("review_flags") or []))
+    feedback = (suggestion.feedback or "").strip() or "(no feedback recorded)"
+    return GradeSuggestionOutput(
+        score=score,
+        max_score=max_score,
+        confidence=confidence,
+        needs_review=bool(suggestion.needs_review),
+        rubric_breakdown=[
+            RubricBreakdownItem(
+                criterion_id="total",
+                criterion="Total (reconstructed from stored suggestion)",
+                max_marks=max_score,
+                awarded_marks=score,
+                reason="Raw provider output is not schema-compliant; using stored totals.",
+                confidence=confidence,
+            )
+        ],
+        detected_answer_summary=feedback,
+        major_errors=[str(item) for item in raw.get("major_errors") or []],
+        feedback_to_student=feedback,
+        review_flags=review_flags or ["raw_output_not_schema_compliant"],
+        model_provider=suggestion.model_provider or "unknown",
+        model_name=suggestion.model_name or "unknown",
+        prompt_version=suggestion.prompt_version or "unknown",
+    )
 
 
 def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
