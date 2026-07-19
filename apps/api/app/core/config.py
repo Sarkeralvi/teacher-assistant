@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     codex_answer_region_suggestions_enabled: bool = Field(
         default=False, alias="CODEX_ANSWER_REGION_SUGGESTIONS_ENABLED"
     )
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    gemini_image_input_enabled: bool = Field(
+        default=False, alias="GEMINI_IMAGE_INPUT_ENABLED"
+    )
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="", alias="OPENAI_MODEL")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")

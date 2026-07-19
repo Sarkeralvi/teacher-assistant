@@ -26,3 +26,13 @@ class BrainProvider(ABC):
         marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
         """Return a validated structured grading suggestion."""
+
+    def extract_questions_from_pdf(self, pdf_path: str) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support question extraction"
+        )
+
+    def extract_rubric_from_pdf(self, pdf_path: str) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support rubric extraction"
+        )

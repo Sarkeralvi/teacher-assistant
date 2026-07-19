@@ -58,3 +58,59 @@ class MockBrainProvider(BrainProvider):
             cost_estimate=estimate_mock_cost(),
             latency_ms=0,
         )
+
+    def extract_questions_from_pdf(self, pdf_path: str) -> dict[str, Any]:
+        del pdf_path
+        return {
+            "questions": [
+                {
+                    "question_number": "1",
+                    "question_text": "Stub: Explain the concept of photosynthesis.",
+                    "marks": 10,
+                    "sub_questions": [
+                        {
+                            "question_number": "1(a)",
+                            "question_text": "Stub: What is the role of chlorophyll?",
+                            "marks": 5,
+                            "sub_questions": [],
+                        },
+                        {
+                            "question_number": "1(b)",
+                            "question_text": "Stub: Write the chemical equation.",
+                            "marks": 5,
+                            "sub_questions": [],
+                        },
+                    ],
+                }
+            ],
+            "warnings": [],
+        }
+
+    def extract_rubric_from_pdf(self, pdf_path: str) -> dict[str, Any]:
+        del pdf_path
+        return {
+            "criteria": [
+                {
+                    "question_number": "1",
+                    "criterion_text": (
+                        "Stub: Award marks for correct explanation of photosynthesis."
+                    ),
+                    "max_marks": 10,
+                    "sub_criteria": [
+                        {
+                            "question_number": "1(a)",
+                            "criterion_text": "Stub: Correct role of chlorophyll stated.",
+                            "max_marks": 5,
+                            "sub_criteria": [],
+                        },
+                        {
+                            "question_number": "1(b)",
+                            "criterion_text": "Stub: Correct chemical equation written.",
+                            "max_marks": 5,
+                            "sub_criteria": [],
+                        },
+                    ],
+                }
+            ],
+            "warnings": [],
+        }

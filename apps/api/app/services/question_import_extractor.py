@@ -12,8 +12,8 @@ import fitz
 from fastapi import HTTPException
 
 from app.core.config import Settings, get_settings
-from app.providers.contracts import get_provider
 from app.schemas import DraftQuestion
+from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
 QUESTION_PATTERN = re.compile(
     r"^\s*(?:Q\.?\s*|Question\s+)?(?P<number>\d+)[\.)\:]?\s*(?P<text>.*)$",
@@ -135,15 +135,26 @@ class CodexQuestionExtractor(QuestionExtractor):
 
     def extract(self, file_path: Path, content_type: str) -> QuestionExtractionResult:
         if self.runner is None:
-            provider = get_provider()
             try:
-                ai_result = provider.extract_questions_from_pdf(str(file_path))
+                adapter = BrainAdapter.from_settings(get_settings())
+            except BrainProviderConfigurationError as e:
+                raise HTTPException(
+                    status_code=503, detail=f"AI provider unavailable: {e}"
+                ) from e
+            try:
+                ai_result = adapter.extract_questions_from_document(str(file_path))
             except json.JSONDecodeError as e:
-                raise HTTPException(status_code=422, detail=f"AI returned malformed JSON: {e}") from e
+                raise HTTPException(
+                    status_code=422, detail=f"AI returned malformed JSON: {e}"
+                ) from e
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e)) from e
+            except NotImplementedError as e:
+                raise HTTPException(status_code=503, detail=str(e)) from e
             except Exception as e:
-                raise HTTPException(status_code=503, detail=f"AI provider unavailable: {e}") from e
+                raise HTTPException(
+                    status_code=503, detail=f"AI provider unavailable: {e}"
+                ) from e
             if not ai_result.get("questions"):
                 raise HTTPException(
                     status_code=422,
@@ -160,7 +171,8 @@ class CodexQuestionExtractor(QuestionExtractor):
         help_text = getattr(self.runner([self.command, "exec", "--help"]), "stdout", "")
         if self.skip_git_repo_check and "--skip-git-repo-check" in help_text:
             command.append("--skip-git-repo-check")
-        if self.image_input_enabled and content_type in _IMAGE_CONTENT_TYPES and "--image" in help_text:
+        image_supported = "--image" in help_text
+        if self.image_input_enabled and content_type in _IMAGE_CONTENT_TYPES and image_supported:
             command += ["--image", str(file_path)]
         prompt = (
             "Extracted text preview from uploaded file:\n\n"
@@ -178,7 +190,9 @@ class CodexQuestionExtractor(QuestionExtractor):
             raise CodexQuestionExtractionError("Codex question extraction timed out") from exc
         if getattr(result, "returncode", 0) != 0:
             message = _sanitize_codex_error(
-                getattr(result, "stderr", "") or getattr(result, "stdout", "") or "Codex extraction failed"
+                getattr(result, "stderr", "")
+                or getattr(result, "stdout", "")
+                or "Codex extraction failed"
             )
             raise CodexQuestionExtractionError(message)
         raw = output_path.read_text(encoding="utf-8")
@@ -209,7 +223,9 @@ def _parse_codex_json(raw: str) -> dict[str, object]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Codex output must be valid JSON; preview={text[:120]}") from exc
     if not isinstance(parsed, dict):
-        raise ValueError("Codex output schema validation failed: top-level keys: questions, warnings")
+        raise ValueError(
+            "Codex output schema validation failed: top-level keys: questions, warnings"
+        )
     return parsed
 
 
@@ -217,7 +233,8 @@ def _normalize_provider_result(parsed: dict[str, object]) -> QuestionExtractionR
     questions = parsed.get("questions")
     if not isinstance(questions, list) or not questions:
         raise CodexQuestionExtractionError(
-            "Codex output schema validation failed: questions too_short; top-level keys: questions, warnings"
+            "Codex output schema validation failed: questions too_short; "
+            "top-level keys: questions, warnings"
         )
     converted = []
     for i, q in enumerate(questions, start=1):
@@ -230,7 +247,9 @@ def _normalize_provider_result(parsed: dict[str, object]) -> QuestionExtractionR
                     "total_marks": q.get("total_marks") or q.get("marks"),
                     "confidence": q.get("confidence", 0.8),
                     "source_page": q.get("source_page", 1),
-                    "source_text_excerpt": q.get("source_text_excerpt") or q.get("question_text", ""),
+                    "source_text_excerpt": (
+                        q.get("source_text_excerpt") or q.get("question_text", "")
+                    ),
                     "needs_review": q.get("needs_review", True),
                 }
             )
@@ -241,10 +260,19 @@ def _normalize_codex_result(parsed: dict[str, object]) -> QuestionExtractionResu
     questions = parsed.get("questions")
     if not isinstance(questions, list) or not questions:
         raise CodexQuestionExtractionError(
-            "Codex output schema validation failed: questions too_short; top-level keys: questions, warnings"
+            "Codex output schema validation failed: questions too_short; "
+            "top-level keys: questions, warnings"
         )
     drafts: list[DraftQuestion] = []
-    required = {"question_no", "question_text", "total_marks", "confidence", "source_page", "source_text_excerpt", "needs_review"}
+    required = {
+        "question_no",
+        "question_text",
+        "total_marks",
+        "confidence",
+        "source_page",
+        "source_text_excerpt",
+        "needs_review",
+    }
     for i, q in enumerate(questions, start=1):
         if not isinstance(q, dict) or not required.issubset(q.keys()):
             raise CodexQuestionExtractionError("Codex output schema validation failed")
@@ -261,7 +289,9 @@ def _normalize_codex_result(parsed: dict[str, object]) -> QuestionExtractionResu
                 needs_review=bool(q.get("needs_review", True)),
             )
         )
-    return QuestionExtractionResult(draft_questions=drafts, warnings=list(parsed.get("warnings", [])))
+    return QuestionExtractionResult(
+        draft_questions=drafts, warnings=list(parsed.get("warnings", []))
+    )
 
 
 def build_question_extractor(
@@ -277,7 +307,9 @@ def build_question_extractor(
         return MockQuestionExtractor()
     if provider == CODEX_QUESTION_PROVIDER:
         if not resolved_settings.codex_question_extraction_enabled:
-            raise CodexQuestionExtractionError("Codex question extraction must be explicitly enabled")
+            raise CodexQuestionExtractionError(
+                "Codex question extraction must be explicitly enabled"
+            )
         return CodexQuestionExtractor(
             command=resolved_settings.codex_cli_command,
             model_name=resolved_settings.codex_cli_model,

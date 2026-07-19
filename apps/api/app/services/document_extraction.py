@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models import ExtractionRun, QuestionNode, RubricExtractionCriterion
-from app.providers.contracts import get_provider
+from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
 QUESTION_PAPER_EXTRACTION_TYPE = "question_paper"
 RUBRIC_EXTRACTION_TYPE = "rubric"
@@ -139,24 +139,39 @@ class ProviderDocumentExtractor(DocumentExtractor):
     def extract(
         self, file_path: Path, extraction_type: str, content_type: str
     ) -> ExtractionProviderResult:
-        provider = get_provider()
+        try:
+            adapter = BrainAdapter.from_settings(get_settings())
+        except BrainProviderConfigurationError as e:
+            raise HTTPException(status_code=503, detail=f"AI provider unavailable: {e}") from e
         pdf_path = str(file_path)
         try:
-            ai_result = provider.extract_rubric_from_pdf(pdf_path)
+            if extraction_type == QUESTION_PAPER_EXTRACTION_TYPE:
+                ai_result = adapter.extract_questions_from_document(pdf_path)
+                result_key = "questions"
+                zero_detail = (
+                    "AI extracted zero questions. Check the PDF quality or page content."
+                )
+            elif extraction_type == RUBRIC_EXTRACTION_TYPE:
+                ai_result = adapter.extract_rubric_from_document(pdf_path)
+                result_key = "criteria"
+                zero_detail = (
+                    "AI extracted zero rubric criteria. Check the PDF quality or "
+                    "page content."
+                )
+            else:
+                raise DocumentExtractionError(f"Unsupported extraction type: {extraction_type}")
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=422, detail=f"AI returned malformed JSON: {e}") from e
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
+        except NotImplementedError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        except DocumentExtractionError:
+            raise
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"AI provider unavailable: {e}") from e
-        if not ai_result.get("criteria"):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "AI extracted zero rubric criteria. Check the PDF quality or "
-                    "page content."
-                ),
-            )
+        if not ai_result.get(result_key):
+            raise HTTPException(status_code=422, detail=zero_detail)
         return ExtractionProviderResult(
             raw_output=json.dumps(ai_result),
             normalized_output=ai_result,
@@ -201,7 +216,9 @@ class HostBridgeCodexDocumentExtractor(DocumentExtractor):
             raw_output = output_path.read_text(encoding="utf-8")
             payload = json.loads(raw_output)
         except json.JSONDecodeError as exc:
-            raise DocumentExtractionError("Document extraction bridge returned malformed JSON") from exc
+            raise DocumentExtractionError(
+                "Document extraction bridge returned malformed JSON"
+            ) from exc
         normalized = validate_normalized_output(extraction_type, payload)
         return ExtractionProviderResult(
             raw_output=raw_output,
@@ -218,7 +235,11 @@ def build_document_extractor(
     *, settings: Settings | None = None, requested_provider: str | None = None
 ) -> DocumentExtractor:
     resolved_settings = settings or get_settings()
-    provider = (requested_provider or resolved_settings.codex_extraction_provider or DISABLED_EXTRACTION_PROVIDER).strip()
+    provider = (
+        requested_provider
+        or resolved_settings.codex_extraction_provider
+        or DISABLED_EXTRACTION_PROVIDER
+    ).strip()
     if provider == MOCK_EXTRACTION_PROVIDER:
         return MockDocumentExtractor()
     if provider == DISABLED_EXTRACTION_PROVIDER:

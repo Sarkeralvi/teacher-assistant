@@ -313,7 +313,7 @@ class ExtractionRun(TimestampMixin, Base):
             name="ck_extraction_runs_type",
         ),
         CheckConstraint(
-            "provider in ('host_bridge_codex', 'mock', 'disabled')",
+            "provider in ('host_bridge_codex', 'mock', 'disabled', 'gemini')",
             name="ck_extraction_runs_provider",
         ),
         CheckConstraint(

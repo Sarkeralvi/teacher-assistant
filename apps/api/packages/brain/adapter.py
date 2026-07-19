@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.config import Settings
 from packages.brain.codex_cli_provider import CodexCliProvider
+from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.image_input import build_image_data_url
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.openai_provider import OpenAICompatibleProvider
@@ -63,6 +64,19 @@ class BrainAdapter:
                 image_input_enabled=settings.openai_image_input_enabled,
                 storage_root=settings.local_storage_root,
             )
+        if provider_name == "gemini":
+            if not settings.gemini_api_key:
+                raise BrainProviderConfigurationError(
+                    "GEMINI_API_KEY is required when BRAIN_PROVIDER=gemini"
+                )
+            return cls(
+                GeminiBrainProvider(
+                    api_key=settings.gemini_api_key,
+                    model_name=settings.gemini_model,
+                ),
+                image_input_enabled=settings.gemini_image_input_enabled,
+                storage_root=settings.local_storage_root,
+            )
         if provider_name == "codex_cli":
             if settings.codex_cli_approval_policy.strip().lower() != "never":
                 raise BrainProviderConfigurationError(
@@ -102,13 +116,14 @@ class BrainAdapter:
         normalized_marking_policy = marking_policy.strip().lower()
         if normalized_marking_policy not in MARKING_POLICY_INSTRUCTIONS:
             normalized_marking_policy = "general"
+        real_providers = {"openai", "codex_cli", "gemini"}
         resolved_policy = policy or (
             ModelPolicy.REAL_GRADING
-            if self.provider.provider_name in {"openai", "codex_cli"}
+            if self.provider.provider_name in real_providers
             else ModelPolicy.MOCK_GRADING
         )
         should_send_image = (
-            self.provider.provider_name in {"openai", "codex_cli"} and self.image_input_enabled
+            self.provider.provider_name in real_providers and self.image_input_enabled
         )
         prompt_version = get_prompt_version(resolved_policy)
         messages = build_grading_prompt(
@@ -121,7 +136,7 @@ class BrainAdapter:
         )
         image_data_url = None
         provider_answer_image_path = answer_image_path
-        if should_send_image and self.provider.provider_name == "openai":
+        if should_send_image and self.provider.provider_name in {"openai", "gemini"}:
             image_data_url = build_image_data_url(
                 image_path=answer_image_path,
                 storage_root=self.storage_root,
@@ -149,3 +164,19 @@ class BrainAdapter:
         latency_ms = int((time.perf_counter() - start) * 1000)
         validated = GradeSuggestionOutput.model_validate(output.model_dump())
         return validated.model_copy(update={"latency_ms": latency_ms})
+
+    def extract_questions_from_document(self, file_path: str) -> dict[str, Any]:
+        try:
+            return self.provider.extract_questions_from_pdf(file_path)
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
+    def extract_rubric_from_document(self, file_path: str) -> dict[str, Any]:
+        try:
+            return self.provider.extract_rubric_from_pdf(file_path)
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc

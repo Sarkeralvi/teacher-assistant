@@ -17,13 +17,12 @@ from app.models import (
     Rubric,
     Submission,
 )
-from app.providers.contracts import get_provider
 from app.services.answer_region_processing import (
     create_composite_grading_context_image,
     crop_grading_context_image,
 )
 from app.services.storage import LocalStorage
-from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.adapter import BrainAdapter
 from packages.brain.codex_cli_provider import CodexCliProvider
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
@@ -117,7 +116,11 @@ class GradingService:
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
-        self.adapter = BrainAdapter.from_settings(get_settings()) if use_configured_adapter else BrainAdapter()
+        self.adapter = (
+            BrainAdapter.from_settings(get_settings())
+            if use_configured_adapter
+            else BrainAdapter()
+        )
 
     def grade_answer_region(
         self, answer_region_id: int, *, marking_policy: str = "general"
@@ -408,64 +411,33 @@ class GradingService:
         self.db.refresh(job)
 
         try:
-            provider = get_provider()
-            if hasattr(self, "adapter") and self.adapter is not None:
-                adapter_output = self.adapter.grade_answer_region(
-                    question_text=region.question.question_text,
-                    question_total_marks=Decimal(region.question.total_marks),
-                    rubric_json=rubric_payload,
-                    answer_image_path=grading_answer_image_path,
-                    student_answer_text=region.manual_answer_text,
-                    marking_policy=marking_policy,
-                )
-                output = adapter_output.model_dump(mode="json")
-                grade_result = {
-                    "score": output.get("score"),
-                    "max_score": output.get("max_score"),
-                    "feedback": output.get("feedback_to_student"),
-                    "confidence": output.get("confidence"),
-                    "review_flags": output.get("review_flags", []),
-                    "rubric_breakdown": output.get("rubric_breakdown", []),
-                    "detected_answer_summary": output.get("detected_answer_summary"),
-                    "major_errors": output.get("major_errors", []),
-                }
-                model_provider = output.get("model_provider") or getattr(self.adapter.provider, "provider_name", "mock")
-                model_name = output.get("model_name") or getattr(self.adapter.provider, "model_name", "mock-grader-v1")
-                prompt_version = output.get("prompt_version") or "v1"
-                cost_estimate = output.get("cost_estimate")
-            else:
-                try:
-                    grade_result = provider.grade_answer(
-                        question_text=region.question.question_text,
-                        rubric_text=str(rubric_payload),
-                        student_answer=region.manual_answer_text,
-                        policy=marking_policy,
-                    )
-                except Exception:
-                    grade_result = {
-                        "score": 7,
-                        "max_score": 10,
-                        "feedback": "Stub feedback: The answer demonstrates partial understanding. Key points were addressed but some detail was missing.",
-                        "confidence": "high",
-                        "warnings": [],
-                    }
-                if provider.__name__.endswith("stub_provider"):
-                    grade_result = {
-                        "score": 0,
-                        "max_score": float(Decimal(region.question.total_marks)),
-                        "feedback": "This is a mock grading suggestion for pipeline validation only.",
-                        "confidence": 0,
-                        "warnings": [],
-                        "review_flags": ["mock_provider", "teacher_review_required"],
-                        "rubric_breakdown": [
-                            {"criterion_id": "concept"},
-                            {"criterion_id": "clarity"},
-                        ],
-                    }
-                model_provider = "mock" if provider.__name__.endswith("stub_provider") else "gemini"
-                model_name = "mock-grader-v1" if provider.__name__.endswith("stub_provider") else "gemini-2.0-flash"
-                prompt_version = "v1"
-                cost_estimate = None
+            adapter_output = self.adapter.grade_answer_region(
+                question_text=region.question.question_text,
+                question_total_marks=Decimal(region.question.total_marks),
+                rubric_json=rubric_payload,
+                answer_image_path=grading_answer_image_path,
+                student_answer_text=region.manual_answer_text,
+                marking_policy=marking_policy,
+            )
+            output = adapter_output.model_dump(mode="json")
+            grade_result = {
+                "score": output.get("score"),
+                "max_score": output.get("max_score"),
+                "feedback": output.get("feedback_to_student"),
+                "confidence": output.get("confidence"),
+                "review_flags": output.get("review_flags", []),
+                "rubric_breakdown": output.get("rubric_breakdown", []),
+                "detected_answer_summary": output.get("detected_answer_summary"),
+                "major_errors": output.get("major_errors", []),
+            }
+            model_provider = output.get("model_provider") or getattr(
+                self.adapter.provider, "provider_name", "mock"
+            )
+            model_name = output.get("model_name") or getattr(
+                self.adapter.provider, "model_name", "mock-grader-v1"
+            )
+            prompt_version = output.get("prompt_version") or "v1"
+            cost_estimate = output.get("cost_estimate")
             score = grade_result["score"]
             max_score = grade_result["max_score"]
             feedback = grade_result["feedback"]

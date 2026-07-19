@@ -6,6 +6,9 @@ FORBIDDEN_IMPORTS = (
     "import anthropic",
     "from anthropic",
     "google.generativeai",
+    "from google import genai",
+    "from google.genai",
+    "import google.genai",
 )
 
 
