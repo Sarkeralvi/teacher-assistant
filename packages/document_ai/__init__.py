@@ -1,1 +1,0 @@
-"""Document AI package placeholder."""

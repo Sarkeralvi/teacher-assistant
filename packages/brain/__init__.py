@@ -1,1 +1,0 @@
-"""Brain adapter package placeholder."""

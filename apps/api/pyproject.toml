@@ -16,7 +16,6 @@ dependencies = [
     "PyMuPDF",
     "google-genai",
     "Pillow",
-    "opencv-python-headless",
     "openpyxl",
     "python-multipart",
     "structlog",

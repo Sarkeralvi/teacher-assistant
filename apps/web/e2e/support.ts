@@ -273,6 +273,8 @@ export async function seedCustomControlledFlow(token: string, files: ReturnType<
       y: 0,
       width: 1,
       height: 1,
+      manual_answer_text: "Synthetic answer text for the mock grading loop.",
+      full_answer_confirmed: true,
     },
   });
 

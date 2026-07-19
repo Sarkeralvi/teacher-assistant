@@ -34,14 +34,14 @@ test("custom controlled mock grading loop keeps FinalGrade gated until teacher a
   expect(reviewBeforeApproval[0]?.latest_grade_suggestion?.needs_review).toBe(true);
   expect(reviewBeforeApproval[0]?.final_grade).toBeNull();
 
-  await page.goto(`/assessments/${seeded.assessment.id}`);
-  await page.getByLabel("Select existing teacher").selectOption(String(seeded.teacher.id));
-  await expect(page.getByText(`Current demo teacher`)).toBeVisible();
-  await expect(page.getByText("needs_review: true")).toBeVisible();
-  await expect(page.getByText("Teacher review is required before any FinalGrade is created.")).toBeVisible();
+  await page.goto(`/assessments/${seeded.assessment.id}/review`);
+  await expect(
+    page.getByRole("heading", { name: "Teacher review and final grade approval" }),
+  ).toBeVisible();
+  await expect(page.getByText("Submission synthetic-script-001").first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Finalize as approved" }).click();
-  await expect(page.getByText(/Current final grade:/i)).toBeVisible();
+  await page.getByRole("button", { name: "Approve AI suggestion" }).click();
+  await expect(page.getByText("Status label: approved", { exact: false })).toBeVisible();
 
   const finalGrade = await apiJson<{ id: number; final_score: string | number; approval_status: string }>(
     `/answer-regions/${seeded.answerRegionId}/final-grade`,

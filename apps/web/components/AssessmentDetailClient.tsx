@@ -17,7 +17,6 @@ import {
   createRubric,
   deleteSubmission,
   editAnswerRegionSegment,
-  finalizeGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
   getAssessmentFinalGradesExportUrl,
@@ -26,7 +25,6 @@ import {
   getGradingEvidencePacket,
   getGradingQueueSummary,
   getSubmissionPageImageUrl,
-  gradeAnswerRegion,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
   listAssessmentQuestionNodeMappings,
@@ -67,11 +65,6 @@ import {
 } from "../lib/api";
 import { type DemoTeacher } from "../lib/demoTeacher";
 import { DemoTeacherSelector } from "./DemoTeacherSelector";
-
-type FinalizeDraft = {
-  finalScore: string;
-  teacherComment: string;
-};
 
 type DraftQuestionEdit = {
   selected: boolean;
@@ -220,7 +213,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [acceptingSuggestionId, setAcceptingSuggestionId] = useState<string | null>(null);
   const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
   const [selectedPreviewRegionId, setSelectedPreviewRegionId] = useState("");
-  const [finalizeDrafts, setFinalizeDrafts] = useState<Record<number, FinalizeDraft>>({});
   const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -228,8 +220,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [creatingRegion, setCreatingRegion] = useState(false);
   const [creatingEvidencePrepRun, setCreatingEvidencePrepRun] = useState(false);
   const [creatingGradingQueueRun, setCreatingGradingQueueRun] = useState(false);
-  const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
-  const [finalizingRegionId, setFinalizingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const pages = submissions.flatMap((submission) => submission.pages);
@@ -425,7 +415,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setReviewQueue(reviewQueueData);
       setEvidencePrepSummary(evidencePrepData);
       setGradingQueueSummary(gradingQueueData);
-      setFinalizeDrafts((current) => mergeFinalizeDrafts(current, reviewQueueData));
       if (!selectedPageId && submissionData[0]?.pages[0]) {
         setSelectedPageId(String(submissionData[0].pages[0].id));
       }
@@ -891,24 +880,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
-  async function handleMockGrade(answerRegionId: number) {
-    const packet = evidencePackets[answerRegionId];
-    if (packet && !packet.readiness_result.ready_for_grading) {
-      setError(`Evidence packet not ready for grading: ${packet.readiness_result.blockers.join(", ")}`);
-      return;
-    }
-    setGradingRegionId(answerRegionId);
-    setError(null);
-    try {
-      await gradeAnswerRegion(answerRegionId);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create mock grade suggestion");
-    } finally {
-      setGradingRegionId(null);
-    }
-  }
-
   async function handleEvidenceCorrection(action: () => Promise<unknown>) {
     setError(null);
     try {
@@ -930,43 +901,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete submission");
     }
-  }
-
-  async function handleFinalize(item: ReviewQueueItem, approvalStatus: "approved" | "edited" | "rejected") {
-    if (!item.latest_grade_suggestion) {
-      setError("Create a mock grade suggestion before finalizing");
-      return;
-    }
-    if (!selectedTeacher) {
-      setError("Select a demo teacher first.");
-      return;
-    }
-    const draft = finalizeDrafts[item.answer_region.id] ?? defaultFinalizeDraft(item);
-    setFinalizingRegionId(item.answer_region.id);
-    setError(null);
-    try {
-      await finalizeGradeSuggestion(item.latest_grade_suggestion.id, {
-        teacher_id: selectedTeacher.id,
-        final_score: draft.finalScore,
-        teacher_comment: draft.teacherComment || null,
-        approval_status: approvalStatus,
-      });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to finalize grade");
-    } finally {
-      setFinalizingRegionId(null);
-    }
-  }
-
-  function updateFinalizeDraft(answerRegionId: number, patch: Partial<FinalizeDraft>) {
-    setFinalizeDrafts((current) => ({
-      ...current,
-      [answerRegionId]: {
-        ...(current[answerRegionId] ?? { finalScore: "0.00", teacherComment: "" }),
-        ...patch,
-      },
-    }));
   }
 
   async function handleCreateEvidencePrepRun() {
@@ -1935,239 +1869,6 @@ function formatQuestionOption(question: Question): string {
   return `${question.question_no} — ${question.total_marks} marks`;
 }
 
-function formatReviewQuestion(question: ReviewQueueItem["question"]): string {
-  return `${question.question_no} · out of ${question.total_marks}`;
-}
-
-function formatEvidencePacketStatus(evidencePacket: GradingEvidencePacket | null): string {
-  if (!evidencePacket) return "Loading";
-  const status = evidencePacket.student_answer_evidence.packet_status;
-  if (evidencePacket.readiness_result.ready_for_grading) return "Ready for grading";
-  if (status === "complete") return "Complete";
-  if (status === "partial") return "Partial / needs review";
-  if (status === "blank") return "Blank";
-  if (evidencePacket.readiness_result.blockers.length) return "Blocked";
-  return "Unconfirmed";
-}
-
-function ReviewQueueCard({
-  item,
-  draft,
-  grading,
-  finalizing,
-  evidencePacket,
-  onMockGrade,
-  onEvidenceCorrection,
-  onDraftChange,
-  onFinalize,
-}: Readonly<{
-  item: ReviewQueueItem;
-  draft: FinalizeDraft;
-  grading: boolean;
-  finalizing: boolean;
-  evidencePacket: GradingEvidencePacket | null;
-  onMockGrade: () => void;
-  onEvidenceCorrection: (action: () => Promise<unknown>) => void;
-  onDraftChange: (patch: Partial<FinalizeDraft>) => void;
-  onFinalize: (status: "approved" | "edited" | "rejected") => void;
-}>) {
-  const suggestion = item.latest_grade_suggestion;
-  const finalGrade: FinalGrade | null = item.final_grade;
-  const rubricBreakdown = suggestion?.raw_response_json.rubric_breakdown ?? [];
-  const readiness = evidencePacket?.readiness_result;
-  const segments = [...item.answer_region.segments].sort((left, right) => left.order_index - right.order_index);
-  return (
-    <article className="grid gap-4 rounded border border-slate-700 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="font-semibold">Submission {item.submission.student_identifier} · {formatReviewQuestion(item.question)}</h3>
-          <p className="text-sm text-slate-400">Review status: {item.review_status} · out of {item.question.total_marks}</p>
-        </div>
-        <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
-          Open cropped answer image
-        </a>
-      </div>
-      <img className="max-h-72 rounded border border-slate-800 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Cropped answer region ${item.answer_region.id}`} />
-
-      <div className="rounded border border-slate-800 bg-slate-950/40 p-3 text-sm">
-        <p className={readiness?.ready_for_grading ? "font-semibold text-emerald-300" : "font-semibold text-amber-200"}>
-          Evidence packet: {formatEvidencePacketStatus(evidencePacket)}
-        </p>
-        {evidencePacket ? (
-          <div className="text-xs text-slate-400">
-            <p>
-              Grading unit {evidencePacket.canonical_grading_unit.label ?? "unknown"} · rubric present: {String(evidencePacket.rubric_evidence.criteria_max_marks.length > 0)} · padded context: {String(evidencePacket.student_answer_evidence.padded_grading_context_generated)}
-            </p>
-            <p>
-              Segment list: segment_count {evidencePacket.student_answer_evidence.segment_count} · pages_covered {evidencePacket.student_answer_evidence.pages_covered.join(", ") || "unknown"} · packet_status {evidencePacket.student_answer_evidence.packet_status} · continuation_check_status {evidencePacket.student_answer_evidence.continuation_check_status}
-            </p>
-            {evidencePacket.student_answer_evidence.continuation_check_status === "possible_continuation" ? (
-              <p className="mt-1 text-amber-200">Possible continuation on next page. Confirm full answer before grading.</p>
-            ) : null}
-            <p>
-              This contains the complete answer for {evidencePacket.canonical_grading_unit.label ?? "this grading unit"}: {String(evidencePacket.student_answer_evidence.teacher_founder_confirmed_full_answer)}
-            </p>
-            <p className="text-amber-200">Partial, blank, blocked, or unconfirmed continuation states are not ready for grading.</p>
-          </div>
-        ) : null}
-        {readiness?.blockers.length ? (
-          <p className="mt-1 text-xs text-red-300">Blockers: {readiness.blockers.join(", ")}</p>
-        ) : null}
-        {readiness?.warnings.length ? (
-          <p className="mt-1 text-xs text-amber-200">Warnings: {readiness.warnings.join(", ")}</p>
-        ) : null}
-      </div>
-
-      <div className="grid gap-3 rounded border border-cyan-900 bg-slate-950/40 p-3 text-sm" data-testid="teacher-evidence-correction-workflow">
-        <div>
-          <p className="font-semibold text-cyan-200">Teacher correction workflow: split / merge / reorder / confirm</p>
-          <p className="text-xs text-amber-200">Corrections prepare evidence only. They do not create grades.</p>
-        </div>
-        <p className="text-xs text-slate-400">
-          Continuation status: {evidencePacket?.student_answer_evidence.continuation_check_status ?? "unknown"} · full-answer confirmed: {String(item.answer_region.full_answer_confirmed)}
-        </p>
-        <div className="grid gap-2">
-          {segments.map((segment, index) => (
-            <form
-              key={segment.id}
-              className="grid gap-2 rounded border border-slate-800 p-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const form = new FormData(event.currentTarget);
-                onEvidenceCorrection(() => editAnswerRegionSegment(item.answer_region.id, segment.id, {
-                  x: String(form.get("x") ?? segment.x),
-                  y: String(form.get("y") ?? segment.y),
-                  width: String(form.get("width") ?? segment.width),
-                  height: String(form.get("height") ?? segment.height),
-                }));
-              }}
-            >
-              <p className="text-xs text-slate-300">Segment {segment.order_index} · page_id {segment.page_id} · primary: {String(segment.is_primary)}</p>
-              <div className="grid gap-2 md:grid-cols-4">
-                <input className={inputClass} name="x" aria-label={`Segment ${segment.id} bbox x`} defaultValue={String(segment.x)} />
-                <input className={inputClass} name="y" aria-label={`Segment ${segment.id} bbox y`} defaultValue={String(segment.y)} />
-                <input className={inputClass} name="width" aria-label={`Segment ${segment.id} bbox width`} defaultValue={String(segment.width)} />
-                <input className={inputClass} name="height" aria-label={`Segment ${segment.id} bbox height`} defaultValue={String(segment.height)} />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button className={buttonClass} type="submit">Edit segment bbox</button>
-                <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => removeAnswerRegionSegment(item.answer_region.id, segment.id))}>Remove segment</button>
-                <button
-                  className={buttonClass}
-                  type="button"
-                  disabled={index === 0}
-                  onClick={() => {
-                    const ids = segments.map((current) => current.id);
-                    [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
-                    onEvidenceCorrection(() => reorderAnswerRegionSegments(item.answer_region.id, ids));
-                  }}
-                >
-                  Move segment up
-                </button>
-                <button
-                  className={buttonClass}
-                  type="button"
-                  disabled={index === segments.length - 1}
-                  onClick={() => {
-                    const ids = segments.map((current) => current.id);
-                    [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
-                    onEvidenceCorrection(() => reorderAnswerRegionSegments(item.answer_region.id, ids));
-                  }}
-                >
-                  Move segment down
-                </button>
-              </div>
-            </form>
-          ))}
-        </div>
-        <form
-          className="grid gap-2 rounded border border-slate-800 p-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const form = new FormData(event.currentTarget);
-            onEvidenceCorrection(() => addAnswerRegionSegment(item.answer_region.id, {
-              page_id: Number(form.get("page_id") ?? item.answer_region.page_id),
-              order_index: Number(form.get("order_index") ?? segments.length + 1),
-              x: String(form.get("x") ?? "0"),
-              y: String(form.get("y") ?? "0"),
-              width: String(form.get("width") ?? "100"),
-              height: String(form.get("height") ?? "100"),
-            }));
-          }}
-        >
-          <p className="text-xs font-semibold text-slate-300">Split / add segment from user-provided box</p>
-          <div className="grid gap-2 md:grid-cols-6">
-            <input className={inputClass} name="page_id" aria-label="New segment page id" defaultValue={String(item.answer_region.page_id)} />
-            <input className={inputClass} name="order_index" aria-label="New segment order" defaultValue={String(segments.length + 1)} />
-            <input className={inputClass} name="x" aria-label="New segment x" defaultValue="0" />
-            <input className={inputClass} name="y" aria-label="New segment y" defaultValue="0" />
-            <input className={inputClass} name="width" aria-label="New segment width" defaultValue="100" />
-            <input className={inputClass} name="height" aria-label="New segment height" defaultValue="100" />
-          </div>
-          <button className={buttonClass} type="submit">Add segment / split answer</button>
-        </form>
-        <div className="flex flex-wrap gap-2">
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm full answer</button>
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Mark partial / needs review</button>
-          <button className={buttonClass} type="button" onClick={() => onEvidenceCorrection(() => confirmAnswerRegionFullAnswer(item.answer_region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
-        </div>
-        <p className="text-xs text-slate-400">Merge support: move/add segments into this AnswerRegion, then reorder into contiguous packet order.</p>
-      </div>
-
-      {!suggestion ? (
-        <button className={buttonClass} type="button" disabled={grading || !readiness?.ready_for_grading} onClick={onMockGrade}>
-          {grading ? "Creating MOCK suggestion..." : "Mock Grade"}
-        </button>
-      ) : (
-        <div className="grid gap-3 rounded border border-amber-800 bg-amber-950/20 p-3">
-          <p className="font-semibold text-amber-200">MOCK suggestion — not real grading</p>
-          <p className="text-sm">Score: {suggestion.score} / {suggestion.max_score}</p>
-          <p className="text-sm">Confidence: {suggestion.confidence} · needs_review: {String(suggestion.needs_review)}</p>
-          <p className="text-sm">Feedback: {suggestion.feedback}</p>
-          <p className="text-sm">Flags: {(suggestion.raw_response_json.review_flags ?? []).join(", ")}</p>
-          <div>
-            <p className="text-sm font-medium">Rubric breakdown</p>
-            <div className="mt-2 grid gap-2">
-              {rubricBreakdown.map((criterion) => (
-                <div key={criterion.criterion_id} className="rounded border border-slate-800 p-2 text-sm">
-                  <p>{criterion.criterion}: {criterion.awarded_marks} / {criterion.max_marks}</p>
-                  <p className="text-slate-400">{criterion.reason}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {suggestion ? (
-        <div className="grid gap-3 rounded border border-slate-800 p-3">
-          <p className="font-semibold">FinalGrade review</p>
-          {finalGrade ? (
-            <p className="text-sm text-emerald-300">Current final grade: {finalGrade.final_score} · {finalGrade.approval_status}</p>
-          ) : null}
-          <div className="grid gap-2 md:grid-cols-2">
-            <input className={inputClass} aria-label="Final score" placeholder="Final score" value={draft.finalScore} onChange={(event) => onDraftChange({ finalScore: event.target.value })} />
-            <input className={inputClass} aria-label="Teacher comment" placeholder="Teacher comment" value={draft.teacherComment} onChange={(event) => onDraftChange({ teacherComment: event.target.value })} />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button className={buttonClass} type="button" disabled={finalizing} onClick={() => onFinalize("approved")}>Finalize as approved</button>
-            <button className={buttonClass} type="button" disabled={finalizing} onClick={() => onFinalize("edited")}>Finalize as edited</button>
-            <button className={buttonClass} type="button" disabled={finalizing} onClick={() => onFinalize("rejected")}>Finalize as rejected</button>
-          </div>
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function defaultFinalizeDraft(item: ReviewQueueItem): FinalizeDraft {
-  return {
-    finalScore: String(item.final_grade?.final_score ?? item.latest_grade_suggestion?.score ?? "0.00"),
-    teacherComment: item.final_grade?.teacher_comment ?? "",
-  };
-}
-
 function draftQuestionToEdit(draft: DraftQuestion): DraftQuestionEdit {
   return {
     selected: true,
@@ -2190,17 +1891,4 @@ function emptyDraftQuestionEdit(): DraftQuestionEdit {
 
 function createDraftQuestionEdits(drafts: DraftQuestion[]): Record<string, DraftQuestionEdit> {
   return Object.fromEntries(drafts.map((draft) => [draft.draft_id, draftQuestionToEdit(draft)]));
-}
-
-function mergeFinalizeDrafts(
-  current: Record<number, FinalizeDraft>,
-  items: ReviewQueueItem[],
-): Record<number, FinalizeDraft> {
-  const next = { ...current };
-  for (const item of items) {
-    if (!next[item.answer_region.id]) {
-      next[item.answer_region.id] = defaultFinalizeDraft(item);
-    }
-  }
-  return next;
 }
