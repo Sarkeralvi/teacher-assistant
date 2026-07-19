@@ -79,11 +79,16 @@ def create_uploaded_page(
 ) -> tuple[dict[str, object], dict[str, object]]:
     image_path = tmp_path / f"answer-{len(list(tmp_path.glob('answer-*.png')))}.png"
     email = f"regions-{image_path.stem}@example.com"
-    user_response = client.post("/users", json={"name": "Teacher", "email": email})
-    assert user_response.status_code == 201
+    register_response = client.post(
+        "/auth/register",
+        json={"name": "Teacher", "email": email, "password": "regions test password"},
+    )
+    assert register_response.status_code == 201
+    user_response_json = register_response.json()["user"]
+    auth_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "REG101", "title": "Regions"},
+        json={"teacher_id": user_response_json["id"], "code": "REG101", "title": "Regions"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
@@ -108,6 +113,7 @@ def create_uploaded_page(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
             data={"student_identifier": "S-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
+            headers=auth_headers,
         )
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
@@ -239,11 +245,16 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
     image_path = tmp_path / "suggest-page.png"
     make_png(image_path, size=(320, 240))
     email = f"suggest-{image_path.stem}@example.com"
-    user_response = client.post("/users", json={"name": "Teacher", "email": email})
-    assert user_response.status_code == 201
+    register_response = client.post(
+        "/auth/register",
+        json={"name": "Teacher", "email": email, "password": "suggest test password"},
+    )
+    assert register_response.status_code == 201
+    user_response_json = register_response.json()["user"]
+    auth_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "SUG101", "title": "Suggest"},
+        json={"teacher_id": user_response_json["id"], "code": "SUG101", "title": "Suggest"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
@@ -266,6 +277,7 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
             data={"student_identifier": "SUG-001"},
             files={"file": ("suggest.png", file_obj, "image/png")},
+            headers=auth_headers,
         )
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
@@ -731,6 +743,15 @@ def test_evidence_packet_sees_accepted_multisegment_mapping(
             "segments": group["segments"],
         },
     ).json()
+    manual_text_response = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        json={
+            "full_answer_confirmed": True,
+            "manual_answer_text": "Working continues across both page segments.",
+            "packet_status": "complete",
+        },
+    )
+    assert manual_text_response.status_code == 200
 
     packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
 
@@ -805,6 +826,7 @@ def create_authenticated_uploaded_page(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
             data={"student_identifier": "S-COR"},
             files={"file": ("answer.png", file_obj, "image/png")},
+            headers=headers,
         )
     assert submission_response.status_code == 201
     return question_response.json(), submission_response.json()["pages"][0], headers

@@ -2,7 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+import pytest
+
+
+def _find_repo_root() -> Path | None:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "apps" / "web" / "lib" / "api.ts").exists():
+            return candidate
+    return None
+
+
+_repo_root = _find_repo_root()
+if _repo_root is None:
+    pytest.skip(
+        "frontend sources not available (containerized backend-only run)",
+        allow_module_level=True,
+    )
+
+REPO_ROOT = _repo_root
 WEB_API = REPO_ROOT / "apps" / "web" / "lib" / "api.ts"
 CONTROLLED_WIZARD = (
     REPO_ROOT / "apps" / "web" / "components" / "CustomControlledGradingRunClient.tsx"

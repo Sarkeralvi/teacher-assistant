@@ -161,6 +161,7 @@ def create_assessment_fixture(client: TestClient, tmp_path: Path) -> dict[str, o
             f"/assessments/{assessment['id']}/submissions/upload",
             data={"student_identifier": "S-001", "student_name": "Student One"},
             files={"file": ("answer.png", file_obj, "image/png")},
+            headers={"Authorization": f"Bearer {token}"},
         ).json()
     region = client.post(
         f"/submission-pages/{submission['pages'][0]['id']}/answer-regions",
@@ -173,6 +174,7 @@ def create_assessment_fixture(client: TestClient, tmp_path: Path) -> dict[str, o
             "full_answer_confirmed": True,
             "continuation_not_needed": True,
             "packet_status": "complete",
+            "manual_answer_text": "Synthetic complete answer for evidence prep.",
         },
     )
     assert confirm_response.status_code == 200
@@ -407,14 +409,17 @@ def upload_submission(
     tmp_path: Path,
     assessment_id: int,
     student_identifier: str,
+    token: str | None = None,
 ) -> dict[str, object]:
     image = tmp_path / f"script-{uuid4().hex}.png"
     make_png(image)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     with image.open("rb") as file_obj:
         return client.post(
             f"/assessments/{assessment_id}/submissions/upload",
             data={"student_identifier": student_identifier, "student_name": student_identifier},
             files={"file": ("answer.png", file_obj, "image/png")},
+            headers=headers,
         ).json()
 
 
@@ -447,8 +452,8 @@ def test_mixed_state_prep_accounts_for_every_expected_packet_slot(
     q1 = create_question_with_optional_rubric(client, assessment["id"], "1", active_rubric=True)
     q2 = create_question_with_optional_rubric(client, assessment["id"], "2", active_rubric=True)
     q3 = create_question_with_optional_rubric(client, assessment["id"], "3", active_rubric=False)
-    s1 = upload_submission(client, tmp_path, assessment["id"], "S-001")
-    s2 = upload_submission(client, tmp_path, assessment["id"], "S-002")
+    s1 = upload_submission(client, tmp_path, assessment["id"], "S-001", token)
+    s2 = upload_submission(client, tmp_path, assessment["id"], "S-002", token)
 
     ready_region = create_region_for_packet(client, s1, q1)
     ready_response = client.patch(
@@ -458,6 +463,7 @@ def test_mixed_state_prep_accounts_for_every_expected_packet_slot(
             "full_answer_confirmed": True,
             "continuation_not_needed": True,
             "packet_status": "complete",
+            "manual_answer_text": "Complete answer for the ready packet.",
         },
     )
     assert ready_response.status_code == 200

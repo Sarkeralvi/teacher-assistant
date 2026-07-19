@@ -44,8 +44,8 @@ def test_queue_run_includes_only_confirmed_ready_packets_and_refuses_everything_
     q1 = create_question_with_optional_rubric(client, assessment["id"], "1", active_rubric=True)
     q2 = create_question_with_optional_rubric(client, assessment["id"], "2", active_rubric=True)
     q3 = create_question_with_optional_rubric(client, assessment["id"], "3", active_rubric=False)
-    s1 = upload_submission(client, tmp_path, assessment["id"], "S-001")
-    s2 = upload_submission(client, tmp_path, assessment["id"], "S-002")
+    s1 = upload_submission(client, tmp_path, assessment["id"], "S-001", token)
+    s2 = upload_submission(client, tmp_path, assessment["id"], "S-002", token)
 
     ready_region = create_region_for_packet(client, s1, q1)
     ready_response = client.patch(
@@ -55,6 +55,7 @@ def test_queue_run_includes_only_confirmed_ready_packets_and_refuses_everything_
             "full_answer_confirmed": True,
             "continuation_not_needed": True,
             "packet_status": "complete",
+            "manual_answer_text": "Complete answer for the ready packet.",
         },
     )
     assert ready_response.status_code == 200

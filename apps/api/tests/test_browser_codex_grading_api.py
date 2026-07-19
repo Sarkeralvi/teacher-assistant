@@ -97,7 +97,12 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, 
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
-        json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
+        json={
+            "question_no": "1",
+            "question_text": "Explain.",
+            "model_answer": "A complete answer explains the concept.",
+            "total_marks": "5.00",
+        },
     )
     assert question_response.status_code == 201
     rubric_response = client.post(
@@ -112,6 +117,7 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, 
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
             data={"student_identifier": "S-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
+            headers={"Authorization": f"Bearer {token}"},
         )
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
@@ -123,6 +129,8 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, 
             "y": 2,
             "width": 20,
             "height": 25,
+            "manual_answer_text": "Student explanation captured for grading.",
+            "full_answer_confirmed": True,
         },
     )
     assert region_response.status_code == 201

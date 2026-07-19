@@ -1,3 +1,4 @@
+import os
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -217,6 +218,7 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path, email: str) -
     with image_path.open("rb") as file_obj:
         submission_response = client.post(
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
+            headers=headers,
             data={"student_identifier": "S-OWN"},
             files={"file": ("answer.png", file_obj, "image/png")},
         )
@@ -240,11 +242,19 @@ def create_assessment_with_answer_regions(
     client: TestClient, tmp_path: Path, *, region_count: int = 3
 ) -> dict[str, object]:
     email = f"batch-{len(list(tmp_path.glob('batch-*.png')))}@example.com"
-    user_response = client.post("/users", json={"name": "Batch Teacher", "email": email})
-    assert user_response.status_code == 201
+    register_response = client.post(
+        "/auth/register",
+        json={"name": "Batch Teacher", "email": email, "password": "batch test password"},
+    )
+    assert register_response.status_code == 201
+    batch_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "BATCH101", "title": "Batch"},
+        json={
+            "teacher_id": register_response.json()["user"]["id"],
+            "code": "BATCH101",
+            "title": "Batch",
+        },
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
@@ -275,6 +285,7 @@ def create_assessment_with_answer_regions(
         with image_path.open("rb") as file_obj:
             submission_response = client.post(
                 f"/assessments/{assessment_id}/submissions/upload",
+                headers=batch_headers,
                 data={"student_identifier": f"S-{index:03d}"},
                 files={"file": ("answer.png", file_obj, "image/png")},
             )
@@ -288,6 +299,8 @@ def create_assessment_with_answer_regions(
                 "y": 2,
                 "width": 20,
                 "height": 25,
+                "manual_answer_text": f"Batch answer {index}.",
+                "full_answer_confirmed": True,
             },
         )
         assert region_response.status_code == 201
@@ -711,6 +724,8 @@ def test_unwritable_grading_context_blocks_before_provider_call(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("chmod-based unwritable-directory check cannot block the root user")
     class FakeCodexCliProvider:
         provider_name = "codex_cli"
         model_name = "codex-cli"

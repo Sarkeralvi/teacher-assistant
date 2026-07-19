@@ -24,6 +24,7 @@ from app.services.answer_region_processing import (
 )
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.codex_cli_provider import CodexCliProvider
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
@@ -298,6 +299,33 @@ class GradingService:
     ) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
         return self._grade_region(region, marking_policy="general")
+
+    def grade_answer_region_with_codex_cli(
+        self, answer_region_id: int
+    ) -> tuple[GradingJob, GradeSuggestion]:
+        region = self._get_region(answer_region_id)
+        settings = get_settings()
+        codex_adapter = BrainAdapter(
+            CodexCliProvider(
+                command=settings.codex_cli_command,
+                model_name=settings.codex_cli_model,
+                timeout_seconds=settings.codex_cli_timeout_seconds,
+                sandbox=settings.codex_cli_sandbox,
+                use_json=settings.codex_cli_use_json,
+                output_last_message=settings.codex_cli_output_last_message,
+                image_input_enabled=settings.codex_cli_image_input_enabled,
+                workdir=settings.codex_cli_workdir,
+                skip_git_repo_check=settings.codex_cli_skip_git_repo_check,
+            ),
+            image_input_enabled=settings.codex_cli_image_input_enabled,
+            storage_root=settings.local_storage_root,
+        )
+        original_adapter = self.adapter
+        self.adapter = codex_adapter
+        try:
+            return self._grade_region(region, marking_policy="general")
+        finally:
+            self.adapter = original_adapter
 
     def grade_assessment_ungraded_regions_mock(
         self, assessment_id: int, *, marking_policy: str = "general"
