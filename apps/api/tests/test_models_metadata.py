@@ -261,6 +261,7 @@ EXPECTED_COLUMNS = {
         "grading_job_id",
         "answer_region_id",
         "question_id",
+        "rubric_id",
         "model_provider",
         "model_name",
         "prompt_version",

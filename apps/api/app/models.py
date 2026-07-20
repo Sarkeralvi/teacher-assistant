@@ -649,6 +649,9 @@ class GradeSuggestion(Base):
     question_id: Mapped[int] = mapped_column(
         ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
     )
+    rubric_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rubrics.id", ondelete="SET NULL"), nullable=True
+    )
     model_provider: Mapped[str] = mapped_column(String(128), nullable=False)
     model_name: Mapped[str] = mapped_column(String(255), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -1,4 +1,5 @@
 import re
+import statistics
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -373,6 +374,152 @@ class GradingService:
             "errors": errors,
         }
 
+    def create_cohort_grading_jobs(
+        self, assessment_id: int, question_id: int
+    ) -> dict[str, object]:
+        """Question x cohort dispatch: create one queued GradingJob for every
+        confirmed-ready answer region of a single question across the whole
+        cohort. Readiness is re-checked per region right now (not from a
+        stale queue flag), so an edited/blocked packet is refused with its
+        reasons instead of silently graded. Regions that already have a
+        suggestion are skipped. Creates no GradeSuggestion and calls no
+        provider — the caller enqueues the returned jobs to the worker.
+        """
+        if self.db.get(Assessment, assessment_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found"
+            )
+        statement = (
+            select(AnswerRegion)
+            .join(Submission, AnswerRegion.submission_id == Submission.id)
+            .options(
+                joinedload(AnswerRegion.question),
+                selectinload(AnswerRegion.grade_suggestions),
+            )
+            .where(
+                Submission.assessment_id == assessment_id,
+                AnswerRegion.question_id == question_id,
+            )
+            .order_by(AnswerRegion.id)
+        )
+        regions = list(self.db.scalars(statement).unique().all())
+        queued_jobs: list[GradingJob] = []
+        skipped: list[dict[str, object]] = []
+        refused: list[dict[str, object]] = []
+        for region in regions:
+            if region.grade_suggestions:
+                skipped.append(
+                    {"answer_region_id": region.id, "reason": "already has a grade suggestion"}
+                )
+                continue
+            try:
+                self._check_readiness_or_raise(region)
+            except HTTPException as exc:
+                refused.append({"answer_region_id": region.id, "reason": str(exc.detail)})
+                continue
+            job = GradingJob(answer_region_id=region.id, status="queued")
+            self.db.add(job)
+            queued_jobs.append(job)
+        self.db.commit()
+        for job in queued_jobs:
+            self.db.refresh(job)
+        return {
+            "assessment_id": assessment_id,
+            "question_id": question_id,
+            "total_regions": len(regions),
+            "queued_jobs": queued_jobs,
+            "queued_count": len(queued_jobs),
+            "skipped": skipped,
+            "refused": refused,
+        }
+
+    def cohort_grade_summary(
+        self, assessment_id: int, question_id: int
+    ) -> dict[str, object]:
+        """Read-only cohort consistency view for one question: the latest
+        grade suggestion per answer region plus distribution stats and
+        outlier flags. Flags are advisory only and never change any score;
+        the teacher decides. Cohort statistics must not become
+        norm-referenced grading.
+        """
+        if self.db.get(Assessment, assessment_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found"
+            )
+        suggestions = list(
+            self.db.scalars(
+                select(GradeSuggestion)
+                .join(AnswerRegion, AnswerRegion.id == GradeSuggestion.answer_region_id)
+                .join(Submission, Submission.id == AnswerRegion.submission_id)
+                .where(
+                    Submission.assessment_id == assessment_id,
+                    GradeSuggestion.question_id == question_id,
+                )
+                .order_by(GradeSuggestion.answer_region_id, GradeSuggestion.id.desc())
+            ).all()
+        )
+        latest_by_region: dict[int, GradeSuggestion] = {}
+        for suggestion in suggestions:
+            latest_by_region.setdefault(suggestion.answer_region_id, suggestion)
+        latest = list(latest_by_region.values())
+
+        scores = [float(s.score) for s in latest if s.score is not None]
+        stats: dict[str, object] = {"count": len(scores)}
+        median = mean = stdev = None
+        if scores:
+            median = statistics.median(scores)
+            mean = statistics.fmean(scores)
+            stdev = statistics.pstdev(scores) if len(scores) > 1 else 0.0
+            stats.update(
+                {
+                    "mean": round(mean, 4),
+                    "median": round(median, 4),
+                    "min": min(scores),
+                    "max": max(scores),
+                    "stdev": round(stdev, 4),
+                }
+            )
+
+        items: list[dict[str, object]] = []
+        for suggestion in latest:
+            score = float(suggestion.score) if suggestion.score is not None else None
+            max_score = float(suggestion.max_score)
+            flags: list[str] = []
+            if score is not None and median is not None and stdev is not None:
+                # Far from the cohort centre — a small floor keeps a tight
+                # cohort (stdev ~ 0) from flagging trivial differences.
+                threshold = max(1.5 * stdev, 0.05 * max_score)
+                if abs(score - median) > threshold:
+                    flags.append("far_from_cohort_median")
+                if score <= 0.2 * max_score and median >= 0.5 * max_score:
+                    flags.append("low_score_vs_cohort")
+            confidence = float(suggestion.confidence) if suggestion.confidence is not None else None
+            if confidence is not None and confidence < 0.4:
+                flags.append("low_confidence")
+            items.append(
+                {
+                    "answer_region_id": suggestion.answer_region_id,
+                    "grade_suggestion_id": suggestion.id,
+                    "score": suggestion.score,
+                    "max_score": suggestion.max_score,
+                    "confidence": suggestion.confidence,
+                    "needs_review": suggestion.needs_review,
+                    "marking_policy": suggestion.marking_policy,
+                    "model_provider": suggestion.model_provider,
+                    "rubric_id": suggestion.rubric_id,
+                    "outlier_flags": flags,
+                }
+            )
+        items.sort(key=lambda item: bool(item["outlier_flags"]), reverse=True)
+        return {
+            "assessment_id": assessment_id,
+            "question_id": question_id,
+            "distribution": stats,
+            "graded_region_count": len(latest),
+            "flagged_region_count": sum(1 for item in items if item["outlier_flags"]),
+            "items": items,
+        }
+
     def _check_readiness_or_raise(self, region: AnswerRegion) -> list[AnswerRegionSegment]:
         """Validate grading readiness. Returns confirmed segments so callers
         that already need them don't re-derive. Raises HTTPException (400)
@@ -519,6 +666,7 @@ class GradingService:
                 grading_job_id=job.id,
                 answer_region_id=region.id,
                 question_id=region.question_id,
+                rubric_id=rubric.id,
                 model_provider=model_provider,
                 model_name=model_name,
                 prompt_version=prompt_version,

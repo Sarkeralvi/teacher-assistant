@@ -943,6 +943,7 @@ class GradeSuggestionRead(ORMBase):
     grading_job_id: int
     answer_region_id: int
     question_id: int
+    rubric_id: int | None = None
     model_provider: str
     model_name: str
     prompt_version: str
@@ -994,6 +995,38 @@ class BatchMockGradeResponse(BaseModel):
     failed_count: int
     created_grade_suggestion_ids: list[int]
     errors: list[str]
+
+
+class CohortGradeDispatchResponse(BaseModel):
+    assessment_id: int
+    question_id: int
+    total_regions: int
+    queued_count: int
+    queued_jobs: list[GradingJobRead]
+    skipped: list[dict[str, Any]]
+    refused: list[dict[str, Any]]
+
+
+class CohortGradeItem(BaseModel):
+    answer_region_id: int
+    grade_suggestion_id: int
+    score: Decimal | None
+    max_score: Decimal
+    confidence: Decimal | None
+    needs_review: bool
+    marking_policy: MarkingPolicy
+    model_provider: str
+    rubric_id: int | None
+    outlier_flags: list[str]
+
+
+class CohortGradeSummaryResponse(BaseModel):
+    assessment_id: int
+    question_id: int
+    distribution: dict[str, Any]
+    graded_region_count: int
+    flagged_region_count: int
+    items: list[CohortGradeItem]
 
 
 class BatchFinalGradeApproveRequest(BaseModel):

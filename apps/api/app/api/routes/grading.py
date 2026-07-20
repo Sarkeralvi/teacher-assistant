@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
 from app.core.config import get_settings
-from app.core.ownership import get_owned_assessment_or_404
+from app.core.ownership import get_owned_assessment_or_404, get_owned_question_or_404
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
@@ -22,6 +22,8 @@ from app.models import (
 from app.schemas import (
     BatchMockGradeResponse,
     BrowserCodexGradeResponse,
+    CohortGradeDispatchResponse,
+    CohortGradeSummaryResponse,
     GradeAnswerRegionResponse,
     GradeSuggestionRead,
     GradingEvidencePacketRead,
@@ -122,6 +124,46 @@ def grade_answer_region_async(
         run_grade_answer_region_job, job.id, retry=Retry(max=1)
     )
     return job
+
+
+@router.post(
+    "/assessments/{assessment_id}/questions/{question_id}/grade-cohort",
+    response_model=CohortGradeDispatchResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def grade_question_cohort(
+    assessment_id: int,
+    question_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    """Question x cohort grading: an explicit, teacher-authorized action that
+    grades every confirmed-ready answer region of one question across the
+    cohort via the async worker. Readiness is re-checked per region; only
+    ready regions without an existing suggestion are dispatched.
+    """
+    get_owned_assessment_or_404(assessment_id, db, current_user)
+    get_owned_question_or_404(question_id, db, current_user)
+    result = GradingService(db).create_cohort_grading_jobs(assessment_id, question_id)
+    queue = get_default_queue()
+    for job in result["queued_jobs"]:
+        queue.enqueue(run_grade_answer_region_job, job.id, retry=Retry(max=1))
+    return result
+
+
+@router.get(
+    "/assessments/{assessment_id}/questions/{question_id}/cohort-grades",
+    response_model=CohortGradeSummaryResponse,
+)
+def read_question_cohort_grades(
+    assessment_id: int,
+    question_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
+    get_owned_question_or_404(question_id, db, current_user)
+    return GradingService(db).cohort_grade_summary(assessment_id, question_id)
 
 
 @router.post(
