@@ -373,9 +373,11 @@ class GradingService:
             "errors": errors,
         }
 
-    def _grade_region(
-        self, region: AnswerRegion, *, marking_policy: str
-    ) -> tuple[GradingJob, GradeSuggestion]:
+    def _check_readiness_or_raise(self, region: AnswerRegion) -> list[AnswerRegionSegment]:
+        """Validate grading readiness. Returns confirmed segments so callers
+        that already need them don't re-derive. Raises HTTPException (400)
+        with the same messages the evidence packet reports as blockers.
+        """
         packet = self.get_grading_evidence_packet(region.id)
         readiness = packet["readiness_result"]
         if isinstance(readiness, dict) and not readiness["ready_for_grading"]:
@@ -384,11 +386,6 @@ class GradingService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Evidence packet not ready for grading: {', '.join(blockers)}",
             )
-        settings = get_settings()
-        rubric = self._get_active_rubric(region.question_id)
-        rubric_payload = dict(rubric.rubric_json)
-        if region.question and region.question.model_answer:
-            rubric_payload["model_answer"] = region.question.model_answer
         confirmed_segments = [segment for segment in _ordered_segments(region) if segment.confirmed]
         if not confirmed_segments:
             raise HTTPException(
@@ -400,13 +397,66 @@ class GradingService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Evidence packet not ready for grading: missing manual answer text",
             )
+        return confirmed_segments
+
+    def create_queued_grading_job(self, answer_region_id: int) -> GradingJob:
+        """Validate readiness and create a GradingJob row in 'queued' state,
+        for callers that hand the actual grading off to an RQ worker
+        (see run_queued_job / app.worker.jobs).
+        """
+        region = self._get_region(answer_region_id)
+        self._check_readiness_or_raise(region)
+        job = GradingJob(answer_region_id=region.id, status="queued")
+        self.db.add(job)
+        self.db.commit()
+        self.db.refresh(job)
+        return job
+
+    def run_queued_job(
+        self, grading_job_id: int, *, marking_policy: str = "general"
+    ) -> tuple[GradingJob, GradeSuggestion]:
+        """Run a job previously created by create_queued_grading_job. Safe to
+        call at most once per job: a job already in a terminal state is
+        left untouched and its existing suggestion (if any) is returned,
+        so an RQ retry after a worker crash never grades twice.
+        """
+        job = self.db.get(GradingJob, grading_job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Grading job not found"
+            )
+        if job.status in {"succeeded", "failed"}:
+            existing = self.db.scalars(
+                select(GradeSuggestion).where(GradeSuggestion.grading_job_id == job.id)
+            ).first()
+            if existing is not None:
+                return job, existing
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Grading job {job.id} already finished with status '{job.status}'",
+            )
+        region = self._get_region(job.answer_region_id)
+        return self._grade_region(region, marking_policy=marking_policy, job=job)
+
+    def _grade_region(
+        self, region: AnswerRegion, *, marking_policy: str, job: GradingJob | None = None
+    ) -> tuple[GradingJob, GradeSuggestion]:
+        confirmed_segments = self._check_readiness_or_raise(region)
+        settings = get_settings()
+        rubric = self._get_active_rubric(region.question_id)
+        rubric_payload = dict(rubric.rubric_json)
+        if region.question and region.question.model_answer:
+            rubric_payload["model_answer"] = region.question.model_answer
 
         grading_answer_image_path, grading_context, segment_metadata = (
             self._prepare_grading_context(region, confirmed_segments, settings)
         )
 
-        job = GradingJob(answer_region_id=region.id, status="running")
-        self.db.add(job)
+        if job is None:
+            job = GradingJob(answer_region_id=region.id, status="running")
+            self.db.add(job)
+        else:
+            job.status = "running"
         self.db.commit()
         self.db.refresh(job)
 

@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from rq import Retry
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,8 @@ from app.schemas import (
     GradingJobRead,
 )
 from app.services.grading_service import GradingService
+from app.worker.jobs import run_grade_answer_region_job
+from app.worker.rq_app import get_default_queue
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -103,6 +106,22 @@ def grade_answer_region(
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
     job, suggestion = GradingService(db).grade_answer_region(answer_region_id)
     return {"job": job, "suggestion": suggestion}
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/grade-async",
+    response_model=GradingJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def grade_answer_region_async(
+    answer_region_id: int, db: DbSession, current_user: CurrentUser
+) -> GradingJob:
+    assert_teacher_owns_answer_region(answer_region_id, db, current_user)
+    job = GradingService(db).create_queued_grading_job(answer_region_id)
+    get_default_queue().enqueue(
+        run_grade_answer_region_job, job.id, retry=Retry(max=1)
+    )
+    return job
 
 
 @router.post(

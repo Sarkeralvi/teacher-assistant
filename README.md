@@ -9,7 +9,9 @@ FinalGrade exists or is exported.
 - Frontend: Next.js App Router, TypeScript, Tailwind CSS
 - Backend: FastAPI, Pydantic, SQLAlchemy 2.x, Alembic
 - Database: PostgreSQL
-- Cache/Queue: Redis / RQ-ready scaffold (workers not yet active)
+- Cache/Queue: Redis + RQ (`worker` service in docker-compose runs
+  `python -m app.worker.run`). Only `POST /answer-regions/{id}/grade-async`
+  uses it so far; the synchronous grading routes are unchanged.
 - Storage: local filesystem behind future storage adapter
 - AI boundary: the Brain Adapter (`apps/api/packages/brain`) is the only
   module allowed to call model providers. Providers: `mock` (default),
