@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,15 +66,28 @@ def client(db_session: Session, tmp_path, monkeypatch: pytest.MonkeyPatch) -> It
         get_settings.cache_clear()
 
 
-def create_user(client: TestClient, email: str = "teacher@example.com") -> dict[str, object]:
-    response = client.post("/users", json={"name": "Teacher One", "email": email})
+def register_teacher(
+    client: TestClient, email: str | None = None, name: str = "Teacher One"
+) -> tuple[dict[str, object], dict[str, str]]:
+    response = client.post(
+        "/auth/register",
+        json={
+            "name": name,
+            "email": email or f"teacher-{uuid4().hex}@example.com",
+            "password": "correct horse battery staple",
+        },
+    )
     assert response.status_code == 201
-    return response.json()
+    payload = response.json()
+    return payload["user"], {"Authorization": f"Bearer {payload['access_token']}"}
 
 
-def create_course(client: TestClient, teacher_id: int) -> dict[str, object]:
+def create_course(
+    client: TestClient, teacher_id: int, headers: dict[str, str]
+) -> dict[str, object]:
     response = client.post(
         "/courses",
+        headers=headers,
         json={
             "teacher_id": teacher_id,
             "code": "MATH101",
@@ -86,9 +100,12 @@ def create_course(client: TestClient, teacher_id: int) -> dict[str, object]:
     return response.json()
 
 
-def create_assessment(client: TestClient, course_id: int) -> dict[str, object]:
+def create_assessment(
+    client: TestClient, course_id: int, headers: dict[str, str]
+) -> dict[str, object]:
     response = client.post(
         f"/courses/{course_id}/assessments",
+        headers=headers,
         json={
             "title": "Midterm",
             "assessment_type": "exam",
@@ -100,9 +117,12 @@ def create_assessment(client: TestClient, course_id: int) -> dict[str, object]:
     return response.json()
 
 
-def create_question(client: TestClient, assessment_id: int) -> dict[str, object]:
+def create_question(
+    client: TestClient, assessment_id: int, headers: dict[str, str]
+) -> dict[str, object]:
     response = client.post(
         f"/assessments/{assessment_id}/questions",
+        headers=headers,
         json={
             "question_no": "1(a)",
             "question_text": "Differentiate x^2.",
@@ -131,12 +151,13 @@ def valid_rubric_json() -> dict[str, object]:
 def test_create_canonical_grading_unit_supports_subpart_labels_and_rejects_duplicates(
     client: TestClient,
 ) -> None:
-    teacher = create_user(client, email="canonical@example.com")
-    course = create_course(client, int(teacher["id"]))
-    assessment = create_assessment(client, int(course["id"]))
+    teacher, headers = register_teacher(client, email="canonical@example.com")
+    course = create_course(client, int(teacher["id"]), headers)
+    assessment = create_assessment(client, int(course["id"]), headers)
 
     first = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={
             "question_no": " 1(a)(i) ",
             "question_text": "Probability subpart.",
@@ -146,6 +167,7 @@ def test_create_canonical_grading_unit_supports_subpart_labels_and_rejects_dupli
     )
     duplicate = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1(a)(i)",
             "question_text": "Duplicate label.",
@@ -161,20 +183,24 @@ def test_create_canonical_grading_unit_supports_subpart_labels_and_rejects_dupli
 
 
 def test_update_canonical_grading_unit_rejects_duplicate_label(client: TestClient) -> None:
-    teacher = create_user(client, email="canonical-update@example.com")
-    course = create_course(client, int(teacher["id"]))
-    assessment = create_assessment(client, int(course["id"]))
+    teacher, headers = register_teacher(client, email="canonical-update@example.com")
+    course = create_course(client, int(teacher["id"]), headers)
+    assessment = create_assessment(client, int(course["id"]), headers)
     first = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={"question_no": "1(a)(i)", "question_text": "A", "total_marks": "6.00"},
     ).json()
     second = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={"question_no": "1(a)(ii)", "question_text": "B", "total_marks": "4.00"},
     ).json()
 
     response = client.patch(
-        f"/questions/{second['id']}", json={"question_no": first["question_no"]}
+        f"/questions/{second['id']}",
+        headers=headers,
+        json={"question_no": first["question_no"]},
     )
 
     assert response.status_code == 409
@@ -184,28 +210,12 @@ def test_update_canonical_grading_unit_rejects_duplicate_label(client: TestClien
 def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
     client: TestClient, tmp_path
 ) -> None:
-    teacher_response = client.post(
-        "/auth/register",
-        json={
-            "name": "Canonical Region Teacher",
-            "email": "canonical-region@example.com",
-            "password": "password",
-            "role": "teacher",
-        },
-    )
-    assert teacher_response.status_code == 201
-    teacher = teacher_response.json()["user"]
-    login_response = client.post(
-        "/auth/login",
-        json={"email": "canonical-region@example.com", "password": "password"},
-    )
-    assert login_response.status_code == 200
-    token = login_response.json()["access_token"]
-    auth_headers = {"Authorization": f"Bearer {token}"}
-    course = create_course(client, int(teacher["id"]))
-    assessment = create_assessment(client, int(course["id"]))
+    teacher, headers = register_teacher(client, email="canonical-region@example.com")
+    course = create_course(client, int(teacher["id"]), headers)
+    assessment = create_assessment(client, int(course["id"]), headers)
     question = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1(b)(i)",
             "question_text": "Synthetic statistics subpart.",
@@ -215,6 +225,7 @@ def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
     ).json()
     rubric = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={
             "version": 1,
             "is_active": True,
@@ -240,10 +251,11 @@ def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
             f"/assessments/{assessment['id']}/submissions/upload",
             data={"student_identifier": "SYN-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
-            headers=auth_headers,
+            headers=headers,
         ).json()
     region = client.post(
         f"/submission-pages/{submission['pages'][0]['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question["id"],
             "x": 1,
@@ -253,7 +265,9 @@ def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
             "manual_answer_text": "Dhaka",
         },
     ).json()
-    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
 
     assert rubric.status_code == 201
     assert region["question_id"] == question["id"]
@@ -268,59 +282,55 @@ def test_rubric_and_answer_region_preserve_canonical_grading_unit_marks(
     assert packet["rubric_evidence"]["criteria_max_marks"][0]["name"] == "Method"
 
 
-def test_create_user_response_excludes_password_hash(client: TestClient) -> None:
-    user = create_user(client)
-
-    assert user["id"] > 0
-    assert user["name"] == "Teacher One"
-    assert user["email"] == "teacher@example.com"
-    assert user["role"] == "teacher"
-    assert "created_at" in user
-    assert "updated_at" in user
-    assert "password_hash" not in user
-
-
 def test_course_crud_and_invalid_teacher(client: TestClient) -> None:
+    teacher, headers = register_teacher(client)
+
     invalid = client.post(
         "/courses",
+        headers=headers,
         json={"teacher_id": 999999, "code": "BAD101", "title": "Bad Course"},
     )
-    assert invalid.status_code == 404
+    assert invalid.status_code == 201
+    assert invalid.json()["teacher_id"] == teacher["id"]
 
-    user = create_user(client)
-    course = create_course(client, int(user["id"]))
+    course = create_course(client, int(teacher["id"]), headers)
 
-    assert course["teacher_id"] == user["id"]
+    assert course["teacher_id"] == teacher["id"]
     assert course["code"] == "MATH101"
 
-    list_response = client.get("/courses")
+    list_response = client.get("/courses", headers=headers)
     assert list_response.status_code == 200
-    assert [item["id"] for item in list_response.json()] == [course["id"]]
+    assert [item["id"] for item in list_response.json()] == [
+        item_id for item_id in [invalid.json()["id"], course["id"]]
+    ]
 
-    get_response = client.get(f"/courses/{course['id']}")
+    get_response = client.get(f"/courses/{course['id']}", headers=headers)
     assert get_response.status_code == 200
     assert get_response.json()["title"] == "Calculus I"
 
-    patch_response = client.patch(f"/courses/{course['id']}", json={"title": "Calculus IA"})
+    patch_response = client.patch(
+        f"/courses/{course['id']}", headers=headers, json={"title": "Calculus IA"}
+    )
     assert patch_response.status_code == 200
     assert patch_response.json()["title"] == "Calculus IA"
 
-    delete_response = client.delete(f"/courses/{course['id']}")
+    delete_response = client.delete(f"/courses/{course['id']}", headers=headers)
     assert delete_response.status_code == 204
-    assert client.get(f"/courses/{course['id']}").status_code == 404
+    assert client.get(f"/courses/{course['id']}", headers=headers).status_code == 404
 
 
 def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient) -> None:
-    user = create_user(client)
-    course = create_course(client, int(user["id"]))
-    assessment = create_assessment(client, int(course["id"]))
-    question = create_question(client, int(assessment["id"]))
+    teacher, headers = register_teacher(client)
+    course = create_course(client, int(teacher["id"]), headers)
+    assessment = create_assessment(client, int(course["id"]), headers)
+    question = create_question(client, int(assessment["id"]), headers)
 
     assert Decimal(assessment["total_marks"]) == Decimal("40.00")
     assert Decimal(question["total_marks"]) == Decimal("5.00")
 
     updated_question = client.patch(
         f"/questions/{question['id']}",
+        headers=headers,
         json={
             "question_text": "Differentiate x^3.",
             "model_answer": "3x^2",
@@ -343,6 +353,7 @@ def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient)
     }
     rubric_response = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": rubric_json, "is_active": True},
     )
     assert rubric_response.status_code == 201
@@ -351,36 +362,41 @@ def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient)
     assert rubric["rubric_json"] == rubric_json
     assert rubric["is_active"] is True
 
-    list_response = client.get(f"/questions/{question['id']}/rubrics")
+    list_response = client.get(f"/questions/{question['id']}/rubrics", headers=headers)
     assert list_response.status_code == 200
     assert list_response.json()[0]["rubric_json"] == rubric_json
     assert list_response.json()[0]["is_active"] is True
 
-    refreshed_question = client.get(f"/questions/{question['id']}")
+    refreshed_question = client.get(f"/questions/{question['id']}", headers=headers)
     assert refreshed_question.status_code == 200
     assert refreshed_question.json()["model_answer"] == "3x^2"
 
 
 def test_missing_parent_and_resource_404s(client: TestClient) -> None:
-    assert client.get("/courses/999999").status_code == 404
-    assert client.get("/assessments/999999").status_code == 404
-    assert client.get("/questions/999999").status_code == 404
-    assert client.get("/rubrics/999999").status_code == 404
+    _teacher, headers = register_teacher(client)
+
+    assert client.get("/courses/999999", headers=headers).status_code == 404
+    assert client.get("/assessments/999999", headers=headers).status_code == 404
+    assert client.get("/questions/999999", headers=headers).status_code == 404
+    assert client.get("/rubrics/999999", headers=headers).status_code == 404
 
     assessment_response = client.post(
         "/courses/999999/assessments",
+        headers=headers,
         json={"title": "Missing", "assessment_type": "exam", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 404
 
     question_response = client.post(
         "/assessments/999999/questions",
+        headers=headers,
         json={"question_no": "1", "question_text": "Missing", "total_marks": "5.00"},
     )
     assert question_response.status_code == 404
 
     rubric_response = client.post(
         "/questions/999999/rubrics",
+        headers=headers,
         json={
             "version": 1,
             "rubric_json": {
@@ -400,25 +416,28 @@ def test_missing_parent_and_resource_404s(client: TestClient) -> None:
 
 
 def test_reject_non_object_rubric_json_and_second_active_rubric(client: TestClient) -> None:
-    user = create_user(client)
-    course = create_course(client, int(user["id"]))
-    assessment = create_assessment(client, int(course["id"]))
-    question = create_question(client, int(assessment["id"]))
+    teacher, headers = register_teacher(client)
+    course = create_course(client, int(teacher["id"]), headers)
+    assessment = create_assessment(client, int(course["id"]), headers)
+    question = create_question(client, int(assessment["id"]), headers)
 
     invalid_json = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": ["not", "an", "object"]},
     )
     assert invalid_json.status_code == 422
 
     first_active = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": valid_rubric_json(), "is_active": True},
     )
     assert first_active.status_code == 201
 
     second_active = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={"version": 2, "rubric_json": valid_rubric_json(), "is_active": True},
     )
     assert second_active.status_code == 409

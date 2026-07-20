@@ -95,14 +95,19 @@ def register_teacher(
     return body["user"], body["access_token"]
 
 
-def create_assessment_for_teacher(client: TestClient, teacher_id: int) -> dict[str, object]:
+def create_assessment_for_teacher(
+    client: TestClient, teacher_id: int, token: str
+) -> dict[str, object]:
+    headers = {"Authorization": f"Bearer {token}"}
     course_response = client.post(
         "/courses",
+        headers=headers,
         json={"teacher_id": teacher_id, "code": "MATH101", "title": "Math"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Midterm", "assessment_type": "exam", "total_marks": "50.00"},
     )
     assert assessment_response.status_code == 201
@@ -117,7 +122,7 @@ def test_create_and_list_custom_grading_run_requires_auth_and_assessment_scope(
     client: TestClient,
 ) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
 
     unauthenticated = client.post(f"/assessments/{assessment['id']}/grading-runs/custom")
     assert unauthenticated.status_code == 401
@@ -165,7 +170,7 @@ def test_upload_materials_stores_safe_relative_pdf_paths_and_updates_status(
     client: TestClient,
 ) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run_response = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -197,7 +202,7 @@ def test_upload_materials_stores_safe_relative_pdf_paths_and_updates_status(
 
 def test_material_upload_rejects_non_pdf_and_wrong_teacher(client: TestClient) -> None:
     owner, owner_token = register_teacher(client, "owner")
-    assessment = create_assessment_for_teacher(client, int(owner["id"]))
+    assessment = create_assessment_for_teacher(client, int(owner["id"]), owner_token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {owner_token}"},
@@ -229,7 +234,7 @@ def test_material_upload_rejects_non_pdf_and_wrong_teacher(client: TestClient) -
 
 def test_status_update_allows_controlled_workflow_statuses(client: TestClient) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -267,9 +272,13 @@ def upload_all_materials(client: TestClient, token: str, run_id: int) -> dict[st
     return response.json()
 
 
-def create_question_and_active_rubric(client: TestClient, assessment_id: int) -> dict[str, object]:
+def create_question_and_active_rubric(
+    client: TestClient, assessment_id: int, token: str
+) -> dict[str, object]:
+    headers = {"Authorization": f"Bearer {token}"}
     question_response = client.post(
         f"/assessments/{assessment_id}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Explain the method.",
@@ -281,6 +290,7 @@ def create_question_and_active_rubric(client: TestClient, assessment_id: int) ->
     question = question_response.json()
     rubric_response = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={
             "version": 1,
             "is_active": True,
@@ -346,7 +356,7 @@ def get_run(client: TestClient, token: str, run_id: int) -> dict[str, object]:
 
 def test_derived_checklist_shows_material_blockers_before_upload(client: TestClient) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -366,7 +376,7 @@ def test_derived_checklist_updates_after_material_upload_and_confirmation(
     client: TestClient,
 ) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -393,7 +403,7 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
     client: TestClient, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run_id = int(
         client.post(
             f"/assessments/{assessment['id']}/grading-runs/custom",
@@ -408,7 +418,7 @@ def test_derived_checklist_requires_confirmed_questions_rubrics_scripts_and_regi
         ).status_code
         == 200
     )
-    question_data = create_question_and_active_rubric(client, int(assessment["id"]))
+    question_data = create_question_and_active_rubric(client, int(assessment["id"]), token)
 
     before_confirm = get_run(client, token, run_id)["workflow_state"]
     assert before_confirm["question_count"] == 1
@@ -453,7 +463,7 @@ def test_confirm_questions_rubrics_blocks_unconfirmed_extracted_nodes_and_rubric
     client: TestClient,
 ) -> None:
     teacher, token = register_teacher(client, "extract-gate")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run_id = int(
         client.post(
             f"/assessments/{assessment['id']}/grading-runs/custom",
@@ -465,7 +475,7 @@ def test_confirm_questions_rubrics_blocks_unconfirmed_extracted_nodes_and_rubric
         f"/grading-runs/{run_id}/confirm-materials",
         headers={"Authorization": f"Bearer {token}"},
     ).status_code == 200
-    create_question_and_active_rubric(client, int(assessment["id"]))
+    create_question_and_active_rubric(client, int(assessment["id"]), token)
 
     extraction_run = ExtractionRun(
         assessment_id=int(assessment["id"]),
@@ -521,14 +531,21 @@ def test_confirm_questions_rubrics_blocks_unconfirmed_extracted_nodes_and_rubric
     assert blocked.status_code == 409
     assert "Confirm every extracted question node" in blocked.json()["detail"]
 
-    node = client.get(f"/assessments/{assessment['id']}/question-nodes").json()[0]
-    criterion = client.get(f"/assessments/{assessment['id']}/rubric-extraction-criteria").json()[0]
+    auth_headers = {"Authorization": f"Bearer {token}"}
+    node = client.get(
+        f"/assessments/{assessment['id']}/question-nodes", headers=auth_headers
+    ).json()[0]
+    criterion = client.get(
+        f"/assessments/{assessment['id']}/rubric-extraction-criteria", headers=auth_headers
+    ).json()[0]
     assert client.patch(
         f"/question-nodes/{node['id']}",
+        headers=auth_headers,
         json={"teacher_confirmed": True},
     ).status_code == 200
     assert client.patch(
         f"/rubric-extraction-criteria/{criterion['id']}",
+        headers=auth_headers,
         json={"teacher_confirmed": True, "blocker": None},
     ).status_code == 200
 
@@ -546,7 +563,7 @@ def test_confirm_questions_rubrics_blocks_unconfirmed_extracted_nodes_and_rubric
 
 def test_semi_automated_run_rejected_by_default(client: TestClient) -> None:
     teacher, token = register_teacher(client, "semi")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
 
     response = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
@@ -566,7 +583,7 @@ def test_semi_automated_run_can_be_enabled_for_explicit_experimentation(
     monkeypatch.setenv("SEMI_AUTOMATED_MODE_ENABLED", "true")
     get_settings.cache_clear()
     teacher, token = register_teacher(client, "semi-enabled")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
 
     response = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
@@ -582,7 +599,7 @@ def test_semi_automated_run_can_be_enabled_for_explicit_experimentation(
 
 def test_fully_automated_run_is_rejected_with_a_clear_message(client: TestClient) -> None:
     teacher, token = register_teacher(client, "fully")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
 
     response = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
@@ -598,7 +615,7 @@ def test_fully_automated_run_is_rejected_with_a_clear_message(client: TestClient
 
 def test_status_update_does_not_imply_finalization(client: TestClient) -> None:
     teacher, token = register_teacher(client)
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -623,7 +640,7 @@ def test_custom_controlled_full_v0_api_workflow_and_no_auto_finalization(
     client: TestClient, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "v0")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -639,7 +656,7 @@ def test_custom_controlled_full_v0_api_workflow_and_no_auto_finalization(
         ).status_code
         == 200
     )
-    question_data = create_question_and_active_rubric(client, int(assessment["id"]))
+    question_data = create_question_and_active_rubric(client, int(assessment["id"]), token)
     assert (
         client.post(
             f"/grading-runs/{run_id}/confirm-questions-rubrics",
@@ -697,7 +714,7 @@ def test_custom_controlled_workflow_state_counts_zip_imported_submissions(
     import zipfile
 
     teacher, token = register_teacher(client, "zip")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -735,7 +752,7 @@ def test_custom_controlled_workflow_state_counts_zip_imported_submissions(
 
 def test_marking_policy_defaults_validates_and_updates_on_custom_run(client: TestClient) -> None:
     teacher, token = register_teacher(client, "policy")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
 
     default_response = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
@@ -777,7 +794,7 @@ def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
     from openpyxl import load_workbook
 
     teacher, token = register_teacher(client, "policy-grade")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
     run = client.post(
         f"/assessments/{assessment['id']}/grading-runs/custom",
         headers={"Authorization": f"Bearer {token}"},
@@ -789,7 +806,7 @@ def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
         f"/grading-runs/{run_id}/confirm-materials",
         headers={"Authorization": f"Bearer {token}"},
     ).status_code == 200
-    question_data = create_question_and_active_rubric(client, int(assessment["id"]))
+    question_data = create_question_and_active_rubric(client, int(assessment["id"]), token)
     assert client.post(
         f"/grading-runs/{run_id}/confirm-questions-rubrics",
         headers={"Authorization": f"Bearer {token}"},
@@ -806,7 +823,9 @@ def test_custom_controlled_mock_grading_persists_marking_policy_and_exports_it(
     assert grade_response.json()["marking_policy"] == "tough"
     suggestion_id = grade_response.json()["created_grade_suggestion_ids"][0]
 
-    suggestion = client.get(f"/grade-suggestions/{suggestion_id}")
+    suggestion = client.get(
+        f"/grade-suggestions/{suggestion_id}", headers={"Authorization": f"Bearer {token}"}
+    )
     assert suggestion.status_code == 200
     suggestion_body = suggestion.json()
     assert suggestion_body["marking_policy"] == "tough"

@@ -7,12 +7,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.auth import get_current_user
+from app.core.ownership import get_owned_assessment_or_404, get_owned_course_or_404
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
     Assessment,
     BatchEvidencePrepRun,
-    Course,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
@@ -34,34 +34,6 @@ router = APIRouter(tags=["assessments"])
 _ALLOWED_STATUSES = {"draft", "ready", "open", "closed", "archived"}
 
 
-def get_course_or_404(course_id: int, db: Session) -> Course:
-    course = db.get(Course, course_id)
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
-    return course
-
-
-def get_assessment_or_404(assessment_id: int, db: Session) -> Assessment:
-    assessment = db.get(Assessment, assessment_id)
-    if assessment is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
-    return assessment
-
-
-def get_owned_assessment_or_404(
-    assessment_id: int, db: Session, teacher: User
-) -> Assessment:
-    statement = (
-        select(Assessment)
-        .join(Course, Assessment.course_id == Course.id)
-        .where(Assessment.id == assessment_id, Course.teacher_id == teacher.id)
-    )
-    assessment = db.scalars(statement).first()
-    if assessment is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
-    return assessment
-
-
 def validate_status(value: str | None) -> None:
     if value is not None and value not in _ALLOWED_STATUSES:
         raise HTTPException(
@@ -76,9 +48,9 @@ def validate_status(value: str | None) -> None:
     status_code=status.HTTP_201_CREATED,
 )
 def create_assessment(
-    course_id: int, payload: AssessmentCreate, db: DbSession
+    course_id: int, payload: AssessmentCreate, db: DbSession, current_user: CurrentUser
 ) -> Assessment:
-    get_course_or_404(course_id, db)
+    get_owned_course_or_404(course_id, db, current_user)
     validate_status(payload.status)
     assessment = Assessment(course_id=course_id, **payload.model_dump())
     db.add(assessment)
@@ -88,22 +60,24 @@ def create_assessment(
 
 
 @router.get("/courses/{course_id}/assessments", response_model=list[AssessmentRead])
-def list_assessments(course_id: int, db: DbSession) -> Sequence[Assessment]:
-    get_course_or_404(course_id, db)
+def list_assessments(
+    course_id: int, db: DbSession, current_user: CurrentUser
+) -> Sequence[Assessment]:
+    get_owned_course_or_404(course_id, db, current_user)
     statement = select(Assessment).where(Assessment.course_id == course_id).order_by(Assessment.id)
     return db.scalars(statement).all()
 
 
 @router.get("/assessments/{assessment_id}", response_model=AssessmentRead)
-def get_assessment(assessment_id: int, db: DbSession) -> Assessment:
-    return get_assessment_or_404(assessment_id, db)
+def get_assessment(assessment_id: int, db: DbSession, current_user: CurrentUser) -> Assessment:
+    return get_owned_assessment_or_404(assessment_id, db, current_user)
 
 
 @router.patch("/assessments/{assessment_id}", response_model=AssessmentRead)
 def update_assessment(
-    assessment_id: int, payload: AssessmentUpdate, db: DbSession
+    assessment_id: int, payload: AssessmentUpdate, db: DbSession, current_user: CurrentUser
 ) -> Assessment:
-    assessment = get_assessment_or_404(assessment_id, db)
+    assessment = get_owned_assessment_or_404(assessment_id, db, current_user)
     updates = payload.model_dump(exclude_unset=True)
     validate_status(updates.get("status"))
     for field, value in updates.items():
@@ -206,8 +180,8 @@ def delete_assessment_test_data(
 
 
 @router.delete("/assessments/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_assessment(assessment_id: int, db: DbSession) -> Response:
-    assessment = get_assessment_or_404(assessment_id, db)
+def delete_assessment(assessment_id: int, db: DbSession, current_user: CurrentUser) -> Response:
+    assessment = get_owned_assessment_or_404(assessment_id, db, current_user)
     db.delete(assessment)
     try:
         db.commit()

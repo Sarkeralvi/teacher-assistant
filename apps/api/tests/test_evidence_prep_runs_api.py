@@ -119,16 +119,20 @@ def make_png(path: Path, size: tuple[int, int] = (120, 100)) -> None:
 
 def create_assessment_fixture(client: TestClient, tmp_path: Path) -> dict[str, object]:
     teacher, token = register_teacher(client)
+    headers = {"Authorization": f"Bearer {token}"}
     course = client.post(
         "/courses",
+        headers=headers,
         json={"teacher_id": teacher["id"], "code": "BATCH101", "title": "Batch"},
     ).json()
     assessment = client.post(
         f"/courses/{course['id']}/assessments",
+        headers=headers,
         json={"title": "Midterm", "assessment_type": "exam", "total_marks": "10.00"},
     ).json()
     question = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Explain.",
@@ -138,6 +142,7 @@ def create_assessment_fixture(client: TestClient, tmp_path: Path) -> dict[str, o
     ).json()
     rubric = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={
             "version": 1,
             "is_active": True,
@@ -161,10 +166,11 @@ def create_assessment_fixture(client: TestClient, tmp_path: Path) -> dict[str, o
             f"/assessments/{assessment['id']}/submissions/upload",
             data={"student_identifier": "S-001", "student_name": "Student One"},
             files={"file": ("answer.png", file_obj, "image/png")},
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
         ).json()
     region = client.post(
         f"/submission-pages/{submission['pages'][0]['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
     ).json()
     confirm_response = client.patch(
@@ -244,7 +250,8 @@ def test_missing_model_answer_blocks_packet_prep_and_queue(
     db_session.commit()
 
     packet_response = client.get(
-        f"/answer-regions/{data['region']['id']}/grading-evidence-packet"
+        f"/answer-regions/{data['region']['id']}/grading-evidence-packet",
+        headers={"Authorization": f"Bearer {data['token']}"},
     )
     assert packet_response.status_code == 200
     packet = packet_response.json()
@@ -344,6 +351,7 @@ def test_prep_summary_quarantines_missing_rubric_invalid_order_and_missing_regio
     data = create_assessment_fixture(client, tmp_path)
     question2 = client.post(
         f"/assessments/{data['assessment']['id']}/questions",
+        headers={"Authorization": f"Bearer {data['token']}"},
         json={"question_no": "2", "question_text": "Second.", "total_marks": "5.00"},
     ).json()
     region = db_session.get(AnswerRegion, data["region"]["id"])
@@ -370,11 +378,14 @@ def create_question_with_optional_rubric(
     client: TestClient,
     assessment_id: int,
     question_no: str,
+    token: str,
     *,
     active_rubric: bool,
 ) -> dict[str, object]:
+    headers = {"Authorization": f"Bearer {token}"}
     question = client.post(
         f"/assessments/{assessment_id}/questions",
+        headers=headers,
         json={
             "question_no": question_no,
             "question_text": f"Question {question_no}.",
@@ -385,6 +396,7 @@ def create_question_with_optional_rubric(
     if active_rubric:
         client.post(
             f"/questions/{question['id']}/rubrics",
+            headers=headers,
             json={
                 "version": 1,
                 "is_active": True,
@@ -427,12 +439,14 @@ def create_region_for_packet(
     client: TestClient,
     submission: dict[str, object],
     question: dict[str, object],
+    token: str,
 ) -> dict[str, object]:
     pages = submission["pages"]
     assert isinstance(pages, list)
     page = pages[0]
     return client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers={"Authorization": f"Bearer {token}"},
         json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 25},
     ).json()
 
@@ -443,19 +457,27 @@ def test_mixed_state_prep_accounts_for_every_expected_packet_slot(
     teacher, token = register_teacher(client, "mixed-prep")
     course = client.post(
         "/courses",
+        headers={"Authorization": f"Bearer {token}"},
         json={"teacher_id": teacher["id"], "code": "MIX101", "title": "Mixed"},
     ).json()
     assessment = client.post(
         f"/courses/{course['id']}/assessments",
+        headers={"Authorization": f"Bearer {token}"},
         json={"title": "Mixed Midterm", "assessment_type": "exam", "total_marks": "15.00"},
     ).json()
-    q1 = create_question_with_optional_rubric(client, assessment["id"], "1", active_rubric=True)
-    q2 = create_question_with_optional_rubric(client, assessment["id"], "2", active_rubric=True)
-    q3 = create_question_with_optional_rubric(client, assessment["id"], "3", active_rubric=False)
+    q1 = create_question_with_optional_rubric(
+        client, assessment["id"], "1", token, active_rubric=True
+    )
+    q2 = create_question_with_optional_rubric(
+        client, assessment["id"], "2", token, active_rubric=True
+    )
+    q3 = create_question_with_optional_rubric(
+        client, assessment["id"], "3", token, active_rubric=False
+    )
     s1 = upload_submission(client, tmp_path, assessment["id"], "S-001", token)
     s2 = upload_submission(client, tmp_path, assessment["id"], "S-002", token)
 
-    ready_region = create_region_for_packet(client, s1, q1)
+    ready_region = create_region_for_packet(client, s1, q1, token)
     ready_response = client.patch(
         f"/answer-regions/{ready_region['id']}/corrections/full-answer-confirmation",
         headers={"Authorization": f"Bearer {token}"},
@@ -468,10 +490,10 @@ def test_mixed_state_prep_accounts_for_every_expected_packet_slot(
     )
     assert ready_response.status_code == 200
 
-    unconfirmed_region = create_region_for_packet(client, s1, q3)
-    partial_region = create_region_for_packet(client, s2, q1)
-    blank_region = create_region_for_packet(client, s2, q2)
-    continuation_region = create_region_for_packet(client, s2, q3)
+    unconfirmed_region = create_region_for_packet(client, s1, q3, token)
+    partial_region = create_region_for_packet(client, s2, q1, token)
+    blank_region = create_region_for_packet(client, s2, q2, token)
+    continuation_region = create_region_for_packet(client, s2, q3, token)
     for region_id, packet_status in (
         (unconfirmed_region["id"], "unconfirmed"),
         (partial_region["id"], "partial"),

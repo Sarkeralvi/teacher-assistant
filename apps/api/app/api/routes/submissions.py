@@ -10,8 +10,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 from starlette.datastructures import Headers
 
-from app.api.routes.assessments import get_owned_assessment_or_404
 from app.core.auth import get_current_user
+from app.core.ownership import get_owned_assessment_or_404
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,

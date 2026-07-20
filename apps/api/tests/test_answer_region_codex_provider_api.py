@@ -96,7 +96,7 @@ def make_png(path: Path, size: tuple[int, int] = (320, 240)) -> None:
 
 def create_uploaded_page(
     client: TestClient, tmp_path: Path
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], dict[str, object], dict[str, str]]:
     image_path = tmp_path / f"answer-{len(list(tmp_path.glob('answer-*.png')))}.png"
     email = f"codex-{image_path.stem}@example.com"
     auth_response = client.post(
@@ -134,7 +134,7 @@ def create_uploaded_page(
         )
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
-    return question_response.json(), page
+    return question_response.json(), page, headers
 
 
 def make_runner(mode: str, *, question_id: int | None = None, question_no: str = "1"):
@@ -194,10 +194,11 @@ def make_enabled_settings() -> Settings:
 def test_codex_answer_region_suggestions_require_explicit_enable_flag(
     client: TestClient, tmp_path: Path
 ) -> None:
-    _question, page = create_uploaded_page(client, tmp_path)
+    _question, page, headers = create_uploaded_page(client, tmp_path)
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=headers,
         json={"provider": "codex_cli_answer_region_suggester"},
     )
 
@@ -208,7 +209,7 @@ def test_codex_answer_region_suggestions_require_explicit_enable_flag(
 def test_codex_answer_region_suggestions_return_drafts_and_wait_for_accept(
     client: TestClient, tmp_path: Path, db_session: Session, monkeypatch
 ) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
     settings = make_enabled_settings()
     question_id = int(cast(int, question["id"]))
     question_no = str(cast(str, question["question_no"]))
@@ -228,6 +229,7 @@ def test_codex_answer_region_suggestions_return_drafts_and_wait_for_accept(
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=headers,
         json={"provider": "codex_cli_answer_region_suggester", "question_ids": [question["id"]]},
     )
 
@@ -254,6 +256,7 @@ def test_codex_answer_region_suggestions_return_drafts_and_wait_for_accept(
 
     accepted_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": suggestion["suggested_question_id"],
             "x": suggestion["x"],
@@ -271,7 +274,7 @@ def test_codex_answer_region_suggestions_return_drafts_and_wait_for_accept(
 def test_codex_answer_region_suggestions_fail_cleanly_on_invalid_json(
     client: TestClient, tmp_path: Path, monkeypatch
 ) -> None:
-    _question, page = create_uploaded_page(client, tmp_path)
+    _question, page, headers = create_uploaded_page(client, tmp_path)
     settings = make_enabled_settings()
     provider = CodexAnswerRegionSuggestionProvider(
         command="codex",
@@ -289,6 +292,7 @@ def test_codex_answer_region_suggestions_fail_cleanly_on_invalid_json(
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=headers,
         json={"provider": "codex_cli_answer_region_suggester"},
     )
 
@@ -300,7 +304,7 @@ def test_codex_answer_region_suggestions_fail_cleanly_on_invalid_json(
 def test_codex_answer_region_suggestions_sanitize_provider_errors(
     client: TestClient, tmp_path: Path, monkeypatch
 ) -> None:
-    _question, page = create_uploaded_page(client, tmp_path)
+    _question, page, headers = create_uploaded_page(client, tmp_path)
     settings = make_enabled_settings()
     provider = CodexAnswerRegionSuggestionProvider(
         command="codex",
@@ -318,6 +322,7 @@ def test_codex_answer_region_suggestions_sanitize_provider_errors(
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=headers,
         json={"provider": "codex_cli_answer_region_suggester"},
     )
 

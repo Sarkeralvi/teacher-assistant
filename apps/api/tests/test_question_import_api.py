@@ -221,7 +221,7 @@ def test_upload_question_paper_creates_import_job_and_drafts(
         "needs_review": True,
     }
 
-    detail = client.get(f"/question-imports/{job['id']}")
+    detail = client.get(f"/question-imports/{job['id']}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["draft_questions"] == job["draft_questions"]
 
@@ -243,10 +243,11 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
     assert job_response.status_code == 201
     job = job_response.json()
 
-    assert client.get(f"/assessments/{assessment['id']}/questions").json() == []
+    assert client.get(f"/assessments/{assessment['id']}/questions", headers=headers).json() == []
 
     accept_response = client.post(
         f"/question-imports/{job['id']}/accept",
+        headers=headers,
         json={
             "draft_questions": [
                 {
@@ -276,9 +277,9 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
     assert accepted["questions"][0]["model_answer"] == "Rate of displacement change."
     assert accepted["questions"][0]["total_marks"] == "6.00"
 
-    listed = client.get(f"/assessments/{assessment['id']}/questions").json()
+    listed = client.get(f"/assessments/{assessment['id']}/questions", headers=headers).json()
     assert [question["question_no"] for question in listed] == ["1A", "3"]
-    detail = client.get(f"/question-imports/{job['id']}").json()
+    detail = client.get(f"/question-imports/{job['id']}", headers=headers).json()
     assert detail["status"] == "accepted"
 
     with SessionLocal() as db:
@@ -289,6 +290,7 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
 
     retry = client.post(
         f"/question-imports/{job['id']}/accept",
+        headers=headers,
         json={
             "draft_questions": [
                 {
@@ -347,7 +349,7 @@ def test_question_import_validation_errors(client: TestClient, tmp_path: Path) -
     assert image_response.status_code == 201
     assert image_response.json()["draft_questions"][0]["needs_review"] is True
 
-    unknown_job = client.get("/question-imports/999999")
+    unknown_job = client.get("/question-imports/999999", headers=headers)
     assert unknown_job.status_code == 404
 
 
@@ -452,7 +454,7 @@ def test_image_upload_routed_to_enabled_codex_provider_with_warnings(
     assert job["provider_warnings"] == ["fake codex warning"]
     assert len(job["draft_questions"]) == 1
     assert job["draft_questions"][0]["needs_review"] is True
-    assert client.get(f"/assessments/{assessment['id']}/questions").json() == []
+    assert client.get(f"/assessments/{assessment['id']}/questions", headers=headers).json() == []
 
 
 def test_provider_failure_stores_actionable_job_error(

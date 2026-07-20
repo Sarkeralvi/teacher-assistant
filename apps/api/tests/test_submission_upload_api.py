@@ -95,6 +95,7 @@ def create_assessment(client: TestClient) -> dict[str, object]:
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=auth_header(token),
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "20.00"},
     )
     assert assessment_response.status_code == 201
@@ -246,6 +247,7 @@ def test_delete_submission_removes_existing_submission_and_related_rows(
     assessment = create_assessment(client)
     question_response = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=assessment["auth_headers"],
         json={"question_no": "1", "question_text": "Explain.", "total_marks": "5.00"},
     )
     assert question_response.status_code == 201
@@ -263,6 +265,7 @@ def test_delete_submission_removes_existing_submission_and_related_rows(
     page_id = submission["pages"][0]["id"]
     region_response = client.post(
         f"/submission-pages/{page_id}/answer-regions",
+        headers=assessment["auth_headers"],
         json={
             "question_id": question_response.json()["id"],
             "x": 1,

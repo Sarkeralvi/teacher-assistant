@@ -746,8 +746,12 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
   if (hasJsonBody) {
     headers["Content-Type"] = "application/json";
   }
-  if (options.token) {
-    headers.Authorization = `Bearer ${options.token}`;
+  // Every route except /auth/register, /auth/login, and /health requires a
+  // bearer token, so attach the stored one by default; pass token: null to
+  // opt out explicitly.
+  const token = options.token !== undefined ? options.token : getStoredAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   let response: Response;
@@ -828,10 +832,6 @@ export type AnswerRegionCorrectionSegmentCreate = AnswerRegionCorrectionSegmentB
   order_index: number;
 };
 
-export function createUser(payload: UserCreate) {
-  return apiRequest<User>("/users", { method: "POST", body: payload });
-}
-
 export function register(payload: AuthRegister) {
   return apiRequest<AuthResponse>("/auth/register", { method: "POST", body: payload });
 }
@@ -854,10 +854,6 @@ export async function logout() {
 
 export function listUsers() {
   return apiRequest<User[]>("/users");
-}
-
-export function createCourse(payload: CourseCreate) {
-  return apiRequest<Course>("/courses", { method: "POST", body: payload });
 }
 
 export type AuthenticatedCourseCreate = Omit<CourseCreate, "teacher_id">;

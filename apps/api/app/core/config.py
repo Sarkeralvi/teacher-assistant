@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     openai_timeout_seconds: float = Field(default=30.0, alias="OPENAI_TIMEOUT_SECONDS")
     jwt_secret_key: str = Field(default="dev-only-change-me", alias="JWT_SECRET_KEY")
     jwt_expire_minutes: int = Field(default=480, alias="JWT_EXPIRE_MINUTES")
+    cors_allowed_origins: str = Field(
+        default="http://localhost:3000,http://host.docker.internal:3000",
+        alias="CORS_ALLOWED_ORIGINS",
+    )
     codex_cli_command: str = Field(default="codex", alias="CODEX_CLI_COMMAND")
     codex_cli_model: str = Field(default="gpt-5.5", alias="CODEX_CLI_MODEL")
     codex_cli_timeout_seconds: float = Field(
@@ -92,7 +96,20 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+
+class InsecureConfigurationError(RuntimeError):
+    """Raised when a non-development environment is configured with dev-only defaults."""
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.app_env != "development" and settings.jwt_secret_key == "dev-only-change-me":
+        raise InsecureConfigurationError(
+            "JWT_SECRET_KEY must be set to a real secret when APP_ENV is not 'development'"
+        )
+    return settings

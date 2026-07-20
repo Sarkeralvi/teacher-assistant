@@ -6,13 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user_optional
+from app.core.auth import get_current_user
+from app.core.ownership import get_owned_course_or_404
 from app.db.session import get_db
 from app.models import Course, User
 from app.schemas import CourseCreate, CourseRead, CourseUpdate
 
 DbSession = Annotated[Session, Depends(get_db)]
-CurrentUserOptional = Annotated[User | None, Depends(get_current_user_optional)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
@@ -23,17 +24,8 @@ def ensure_teacher_exists(db: Session, teacher_id: int) -> None:
 
 
 @router.post("", response_model=CourseRead, status_code=status.HTTP_201_CREATED)
-def create_course(
-    payload: CourseCreate, db: DbSession, current_user: CurrentUserOptional
-) -> Course:
-    teacher_id = current_user.id if current_user is not None else payload.teacher_id
-    if teacher_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Login required to create a course without teacher_id",
-        )
-    ensure_teacher_exists(db, teacher_id)
-    course = Course(**payload.model_dump(exclude={"teacher_id"}), teacher_id=teacher_id)
+def create_course(payload: CourseCreate, db: DbSession, current_user: CurrentUser) -> Course:
+    course = Course(**payload.model_dump(exclude={"teacher_id"}), teacher_id=current_user.id)
     db.add(course)
     db.commit()
     db.refresh(course)
@@ -41,21 +33,23 @@ def create_course(
 
 
 @router.get("", response_model=list[CourseRead])
-def list_courses(db: DbSession) -> Sequence[Course]:
-    return db.scalars(select(Course).order_by(Course.id)).all()
+def list_courses(db: DbSession, current_user: CurrentUser) -> Sequence[Course]:
+    statement = (
+        select(Course).where(Course.teacher_id == current_user.id).order_by(Course.id)
+    )
+    return db.scalars(statement).all()
 
 
 @router.get("/{course_id}", response_model=CourseRead)
-def get_course(course_id: int, db: DbSession) -> Course:
-    course = db.get(Course, course_id)
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
-    return course
+def get_course(course_id: int, db: DbSession, current_user: CurrentUser) -> Course:
+    return get_owned_course_or_404(course_id, db, current_user)
 
 
 @router.patch("/{course_id}", response_model=CourseRead)
-def update_course(course_id: int, payload: CourseUpdate, db: DbSession) -> Course:
-    course = get_course(course_id, db)
+def update_course(
+    course_id: int, payload: CourseUpdate, db: DbSession, current_user: CurrentUser
+) -> Course:
+    course = get_owned_course_or_404(course_id, db, current_user)
     updates = payload.model_dump(exclude_unset=True)
     if "teacher_id" in updates and updates["teacher_id"] is not None:
         ensure_teacher_exists(db, updates["teacher_id"])
@@ -67,8 +61,8 @@ def update_course(course_id: int, payload: CourseUpdate, db: DbSession) -> Cours
 
 
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_course(course_id: int, db: DbSession) -> Response:
-    course = get_course(course_id, db)
+def delete_course(course_id: int, db: DbSession, current_user: CurrentUser) -> Response:
+    course = get_owned_course_or_404(course_id, db, current_user)
     db.delete(course)
     try:
         db.commit()

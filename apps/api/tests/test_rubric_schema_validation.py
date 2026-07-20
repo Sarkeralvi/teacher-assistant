@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,23 +78,36 @@ def valid_rubric_json(total_marks: int = 5) -> dict[str, object]:
     }
 
 
-def create_question(client: TestClient, total_marks: str = "5.00") -> dict[str, object]:
-    user_response = client.post(
-        "/users", json={"name": "Teacher One", "email": "rubric-teacher@example.com"}
+def register_teacher(client: TestClient) -> dict[str, str]:
+    response = client.post(
+        "/auth/register",
+        json={
+            "name": "Teacher One",
+            "email": f"rubric-teacher-{uuid4().hex}@example.com",
+            "password": "correct horse battery staple",
+        },
     )
-    assert user_response.status_code == 201
+    assert response.status_code == 201
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def create_question(
+    client: TestClient, total_marks: str = "5.00"
+) -> tuple[dict[str, object], dict[str, str]]:
+    headers = register_teacher(client)
     course_response = client.post(
-        "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "RUB101", "title": "Rubrics"},
+        "/courses", headers=headers, json={"code": "RUB101", "title": "Rubrics"}
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Explain the method.",
@@ -101,19 +115,21 @@ def create_question(client: TestClient, total_marks: str = "5.00") -> dict[str, 
         },
     )
     assert question_response.status_code == 201
-    return question_response.json()
+    return question_response.json(), headers
 
 
 def post_rubric(
     client: TestClient,
     question_id: int,
     rubric_json: object,
+    headers: dict[str, str],
     *,
     version: int = 1,
     is_active: bool = True,
 ):
     return client.post(
         f"/questions/{question_id}/rubrics",
+        headers=headers,
         json={"version": version, "rubric_json": rubric_json, "is_active": is_active},
     )
 
@@ -124,9 +140,9 @@ def assert_validation_error(response, expected_text: str) -> None:
 
 
 def test_accepts_valid_rubric_schema(client: TestClient) -> None:
-    question = create_question(client)
+    question, headers = create_question(client)
 
-    response = post_rubric(client, int(question["id"]), valid_rubric_json())
+    response = post_rubric(client, int(question["id"]), valid_rubric_json(), headers)
 
     assert response.status_code == 201
     assert response.json()["rubric_json"] == valid_rubric_json()
@@ -160,38 +176,38 @@ def test_accepts_valid_rubric_schema(client: TestClient) -> None:
     ],
 )
 def test_rejects_invalid_rubric_schema_payloads(client: TestClient, mutate, message: str) -> None:
-    question = create_question(client)
+    question, headers = create_question(client)
     rubric_json = deepcopy(valid_rubric_json())
     mutate(rubric_json)
 
-    response = post_rubric(client, int(question["id"]), rubric_json)
+    response = post_rubric(client, int(question["id"]), rubric_json, headers)
 
     assert_validation_error(response, message)
 
 
 def test_rejects_rubric_total_marks_mismatch_with_question(client: TestClient) -> None:
-    question = create_question(client, total_marks="4.00")
+    question, headers = create_question(client, total_marks="4.00")
 
-    response = post_rubric(client, int(question["id"]), valid_rubric_json(total_marks=5))
+    response = post_rubric(client, int(question["id"]), valid_rubric_json(total_marks=5), headers)
 
     assert_validation_error(response, "rubric_json.total_marks must match question.total_marks")
 
 
 def test_rejects_second_active_rubric_but_allows_inactive_rubric(client: TestClient) -> None:
-    question = create_question(client)
+    question, headers = create_question(client)
     first_active = post_rubric(
-        client, int(question["id"]), valid_rubric_json(), version=1, is_active=True
+        client, int(question["id"]), valid_rubric_json(), headers, version=1, is_active=True
     )
     assert first_active.status_code == 201
 
     second_active = post_rubric(
-        client, int(question["id"]), valid_rubric_json(), version=2, is_active=True
+        client, int(question["id"]), valid_rubric_json(), headers, version=2, is_active=True
     )
     assert second_active.status_code == 409
     assert "already has an active rubric" in second_active.text
 
     inactive = post_rubric(
-        client, int(question["id"]), valid_rubric_json(), version=2, is_active=False
+        client, int(question["id"]), valid_rubric_json(), headers, version=2, is_active=False
     )
     assert inactive.status_code == 201
     assert inactive.json()["is_active"] is False

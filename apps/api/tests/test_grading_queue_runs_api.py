@@ -33,21 +33,30 @@ def test_queue_run_includes_only_confirmed_ready_packets_and_refuses_everything_
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
     teacher, token = register_teacher(client, "queue-mixed")
+    headers = {"Authorization": f"Bearer {token}"}
     course = client.post(
         "/courses",
+        headers=headers,
         json={"teacher_id": teacher["id"], "code": "QUEUE101", "title": "Queue"},
     ).json()
     assessment = client.post(
         f"/courses/{course['id']}/assessments",
+        headers=headers,
         json={"title": "Queue Midterm", "assessment_type": "exam", "total_marks": "15.00"},
     ).json()
-    q1 = create_question_with_optional_rubric(client, assessment["id"], "1", active_rubric=True)
-    q2 = create_question_with_optional_rubric(client, assessment["id"], "2", active_rubric=True)
-    q3 = create_question_with_optional_rubric(client, assessment["id"], "3", active_rubric=False)
+    q1 = create_question_with_optional_rubric(
+        client, assessment["id"], "1", token, active_rubric=True
+    )
+    q2 = create_question_with_optional_rubric(
+        client, assessment["id"], "2", token, active_rubric=True
+    )
+    q3 = create_question_with_optional_rubric(
+        client, assessment["id"], "3", token, active_rubric=False
+    )
     s1 = upload_submission(client, tmp_path, assessment["id"], "S-001", token)
     s2 = upload_submission(client, tmp_path, assessment["id"], "S-002", token)
 
-    ready_region = create_region_for_packet(client, s1, q1)
+    ready_region = create_region_for_packet(client, s1, q1, token)
     ready_response = client.patch(
         f"/answer-regions/{ready_region['id']}/corrections/full-answer-confirmation",
         headers={"Authorization": f"Bearer {token}"},
@@ -60,10 +69,10 @@ def test_queue_run_includes_only_confirmed_ready_packets_and_refuses_everything_
     )
     assert ready_response.status_code == 200
 
-    unconfirmed_region = create_region_for_packet(client, s1, q3)
-    partial_region = create_region_for_packet(client, s2, q1)
-    blank_region = create_region_for_packet(client, s2, q2)
-    continuation_region = create_region_for_packet(client, s2, q3)
+    unconfirmed_region = create_region_for_packet(client, s1, q3, token)
+    partial_region = create_region_for_packet(client, s2, q1, token)
+    blank_region = create_region_for_packet(client, s2, q2, token)
+    continuation_region = create_region_for_packet(client, s2, q3, token)
     for region_id, packet_status in (
         (unconfirmed_region["id"], "unconfirmed"),
         (partial_region["id"], "partial"),

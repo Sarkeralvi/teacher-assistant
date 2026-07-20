@@ -6,27 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
+from app.core.ownership import get_owned_assessment_or_404, get_owned_question_or_404
 from app.db.session import get_db
-from app.models import Assessment, Question
+from app.models import Question, User
 from app.schemas import QuestionCreate, QuestionRead, QuestionUpdate
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["questions"])
-
-
-def get_assessment_or_404(assessment_id: int, db: Session) -> Assessment:
-    assessment = db.get(Assessment, assessment_id)
-    if assessment is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
-    return assessment
-
-
-def get_question_or_404(question_id: int, db: Session) -> Question:
-    question = db.get(Question, question_id)
-    if question is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
-    return question
 
 
 def ensure_unique_question_label(
@@ -52,9 +41,9 @@ def ensure_unique_question_label(
     status_code=status.HTTP_201_CREATED,
 )
 def create_question(
-    assessment_id: int, payload: QuestionCreate, db: DbSession
+    assessment_id: int, payload: QuestionCreate, db: DbSession, current_user: CurrentUser
 ) -> Question:
-    get_assessment_or_404(assessment_id, db)
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     data = payload.model_dump()
     data["question_no"] = data["question_no"].strip()
     ensure_unique_question_label(assessment_id, data["question_no"], db)
@@ -66,8 +55,10 @@ def create_question(
 
 
 @router.get("/assessments/{assessment_id}/questions", response_model=list[QuestionRead])
-def list_questions(assessment_id: int, db: DbSession) -> Sequence[Question]:
-    get_assessment_or_404(assessment_id, db)
+def list_questions(
+    assessment_id: int, db: DbSession, current_user: CurrentUser
+) -> Sequence[Question]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     statement = (
         select(Question)
         .where(Question.assessment_id == assessment_id)
@@ -77,15 +68,15 @@ def list_questions(assessment_id: int, db: DbSession) -> Sequence[Question]:
 
 
 @router.get("/questions/{question_id}", response_model=QuestionRead)
-def get_question(question_id: int, db: DbSession) -> Question:
-    return get_question_or_404(question_id, db)
+def get_question(question_id: int, db: DbSession, current_user: CurrentUser) -> Question:
+    return get_owned_question_or_404(question_id, db, current_user)
 
 
 @router.patch("/questions/{question_id}", response_model=QuestionRead)
 def update_question(
-    question_id: int, payload: QuestionUpdate, db: DbSession
+    question_id: int, payload: QuestionUpdate, db: DbSession, current_user: CurrentUser
 ) -> Question:
-    question = get_question_or_404(question_id, db)
+    question = get_owned_question_or_404(question_id, db, current_user)
     updates = payload.model_dump(exclude_unset=True)
     if "question_no" in updates:
         updates["question_no"] = updates["question_no"].strip()
@@ -100,8 +91,8 @@ def update_question(
 
 
 @router.delete("/questions/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_question(question_id: int, db: DbSession) -> Response:
-    question = get_question_or_404(question_id, db)
+def delete_question(question_id: int, db: DbSession, current_user: CurrentUser) -> Response:
+    question = get_owned_question_or_404(question_id, db, current_user)
     db.delete(question)
     try:
         db.commit()

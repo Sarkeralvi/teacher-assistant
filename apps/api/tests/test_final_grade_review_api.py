@@ -110,12 +110,14 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
     )
     assert assessment_response.status_code == 201
     assessment = assessment_response.json()
     question_response = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1(a)(i)",
             "question_text": "Explain.",
@@ -127,6 +129,7 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     question = question_response.json()
     rubric_response = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
     )
     assert rubric_response.status_code == 201
@@ -145,6 +148,7 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     page = submission["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question["id"],
             "x": 1,
@@ -156,7 +160,7 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     )
     assert region_response.status_code == 201
     region = region_response.json()
-    grade_response = client.post(f"/answer-regions/{region['id']}/grade")
+    grade_response = client.post(f"/answer-regions/{region['id']}/grade", headers=headers)
     assert grade_response.status_code == 201
     suggestion = grade_response.json()["suggestion"]
     return {
@@ -176,9 +180,11 @@ def create_extra_region_and_suggestion(
 ) -> dict[str, object]:
     submission = data["submission"]
     question = data["question"]
+    headers = data["headers"]
     page = submission["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question["id"],
             "x": x,
@@ -189,7 +195,9 @@ def create_extra_region_and_suggestion(
         },
     )
     assert region_response.status_code == 201
-    grade_response = client.post(f"/answer-regions/{region_response.json()['id']}/grade")
+    grade_response = client.post(
+        f"/answer-regions/{region_response.json()['id']}/grade", headers=headers
+    )
     assert grade_response.status_code == 201
     return {"region": region_response.json(), "suggestion": grade_response.json()["suggestion"]}
 
@@ -229,6 +237,7 @@ def create_owned_region_and_suggestion(
     assessment = assessment_response.json()
     question_response = client.post(
         f"/assessments/{assessment['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1(a)(i)",
             "question_text": "Explain.",
@@ -240,6 +249,7 @@ def create_owned_region_and_suggestion(
     question = question_response.json()
     rubric_response = client.post(
         f"/questions/{question['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
     )
     assert rubric_response.status_code == 201
@@ -257,6 +267,7 @@ def create_owned_region_and_suggestion(
     page = submission["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question["id"],
             "x": 1,
@@ -267,7 +278,9 @@ def create_owned_region_and_suggestion(
         },
     )
     assert region_response.status_code == 201
-    grade_response = client.post(f"/answer-regions/{region_response.json()['id']}/grade")
+    grade_response = client.post(
+        f"/answer-regions/{region_response.json()['id']}/grade", headers=headers
+    )
     assert grade_response.status_code == 201
     return {
         "auth": auth,
@@ -517,6 +530,7 @@ def test_review_queue_includes_ungraded_regions(client: TestClient, tmp_path: Pa
     question_id = data["question"]["id"]
     second_region = client.post(
         f"/submission-pages/{page_id}/answer-regions",
+        headers=data["headers"],
         json={"question_id": question_id, "x": 30, "y": 2, "width": 20, "height": 25},
     )
     assert second_region.status_code == 201
@@ -580,6 +594,7 @@ def test_assessment_summary_returns_review_counts(client: TestClient, tmp_path: 
     page_id = data["submission"]["pages"][0]["id"]
     pending_region = client.post(
         f"/submission-pages/{page_id}/answer-regions",
+        headers=data["headers"],
         json={"question_id": data["question"]["id"], "x": 70, "y": 2, "width": 20, "height": 25},
     )
     assert pending_region.status_code == 201

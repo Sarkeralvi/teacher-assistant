@@ -98,6 +98,7 @@ def create_owned_assessment(client: TestClient, token: str) -> dict[str, object]
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers={"Authorization": f"Bearer {token}"},
         json={"title": "Synthetic exam", "assessment_type": "exam", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 201

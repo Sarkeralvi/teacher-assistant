@@ -6,8 +6,15 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
+from app.core.ownership import (
+    get_owned_assessment_or_404,
+    get_owned_extraction_run_or_404,
+    get_owned_question_node_or_404,
+    get_owned_rubric_criterion_or_404,
+)
 from app.db.session import get_db
-from app.models import Assessment, ExtractionRun, QuestionNode, RubricExtractionCriterion
+from app.models import ExtractionRun, QuestionNode, RubricExtractionCriterion, User
 from app.schemas import (
     ExtractionRunRead,
     QuestionNodeRead,
@@ -27,6 +34,7 @@ from app.services.document_extraction import (
 from app.services.storage import LocalStorage
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 ExtractionFile = Annotated[UploadFile, File(...)]
 ExtractionTypeValue = Annotated[str, Form()]
 ExtractionProviderValue = Annotated[str | None, Form()]
@@ -43,12 +51,11 @@ def create_extraction_run(
     assessment_id: int,
     extraction_type: ExtractionTypeValue,
     db: DbSession,
+    current_user: CurrentUser,
     file: ExtractionFile,
     provider: ExtractionProviderValue = None,
 ) -> ExtractionRun:
-    assessment = db.get(Assessment, assessment_id)
-    if assessment is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     suffix = allowed_extraction_content_types().get(file.content_type or "")
     if suffix is None:
         raise HTTPException(
@@ -101,22 +108,18 @@ def create_extraction_run(
 
 
 @router.get("/extraction-runs/{run_id}", response_model=ExtractionRunRead)
-def get_extraction_run(run_id: int, db: DbSession) -> ExtractionRun:
-    run = db.get(ExtractionRun, run_id)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Extraction run not found"
-        )
-    return run
+def get_extraction_run(run_id: int, db: DbSession, current_user: CurrentUser) -> ExtractionRun:
+    return get_owned_extraction_run_or_404(run_id, db, current_user)
 
 
 @router.get(
     "/assessments/{assessment_id}/question-nodes",
     response_model=list[QuestionNodeRead],
 )
-def list_question_nodes(assessment_id: int, db: DbSession) -> list[QuestionNode]:
-    if db.get(Assessment, assessment_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
+def list_question_nodes(
+    assessment_id: int, db: DbSession, current_user: CurrentUser
+) -> list[QuestionNode]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     statement = (
         select(QuestionNode)
         .where(QuestionNode.assessment_id == assessment_id)
@@ -130,10 +133,9 @@ def list_question_nodes(assessment_id: int, db: DbSession) -> list[QuestionNode]
     response_model=list[RubricExtractionCriterionRead],
 )
 def list_rubric_extraction_criteria(
-    assessment_id: int, db: DbSession
+    assessment_id: int, db: DbSession, current_user: CurrentUser
 ) -> list[RubricExtractionCriterion]:
-    if db.get(Assessment, assessment_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     statement = (
         select(RubricExtractionCriterion)
         .where(RubricExtractionCriterion.assessment_id == assessment_id)
@@ -145,10 +147,10 @@ def list_rubric_extraction_criteria(
 
 
 @router.patch("/question-nodes/{node_id}", response_model=QuestionNodeRead)
-def update_question_node(node_id: int, payload: QuestionNodeUpdate, db: DbSession):
-    node = db.get(QuestionNode, node_id)
-    if node is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question node not found")
+def update_question_node(
+    node_id: int, payload: QuestionNodeUpdate, db: DbSession, current_user: CurrentUser
+):
+    node = get_owned_question_node_or_404(node_id, db, current_user)
     provided_fields = payload.model_fields_set
     if payload.question_number is not None:
         node.question_number = payload.question_number.strip()
@@ -179,14 +181,12 @@ def update_question_node(node_id: int, payload: QuestionNodeUpdate, db: DbSessio
     response_model=RubricExtractionCriterionRead,
 )
 def update_rubric_extraction_criterion(
-    criterion_id: int, payload: RubricExtractionCriterionUpdate, db: DbSession
+    criterion_id: int,
+    payload: RubricExtractionCriterionUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
 ):
-    criterion = db.get(RubricExtractionCriterion, criterion_id)
-    if criterion is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Rubric extraction criterion not found",
-        )
+    criterion = get_owned_rubric_criterion_or_404(criterion_id, db, current_user)
     provided_fields = payload.model_fields_set
     if payload.question_number is not None:
         cleaned_question_number = payload.question_number.strip()

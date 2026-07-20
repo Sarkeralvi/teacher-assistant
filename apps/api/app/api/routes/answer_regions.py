@@ -10,11 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.routes.assessments import get_assessment_or_404, get_owned_assessment_or_404
-from app.api.routes.questions import get_question_or_404
-from app.api.routes.submissions import get_submission_or_404
+from app.api.routes.submissions import (
+    get_owned_submission_or_404,
+    get_owned_submission_page_or_404,
+    get_submission_or_404,
+)
 from app.core.auth import get_current_user
 from app.core.config import get_settings
+from app.core.ownership import get_owned_assessment_or_404, get_owned_question_or_404
 from app.db.session import get_db
 from app.models import (
     AnswerRegion,
@@ -619,9 +622,11 @@ def get_codex_answer_region_suggestion_provider(settings) -> CodexAnswerRegionSu
     response_model=AnswerRegionRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_answer_region(page_id: int, payload: AnswerRegionCreate, db: DbSession) -> AnswerRegion:
-    page = get_submission_page_or_404(page_id, db)
-    question = get_question_or_404(payload.question_id, db)
+def create_answer_region(
+    page_id: int, payload: AnswerRegionCreate, db: DbSession, current_user: CurrentUser
+) -> AnswerRegion:
+    page = get_owned_submission_page_or_404(page_id, db, current_user)
+    question = get_owned_question_or_404(payload.question_id, db, current_user)
     if question.assessment_id != page.submission.assessment_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -877,9 +882,10 @@ def correct_answer_region_full_answer_confirmation(
 def suggest_answer_region_mapping_groups(
     submission_id: int,
     db: DbSession,
+    current_user: CurrentUser,
     payload: AnswerRegionMappingSuggestionRequest | None = None,
 ) -> AnswerRegionSuggestionGroupResponse:
-    submission = get_submission_or_404(submission_id, db)
+    submission = get_owned_submission_or_404(submission_id, db, current_user)
     request = payload or AnswerRegionMappingSuggestionRequest()
     provider_name = (request.provider or "mock").strip().lower()
     if provider_name != "mock":
@@ -905,9 +911,10 @@ def accept_answer_region_mapping_suggestion(
     submission_id: int,
     payload: AnswerRegionSuggestionAcceptRequest,
     db: DbSession,
+    current_user: CurrentUser,
 ) -> AnswerRegion:
-    submission = get_submission_or_404(submission_id, db)
-    question = get_question_or_404(payload.question_id, db)
+    submission = get_owned_submission_or_404(submission_id, db, current_user)
+    question = get_owned_question_or_404(payload.question_id, db, current_user)
     if question.assessment_id != submission.assessment_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1290,9 +1297,12 @@ def confirm_question_node_mapping(
     response_model=AnswerRegionSuggestionResponse,
 )
 def suggest_answer_regions(
-    page_id: int, db: DbSession, payload: AnswerRegionSuggestionRequest | None = None
+    page_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    payload: AnswerRegionSuggestionRequest | None = None,
 ) -> AnswerRegionSuggestionResponse:
-    page = get_submission_page_or_404(page_id, db)
+    page = get_owned_submission_page_or_404(page_id, db, current_user)
     settings = get_settings()
     request = payload or AnswerRegionSuggestionRequest()
     provider_name = normalize_answer_region_suggestion_provider(
@@ -1356,8 +1366,10 @@ def suggest_answer_regions(
 
 
 @router.get("/submissions/{submission_id}/answer-regions", response_model=list[AnswerRegionRead])
-def list_submission_answer_regions(submission_id: int, db: DbSession) -> Sequence[AnswerRegion]:
-    get_submission_or_404(submission_id, db)
+def list_submission_answer_regions(
+    submission_id: int, db: DbSession, current_user: CurrentUser
+) -> Sequence[AnswerRegion]:
+    get_owned_submission_or_404(submission_id, db, current_user)
     statement = (
         select(AnswerRegion)
         .where(AnswerRegion.submission_id == submission_id)
@@ -1368,9 +1380,12 @@ def list_submission_answer_regions(submission_id: int, db: DbSession) -> Sequenc
 
 @router.get("/assessments/{assessment_id}/answer-regions", response_model=list[AnswerRegionRead])
 def list_assessment_answer_regions(
-    assessment_id: int, db: DbSession, question_id: int | None = None
+    assessment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    question_id: int | None = None,
 ) -> Sequence[AnswerRegion]:
-    get_assessment_or_404(assessment_id, db)
+    get_owned_assessment_or_404(assessment_id, db, current_user)
     statement = (
         select(AnswerRegion)
         .join(Submission, Submission.id == AnswerRegion.submission_id)
@@ -1383,8 +1398,10 @@ def list_assessment_answer_regions(
 
 
 @router.get("/answer-regions/{answer_region_id}", response_model=AnswerRegionRead)
-def get_answer_region(answer_region_id: int, db: DbSession) -> AnswerRegion:
-    return get_answer_region_or_404(answer_region_id, db)
+def get_answer_region(
+    answer_region_id: int, db: DbSession, current_user: CurrentUser
+) -> AnswerRegion:
+    return get_owned_answer_region_or_404(answer_region_id, db, current_user)
 
 
 @router.post(
@@ -1393,10 +1410,13 @@ def get_answer_region(answer_region_id: int, db: DbSession) -> AnswerRegion:
     status_code=status.HTTP_201_CREATED,
 )
 def add_answer_region_segment(
-    answer_region_id: int, payload: AnswerRegionSegmentCreate, db: DbSession
+    answer_region_id: int,
+    payload: AnswerRegionSegmentCreate,
+    db: DbSession,
+    current_user: CurrentUser,
 ) -> AnswerRegionSegment:
-    region = get_answer_region_or_404(answer_region_id, db)
-    page = get_submission_page_or_404(payload.page_id, db)
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    page = get_owned_submission_page_or_404(payload.page_id, db, current_user)
     if page.submission_id != region.submission_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1435,9 +1455,12 @@ def add_answer_region_segment(
     response_model=AnswerRegionRead,
 )
 def update_answer_region_full_answer_confirmation(
-    answer_region_id: int, payload: AnswerRegionFullAnswerConfirmation, db: DbSession
+    answer_region_id: int,
+    payload: AnswerRegionFullAnswerConfirmation,
+    db: DbSession,
+    current_user: CurrentUser,
 ) -> AnswerRegion:
-    region = get_answer_region_or_404(answer_region_id, db)
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
     region.full_answer_confirmed = payload.full_answer_confirmed
     if payload.manual_answer_text is not None:
         region.manual_answer_text = payload.manual_answer_text.strip() or None
@@ -1452,8 +1475,10 @@ def update_answer_region_full_answer_confirmation(
 
 
 @router.get("/answer-regions/{answer_region_id}/image")
-def get_answer_region_image(answer_region_id: int, db: DbSession) -> FileResponse:
-    region = get_answer_region_or_404(answer_region_id, db)
+def get_answer_region_image(
+    answer_region_id: int, db: DbSession, current_user: CurrentUser
+) -> FileResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
     path = LocalStorage().resolve_relative(region.image_path)
     if not path.is_file():
         raise HTTPException(
@@ -1464,8 +1489,10 @@ def get_answer_region_image(answer_region_id: int, db: DbSession) -> FileRespons
 
 
 @router.delete("/answer-regions/{answer_region_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_answer_region(answer_region_id: int, db: DbSession) -> Response:
-    region = get_answer_region_or_404(answer_region_id, db)
+def delete_answer_region(
+    answer_region_id: int, db: DbSession, current_user: CurrentUser
+) -> Response:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
     db.delete(region)
     try:
         db.commit()

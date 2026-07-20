@@ -180,7 +180,9 @@ def create_answer_region_with_optional_rubric(
         },
     )
     assert region_response.status_code == 201
-    return region_response.json()
+    region = region_response.json()
+    region["_auth_headers"] = headers
+    return region
 
 
 def create_owned_answer_region(client: TestClient, tmp_path: Path, email: str) -> dict[str, object]:
@@ -200,6 +202,7 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path, email: str) -
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Explain.",
@@ -210,6 +213,7 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path, email: str) -
     assert question_response.status_code == 201
     rubric_response = client.post(
         f"/questions/{question_response.json()['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
     )
     assert rubric_response.status_code == 201
@@ -226,6 +230,7 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path, email: str) -
     page = submission_response.json()["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question_response.json()["id"],
             "x": 1,
@@ -250,6 +255,7 @@ def create_assessment_with_answer_regions(
     batch_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
     course_response = client.post(
         "/courses",
+        headers=batch_headers,
         json={
             "teacher_id": register_response.json()["user"]["id"],
             "code": "BATCH101",
@@ -259,12 +265,14 @@ def create_assessment_with_answer_regions(
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=batch_headers,
         json={"title": "Batch Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
     )
     assert assessment_response.status_code == 201
     assessment_id = assessment_response.json()["id"]
     question_response = client.post(
         f"/assessments/{assessment_id}/questions",
+        headers=batch_headers,
         json={
             "question_no": "1",
             "question_text": "Explain.",
@@ -275,6 +283,7 @@ def create_assessment_with_answer_regions(
     assert question_response.status_code == 201
     rubric_response = client.post(
         f"/questions/{question_response.json()['id']}/rubrics",
+        headers=batch_headers,
         json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
     )
     assert rubric_response.status_code == 201
@@ -293,6 +302,7 @@ def create_assessment_with_answer_regions(
         page = submission_response.json()["pages"][0]
         region_response = client.post(
             f"/submission-pages/{page['id']}/answer-regions",
+            headers=batch_headers,
             json={
                 "question_id": question_response.json()["id"],
                 "x": 1,
@@ -305,7 +315,7 @@ def create_assessment_with_answer_regions(
         )
         assert region_response.status_code == 201
         regions.append(region_response.json())
-    return {"assessment_id": assessment_id, "regions": regions}
+    return {"assessment_id": assessment_id, "regions": regions, "headers": batch_headers}
 
 
 def test_grade_answer_region_creates_job_and_mock_suggestion(
@@ -313,7 +323,7 @@ def test_grade_answer_region_creates_job_and_mock_suggestion(
 ) -> None:
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 201
     payload = response.json()
@@ -432,7 +442,9 @@ def test_grading_evidence_packet_reports_ready_state_and_auditable_fields(
 ) -> None:
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
-    response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+    response = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=region["_auth_headers"]
+    )
 
     assert response.status_code == 200
     packet = response.json()
@@ -463,14 +475,18 @@ def test_grading_evidence_packet_blocks_when_active_rubric_is_missing(
 ) -> None:
     region = create_answer_region_with_optional_rubric(client, tmp_path, create_rubric=False)
 
-    packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+    packet_response = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=region["_auth_headers"]
+    )
 
     assert packet_response.status_code == 200
     packet = packet_response.json()
     assert packet["readiness_result"]["ready_for_grading"] is False
     assert "missing active rubric" in packet["readiness_result"]["blockers"]
 
-    grade_response = client.post(f"/answer-regions/{region['id']}/grade")
+    grade_response = client.post(
+        f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"]
+    )
     assert grade_response.status_code == 400
     assert "Evidence packet not ready for grading" in grade_response.text
     assert db_session_scalars_count(FinalGrade) == 0
@@ -493,16 +509,21 @@ def test_batch_mock_grading_grades_ungraded_regions_only_and_skips_existing(
     data = create_assessment_with_answer_regions(client, tmp_path, region_count=3)
     assessment_id = data["assessment_id"]
     regions = data["regions"]
+    batch_headers = data["headers"]
     assert isinstance(assessment_id, int)
     assert isinstance(regions, list)
     pregraded_region = regions[0]
-    pregraded_response = client.post(f"/answer-regions/{pregraded_region['id']}/grade")
+    pregraded_response = client.post(
+        f"/answer-regions/{pregraded_region['id']}/grade", headers=batch_headers
+    )
     assert pregraded_response.status_code == 201
 
     monkeypatch.setenv("BRAIN_PROVIDER", "openai")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     get_settings.cache_clear()
-    response = client.post(f"/assessments/{assessment_id}/grade-all-mock")
+    response = client.post(
+        f"/assessments/{assessment_id}/grade-all-mock", headers=batch_headers
+    )
 
     assert response.status_code == 201
     payload = response.json()
@@ -522,38 +543,62 @@ def test_batch_mock_grading_grades_ungraded_regions_only_and_skips_existing(
 
 
 def test_grade_answer_region_failure_cases(client: TestClient, tmp_path: Path) -> None:
-    missing_region = client.post("/answer-regions/999999/grade")
-    assert missing_region.status_code == 404
-
     no_rubric_region = create_answer_region_with_optional_rubric(
         client, tmp_path, create_rubric=False
     )
-    no_rubric = client.post(f"/answer-regions/{no_rubric_region['id']}/grade")
+    missing_region = client.post(
+        "/answer-regions/999999/grade", headers=no_rubric_region["_auth_headers"]
+    )
+    assert missing_region.status_code == 404
+
+    no_rubric = client.post(
+        f"/answer-regions/{no_rubric_region['id']}/grade",
+        headers=no_rubric_region["_auth_headers"],
+    )
     assert no_rubric.status_code == 400
     assert "active rubric" in no_rubric.text
 
 
 def test_batch_mock_grading_missing_assessment_returns_404(client: TestClient) -> None:
-    response = client.post("/assessments/999999/grade-all-mock")
+    register_response = client.post(
+        "/auth/register",
+        json={
+            "name": "Teacher",
+            "email": "batch-404@example.com",
+            "password": "batch-404-password",
+        },
+    )
+    assert register_response.status_code == 201
+    headers = auth_header(register_response.json()["access_token"])
+
+    response = client.post("/assessments/999999/grade-all-mock", headers=headers)
 
     assert response.status_code == 404
 
 
 def test_grade_suggestion_and_job_read_endpoints(client: TestClient, tmp_path: Path) -> None:
     region = create_answer_region_with_optional_rubric(client, tmp_path)
-    grade_response = client.post(f"/answer-regions/{region['id']}/grade")
+    grade_response = client.post(
+        f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"]
+    )
     assert grade_response.status_code == 201
     created = grade_response.json()
 
-    list_response = client.get(f"/answer-regions/{region['id']}/grade-suggestions")
+    list_response = client.get(
+        f"/answer-regions/{region['id']}/grade-suggestions", headers=region["_auth_headers"]
+    )
     assert list_response.status_code == 200
     assert [item["id"] for item in list_response.json()] == [created["suggestion"]["id"]]
 
-    suggestion_response = client.get(f"/grade-suggestions/{created['suggestion']['id']}")
+    suggestion_response = client.get(
+        f"/grade-suggestions/{created['suggestion']['id']}", headers=region["_auth_headers"]
+    )
     assert suggestion_response.status_code == 200
     assert suggestion_response.json()["id"] == created["suggestion"]["id"]
 
-    job_response = client.get(f"/grading-jobs/{created['job']['id']}")
+    job_response = client.get(
+        f"/grading-jobs/{created['job']['id']}", headers=region["_auth_headers"]
+    )
     assert job_response.status_code == 200
     assert job_response.json()["status"] == "succeeded"
 
@@ -576,7 +621,7 @@ def test_grade_answer_region_marks_job_failed_on_provider_error(
     region = create_answer_region_with_optional_rubric(client, tmp_path)
     monkeypatch.setattr("app.services.grading_service.BrainAdapter", FailingBrainAdapterFactory)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 502
     assert "provider failed" in response.text
@@ -619,7 +664,7 @@ def test_grade_answer_region_with_mocked_openai_image_input_creates_suggestion(
     monkeypatch.setattr("packages.brain.adapter.OpenAICompatibleProvider", provider_factory)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 201
     suggestion = response.json()["suggestion"]
@@ -649,7 +694,7 @@ def test_grade_answer_region_missing_image_fails_before_provider_call(
     assert answer_region is not None
     Path(tmp_path / "storage" / answer_region.image_path).unlink()
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 400
     assert "image is missing" in response.text
@@ -746,7 +791,9 @@ def test_unwritable_grading_context_blocks_before_provider_call(
     grading_context_root.mkdir(parents=True, exist_ok=True)
     grading_context_root.chmod(0o500)
     try:
-        response = client.post(f"/answer-regions/{region['id']}/grade")
+        response = client.post(
+            f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"]
+        )
     finally:
         grading_context_root.chmod(0o700)
 
@@ -783,7 +830,7 @@ def test_grade_answer_region_with_codex_cli_mocked_subprocess_creates_suggestion
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 201
     payload = response.json()
@@ -819,7 +866,7 @@ def test_grade_answer_region_codex_cli_subprocess_failure_marks_job_failed(
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FailingCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 502
     assert "Codex CLI exited with status 2" in response.text
@@ -853,7 +900,7 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", ImageUnsupportedCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade")
+    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
     assert response.status_code == 502
     assert "image input is not supported" in response.text
@@ -881,7 +928,9 @@ def test_evidence_packet_blocks_possible_continuation_near_page_bottom(
     )
     db_session.commit()
 
-    packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+    packet_response = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=region["_auth_headers"]
+    )
 
     assert packet_response.status_code == 200
     packet = packet_response.json()
@@ -894,7 +943,9 @@ def test_evidence_packet_blocks_possible_continuation_near_page_bottom(
     assert "possible answer continuation not confirmed" in packet["readiness_result"]["blockers"]
     assert packet["readiness_result"]["ready_for_grading"] is False
 
-    grade_response = client.post(f"/answer-regions/{region['id']}/grade")
+    grade_response = client.post(
+        f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"]
+    )
     assert grade_response.status_code == 400
     assert "possible answer continuation not confirmed" in grade_response.text
     db_session.expire_all()
@@ -915,11 +966,14 @@ def test_full_answer_confirmation_clears_continuation_blocker(
 
     confirm_response = client.patch(
         f"/answer-regions/{region['id']}/full-answer-confirmation",
+        headers=region["_auth_headers"],
         json={"full_answer_confirmed": True},
     )
     assert confirm_response.status_code == 200
 
-    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=region["_auth_headers"]
+    ).json()
     assert (
         packet["student_answer_evidence"]["continuation_check_status"]
         == "continuation_confirmed_not_needed"
@@ -936,10 +990,12 @@ def test_multisegment_grading_uses_composite_context_with_all_segments(
     from app.services.grading_service import GradingService
 
     region_payload = create_answer_region_with_optional_rubric(client, tmp_path)
+    region_headers = region_payload["_auth_headers"]
     region = db_session.get(AnswerRegion, region_payload["id"])
     assert region is not None
     segment_response = client.post(
         f"/answer-regions/{region.id}/segments",
+        headers=region_headers,
         json={
             "page_id": region.page_id,
             "x": 30,
@@ -954,6 +1010,7 @@ def test_multisegment_grading_uses_composite_context_with_all_segments(
     assert segment_response.status_code == 201
     confirm_response = client.patch(
         f"/answer-regions/{region.id}/full-answer-confirmation",
+        headers=region_headers,
         json={"full_answer_confirmed": True},
     )
     assert confirm_response.status_code == 200

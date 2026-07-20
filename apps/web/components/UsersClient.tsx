@@ -1,17 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
-import { createUser, listUsers, type User } from "../lib/api";
+import { EmptyState, ErrorState, LoadingState } from "./AppShell";
+import { listUsers, type User } from "../lib/api";
 import { SetDemoTeacherButton } from "./DemoTeacherSelector";
 
 export function UsersClient() {
   const [users, setUsers] = useState<User[]>([]);
-  const [name, setName] = useState("Dev Teacher");
-  const [email, setEmail] = useState("teacher@example.com");
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function loadUsers() {
@@ -30,43 +27,15 @@ export function UsersClient() {
     void loadUsers();
   }, []);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const created = await createUser({ name, email, role: "teacher" });
-      window.localStorage.setItem("teacher-assistant.demoTeacherId", String(created.id));
-      await loadUsers();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create user");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold">Users / teacher setup</h1>
-        <p className="mt-2 text-slate-400">Dev-only teacher records. No auth or login here.</p>
+        <h1 className="text-3xl font-semibold">Users / teacher directory</h1>
+        <p className="mt-2 text-slate-400">
+          Registered teachers. Create an account via Register, then set it as the current demo
+          teacher here.
+        </p>
       </div>
-
-      <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5 md:grid-cols-3">
-        <label className="space-y-1">
-          <span className="text-sm text-slate-300">Name</span>
-          <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} required />
-        </label>
-        <label className="space-y-1">
-          <span className="text-sm text-slate-300">Email</span>
-          <input className={inputClass} value={email} onChange={(event) => setEmail(event.target.value)} required />
-        </label>
-        <div className="flex items-end">
-          <button className={buttonClass} disabled={submitting} type="submit">
-            {submitting ? "Creating..." : "Create teacher"}
-          </button>
-        </div>
-      </form>
 
       {error && <ErrorState message={error} />}
       {loading ? <LoadingState /> : null}

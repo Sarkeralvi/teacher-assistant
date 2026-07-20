@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.routes.assessments import get_owned_assessment_or_404
 from app.core.auth import get_current_user
 from app.core.config import get_settings
+from app.core.ownership import get_owned_assessment_or_404, get_owned_question_import_job_or_404
 from app.db.session import get_db
 from app.models import ExtractionRun, Question, QuestionImportJob, QuestionNode, User
 from app.schemas import (
@@ -105,8 +105,10 @@ def create_question_import(
 
 
 @router.get("/question-imports/{job_id}", response_model=QuestionImportJobRead)
-def get_question_import(job_id: int, db: DbSession) -> QuestionImportJob:
-    return get_question_import_or_404(job_id, db)
+def get_question_import(
+    job_id: int, db: DbSession, current_user: CurrentUser
+) -> QuestionImportJob:
+    return get_owned_question_import_job_or_404(job_id, db, current_user)
 
 
 @router.post(
@@ -115,9 +117,12 @@ def get_question_import(job_id: int, db: DbSession) -> QuestionImportJob:
     status_code=status.HTTP_201_CREATED,
 )
 def accept_question_import(
-    job_id: int, payload: QuestionImportAcceptRequest, db: DbSession
+    job_id: int,
+    payload: QuestionImportAcceptRequest,
+    db: DbSession,
+    current_user: CurrentUser,
 ) -> QuestionImportAcceptResponse:
-    job = get_question_import_or_404(job_id, db)
+    job = get_owned_question_import_job_or_404(job_id, db, current_user)
     known_draft_ids = {str(draft.get("draft_id")) for draft in job.draft_questions}
     for draft in payload.draft_questions:
         if draft.draft_id not in known_draft_ids:
@@ -141,15 +146,6 @@ def accept_question_import(
     return QuestionImportAcceptResponse(
         job_id=job.id, created_count=len(questions), questions=questions
     )
-
-
-def get_question_import_or_404(job_id: int, db: Session) -> QuestionImportJob:
-    job = db.get(QuestionImportJob, job_id)
-    if job is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Question import not found"
-        )
-    return job
 
 
 def ensure_unique_question_labels(

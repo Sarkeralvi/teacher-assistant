@@ -97,23 +97,31 @@ def register_teacher(
     return body["user"], body["access_token"]
 
 
-def create_assessment_for_teacher(client: TestClient, teacher_id: int) -> dict[str, object]:
+def create_assessment_for_teacher(
+    client: TestClient, teacher_id: int, token: str
+) -> dict[str, object]:
+    headers = {"Authorization": f"Bearer {token}"}
     course_response = client.post(
         "/courses",
+        headers=headers,
         json={"teacher_id": teacher_id, "code": "MATH101", "title": "Math"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Midterm", "assessment_type": "exam", "total_marks": "50.00"},
     )
     assert assessment_response.status_code == 201
     return assessment_response.json()
 
 
-def create_question(client: TestClient, assessment_id: int, question_no: str) -> dict[str, object]:
+def create_question(
+    client: TestClient, assessment_id: int, question_no: str, token: str
+) -> dict[str, object]:
     response = client.post(
         f"/assessments/{assessment_id}/questions",
+        headers={"Authorization": f"Bearer {token}"},
         json={
             "question_no": question_no,
             "question_text": f"Explain {question_no}",
@@ -125,9 +133,10 @@ def create_question(client: TestClient, assessment_id: int, question_no: str) ->
     return response.json()
 
 
-def create_active_rubric(client: TestClient, question_id: int) -> dict[str, object]:
+def create_active_rubric(client: TestClient, question_id: int, token: str) -> dict[str, object]:
     response = client.post(
         f"/questions/{question_id}/rubrics",
+        headers={"Authorization": f"Bearer {token}"},
         json={
             "version": 1,
             "rubric_json": {
@@ -236,9 +245,9 @@ def test_text_script_mapping_maps_q1a_and_q1b_without_creating_grading_records(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "map-success")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
-    create_question(client, int(assessment["id"]), "Q1(a)")
-    create_question(client, int(assessment["id"]), "Q1(b)")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    create_question(client, int(assessment["id"]), "Q1(b)", token)
     seed_confirmed_question_nodes(db_session, int(assessment["id"]))
 
     pdf_path = tmp_path / "script.pdf"
@@ -270,9 +279,9 @@ def test_mapping_run_returns_empty_when_no_confirmed_question_nodes_exist(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "map-empty")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
-    create_question(client, int(assessment["id"]), "Q1(a)")
-    create_question(client, int(assessment["id"]), "Q1(b)")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    create_question(client, int(assessment["id"]), "Q1(b)", token)
 
     pdf_path = tmp_path / "script.pdf"
     make_text_pdf(pdf_path, ["Q1(a) answer only"])
@@ -294,9 +303,9 @@ def test_ambiguous_mapping_creates_uncertain_blocker(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "map-uncertain")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
-    create_question(client, int(assessment["id"]), "Q1(a)")
-    create_question(client, int(assessment["id"]), "Q1(b)")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    create_question(client, int(assessment["id"]), "Q1(b)", token)
     seed_confirmed_question_nodes(db_session, int(assessment["id"]))
 
     pdf_path = tmp_path / "ambiguous.pdf"
@@ -323,9 +332,9 @@ def test_teacher_correction_and_confirmation_persist(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "map-correct")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
-    create_question(client, int(assessment["id"]), "Q1(a)")
-    create_question(client, int(assessment["id"]), "Q1(b)")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    create_question(client, int(assessment["id"]), "Q1(b)", token)
     nodes = seed_confirmed_question_nodes(db_session, int(assessment["id"]))
 
     pdf_path = tmp_path / "partial.pdf"
@@ -378,11 +387,11 @@ def test_workflow_state_blocks_unconfirmed_or_uncertain_mappings(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "map-ready")
-    assessment = create_assessment_for_teacher(client, int(teacher["id"]))
-    question_a = create_question(client, int(assessment["id"]), "Q1(a)")
-    question_b = create_question(client, int(assessment["id"]), "Q1(b)")
-    create_active_rubric(client, int(question_a["id"]))
-    create_active_rubric(client, int(question_b["id"]))
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    question_a = create_question(client, int(assessment["id"]), "Q1(a)", token)
+    question_b = create_question(client, int(assessment["id"]), "Q1(b)", token)
+    create_active_rubric(client, int(question_a["id"]), token)
+    create_active_rubric(client, int(question_b["id"]), token)
     seed_confirmed_question_nodes(db_session, int(assessment["id"]))
     grading_run = create_grading_run(client, int(assessment["id"]), token)
 

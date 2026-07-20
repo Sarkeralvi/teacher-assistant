@@ -68,18 +68,28 @@ def client(
 
 
 @pytest.fixture()
-def assessment(client: TestClient) -> dict[str, object]:
-    user_response = client.post(
-        "/users", json={"name": "Teacher", "email": f"extract-{uuid4().hex}@example.com"}
+def auth_headers(client: TestClient) -> dict[str, str]:
+    response = client.post(
+        "/auth/register",
+        json={
+            "name": "Teacher",
+            "email": f"extract-{uuid4().hex}@example.com",
+            "password": "correct horse battery staple",
+        },
     )
-    assert user_response.status_code == 201
+    assert response.status_code == 201
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+@pytest.fixture()
+def assessment(client: TestClient, auth_headers: dict[str, str]) -> dict[str, object]:
     course_response = client.post(
-        "/courses",
-        json={"teacher_id": user_response.json()["id"], "code": "PHY101", "title": "Physics"},
+        "/courses", headers=auth_headers, json={"code": "PHY101", "title": "Physics"}
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=auth_headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "20.00"},
     )
     assert assessment_response.status_code == 201
@@ -113,6 +123,7 @@ def test_provider_disabled_blocks_extraction_run(
     assessment: dict[str, object],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
 ) -> None:
     monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "false")
     monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "host_bridge_codex")
@@ -123,6 +134,7 @@ def test_provider_disabled_blocks_extraction_run(
     with paper_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/extraction-runs",
+            headers=auth_headers,
             data={"extraction_type": "question_paper", "provider": "host_bridge_codex"},
             files={"file": ("paper.pdf", file_obj, "application/pdf")},
         )
@@ -138,6 +150,7 @@ def test_invalid_extraction_provider_returns_clean_http_error(
     client: TestClient,
     assessment: dict[str, object],
     tmp_path: Path,
+    auth_headers: dict[str, str],
 ) -> None:
     rubric_path = tmp_path / "rubric.pdf"
     make_pdf(rubric_path, RUBRIC_TEXT)
@@ -145,6 +158,7 @@ def test_invalid_extraction_provider_returns_clean_http_error(
     with rubric_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/extraction-runs",
+            headers=auth_headers,
             data={"extraction_type": "rubric", "provider": "gpt-5.5"},
             files={"file": ("rubric.pdf", file_obj, "application/pdf")},
         )
@@ -158,6 +172,7 @@ def test_mock_question_extraction_run_stores_raw_and_normalized_output(
     assessment: dict[str, object],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
 ) -> None:
     monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "true")
     monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "mock")
@@ -168,6 +183,7 @@ def test_mock_question_extraction_run_stores_raw_and_normalized_output(
     with paper_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/extraction-runs",
+            headers=auth_headers,
             data={"extraction_type": "question_paper", "provider": "mock"},
             files={"file": ("paper.pdf", file_obj, "application/pdf")},
         )
@@ -180,7 +196,7 @@ def test_mock_question_extraction_run_stores_raw_and_normalized_output(
     assert payload["normalized_output"]
     assert payload["normalized_output"]["question_nodes"][0]["question_number"] == "Q1"
 
-    nodes = client.get(f"/assessments/{assessment['id']}/question-nodes")
+    nodes = client.get(f"/assessments/{assessment['id']}/question-nodes", headers=auth_headers)
     assert nodes.status_code == 200
     numbers = [node["question_number"] for node in nodes.json()]
     assert numbers == ["Q1", "Q1(a)", "Q1(b)"]
@@ -191,6 +207,7 @@ def test_mock_rubric_extraction_run_stores_linked_criteria(
     assessment: dict[str, object],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
 ) -> None:
     monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "true")
     monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "mock")
@@ -201,6 +218,7 @@ def test_mock_rubric_extraction_run_stores_linked_criteria(
     with rubric_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/extraction-runs",
+            headers=auth_headers,
             data={"extraction_type": "rubric", "provider": "mock"},
             files={"file": ("rubric.pdf", file_obj, "application/pdf")},
         )
@@ -210,7 +228,9 @@ def test_mock_rubric_extraction_run_stores_linked_criteria(
     assert payload["status"] == "succeeded"
     assert payload["normalized_output"]["criteria"][0]["question_number"] == "Q1(a)"
 
-    criteria = client.get(f"/assessments/{assessment['id']}/rubric-extraction-criteria")
+    criteria = client.get(
+        f"/assessments/{assessment['id']}/rubric-extraction-criteria", headers=auth_headers
+    )
     assert criteria.status_code == 200
     assert [item["question_number"] for item in criteria.json()] == ["Q1(a)", "Q1(b)"]
 
@@ -220,6 +240,7 @@ def test_extracted_question_nodes_can_be_edited_and_confirmed(
     assessment: dict[str, object],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
 ) -> None:
     monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "true")
     monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "mock")
@@ -230,14 +251,18 @@ def test_extracted_question_nodes_can_be_edited_and_confirmed(
     with paper_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/extraction-runs",
+            headers=auth_headers,
             data={"extraction_type": "question_paper", "provider": "mock"},
             files={"file": ("paper.pdf", file_obj, "application/pdf")},
         )
     assert response.status_code == 201
 
-    node = client.get(f"/assessments/{assessment['id']}/question-nodes").json()[0]
+    node = client.get(
+        f"/assessments/{assessment['id']}/question-nodes", headers=auth_headers
+    ).json()[0]
     updated = client.patch(
         f"/question-nodes/{node['id']}",
+        headers=auth_headers,
         json={
             "question_number": "Q1-main",
             "label": "Edited Q1",
@@ -256,7 +281,9 @@ def test_extracted_question_nodes_can_be_edited_and_confirmed(
     assert body["source_page"] == 2
     assert body["teacher_confirmed"] is True
 
-    refreshed = client.get(f"/assessments/{assessment['id']}/question-nodes").json()[0]
+    refreshed = client.get(
+        f"/assessments/{assessment['id']}/question-nodes", headers=auth_headers
+    ).json()[0]
     assert refreshed["teacher_confirmed"] is True
 
 
@@ -266,6 +293,7 @@ def test_extracted_rubric_criteria_can_be_edited_confirmed_and_blockers_cleared(
     assessment: dict[str, object],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
 ) -> None:
     monkeypatch.setenv("CODEX_EXTRACTION_ENABLED", "true")
     monkeypatch.setenv("CODEX_EXTRACTION_PROVIDER", "mock")
@@ -276,14 +304,18 @@ def test_extracted_rubric_criteria_can_be_edited_confirmed_and_blockers_cleared(
     with rubric_path.open("rb") as file_obj:
         response = client.post(
             f"/assessments/{assessment['id']}/extraction-runs",
+            headers=auth_headers,
             data={"extraction_type": "rubric", "provider": "mock"},
             files={"file": ("rubric.pdf", file_obj, "application/pdf")},
         )
     assert response.status_code == 201
 
-    criterion = client.get(f"/assessments/{assessment['id']}/rubric-extraction-criteria").json()[0]
+    criterion = client.get(
+        f"/assessments/{assessment['id']}/rubric-extraction-criteria", headers=auth_headers
+    ).json()[0]
     updated = client.patch(
         f"/rubric-extraction-criteria/{criterion['id']}",
+        headers=auth_headers,
         json={
             "question_number": "Q1(a)",
             "criterion_label": "Edited criterion",

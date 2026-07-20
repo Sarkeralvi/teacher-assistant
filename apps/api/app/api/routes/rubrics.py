@@ -6,27 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
+from app.core.ownership import get_owned_question_or_404, get_owned_rubric_or_404
 from app.db.session import get_db
-from app.models import Question, Rubric
+from app.models import Question, Rubric, User
 from app.schemas import RubricCreate, RubricRead, RubricUpdate, validate_rubric_json_schema
 
 DbSession = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["rubrics"])
-
-
-def get_question_or_404(question_id: int, db: Session) -> Question:
-    question = db.get(Question, question_id)
-    if question is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
-    return question
-
-
-def get_rubric_or_404(rubric_id: int, db: Session) -> Rubric:
-    rubric = db.get(Rubric, rubric_id)
-    if rubric is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rubric not found")
-    return rubric
 
 
 def ensure_no_other_active_rubric(
@@ -59,8 +48,10 @@ def validate_rubric_or_422(rubric_json: dict[str, object], question: Question) -
     response_model=RubricRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_rubric(question_id: int, payload: RubricCreate, db: DbSession) -> Rubric:
-    question = get_question_or_404(question_id, db)
+def create_rubric(
+    question_id: int, payload: RubricCreate, db: DbSession, current_user: CurrentUser
+) -> Rubric:
+    question = get_owned_question_or_404(question_id, db, current_user)
     validate_rubric_or_422(payload.rubric_json, question)
     if payload.is_active:
         ensure_no_other_active_rubric(db, question_id)
@@ -72,20 +63,24 @@ def create_rubric(question_id: int, payload: RubricCreate, db: DbSession) -> Rub
 
 
 @router.get("/questions/{question_id}/rubrics", response_model=list[RubricRead])
-def list_rubrics(question_id: int, db: DbSession) -> Sequence[Rubric]:
-    get_question_or_404(question_id, db)
+def list_rubrics(
+    question_id: int, db: DbSession, current_user: CurrentUser
+) -> Sequence[Rubric]:
+    get_owned_question_or_404(question_id, db, current_user)
     statement = select(Rubric).where(Rubric.question_id == question_id).order_by(Rubric.id)
     return db.scalars(statement).all()
 
 
 @router.get("/rubrics/{rubric_id}", response_model=RubricRead)
-def get_rubric(rubric_id: int, db: DbSession) -> Rubric:
-    return get_rubric_or_404(rubric_id, db)
+def get_rubric(rubric_id: int, db: DbSession, current_user: CurrentUser) -> Rubric:
+    return get_owned_rubric_or_404(rubric_id, db, current_user)
 
 
 @router.patch("/rubrics/{rubric_id}", response_model=RubricRead)
-def update_rubric(rubric_id: int, payload: RubricUpdate, db: DbSession) -> Rubric:
-    rubric = get_rubric_or_404(rubric_id, db)
+def update_rubric(
+    rubric_id: int, payload: RubricUpdate, db: DbSession, current_user: CurrentUser
+) -> Rubric:
+    rubric = get_owned_rubric_or_404(rubric_id, db, current_user)
     updates = payload.model_dump(exclude_unset=True)
     if "rubric_json" in updates:
         validate_rubric_or_422(updates["rubric_json"], rubric.question)
@@ -99,8 +94,8 @@ def update_rubric(rubric_id: int, payload: RubricUpdate, db: DbSession) -> Rubri
 
 
 @router.delete("/rubrics/{rubric_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_rubric(rubric_id: int, db: DbSession) -> Response:
-    rubric = get_rubric_or_404(rubric_id, db)
+def delete_rubric(rubric_id: int, db: DbSession, current_user: CurrentUser) -> Response:
+    rubric = get_owned_rubric_or_404(rubric_id, db, current_user)
     db.delete(rubric)
     try:
         db.commit()

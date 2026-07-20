@@ -85,18 +85,22 @@ def register_teacher(
 
 def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, object]:
     teacher_id, token = register_teacher(client)
+    headers = {"Authorization": f"Bearer {token}"}
     course_response = client.post(
         "/courses",
+        headers=headers,
         json={"teacher_id": teacher_id, "code": "COD101", "title": "Codex Smoke"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "5.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Explain.",
@@ -107,6 +111,7 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, 
     assert question_response.status_code == 201
     rubric_response = client.post(
         f"/questions/{question_response.json()['id']}/rubrics",
+        headers=headers,
         json={"version": 1, "rubric_json": strict_rubric(), "is_active": True},
     )
     assert rubric_response.status_code == 201
@@ -117,12 +122,13 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, 
             f"/assessments/{assessment_response.json()['id']}/submissions/upload",
             data={"student_identifier": "S-001"},
             files={"file": ("answer.png", file_obj, "image/png")},
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
         )
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={
             "question_id": question_response.json()["id"],
             "x": 1,

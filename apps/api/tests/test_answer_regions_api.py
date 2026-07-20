@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -75,29 +76,32 @@ def make_png(path: Path, size: tuple[int, int] = (100, 80)) -> None:
 
 
 def create_uploaded_page(
-    client: TestClient, tmp_path: Path
-) -> tuple[dict[str, object], dict[str, object]]:
-    image_path = tmp_path / f"answer-{len(list(tmp_path.glob('answer-*.png')))}.png"
-    email = f"regions-{image_path.stem}@example.com"
-    register_response = client.post(
-        "/auth/register",
-        json={"name": "Teacher", "email": email, "password": "regions test password"},
-    )
-    assert register_response.status_code == 201
-    user_response_json = register_response.json()["user"]
-    auth_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
+    client: TestClient, tmp_path: Path, auth_headers: dict[str, str] | None = None
+) -> tuple[dict[str, object], dict[str, object], dict[str, str]]:
+    if auth_headers is None:
+        image_path = tmp_path / f"answer-{len(list(tmp_path.glob('answer-*.png')))}.png"
+        email = f"regions-{image_path.stem}@example.com"
+        register_response = client.post(
+            "/auth/register",
+            json={"name": "Teacher", "email": email, "password": "regions test password"},
+        )
+        assert register_response.status_code == 201
+        auth_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response_json["id"], "code": "REG101", "title": "Regions"},
+        headers=auth_headers,
+        json={"code": f"REG-{uuid4().hex[:8]}", "title": "Regions"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=auth_headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=auth_headers,
         json={
             "question_no": "1",
             "question_text": "Answer this.",
@@ -117,16 +121,17 @@ def create_uploaded_page(
         )
     assert submission_response.status_code == 201
     page = submission_response.json()["pages"][0]
-    return question_response.json(), page
+    return question_response.json(), page, auth_headers
 
 
 def test_create_answer_region_crops_image_and_serves_png(
     client: TestClient, tmp_path: Path
 ) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 10, "y": 12, "width": 30, "height": 20},
     )
 
@@ -143,7 +148,7 @@ def test_create_answer_region_crops_image_and_serves_png(
     assert not region["image_path"].startswith("/")
     assert ".." not in region["image_path"]
 
-    image_response = client.get(f"/answer-regions/{region['id']}/image")
+    image_response = client.get(f"/answer-regions/{region['id']}/image", headers=headers)
     assert image_response.status_code == 200
     assert image_response.headers["content-type"] == "image/png"
     assert image_response.content.startswith(b"\x89PNG")
@@ -157,24 +162,30 @@ def test_create_answer_region_crops_image_and_serves_png(
 def test_answer_region_list_endpoints_and_question_filter(
     client: TestClient, tmp_path: Path
 ) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
     create_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 2, "width": 10, "height": 12},
     )
     assert create_response.status_code == 201
     region = create_response.json()
 
-    submission_list = client.get(f"/submissions/{page['submission_id']}/answer-regions")
+    submission_list = client.get(
+        f"/submissions/{page['submission_id']}/answer-regions", headers=headers
+    )
     assert submission_list.status_code == 200
     assert [item["id"] for item in submission_list.json()] == [region["id"]]
 
-    assessment_list = client.get(f"/assessments/{question['assessment_id']}/answer-regions")
+    assessment_list = client.get(
+        f"/assessments/{question['assessment_id']}/answer-regions", headers=headers
+    )
     assert assessment_list.status_code == 200
     assert [item["id"] for item in assessment_list.json()] == [region["id"]]
 
     filtered = client.get(
         f"/assessments/{question['assessment_id']}/answer-regions",
+        headers=headers,
         params={"question_id": question["id"]},
     )
     assert filtered.status_code == 200
@@ -182,56 +193,63 @@ def test_answer_region_list_endpoints_and_question_filter(
 
     no_match = client.get(
         f"/assessments/{question['assessment_id']}/answer-regions",
+        headers=headers,
         params={"question_id": 999999},
     )
     assert no_match.status_code == 200
     assert no_match.json() == []
 
-    detail = client.get(f"/answer-regions/{region['id']}")
+    detail = client.get(f"/answer-regions/{region['id']}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["id"] == region["id"]
 
 
 def test_answer_region_validation_errors(client: TestClient, tmp_path: Path) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
 
     missing_page = client.post(
         "/submission-pages/999999/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 1, "width": 10, "height": 10},
     )
     assert missing_page.status_code == 404
 
     missing_question = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": 999999, "x": 1, "y": 1, "width": 10, "height": 10},
     )
     assert missing_question.status_code == 404
 
     negative_xy = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": -1, "y": 1, "width": 10, "height": 10},
     )
     assert negative_xy.status_code == 422
 
     zero_width = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 1, "width": 0, "height": 10},
     )
     assert zero_width.status_code == 422
 
     outside_bounds = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 90, "y": 70, "width": 20, "height": 20},
     )
     assert outside_bounds.status_code == 422
 
 
 def test_rejects_question_from_different_assessment(client: TestClient, tmp_path: Path) -> None:
-    _question, page = create_uploaded_page(client, tmp_path)
-    other_question, _other_page = create_uploaded_page(client, tmp_path)
+    _question, page, headers = create_uploaded_page(client, tmp_path)
+    other_question, _other_page, _same_headers = create_uploaded_page(client, tmp_path, headers)
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": other_question["id"], "x": 1, "y": 1, "width": 10, "height": 10},
     )
 
@@ -250,20 +268,22 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
         json={"name": "Teacher", "email": email, "password": "suggest test password"},
     )
     assert register_response.status_code == 201
-    user_response_json = register_response.json()["user"]
     auth_headers = {"Authorization": f"Bearer {register_response.json()['access_token']}"}
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user_response_json["id"], "code": "SUG101", "title": "Suggest"},
+        headers=auth_headers,
+        json={"code": "SUG101", "title": "Suggest"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=auth_headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=auth_headers,
         json={
             "question_no": "1",
             "question_text": "Answer this.",
@@ -284,6 +304,7 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
 
     suggest_response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=auth_headers,
         json={"provider": "mock", "question_ids": [question_response.json()["id"]]},
     )
     assert suggest_response.status_code == 200
@@ -304,12 +325,15 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
     assert float(suggestion["width"]) > 0
     assert float(suggestion["height"]) > 0
 
-    list_response = client.get(f"/submissions/{page['submission_id']}/answer-regions")
+    list_response = client.get(
+        f"/submissions/{page['submission_id']}/answer-regions", headers=auth_headers
+    )
     assert list_response.status_code == 200
     assert list_response.json() == []
 
     created_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=auth_headers,
         json={
             "question_id": suggestion["suggested_question_id"],
             "x": suggestion["x"],
@@ -327,10 +351,11 @@ def test_answer_region_suggestion_endpoint_returns_draft_and_does_not_persist(
 def test_answer_region_suggestion_endpoint_handles_small_page_cleanly(
     client: TestClient, tmp_path: Path
 ) -> None:
-    _question, page = create_uploaded_page(client, tmp_path)
+    _question, page, headers = create_uploaded_page(client, tmp_path)
 
     suggest_response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=headers,
         json={"provider": "mock"},
     )
     assert suggest_response.status_code == 200
@@ -339,17 +364,23 @@ def test_answer_region_suggestion_endpoint_handles_small_page_cleanly(
     assert body["suggestions"] == []
     assert "too small" in body["message"]
 
-    assert client.get(f"/submissions/{page['submission_id']}/answer-regions").json() == []
+    assert (
+        client.get(
+            f"/submissions/{page['submission_id']}/answer-regions", headers=headers
+        ).json()
+        == []
+    )
 
 
 def test_answer_region_suggestion_rejects_cross_assessment_questions(
     client: TestClient, tmp_path: Path
 ) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
-    other_question, _other_page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
+    other_question, _other_page, _other_headers = create_uploaded_page(client, tmp_path)
 
     response = client.post(
         f"/submission-pages/{page['id']}/answer-region-suggestions",
+        headers=headers,
         json={"provider": "mock", "question_ids": [other_question["id"]]},
     )
 
@@ -358,6 +389,7 @@ def test_answer_region_suggestion_rejects_cross_assessment_questions(
 
     accept_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 1, "width": 10, "height": 10},
     )
     assert accept_response.status_code == 201
@@ -366,9 +398,10 @@ def test_answer_region_suggestion_rejects_cross_assessment_questions(
 def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
     client: TestClient, tmp_path: Path
 ) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 20},
     )
     assert region_response.status_code == 201
@@ -376,6 +409,7 @@ def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
 
     segment_response = client.post(
         f"/answer-regions/{region['id']}/segments",
+        headers=headers,
         json={
             "page_id": page["id"],
             "x": 4,
@@ -398,7 +432,7 @@ def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
     assert segment["image_path"].endswith(".png")
     assert not segment["image_path"].startswith("/")
 
-    detail_response = client.get(f"/answer-regions/{region['id']}")
+    detail_response = client.get(f"/answer-regions/{region['id']}", headers=headers)
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["full_answer_confirmed"] is False
@@ -408,6 +442,7 @@ def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
 
     confirm_response = client.patch(
         f"/answer-regions/{region['id']}/full-answer-confirmation",
+        headers=headers,
         json={"full_answer_confirmed": True},
     )
     assert confirm_response.status_code == 200
@@ -417,16 +452,18 @@ def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
 def test_answer_region_segment_rejects_page_from_other_submission(
     client: TestClient, tmp_path: Path
 ) -> None:
-    question, page = create_uploaded_page(client, tmp_path)
-    _other_question, other_page = create_uploaded_page(client, tmp_path)
+    question, page, headers = create_uploaded_page(client, tmp_path)
+    _other_question, other_page, _same_headers = create_uploaded_page(client, tmp_path, headers)
     region_response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 1, "y": 2, "width": 20, "height": 20},
     )
     assert region_response.status_code == 201
 
     response = client.post(
         f"/answer-regions/{region_response.json()['id']}/segments",
+        headers=headers,
         json={
             "page_id": other_page["id"],
             "x": 4,
@@ -443,7 +480,13 @@ def test_answer_region_segment_rejects_page_from_other_submission(
 
 def create_mapping_fixture(
     client: TestClient, tmp_path: Path, db_session: Session
-) -> tuple[dict[str, object], dict[str, object], dict[str, object], list[dict[str, object]]]:
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    list[dict[str, object]],
+    dict[str, str],
+]:
     image_path = tmp_path / "mapping-page.png"
     make_png(image_path, size=(420, 600))
     user_response = client.post(
@@ -522,16 +565,19 @@ def create_mapping_fixture(
     db_session.commit()
     db_session.refresh(second_page)
     pages = [first_page, {"id": second_page.id, "submission_id": submission["id"], "page_no": 2}]
-    return assessment_response.json(), question_response.json(), submission, pages
+    return assessment_response.json(), question_response.json(), submission, pages, headers
 
 
 def test_mock_mapping_suggestion_returns_single_segment_group(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
 
     response = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        headers=headers,
         json={
             "provider": "mock",
             "question_ids": [question["id"]],
@@ -563,10 +609,13 @@ def test_mock_mapping_suggestion_returns_single_segment_group(
 def test_mock_mapping_suggestion_returns_multisegment_continuation_group(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
 
     response = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        headers=headers,
         json={
             "provider": "mock",
             "question_ids": [question["id"]],
@@ -586,10 +635,13 @@ def test_mock_mapping_suggestion_returns_multisegment_continuation_group(
 def test_mock_mapping_possible_continuation_carries_warning(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
 
     response = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        headers=headers,
         json={
             "provider": "mock",
             "question_ids": [question["id"]],
@@ -608,9 +660,12 @@ def test_mock_mapping_possible_continuation_carries_warning(
 def test_accepting_mapping_suggestion_creates_ordered_segments_without_grades(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
     suggestions = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        headers=headers,
         json={
             "provider": "mock",
             "question_ids": [question["id"]],
@@ -622,6 +677,7 @@ def test_accepting_mapping_suggestion_creates_ordered_segments_without_grades(
 
     response = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        headers=headers,
         json={
             "draft_id": group["draft_id"],
             "question_id": question["id"],
@@ -649,11 +705,14 @@ def test_accepting_mapping_suggestion_creates_ordered_segments_without_grades(
 def test_accepting_mapping_suggestion_rejects_cross_assessment_question(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, _question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
-    other_question, _other_page = create_uploaded_page(client, tmp_path)
+    _assessment, _question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
+    other_question, _other_page, _same_headers = create_uploaded_page(client, tmp_path, headers)
 
     response = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        headers=headers,
         json={
             "draft_id": "bad-cross-assessment",
             "question_id": other_question["id"],
@@ -682,10 +741,13 @@ def test_accepting_mapping_suggestion_rejects_cross_assessment_question(
 def test_accepting_mapping_suggestion_rejects_invalid_segment_order(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
 
     response = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        headers=headers,
         json={
             "draft_id": "bad-order",
             "question_id": question["id"],
@@ -724,9 +786,12 @@ def test_accepting_mapping_suggestion_rejects_invalid_segment_order(
 def test_evidence_packet_sees_accepted_multisegment_mapping(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
     group = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions",
+        headers=headers,
         json={
             "provider": "mock",
             "question_ids": [question["id"]],
@@ -736,6 +801,7 @@ def test_evidence_packet_sees_accepted_multisegment_mapping(
     ).json()["suggestion_groups"][0]
     region = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        headers=headers,
         json={
             "draft_id": group["draft_id"],
             "question_id": question["id"],
@@ -745,6 +811,7 @@ def test_evidence_packet_sees_accepted_multisegment_mapping(
     ).json()
     manual_text_response = client.patch(
         f"/answer-regions/{region['id']}/full-answer-confirmation",
+        headers=headers,
         json={
             "full_answer_confirmed": True,
             "manual_answer_text": "Working continues across both page segments.",
@@ -753,7 +820,9 @@ def test_evidence_packet_sees_accepted_multisegment_mapping(
     )
     assert manual_text_response.status_code == 200
 
-    packet_response = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet")
+    packet_response = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    )
 
     assert packet_response.status_code == 200
     evidence = packet_response.json()["student_answer_evidence"]
@@ -782,16 +851,19 @@ def create_authenticated_uploaded_page(
     user, headers = register_for_correction(client, email)
     course_response = client.post(
         "/courses",
-        json={"teacher_id": user["id"], "code": "COR101", "title": "Corrections"},
+        headers=headers,
+        json={"teacher_id": user["id"], "code": f"COR-{uuid4().hex[:8]}", "title": "Corrections"},
     )
     assert course_response.status_code == 201
     assessment_response = client.post(
         f"/courses/{course_response.json()['id']}/assessments",
+        headers=headers,
         json={"title": "Quiz", "assessment_type": "quiz", "total_marks": "10.00"},
     )
     assert assessment_response.status_code == 201
     question_response = client.post(
         f"/assessments/{assessment_response.json()['id']}/questions",
+        headers=headers,
         json={
             "question_no": "1",
             "question_text": "Answer this.",
@@ -802,6 +874,7 @@ def create_authenticated_uploaded_page(
     assert question_response.status_code == 201
     rubric_response = client.post(
         f"/questions/{question_response.json()['id']}/rubrics",
+        headers=headers,
         json={
             "version": 1,
             "is_active": True,
@@ -838,6 +911,7 @@ def create_correction_region(
     question, page, headers = create_authenticated_uploaded_page(client, tmp_path, email=email)
     response = client.post(
         f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
         json={"question_id": question["id"], "x": 10, "y": 10, "width": 30, "height": 20},
     )
     assert response.status_code == 201
@@ -920,7 +994,9 @@ def test_add_reorder_and_remove_segment_updates_evidence_packet(
     assert [segment["order_index"] for segment in reordered] == [1, 2]
     assert reordered[0]["id"] == segments[1]["id"]
 
-    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert packet["student_answer_evidence"]["segment_count"] == 2
     assert packet["student_answer_evidence"]["pages_covered"] == [page["page_no"]]
 
@@ -968,7 +1044,9 @@ def test_full_answer_and_continuation_not_needed_confirmation_clear_blocker(
         json={"x": 10, "y": 82, "width": 30, "height": 16},
     )
     assert near_bottom.status_code == 200
-    packet_before = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet_before = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert (
         "possible answer continuation not confirmed"
         in packet_before["readiness_result"]["blockers"]
@@ -981,7 +1059,9 @@ def test_full_answer_and_continuation_not_needed_confirmation_clear_blocker(
     )
 
     assert confirm.status_code == 200
-    packet_after = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet_after = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert packet_after["student_answer_evidence"]["teacher_founder_confirmed_full_answer"] is True
     assert (
         packet_after["student_answer_evidence"]["continuation_check_status"]
@@ -996,9 +1076,12 @@ def test_full_answer_and_continuation_not_needed_confirmation_clear_blocker(
 def test_evidence_packet_requires_explicit_complete_status_before_grading(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _assessment, question, submission, pages = create_mapping_fixture(client, tmp_path, db_session)
+    _assessment, question, submission, pages, headers = create_mapping_fixture(
+        client, tmp_path, db_session
+    )
     region = client.post(
         f"/submissions/{submission['id']}/answer-region-mapping-suggestions/accept",
+        headers=headers,
         json={
             "draft_id": "unconfirmed-status",
             "question_id": question["id"],
@@ -1019,7 +1102,9 @@ def test_evidence_packet_requires_explicit_complete_status_before_grading(
         },
     ).json()
 
-    packet_before = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet_before = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert packet_before["student_answer_evidence"]["packet_status"] == "unconfirmed"
     assert packet_before["readiness_result"]["ready_for_grading"] is False
     assert (
@@ -1036,7 +1121,9 @@ def test_evidence_packet_requires_explicit_complete_status_before_grading(
         segment.confirmed = True
     db_session.commit()
 
-    packet_after = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet_after = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert packet_after["student_answer_evidence"]["packet_status"] == "complete"
     assert packet_after["student_answer_evidence"]["manual_answer_text"] == "Confirmed answer text."
     assert packet_after["readiness_result"]["ready_for_grading"] is True
@@ -1069,7 +1156,9 @@ def test_continuation_not_needed_clears_only_continuation_blocker(
     )
 
     assert confirm.status_code == 200
-    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert (
         packet["student_answer_evidence"]["continuation_check_status"]
         == "continuation_confirmed_not_needed"
@@ -1101,7 +1190,9 @@ def test_correction_operations_reopen_confirmation_and_partial_blank_are_not_rea
         json={"page_id": page["id"], "x": 12, "y": 40, "width": 30, "height": 20, "order_index": 2},
     )
     assert add_response.status_code == 200
-    packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert packet["student_answer_evidence"]["packet_status"] == "unconfirmed"
     assert (
         "evidence packet is not confirmed complete"
@@ -1114,7 +1205,9 @@ def test_correction_operations_reopen_confirmation_and_partial_blank_are_not_rea
         json={"full_answer_confirmed": False, "packet_status": "partial"},
     )
     assert partial.status_code == 200
-    partial_packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    partial_packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert partial_packet["student_answer_evidence"]["packet_status"] == "partial"
     assert (
         "partial evidence packet requires teacher review"
@@ -1127,7 +1220,9 @@ def test_correction_operations_reopen_confirmation_and_partial_blank_are_not_rea
         json={"full_answer_confirmed": False, "packet_status": "blank"},
     )
     assert blank.status_code == 200
-    blank_packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    blank_packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert blank_packet["student_answer_evidence"]["packet_status"] == "blank"
     assert (
         "confirmed blank packet is not enabled for grading"
@@ -1140,7 +1235,7 @@ def test_correction_operations_reopen_confirmation_and_partial_blank_are_not_rea
 def test_invalid_segment_order_and_no_segment_block_readiness(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
-    _question, _page, region, _headers = create_correction_region(client, tmp_path)
+    _question, _page, region, headers = create_correction_region(client, tmp_path)
     db_region = db_session.get(AnswerRegion, region["id"])
     assert db_region is not None
     db_region.full_answer_confirmed = True
@@ -1149,7 +1244,7 @@ def test_invalid_segment_order_and_no_segment_block_readiness(
     db_session.commit()
 
     invalid_order_packet = client.get(
-        f"/answer-regions/{region['id']}/grading-evidence-packet"
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
     ).json()
     assert (
         "answer segment order must be contiguous starting at 1"
@@ -1158,7 +1253,9 @@ def test_invalid_segment_order_and_no_segment_block_readiness(
 
     db_session.delete(db_region.segments[0])
     db_session.commit()
-    no_segment_packet = client.get(f"/answer-regions/{region['id']}/grading-evidence-packet").json()
+    no_segment_packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
     assert "missing confirmed answer segment" in no_segment_packet["readiness_result"]["blockers"]
     assert no_segment_packet["student_answer_evidence"]["packet_status"] == "complete"
 
