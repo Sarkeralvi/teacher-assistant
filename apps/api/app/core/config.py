@@ -19,6 +19,40 @@ class Settings(BaseSettings):
     artifacts_dir: str = Field(default="/data/artifacts", alias="ARTIFACTS_DIR")
     brain_provider: str = Field(default="mock", alias="BRAIN_PROVIDER")
     brain_allow_real_providers: bool = Field(default=False, alias="BRAIN_ALLOW_REAL_PROVIDERS")
+    local_qwen_enabled: bool = Field(default=False, alias="LOCAL_QWEN_ENABLED")
+    local_qwen_base_url: str = Field(
+        default="http://127.0.0.1:8080/v1", alias="LOCAL_QWEN_BASE_URL"
+    )
+    local_qwen_model: str = Field(
+        default="qwen3.6-35b-a3b-q4km", alias="LOCAL_QWEN_MODEL"
+    )
+    local_qwen_api_key: str = Field(default="", alias="LOCAL_QWEN_API_KEY")
+    local_qwen_timeout_seconds: float = Field(
+        default=180.0, alias="LOCAL_QWEN_TIMEOUT_SECONDS", gt=0
+    )
+    local_ocr_enabled: bool = Field(default=False, alias="LOCAL_OCR_ENABLED")
+    local_ocr_base_url: str = Field(
+        default="http://127.0.0.1:8090", alias="LOCAL_OCR_BASE_URL"
+    )
+    local_ocr_api_key: str = Field(default="", alias="LOCAL_OCR_API_KEY")
+    local_ocr_timeout_seconds: float = Field(
+        default=300.0, alias="LOCAL_OCR_TIMEOUT_SECONDS", gt=0
+    )
+    local_ocr_max_image_bytes: int = Field(
+        default=20 * 1024 * 1024, alias="LOCAL_OCR_MAX_IMAGE_BYTES", gt=0
+    )
+    cohort_model_grading_enabled: bool = Field(
+        default=False, alias="COHORT_MODEL_GRADING_ENABLED"
+    )
+    cohort_max_provider_calls: int = Field(
+        default=25, alias="COHORT_MAX_PROVIDER_CALLS", ge=1, le=25
+    )
+    cohort_provider_retry_count: int = Field(
+        default=0, alias="COHORT_PROVIDER_RETRY_COUNT", ge=0, le=0
+    )
+    cohort_dispatch_heartbeat_timeout_seconds: int = Field(
+        default=600, alias="COHORT_DISPATCH_HEARTBEAT_TIMEOUT_SECONDS", ge=30
+    )
     answer_region_suggestion_provider: str = Field(
         default="mock", alias="ANSWER_REGION_SUGGESTION_PROVIDER"
     )

@@ -174,6 +174,7 @@ TA-BATCH-001A is evidence preparation only. It is not batch grading. It creates 
 - `git diff --check` — passed.
 - `PATH=/tmp/ta-bin:$PATH make down` — services stopped and removed.
 
+
 # TA-BATCH-001 — Batch evidence packet preparation scaffold
 
 - Recorded at: 2026-06-04
@@ -1438,3 +1439,46 @@ No grading was run. No Codex/OpenAI/Claude/Gemini/provider call was made. No `Gr
 - Playwright Docker E2E command — 2 passed.
 - `git diff --check` — passed.
 - `PATH=/tmp/ta-bin:$PATH make down` — services stopped and removed.
+
+
+# TA-LOCAL-001 — Local-first AI integration and safe cohort grading
+
+- Recorded at: 2026-08-07
+- Baseline commit: `74c65ce`
+- Workflow type: Custom Controlled, Windows-host local providers
+- Data policy: generated synthetic answer images and text only; no student/private material
+- Successful live inference: 3 PaddleOCR calls (one isolated plus two end-to-end) and 3 Qwen grading calls (one isolated plus two end-to-end)
+- No cloud/Codex/provider fallback was used
+
+## Scope result
+
+Gates 5A–5E are implemented: real-provider kill switches, loopback services, persisted OCR drafts and teacher confirmation, local reference extraction, text-only Qwen, immutable safe cohort dispatches, teacher progress/review UI, migrations, tests, operator scripts, and canonical documentation.
+
+The successful two-student smoke exercised local-service status, OCR drafting, editable teacher text confirmation, separate full-evidence confirmation, grading queue creation, explicit two-call authorization, sequential Qwen grading, teacher review/approval, approved-only XLSX export, and audit-payload privacy. The two `FinalGrade` rows were created only by explicit synthetic teacher approvals and were removed during disposable test-database cleanup.
+
+## Host compatibility findings
+
+- Windows PowerShell 5.1 required legacy-compatible cryptographic key generation and explicit native-process exit-code handling for llama.cpp's stderr version banner.
+- llama.cpp build 10249 could not compile Pydantic's regex-backed Decimal string alternatives; the wire schema now allows JSON numbers while Pydantic retains strict Decimal validation.
+- Qwen 3.6 strict grammars require reasoning disabled with the `deepseek` reasoning parser rather than `reasoning-format=none` on this build.
+- PaddleX 3.7.2 probed CUDA even for a CPU-selected pipeline. The sidecar now hides CUDA before Paddle import, selects `cpu`, and disables only the optional GPU SDPA capability probe. OS process inspection confirmed Qwen on CUDA and PaddleOCR absent from CUDA compute processes.
+- One pre-fix OCR request timed out safely: the failed OCR run was recorded, cohort dispatch never began, and no grade was created. Two pre-fix Qwen requests returned HTTP 400 before inference; neither retried nor fell back.
+
+## Checks run
+
+- Backend full suite: `328 passed, 2 skipped`.
+- Live host smoke: `1 passed` in 244.20 seconds.
+- Ruff: passed; Python `compileall`: passed.
+- Alembic: `0019_grading_dispatch_runs (head)`.
+- Frontend TypeScript and workflow static test: passed.
+- Next.js production build: passed; the existing ESLint flat-config warning remained non-fatal.
+- PowerShell parser and real machine preflight: passed.
+- Real isolated OCR: exact synthetic text, one block, no warning, CPU metadata.
+- Real isolated Qwen: strict 5/5 draft, 1,435 tokens, zero cost, review/image-disabled/local flags.
+- Authenticated live status: exact Qwen alias, OCR ready on CPU, Qwen present and OCR absent in GPU compute clients.
+- `git diff --check`: passed.
+- Ignored-local-state check: `.env.local-ai` and `.local-ai/` are ignored; no real keys or machine model paths are in the tracked diff.
+
+## Remaining gate
+
+The 20-case curated OCR/grading evaluation has not been run. The teacher pilot remains blocked until it passes every stop condition in `TEACHER_CURATED_EVAL_PROTOCOL.md`.

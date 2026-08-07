@@ -13,6 +13,11 @@ from fastapi import HTTPException
 
 from app.core.config import Settings, get_settings
 from app.schemas import DraftQuestion
+from app.services.local_reference_extraction import (
+    LOCAL_PADDLE_QWEN_PROVIDER,
+    LocalReferenceExtractionError,
+    LocalReferenceExtractor,
+)
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
 QUESTION_PATTERN = re.compile(
@@ -207,6 +212,20 @@ class ProviderQuestionExtractor(CodexQuestionExtractor):
     pass
 
 
+class LocalPaddleQwenQuestionExtractor:
+    provider = LOCAL_PADDLE_QWEN_PROVIDER
+
+    def __init__(self, extractor: LocalReferenceExtractor | None = None) -> None:
+        self.extractor = extractor or LocalReferenceExtractor()
+
+    def extract(self, file_path: Path, content_type: str) -> QuestionExtractionResult:
+        try:
+            result = self.extractor.extract_questions(file_path, content_type)
+            return _normalize_provider_result(result)
+        except LocalReferenceExtractionError as exc:
+            raise CodexQuestionExtractionError(str(exc)) from exc
+
+
 def _sanitize_codex_error(message: str) -> str:
     sanitized = _API_KEY_PATTERN.sub("[REDACTED]", message)
     sanitized = _DATA_URL_PATTERN.sub("[IMAGE_DATA_REDACTED]", sanitized)
@@ -319,6 +338,11 @@ def build_question_extractor(
             image_input_enabled=resolved_settings.codex_cli_image_input_enabled,
             skip_git_repo_check=resolved_settings.codex_cli_skip_git_repo_check,
         )
+    if provider == LOCAL_PADDLE_QWEN_PROVIDER:
+        try:
+            return LocalPaddleQwenQuestionExtractor()
+        except LocalReferenceExtractionError as exc:
+            raise CodexQuestionExtractionError(str(exc)) from exc
     raise CodexQuestionExtractionError(f"Unsupported question import provider: {provider}")
 
 def extract_text_lines(file_path: Path, content_type: str) -> list[tuple[int, str]]:

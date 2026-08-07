@@ -1,3 +1,17 @@
+# TA-LOCAL-001 — Local-first AI integration and safe cohort grading
+
+- Recorded at: 2026-08-07
+- Canonical roadmap: `docs/PRODUCT_ROADMAP.md`
+- Workflow type: Custom Controlled, Windows-host local models
+- Scope: local llama.cpp Qwen provider, CPU PaddleOCR sidecar, teacher-confirmed OCR evidence, local reference extraction, immutable queue safety, explicit capped cohort dispatch, teacher UI, evaluation gate, and operator documentation.
+- Implemented: Gates 5A–5E code paths, migrations `0018`/`0019`, provider/sidecar tests, frontend workflow, and local runbook.
+- Safety: disabled by default; explicit teacher actions; text-only Qwen; OCR drafts require confirmation; manual mapping remains canonical; maximum 25 sequential calls; zero automatic retries; stop on first provider failure; no fallback; no automatic final grades; approved-only export unchanged.
+- Verification completed: PostgreSQL migration/API suite, frontend production build, live Qwen/OCR health and structured calls, CPU/GPU coexistence, and the two-student synthetic OCR-to-approved-XLSX smoke.
+- Verification remaining: the required 20-case curated OCR/grading evaluation.
+- Pilot status: Blocked until all remaining verification and quality gates pass.
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: In verification
+
 # TA-PILOT-007 — Freeze Custom Controlled V0 pilot baseline
 
 - Recorded at: 2026-06-13

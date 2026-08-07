@@ -8,9 +8,11 @@ import {
   acceptAnswerRegionMappingSuggestion,
   acceptQuestionImportDrafts,
   addAnswerRegionSegment,
+  confirmAnswerRegionOcrRun,
   confirmAnswerRegionFullAnswer,
   confirmQuestionNodeMapping,
   createAnswerRegion,
+  createAnswerRegionOcrRun,
   createEvidencePrepRun,
   createGradingQueueRun,
   createQuestion,
@@ -24,9 +26,11 @@ import {
   getEvidencePrepSummary,
   getGradingEvidencePacket,
   getGradingQueueSummary,
+  getLocalAiStatus,
   getSubmissionPageImageUrl,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
+  listAnswerRegionOcrRuns,
   listAssessmentQuestionNodeMappings,
   listQuestionNodes,
   listQuestions,
@@ -46,6 +50,7 @@ import {
   uploadSubmissionZip,
   type AnswerRegion,
   type AnswerRegionMapping,
+  type AnswerRegionOcrRun,
   type Assessment,
   type DraftAnswerRegionSuggestionGroup,
   type DraftQuestion,
@@ -53,8 +58,10 @@ import {
   type FinalGrade,
   type GradingEvidencePacket,
   type GradingQueueRun,
+  type LocalAiStatus,
   type Question,
   type QuestionImportJob,
+  type QuestionImportProvider,
   type QuestionNode,
   type QuestionNodeMappingGroup,
   type Rubric,
@@ -167,6 +174,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [savingRubricQuestionId, setSavingRubricQuestionId] = useState<number | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
+  const [ocrRunsByRegionId, setOcrRunsByRegionId] = useState<Record<number, AnswerRegionOcrRun[]>>({});
+  const [ocrConfirmedTextByRunId, setOcrConfirmedTextByRunId] = useState<Record<number, string>>({});
+  const [runningOcrRegionId, setRunningOcrRegionId] = useState<number | null>(null);
+  const [confirmingOcrRunId, setConfirmingOcrRunId] = useState<number | null>(null);
   const [questionNodeMappings, setQuestionNodeMappings] = useState<QuestionNodeMappingGroup[]>([]);
   const [selectedMappingQuestionNodeId, setSelectedMappingQuestionNodeId] = useState("");
   const [mappingPageId, setMappingPageId] = useState("");
@@ -194,7 +205,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [zipStudentNamePrefix, setZipStudentNamePrefix] = useState("");
   const [zipUploadResult, setZipUploadResult] = useState<SubmissionZipUploadResponse | null>(null);
   const [questionImportFile, setQuestionImportFile] = useState<File | null>(null);
+  const [questionImportProvider, setQuestionImportProvider] = useState<QuestionImportProvider>("mock");
   const [questionImportJob, setQuestionImportJob] = useState<QuestionImportJob | null>(null);
+  const [localAiStatus, setLocalAiStatus] = useState<LocalAiStatus | null>(null);
   const [draftQuestionEdits, setDraftQuestionEdits] = useState<Record<string, DraftQuestionEdit>>({});
   const [importingQuestions, setImportingQuestions] = useState(false);
   const [acceptingQuestions, setAcceptingQuestions] = useState(false);
@@ -278,6 +291,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const unresolvedRubricBlockerCount = rubricCriteria.filter((criterion) => criterion.blocker?.trim()).length;
   const selectedPreviewRegion =
     answerRegions.find((region) => String(region.id) === selectedPreviewRegionId) ?? answerRegions[0] ?? null;
+  const localReferenceExtractionReady = Boolean(
+    localAiStatus?.real_providers_allowed &&
+    localAiStatus.qwen.enabled &&
+    localAiStatus.qwen.available &&
+    localAiStatus.ocr.enabled &&
+    localAiStatus.ocr.available,
+  );
 
   function statusForRegion(regionId: number): "finalized" | "graded" | "mapped" {
     if (finalizedRegionIds.has(regionId)) {
@@ -353,6 +373,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         reviewQueueData,
         evidencePrepData,
         gradingQueueData,
+        localAiData,
       ] =
         await Promise.all([
           getAssessment(assessmentId),
@@ -365,6 +386,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           getAssessmentReviewQueue(assessmentId),
           getEvidencePrepSummary(assessmentId).catch(() => null),
           getGradingQueueSummary(assessmentId).catch(() => null),
+          getLocalAiStatus().catch(() => null),
         ]);
 
       setAssessment(assessmentData);
@@ -411,10 +433,29 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       const evidenceEntries = await Promise.all(
         answerRegionData.map(async (region) => [region.id, await getGradingEvidencePacket(region.id)] as const),
       );
+      const ocrEntries = await Promise.all(
+        answerRegionData.map(async (region) => [
+          region.id,
+          await listAnswerRegionOcrRuns(region.id).catch(() => [] as AnswerRegionOcrRun[]),
+        ] as const),
+      );
       setEvidencePackets(Object.fromEntries(evidenceEntries));
+      setOcrRunsByRegionId(Object.fromEntries(ocrEntries));
+      setOcrConfirmedTextByRunId((current) => {
+        const next = { ...current };
+        for (const [, runs] of ocrEntries) {
+          for (const run of runs) {
+            if (next[run.id] === undefined) {
+              next[run.id] = run.confirmed_text ?? run.draft_text ?? "";
+            }
+          }
+        }
+        return next;
+      });
       setReviewQueue(reviewQueueData);
       setEvidencePrepSummary(evidencePrepData);
       setGradingQueueSummary(gradingQueueData);
+      setLocalAiStatus(localAiData);
       if (!selectedPageId && submissionData[0]?.pages[0]) {
         setSelectedPageId(String(submissionData[0].pages[0].id));
       }
@@ -687,7 +728,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setImportingQuestions(true);
     setError(null);
     try {
-      const job = await importQuestionsFromPaper(assessmentId, selectedFile);
+      const job = await importQuestionsFromPaper(assessmentId, selectedFile, questionImportProvider);
       setQuestionImportJob(job);
       setDraftQuestionEdits(createDraftQuestionEdits(job.draft_questions));
     } catch (err) {
@@ -816,6 +857,41 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Failed to create answer region");
     } finally {
       setCreatingRegion(false);
+    }
+  }
+
+  async function handleCreateOcrDraft(answerRegionId: number) {
+    setRunningOcrRegionId(answerRegionId);
+    setError(null);
+    try {
+      const run = await createAnswerRegionOcrRun(answerRegionId);
+      setOcrRunsByRegionId((current) => ({
+        ...current,
+        [answerRegionId]: [run, ...(current[answerRegionId] ?? [])],
+      }));
+      setOcrConfirmedTextByRunId((current) => ({
+        ...current,
+        [run.id]: run.draft_text ?? "",
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create a local OCR draft");
+    } finally {
+      setRunningOcrRegionId(null);
+    }
+  }
+
+  async function handleConfirmOcrDraft(answerRegionId: number, runId: number) {
+    setConfirmingOcrRunId(runId);
+    setError(null);
+    try {
+      await confirmAnswerRegionOcrRun(answerRegionId, runId, {
+        confirmed_text: ocrConfirmedTextByRunId[runId] ?? "",
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to confirm the OCR draft");
+    } finally {
+      setConfirmingOcrRunId(null);
     }
   }
 
@@ -970,8 +1046,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <h2 className="mt-1 text-2xl font-semibold">Founder/teacher pilot flow for ready evidence → single-packet draft grading → teacher approval.</h2>
         <p className="mt-2 text-emerald-100">Teacher supplies question, model answer, active rubric, and student answer evidence before grading.</p>
         <p className="mt-1 text-amber-100">Manual answer text is required for V0 reliable grading.</p>
-        <p className="mt-1 text-amber-100">Real grading is single-packet only and creates a draft GradeSuggestion only.</p>
-        <p className="mt-1 text-amber-100">Teacher review is required. No batch, autonomous mode, FinalGrade, or export without teacher approval.</p>
+        <p className="mt-1 text-amber-100">Every real-provider result is a draft GradeSuggestion only.</p>
+        <p className="mt-1 text-amber-100">Local Qwen cohort dispatch is available only from the grading-run page after an explicit capped preflight.</p>
+        <p className="mt-1 text-amber-100">Teacher review is required. No autonomous mode, automatic FinalGrade, or export without teacher approval.</p>
       </section>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
@@ -1026,12 +1103,24 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <h2 className="text-xl font-semibold">Step 2 helper: Import questions from reference paper</h2>
           <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
-          <p className="text-sm text-slate-400">Default extraction is mock/simple.</p>
-          <p className="text-sm text-slate-400">Real Codex extraction must be explicitly enabled.</p>
-          <p className="text-sm text-slate-400">If real extraction is not enabled, uploaded images will not be treated as understood question papers.</p>
-          <p className="text-sm text-slate-400">Upload a question paper PDF/image to generate draft questions by question number. No real Codex extraction is enabled by default.</p>
+          <p className="text-sm text-slate-400">Default extraction is mock/simple. Local PaddleOCR + Qwen is an explicit, local-only draft option.</p>
+          <p className="text-sm text-slate-400">Local extraction OCRs pages in order, then sends only normalized OCR text and page references to Qwen.</p>
+          <p className="text-sm text-slate-400">Drafts never become canonical until the teacher selects, edits, and accepts them below.</p>
         </div>
         <form onSubmit={handleQuestionImport} className="grid gap-3">
+          <label className="grid gap-2 text-sm">
+            Draft extraction provider
+            <select
+              className={inputClass}
+              value={questionImportProvider}
+              onChange={(event) => setQuestionImportProvider(event.target.value as QuestionImportProvider)}
+            >
+              <option value="mock">Mock/simple (default)</option>
+              <option value="local_paddle_qwen" disabled={!localReferenceExtractionReady}>
+                Local PaddleOCR + Qwen{localReferenceExtractionReady ? "" : " (unavailable or disabled)"}
+              </option>
+            </select>
+          </label>
           <label className="grid gap-2 text-sm">
             Question paper file
             <input
@@ -1045,7 +1134,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           {selectedQuestionImportFileName ? (
             <p className="text-sm text-emerald-300">Selected question paper file: {selectedQuestionImportFileName}</p>
           ) : null}
-          <button className={buttonClass} disabled={importingQuestions || !questionImportFile} type="submit">
+          <button
+            className={buttonClass}
+            disabled={importingQuestions || !questionImportFile || (questionImportProvider === "local_paddle_qwen" && !localReferenceExtractionReady)}
+            type="submit"
+          >
             {importingQuestions ? "Extracting draft questions..." : "Extract draft questions"}
           </button>
         </form>
@@ -1634,6 +1727,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const manualAnswerText = packetAnswer?.manual_answer_text?.trim() ?? region.manual_answer_text?.trim() ?? "";
             const manualAnswerMissing = manualAnswerText.length === 0;
             const readyForRealDraftGrading = Boolean(readiness?.ready_for_grading) && !manualAnswerMissing;
+            const latestOcrRun = (ocrRunsByRegionId[region.id] ?? [])[0] ?? null;
+            const ocrEditableText = latestOcrRun
+              ? (ocrConfirmedTextByRunId[latestOcrRun.id] ?? latestOcrRun.confirmed_text ?? latestOcrRun.draft_text ?? "")
+              : "";
             return (
               <article id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" className="grid gap-3 rounded border border-slate-700 p-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
@@ -1647,6 +1744,76 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 </p>
                 <p className="text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</p>
                 <a className="text-xs text-cyan-300 underline" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer">Open crop preview · Cropped image</a>
+
+                <section className="grid gap-3 rounded border border-violet-800 bg-violet-950/20 p-3" data-testid="local-ocr-draft-panel">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold text-violet-100">Local PaddleOCR draft evidence</h3>
+                      <p className="text-xs text-amber-200">
+                        OCR output is a draft. It is never grading evidence until you edit and confirm it.
+                      </p>
+                    </div>
+                    <button
+                      className={buttonClass}
+                      type="button"
+                      disabled={runningOcrRegionId === region.id}
+                      onClick={() => void handleCreateOcrDraft(region.id)}
+                    >
+                      {runningOcrRegionId === region.id ? "Drafting with PaddleOCR..." : "Draft text with local PaddleOCR"}
+                    </button>
+                  </div>
+                  {latestOcrRun ? (
+                    <div className="grid gap-3 rounded border border-violet-900/80 p-3">
+                      <div className="grid gap-1 text-xs text-slate-300 md:grid-cols-2">
+                        <p>OCR run #{latestOcrRun.id} · status: {latestOcrRun.status}</p>
+                        <p>Models: {latestOcrRun.model_name}{latestOcrRun.layout_model_name ? ` + ${latestOcrRun.layout_model_name}` : ""}</p>
+                        <p>Device: CPU · latency: {latestOcrRun.latency_ms == null ? "pending" : `${latestOcrRun.latency_ms} ms`}</p>
+                        <p>Teacher confirmation: {latestOcrRun.confirmed_at ? "confirmed" : "required"}</p>
+                      </div>
+                      {latestOcrRun.warnings.length > 0 ? (
+                        <ul className="list-disc pl-5 text-xs text-amber-200">
+                          {latestOcrRun.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                        </ul>
+                      ) : null}
+                      {latestOcrRun.error ? <p className="text-xs text-red-200">OCR failed: {latestOcrRun.error}</p> : null}
+                      {latestOcrRun.status === "succeeded" ? (
+                        <>
+                          <label className="grid gap-2 text-sm">
+                            Edit OCR draft before confirmation
+                            <textarea
+                              className={inputClass}
+                              rows={6}
+                              value={ocrEditableText}
+                              onChange={(event) => setOcrConfirmedTextByRunId((current) => ({
+                                ...current,
+                                [latestOcrRun.id]: event.target.value,
+                              }))}
+                            />
+                          </label>
+                          <button
+                            className={buttonClass}
+                            type="button"
+                            disabled={confirmingOcrRunId === latestOcrRun.id}
+                            onClick={() => void handleConfirmOcrDraft(region.id, latestOcrRun.id)}
+                          >
+                            {confirmingOcrRunId === latestOcrRun.id ? "Confirming..." : "Confirm edited text as manual answer"}
+                          </button>
+                        </>
+                      ) : null}
+                      {latestOcrRun.status === "confirmed" ? (
+                        <div className="rounded border border-emerald-800 bg-emerald-950/30 p-3 text-emerald-100">
+                          <p className="font-semibold">Teacher-confirmed answer text</p>
+                          <p className="mt-1 whitespace-pre-wrap">{latestOcrRun.confirmed_text || "Confirmed as blank."}</p>
+                          <p className="mt-2 text-xs text-amber-100">
+                            Text confirmation does not mark the region complete or ready. Confirm the full-answer evidence separately below.
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400">No local OCR draft has been requested for this region.</p>
+                  )}
+                </section>
 
                 <section className="grid gap-3 rounded border border-cyan-900 bg-slate-950/40 p-3" data-testid="evidence-packet-preview">
                   <div>
@@ -1762,7 +1929,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <p className="mt-3 text-xs text-slate-500">No batch grade button is available here. Real AI/OCR and Codex are not invoked by evidence preparation.</p>
       </section>
 
-      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+      <section id="grading-queue" className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold">Step 6: Queue scaffold</h2>

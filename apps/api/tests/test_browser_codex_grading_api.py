@@ -186,8 +186,9 @@ def test_browser_codex_endpoint_grades_one_region_and_never_finalizes(
 
     data = create_owned_answer_region(client, tmp_path)
     monkeypatch.setenv("CODEX_BROWSER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     get_settings.cache_clear()
-    monkeypatch.setattr("app.services.grading_service.CodexCliProvider", FakeCodexCliProvider)
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
 
     response = client.post(
         f"/answer-regions/{data['region']['id']}/grade-codex-dev",
@@ -228,8 +229,9 @@ def test_browser_codex_endpoint_returns_clear_error_when_cli_unavailable(
 
     data = create_owned_answer_region(client, tmp_path)
     monkeypatch.setenv("CODEX_BROWSER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     get_settings.cache_clear()
-    monkeypatch.setattr("app.services.grading_service.CodexCliProvider", MissingCodexCliProvider)
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", MissingCodexCliProvider)
 
     response = client.post(
         f"/answer-regions/{data['region']['id']}/grade-codex-dev",
@@ -263,8 +265,9 @@ def test_browser_codex_endpoint_sanitizes_provider_errors(
 
     data = create_owned_answer_region(client, tmp_path)
     monkeypatch.setenv("CODEX_BROWSER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     get_settings.cache_clear()
-    monkeypatch.setattr("app.services.grading_service.CodexCliProvider", FailingCodexCliProvider)
+    monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FailingCodexCliProvider)
 
     response = client.post(
         f"/answer-regions/{data['region']['id']}/grade-codex-dev",

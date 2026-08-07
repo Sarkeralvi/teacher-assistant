@@ -23,3 +23,10 @@ Project documentation and decisions.
 - [Provider Usage Policy](PROVIDER_USAGE_POLICY.md)
 - [External Teacher Pilot Checklist](EXTERNAL_TEACHER_PILOT_CHECKLIST.md)
 - [Operational Failure Runbook](OPERATIONAL_FAILURE_RUNBOOK.md)
+
+## Local-first AI integration
+
+- [Windows Local AI Runbook](LOCAL_AI_RUNBOOK.md)
+- [Teacher-Curated Grading Evaluation Protocol](TEACHER_CURATED_EVAL_PROTOCOL.md)
+- [Provider Usage Policy](PROVIDER_USAGE_POLICY.md)
+- [Product Roadmap](PRODUCT_ROADMAP.md)

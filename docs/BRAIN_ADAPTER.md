@@ -1,6 +1,6 @@
 # Brain Adapter provider configuration
 
-TA Agent keeps grading model access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default and requires no keys. OpenAI-compatible chat completions remain available when explicitly configured with an API key. TA-W1-013 adds a local `codex_cli` provider that shells out to authenticated Codex CLI via `codex exec` and does not require `OPENAI_API_KEY`.
+TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default and requires no keys. OpenAI-compatible chat completions and `codex_cli` remain available when explicitly configured. The local-first milestone adds loopback-only `llama_cpp_qwen`; it is text-only and pairs with the separately authenticated PaddleOCR sidecar.
 
 ## Environment variables
 
@@ -8,6 +8,12 @@ Set these in `.env` for local development. Do not commit `.env`.
 
 ```env
 BRAIN_PROVIDER=mock
+BRAIN_ALLOW_REAL_PROVIDERS=false
+
+LOCAL_QWEN_ENABLED=false
+LOCAL_QWEN_BASE_URL=http://127.0.0.1:8080/v1
+LOCAL_QWEN_MODEL=qwen3.6-35b-a3b-q4km
+LOCAL_QWEN_API_KEY=
 
 OPENAI_API_KEY=
 OPENAI_MODEL=
@@ -29,8 +35,11 @@ CODEX_CLI_WORKDIR=/home/newton/teacher-assistant
 Behavior:
 
 - `BRAIN_PROVIDER=mock` uses the deterministic mock provider and ignores OpenAI/Codex settings.
+- Every non-mock provider first requires `BRAIN_ALLOW_REAL_PROVIDERS=true`.
 - `BRAIN_PROVIDER=openai` enables the OpenAI-compatible provider and requires `OPENAI_API_KEY`.
 - `BRAIN_PROVIDER=codex_cli` enables local Codex CLI execution and does **not** require `OPENAI_API_KEY`.
+- `BRAIN_PROVIDER=llama_cpp_qwen` additionally requires `LOCAL_QWEN_ENABLED=true`, a loopback HTTP URL, and `LOCAL_QWEN_API_KEY`.
+- `llama_cpp_qwen` verifies the exact configured alias through `/v1/models` before completion, sends strict JSON-schema requests with reasoning disabled, records token/latency metadata and zero monetary cost, and never sends answer image bytes or paths.
 - `CODEX_CLI_COMMAND` defaults to `codex`; it must exist on `PATH` or provider preflight fails clearly.
 - `CODEX_CLI_MODEL` defaults to `gpt-5.5`; keep it explicit so host dev runs do not fall back to an unsupported Codex CLI default model.
 - `CODEX_CLI_TIMEOUT_SECONDS` controls subprocess timeout for preflight/execution.
@@ -84,4 +93,6 @@ Image input is optional and disabled by default.
 - API keys are never stored in the database and should never be logged.
 - Image base64 is never stored in the database and should never be logged.
 - Real provider output is still only a `GradeSuggestion`; teacher review and `FinalGrade` remain required.
-- The provider does not implement OCR, automatic answer detection, or autonomous final grading.
+- Local Qwen cohort dispatch has no provider fallback or automatic retry and is capped at 25 sequential calls.
+- OCR is handled by the separate loopback PaddleOCR sidecar; its output remains draft evidence until teacher confirmation.
+- No provider implements automatic answer mapping or autonomous final grading.

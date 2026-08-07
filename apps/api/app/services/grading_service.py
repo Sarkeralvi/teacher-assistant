@@ -22,9 +22,9 @@ from app.services.answer_region_processing import (
     create_composite_grading_context_image,
     crop_grading_context_image,
 )
+from app.services.grading_integrity import rubric_snapshot_hash
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
-from packages.brain.codex_cli_provider import CodexCliProvider
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
@@ -114,14 +114,18 @@ class GradingService:
         storage: LocalStorage | None = None,
         *,
         use_configured_adapter: bool = True,
+        adapter: BrainAdapter | None = None,
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
-        self.adapter = (
-            BrainAdapter.from_settings(get_settings())
-            if use_configured_adapter
-            else BrainAdapter()
-        )
+        if adapter is not None:
+            self.adapter = adapter
+        else:
+            self.adapter = (
+                BrainAdapter.from_settings(get_settings())
+                if use_configured_adapter
+                else BrainAdapter()
+            )
 
     def grade_answer_region(
         self, answer_region_id: int, *, marking_policy: str = "general"
@@ -309,21 +313,7 @@ class GradingService:
     ) -> tuple[GradingJob, GradeSuggestion]:
         region = self._get_region(answer_region_id)
         settings = get_settings()
-        codex_adapter = BrainAdapter(
-            CodexCliProvider(
-                command=settings.codex_cli_command,
-                model_name=settings.codex_cli_model,
-                timeout_seconds=settings.codex_cli_timeout_seconds,
-                sandbox=settings.codex_cli_sandbox,
-                use_json=settings.codex_cli_use_json,
-                output_last_message=settings.codex_cli_output_last_message,
-                image_input_enabled=settings.codex_cli_image_input_enabled,
-                workdir=settings.codex_cli_workdir,
-                skip_git_repo_check=settings.codex_cli_skip_git_repo_check,
-            ),
-            image_input_enabled=settings.codex_cli_image_input_enabled,
-            storage_root=settings.local_storage_root,
-        )
+        codex_adapter = BrainAdapter.for_provider(settings, "codex_cli")
         original_adapter = self.adapter
         self.adapter = codex_adapter
         try:
@@ -560,7 +550,12 @@ class GradingService:
         return job
 
     def run_queued_job(
-        self, grading_job_id: int, *, marking_policy: str = "general"
+        self,
+        grading_job_id: int,
+        *,
+        marking_policy: str = "general",
+        expected_rubric_id: int | None = None,
+        expected_rubric_hash: str | None = None,
     ) -> tuple[GradingJob, GradeSuggestion]:
         """Run a job previously created by create_queued_grading_job. Safe to
         call at most once per job: a job already in a terminal state is
@@ -583,17 +578,46 @@ class GradingService:
                 detail=f"Grading job {job.id} already finished with status '{job.status}'",
             )
         region = self._get_region(job.answer_region_id)
-        return self._grade_region(region, marking_policy=marking_policy, job=job)
+        return self._grade_region(
+            region,
+            marking_policy=marking_policy,
+            job=job,
+            expected_rubric_id=expected_rubric_id,
+            expected_rubric_hash=expected_rubric_hash,
+        )
 
     def _grade_region(
-        self, region: AnswerRegion, *, marking_policy: str, job: GradingJob | None = None
+        self,
+        region: AnswerRegion,
+        *,
+        marking_policy: str,
+        job: GradingJob | None = None,
+        expected_rubric_id: int | None = None,
+        expected_rubric_hash: str | None = None,
     ) -> tuple[GradingJob, GradeSuggestion]:
         confirmed_segments = self._check_readiness_or_raise(region)
         settings = get_settings()
         rubric = self._get_active_rubric(region.question_id)
+        if expected_rubric_id is not None and rubric.id != expected_rubric_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Active rubric changed before provider execution",
+            )
+        if (
+            expected_rubric_hash is not None
+            and rubric_snapshot_hash(region.question, rubric) != expected_rubric_hash
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Question, model answer, or rubric changed before provider execution",
+            )
         rubric_payload = dict(rubric.rubric_json)
         if region.question and region.question.model_answer:
             rubric_payload["model_answer"] = region.question.model_answer
+        question_text = region.question.question_text
+        question_total_marks = Decimal(region.question.total_marks)
+        student_answer_text = region.manual_answer_text
+        pinned_rubric_id = rubric.id
 
         grading_answer_image_path, grading_context, segment_metadata = (
             self._prepare_grading_context(region, confirmed_segments, settings)
@@ -609,11 +633,11 @@ class GradingService:
 
         try:
             adapter_output = self.adapter.grade_answer_region(
-                question_text=region.question.question_text,
-                question_total_marks=Decimal(region.question.total_marks),
+                question_text=question_text,
+                question_total_marks=question_total_marks,
                 rubric_json=rubric_payload,
                 answer_image_path=grading_answer_image_path,
-                student_answer_text=region.manual_answer_text,
+                student_answer_text=student_answer_text,
                 marking_policy=marking_policy,
             )
             output = adapter_output.model_dump(mode="json")
@@ -658,6 +682,10 @@ class GradingService:
             raw_response["model_provider"] = model_provider
             raw_response["model_name"] = model_name
             raw_response["prompt_version"] = prompt_version
+            raw_response["latency_ms"] = output.get("latency_ms", 0)
+            raw_response["prompt_tokens"] = output.get("prompt_tokens")
+            raw_response["completion_tokens"] = output.get("completion_tokens")
+            raw_response["total_tokens"] = output.get("total_tokens")
             if cost_estimate is not None:
                 raw_response["cost_estimate"] = str(cost_estimate)
             if grading_context is not None:
@@ -666,7 +694,7 @@ class GradingService:
                 grading_job_id=job.id,
                 answer_region_id=region.id,
                 question_id=region.question_id,
-                rubric_id=rubric.id,
+                rubric_id=pinned_rubric_id,
                 model_provider=model_provider,
                 model_name=model_name,
                 prompt_version=prompt_version,

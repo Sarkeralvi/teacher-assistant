@@ -1,6 +1,12 @@
 from decimal import Decimal
 
-from packages.brain.adapter import BrainAdapter
+import pytest
+
+from app.core.config import Settings
+from packages.brain.adapter import (
+    BrainAdapter,
+    BrainProviderConfigurationError,
+)
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.prompt_registry import get_prompt_version
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
@@ -81,6 +87,24 @@ def test_mock_output_cannot_be_mistaken_for_real_grading() -> None:
         == "This is a mock grading suggestion for pipeline validation only."
     )
     assert "mock_provider" in output.review_flags
+
+
+@pytest.mark.parametrize("provider", ["openai", "gemini", "codex_cli", "llama_cpp_qwen"])
+def test_real_provider_kill_switch_is_enforced_before_initialization(provider: str) -> None:
+    settings = Settings(
+        BRAIN_PROVIDER=provider,
+        BRAIN_ALLOW_REAL_PROVIDERS=False,
+        OPENAI_API_KEY="sk-example",
+        GEMINI_API_KEY="key-example",
+        LOCAL_QWEN_ENABLED=True,
+        LOCAL_QWEN_API_KEY="key-local-example",
+    )
+
+    with pytest.raises(
+        BrainProviderConfigurationError,
+        match="BRAIN_ALLOW_REAL_PROVIDERS must be true",
+    ):
+        BrainAdapter.from_settings(settings)
 
 
 def test_marking_policy_prompt_text_is_distinct_for_each_policy() -> None:

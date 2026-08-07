@@ -2,7 +2,6 @@ from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from rq import Retry
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +14,7 @@ from app.models import (
     Assessment,
     Course,
     GradeSuggestion,
+    GradingDispatchRun,
     GradingJob,
     Submission,
     User,
@@ -22,15 +22,18 @@ from app.models import (
 from app.schemas import (
     BatchMockGradeResponse,
     BrowserCodexGradeResponse,
-    CohortGradeDispatchResponse,
+    CohortDispatchPreflightRead,
+    CohortDispatchRequest,
     CohortGradeSummaryResponse,
     GradeAnswerRegionResponse,
     GradeSuggestionRead,
+    GradingDispatchRunRead,
     GradingEvidencePacketRead,
     GradingJobRead,
 )
+from app.services.grading_dispatch_service import GradingDispatchService
 from app.services.grading_service import GradingService
-from app.worker.jobs import run_grade_answer_region_job
+from app.worker.jobs import run_grade_answer_region_job, run_grading_dispatch_job
 from app.worker.rq_app import get_default_queue
 
 DbSession = Annotated[Session, Depends(get_db)]
@@ -120,35 +123,119 @@ def grade_answer_region_async(
 ) -> GradingJob:
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
     job = GradingService(db).create_queued_grading_job(answer_region_id)
-    get_default_queue().enqueue(
-        run_grade_answer_region_job, job.id, retry=Retry(max=1)
-    )
+    get_default_queue().enqueue(run_grade_answer_region_job, job.id)
     return job
 
 
 @router.post(
+    "/assessments/{assessment_id}/questions/{question_id}/grade-cohort/preflight",
+    response_model=CohortDispatchPreflightRead,
+)
+def preflight_question_cohort(
+    assessment_id: int,
+    question_id: int,
+    payload: CohortDispatchRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    get_owned_assessment_or_404(assessment_id, db, current_user)
+    question = get_owned_question_or_404(question_id, db, current_user)
+    if question.assessment_id != assessment_id:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return GradingDispatchService(db).preflight(
+        assessment_id=assessment_id,
+        question_id=question_id,
+        teacher_id=current_user.id,
+        request=payload,
+    )
+
+
+@router.post(
     "/assessments/{assessment_id}/questions/{question_id}/grade-cohort",
-    response_model=CohortGradeDispatchResponse,
+    response_model=GradingDispatchRunRead,
     status_code=status.HTTP_202_ACCEPTED,
 )
 def grade_question_cohort(
     assessment_id: int,
     question_id: int,
+    payload: CohortDispatchRequest,
     db: DbSession,
     current_user: CurrentUser,
-) -> dict[str, object]:
-    """Question x cohort grading: an explicit, teacher-authorized action that
-    grades every confirmed-ready answer region of one question across the
-    cohort via the async worker. Readiness is re-checked per region; only
-    ready regions without an existing suggestion are dispatched.
-    """
+) -> GradingDispatchRun:
     get_owned_assessment_or_404(assessment_id, db, current_user)
-    get_owned_question_or_404(question_id, db, current_user)
-    result = GradingService(db).create_cohort_grading_jobs(assessment_id, question_id)
-    queue = get_default_queue()
-    for job in result["queued_jobs"]:
-        queue.enqueue(run_grade_answer_region_job, job.id, retry=Retry(max=1))
-    return result
+    question = get_owned_question_or_404(question_id, db, current_user)
+    if question.assessment_id != assessment_id:
+        raise HTTPException(status_code=404, detail="Question not found")
+    service = GradingDispatchService(db)
+    run = service.create_dispatch(
+        assessment_id=assessment_id,
+        question_id=question_id,
+        teacher_id=current_user.id,
+        request=payload,
+    )
+    if run.status == "queued":
+        try:
+            get_default_queue().enqueue(run_grading_dispatch_job, run.id)
+        except Exception as exc:
+            service.mark_enqueue_failed(run.id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Grading dispatch could not be enqueued",
+            ) from exc
+    return run
+
+
+@router.get(
+    "/grading-dispatch-runs/{run_id}",
+    response_model=GradingDispatchRunRead,
+)
+def read_grading_dispatch_run(
+    run_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> GradingDispatchRun:
+    service = GradingDispatchService(db)
+    run = service.get_owned_run(run_id, current_user.id)
+    service.reconcile_stale_worker(run, actor_id=current_user.id)
+    return service.get_owned_run(run_id, current_user.id)
+
+
+@router.post(
+    "/grading-dispatch-runs/{run_id}/stop",
+    response_model=GradingDispatchRunRead,
+)
+def stop_grading_dispatch_run(
+    run_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> GradingDispatchRun:
+    service = GradingDispatchService(db)
+    run = service.get_owned_run(run_id, current_user.id)
+    return service.request_stop(run, current_user.id)
+
+
+@router.post(
+    "/grading-dispatch-runs/{run_id}/resume",
+    response_model=GradingDispatchRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def resume_grading_dispatch_run(
+    run_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> GradingDispatchRun:
+    service = GradingDispatchService(db)
+    run = service.get_owned_run(run_id, current_user.id)
+    run = service.resume(run, current_user.id)
+    try:
+        get_default_queue().enqueue(run_grading_dispatch_job, run.id)
+    except Exception as exc:
+        service.mark_enqueue_failed(run.id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Grading dispatch could not be re-enqueued",
+        ) from exc
+    return run
 
 
 @router.get(

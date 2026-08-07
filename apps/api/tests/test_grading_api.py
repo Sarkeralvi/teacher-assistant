@@ -657,6 +657,7 @@ def test_grade_answer_region_with_mocked_openai_image_input_creates_suggestion(
         )
 
     monkeypatch.setenv("BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-test")
     monkeypatch.setenv("OPENAI_IMAGE_INPUT_ENABLED", "true")
@@ -686,6 +687,7 @@ def test_grade_answer_region_missing_image_fails_before_provider_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
     monkeypatch.setenv("OPENAI_IMAGE_INPUT_ENABLED", "true")
     get_settings.cache_clear()
@@ -769,6 +771,8 @@ def test_unwritable_grading_context_blocks_before_provider_call(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    if os.name == "nt":
+        pytest.skip("chmod does not make a directory unwritable on Windows")
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("chmod-based unwritable-directory check cannot block the root user")
     class FakeCodexCliProvider:
@@ -784,6 +788,7 @@ def test_unwritable_grading_context_blocks_before_provider_call(
             return codex_api_output()
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
@@ -825,6 +830,7 @@ def test_grade_answer_region_with_codex_cli_mocked_subprocess_creates_suggestion
             return codex_api_output()
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
@@ -862,6 +868,7 @@ def test_grade_answer_region_codex_cli_subprocess_failure_marks_job_failed(
             raise RuntimeError("Codex CLI exited with status 2: failed with sk-secret-value")
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FailingCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
@@ -895,6 +902,7 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
             raise RuntimeError("Codex CLI image input is not supported by this installed version.")
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("CODEX_CLI_IMAGE_INPUT_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", ImageUnsupportedCodexCliProvider)

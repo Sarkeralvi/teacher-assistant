@@ -1,12 +1,29 @@
 # Product Roadmap
 
+## Canonical current status — local-first milestone
+
+Status date: 2026-08-07. This section is the canonical status for local OCR/Qwen and cohort safety; older task notes remain historical records.
+
+- **Custom Controlled:** implemented as the only normal teacher workflow. Local PaddleOCR draft evidence and local Qwen draft grading are integrated behind disabled-by-default flags and explicit teacher actions.
+- **Local services:** Windows-host llama.cpp Qwen and CPU PaddleOCR sidecar startup/preflight/stop workflows are implemented. Normal app startup never loads a model.
+- **OCR evidence:** implemented as persisted draft runs with editable teacher confirmation. Confirmation copies text only and does not mark evidence complete or accept mappings.
+- **Reference extraction:** `local_paddle_qwen` is implemented for page-ordered local OCR followed by Qwen draft extraction. Existing teacher confirmation gates remain canonical.
+- **Safe cohort execution:** implemented as question-wise, immutable-snapshot dispatches with exact provider/model authorization, a 25-call ceiling, sequential execution, stop-on-failure, stop/resume controls, zero automatic retries, no fallback, and draft suggestions only.
+- **Teacher UI:** implemented for local status, OCR draft review, preflight counts, dispatch progress/failures/uncertain items, and links to the existing review/approval/export workflow.
+- **Verification completed:** PostgreSQL migrations/API regression, frontend production build, real local-service health, one synthetic OCR page, one strict structured Qwen call, CPU/GPU coexistence, and the two-student OCR-to-approved-XLSX host smoke passed on 2026-08-07.
+- **Verification remaining:** the 20-case curated grading/OCR quality gate. The teacher pilot remains blocked until it passes with no severe stop condition.
+- **Semi-Automated:** experimental and disabled; local integration does not activate it.
+- **Fully Automated:** unreleased and disabled; automatic mapping/finalization remain out of scope.
+
+Operational instructions are in `docs/LOCAL_AI_RUNBOOK.md`; provider rules are in `docs/PROVIDER_USAGE_POLICY.md`.
+
 ## Started prototype: Question paper import / question extraction
 
 Teacher uploads an image/PDF of a question paper. The system extracts question numbers, question text, marks, and possible sub-questions into draft Questions. The teacher must review and edit the drafted Questions before saving.
 
 Important: this is not simple OCR only. It needs document understanding, question segmentation, mark detection, and teacher confirmation.
 
-Prototype status: Started in TA-W1-028B. Current foundation supports safe question-paper upload, deterministic/mock draft extraction, draft question review/edit/select, and teacher-confirmed creation of real Questions. Real Codex/OCR extraction is not enabled by default.
+Prototype status: local `local_paddle_qwen` draft extraction is implemented in addition to deterministic/mock extraction. It is disabled by default, runs PaddleOCR locally before Qwen, and still requires draft review/edit/select and teacher-confirmed canonical creation. Cloud/Codex fallback is not enabled.
 
 ## Planned grading workflow modes
 
@@ -28,12 +45,13 @@ Each grading run should eventually record a rubric interpretation policy:
 - **General** — normal rubric interpretation with equivalent methods allowed.
 - **Easy** — benefit of doubt for minor notation/presentation issues while still flagging unclear work.
 
-Planned build order:
+Build order and current state:
 
-1. `TA-W1-035B` — Custom controlled grading run wizard.
-2. `TA-W1-036` — Semi-automated question/rubric confirmation workflow.
-3. `TA-W1-037` — Fully automated ZIP grading prototype.
-4. `TA-W1-038` — Marking policy calibration.
+1. `TA-W1-035B` — Custom controlled grading run wizard: implemented.
+2. Local-first OCR/Qwen and safe cohort dispatch: implemented and host-smoke verified; curated quality evaluation remains.
+3. `TA-W1-038` — Marking policy recording: implemented; local 20-case calibration still required.
+4. `TA-W1-036` — Semi-automated question/rubric workflow: experimental and disabled.
+5. `TA-W1-037` — Fully automated ZIP grading: unreleased and disabled.
 
 ## Future extension: Voice command assistant
 

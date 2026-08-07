@@ -7,19 +7,31 @@ import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from ".
 import {
   confirmGradingRunMaterials,
   confirmGradingRunQuestionsRubrics,
+  createCohortDispatch,
   createCustomGradingRun,
   getAssessment,
   getAssessmentFinalGradesExportUrl,
+  getGradingDispatchRun,
+  getGradingQueueSummary,
+  getLocalAiStatus,
   gradeGradingRunReadyRegionsMock,
   listAssessmentGradingRuns,
   listQuestions,
   listRubrics,
+  preflightCohortDispatch,
+  resumeGradingDispatchRun,
+  stopGradingDispatchRun,
   updateGradingRun,
   uploadGradingRunMaterials,
   type Assessment,
   type BatchMockGradeResponse,
+  type CohortDispatchPreflight,
+  type CohortDispatchRequest,
+  type GradingDispatchRun,
+  type GradingQueueRun,
   type GradingRun,
   type GradingRunWorkflowState,
+  type LocalAiStatus,
   type MarkingPolicy,
   type Question,
   type Rubric,
@@ -31,7 +43,7 @@ const workflowSteps = [
   "Confirm or create questions/rubrics",
   "Upload scripts",
   "Create answer regions manually",
-  "Run mock batch grading",
+  "Preflight and run draft grading",
   "Review suggestions",
   "Approve selected / export",
 ];
@@ -121,6 +133,14 @@ export function CustomControlledGradingRunClient({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastGradingResult, setLastGradingResult] = useState<BatchMockGradeResponse | null>(null);
+  const [localAiStatus, setLocalAiStatus] = useState<LocalAiStatus | null>(null);
+  const [gradingQueue, setGradingQueue] = useState<GradingQueueRun | null>(null);
+  const [dispatchQuestionId, setDispatchQuestionId] = useState("");
+  const [dispatchCallLimit, setDispatchCallLimit] = useState("5");
+  const [draftOnlyConfirmed, setDraftOnlyConfirmed] = useState(false);
+  const [dispatchPreflight, setDispatchPreflight] = useState<CohortDispatchPreflight | null>(null);
+  const [dispatchRun, setDispatchRun] = useState<GradingDispatchRun | null>(null);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
 
   const isSemiAutomated = mode === "semi_automated";
   const modeTitle = isSemiAutomated ? "Semi-Automated Grading Run" : "Custom Controlled Grading Run";
@@ -131,15 +151,23 @@ export function CustomControlledGradingRunClient({
 
   const selectedRun = gradingRuns.find((run) => run.id === selectedRunId) ?? gradingRuns[0] ?? null;
   const workflowState = selectedRun?.workflow_state ?? null;
+  const localQwenReady = Boolean(
+    localAiStatus?.real_providers_allowed &&
+    localAiStatus.cohort_model_grading_enabled &&
+    localAiStatus.qwen.enabled &&
+    localAiStatus.qwen.available,
+  );
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, runData, questionData] = await Promise.all([
+      const [assessmentData, runData, questionData, localAiData, gradingQueueData] = await Promise.all([
         getAssessment(assessmentId),
         listAssessmentGradingRuns(assessmentId),
         listQuestions(assessmentId),
+        getLocalAiStatus().catch(() => null),
+        getGradingQueueSummary(assessmentId).catch(() => null),
       ]);
       const rubricData = await Promise.all(questionData.map(async (question) => ({
         question,
@@ -148,6 +176,11 @@ export function CustomControlledGradingRunClient({
       setAssessment(assessmentData);
       setGradingRuns(runData);
       setCanonicalUnits(rubricData);
+      setLocalAiStatus(localAiData);
+      setGradingQueue(gradingQueueData);
+      if (!dispatchQuestionId && questionData[0]) {
+        setDispatchQuestionId(String(questionData[0].id));
+      }
       const preferredRun = runData.find((run) => run.id === selectedRunId) ?? runData[0] ?? null;
       setSelectedRunId(preferredRun?.id ?? null);
       setStatus(preferredRun?.status ?? "draft");
@@ -163,6 +196,28 @@ export function CustomControlledGradingRunClient({
   useEffect(() => {
     void load();
   }, [assessmentId]);
+
+  useEffect(() => {
+    const storedRunId = window.localStorage.getItem(`teacher-assistant-dispatch-${assessmentId}`);
+    if (!storedRunId) {
+      return;
+    }
+    void getGradingDispatchRun(Number(storedRunId))
+      .then(setDispatchRun)
+      .catch(() => window.localStorage.removeItem(`teacher-assistant-dispatch-${assessmentId}`));
+  }, [assessmentId]);
+
+  useEffect(() => {
+    if (!dispatchRun || !["queued", "running", "stopping"].includes(dispatchRun.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void getGradingDispatchRun(dispatchRun.id)
+        .then(setDispatchRun)
+        .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to refresh dispatch progress"));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [dispatchRun?.id, dispatchRun?.status]);
 
   async function handleStartRun() {
     setSaving(true);
@@ -241,6 +296,108 @@ export function CustomControlledGradingRunClient({
       setError(err instanceof Error ? err.message : "Failed to run bulk mock grading");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function cohortDispatchPayload(): CohortDispatchRequest | null {
+    if (!selectedRun) {
+      setError("Start and select a grading run before cohort preflight.");
+      return null;
+    }
+    if (!gradingQueue?.id) {
+      setError("Create a fresh grading queue on the assessment page before cohort preflight.");
+      return null;
+    }
+    const questionId = Number(dispatchQuestionId);
+    if (!questionId) {
+      setError("Select one question for the cohort dispatch.");
+      return null;
+    }
+    const callLimit = Number(dispatchCallLimit);
+    if (!Number.isInteger(callLimit) || callLimit < 1 || callLimit > 25) {
+      setError("Call limit must be a whole number from 1 to 25.");
+      return null;
+    }
+    if (!draftOnlyConfirmed) {
+      setError("Confirm that Qwen will create draft suggestions only before continuing.");
+      return null;
+    }
+    return {
+      queue_run_id: gradingQueue.id,
+      grading_run_id: selectedRun.id,
+      provider: "llama_cpp_qwen",
+      expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
+      call_limit: callLimit,
+      draft_only_confirmed: true,
+    };
+  }
+
+  async function handleCohortPreflight() {
+    const payload = cohortDispatchPayload();
+    const questionId = Number(dispatchQuestionId);
+    if (!payload || !questionId) {
+      return;
+    }
+    setDispatchBusy(true);
+    setDispatchPreflight(null);
+    setError(null);
+    try {
+      setDispatchPreflight(await preflightCohortDispatch(assessmentId, questionId, payload));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cohort preflight failed");
+    } finally {
+      setDispatchBusy(false);
+    }
+  }
+
+  async function handleCreateCohortDispatch() {
+    const payload = cohortDispatchPayload();
+    const questionId = Number(dispatchQuestionId);
+    if (!payload || !questionId || !dispatchPreflight) {
+      setError("Run and review a cohort preflight before authorizing model calls.");
+      return;
+    }
+    setDispatchBusy(true);
+    setError(null);
+    try {
+      const run = await createCohortDispatch(assessmentId, questionId, payload);
+      setDispatchRun(run);
+      setDispatchPreflight(null);
+      window.localStorage.setItem(`teacher-assistant-dispatch-${assessmentId}`, String(run.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start cohort dispatch");
+    } finally {
+      setDispatchBusy(false);
+    }
+  }
+
+  async function handleStopDispatch() {
+    if (!dispatchRun) {
+      return;
+    }
+    setDispatchBusy(true);
+    setError(null);
+    try {
+      setDispatchRun(await stopGradingDispatchRun(dispatchRun.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to stop cohort dispatch");
+    } finally {
+      setDispatchBusy(false);
+    }
+  }
+
+  async function handleResumeDispatch() {
+    if (!dispatchRun) {
+      return;
+    }
+    setDispatchBusy(true);
+    setError(null);
+    try {
+      setDispatchRun(await resumeGradingDispatchRun(dispatchRun.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resume cohort dispatch");
+    } finally {
+      setDispatchBusy(false);
     }
   }
 
@@ -464,7 +621,7 @@ export function CustomControlledGradingRunClient({
 
       <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Grading readiness</h2>
-        <p className="text-sm text-amber-100">Mock grading only. Real Codex batch grading is not enabled.</p>
+        <p className="text-sm text-amber-100">Mock remains the default. Local Qwen requires a separate explicit preflight and draft-only authorization below.</p>
         <div className="flex flex-wrap gap-3">
           <button className={buttonClass} disabled={saving || !selectedRun || !workflowState?.grading_ready} onClick={handleRunGatedMockGrading} type="button">
             {saving ? "Grading..." : "Bulk mock grade ungraded answers"}
@@ -474,6 +631,138 @@ export function CustomControlledGradingRunClient({
           </Link>
         </div>
         {lastGradingResult ? <MockGradingResultPanel result={lastGradingResult} /> : null}
+      </section>
+
+      <section className="grid gap-4 rounded border border-violet-800 bg-slate-900 p-5" data-testid="local-cohort-grading-panel">
+        <div>
+          <h2 className="text-xl font-semibold">Local Qwen cohort grading — draft suggestions only</h2>
+          <p className="mt-1 text-sm text-amber-100">
+            Text only: Qwen receives teacher-confirmed manual/OCR text, never answer images. Every suggestion still requires teacher review.
+          </p>
+          <p className="mt-1 text-sm text-red-200">No provider fallback, no automatic retry, no final-grade creation.</p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <SafetyStatus label="Real-provider gate" ready={Boolean(localAiStatus?.real_providers_allowed)} />
+          <SafetyStatus label="Cohort execution gate" ready={Boolean(localAiStatus?.cohort_model_grading_enabled)} />
+          <SafetyStatus label="Local Qwen enabled" ready={Boolean(localAiStatus?.qwen.enabled)} />
+          <SafetyStatus label="Qwen reachable/model verified" ready={Boolean(localAiStatus?.qwen.available)} />
+        </div>
+        <div className="rounded border border-slate-800 p-3 text-sm text-slate-300">
+          <p>Provider: llama_cpp_qwen</p>
+          <p>Expected model alias: {localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km"}</p>
+          <p>Device: {localAiStatus?.qwen.device ?? "GPU/hybrid"}</p>
+          <p>Status: {localQwenReady ? "ready for explicit preflight" : (localAiStatus?.qwen.detail ?? "Local AI status unavailable")}</p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="grid gap-2 text-sm">
+            Question-wise cohort
+            <select
+              className={inputClass}
+              value={dispatchQuestionId}
+              onChange={(event) => {
+                setDispatchQuestionId(event.target.value);
+                setDispatchPreflight(null);
+              }}
+            >
+              <option value="">Select a question</option>
+              {canonicalUnits.map(({ question }) => (
+                <option key={question.id} value={question.id}>{question.question_no} · {question.question_text}</option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm">
+            Provider-call limit (server ceiling 25)
+            <input
+              className={inputClass}
+              type="number"
+              min={1}
+              max={25}
+              step={1}
+              value={dispatchCallLimit}
+              onChange={(event) => {
+                setDispatchCallLimit(event.target.value);
+                setDispatchPreflight(null);
+              }}
+            />
+          </label>
+          <div className="rounded border border-slate-800 p-3 text-sm text-slate-300">
+            <p>Queue snapshot: {gradingQueue?.id ? `#${gradingQueue.id}` : "missing"}</p>
+            <p>Queue items: {gradingQueue?.queued_item_count ?? 0}</p>
+            <p>Marking policy copied from run: {selectedRun?.marking_policy ?? "not selected"}</p>
+          </div>
+        </div>
+
+        <label className="flex items-start gap-3 rounded border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-100">
+          <input
+            className="mt-1"
+            type="checkbox"
+            checked={draftOnlyConfirmed}
+            onChange={(event) => {
+              setDraftOnlyConfirmed(event.target.checked);
+              setDispatchPreflight(null);
+            }}
+          />
+          <span>I authorize only the selected number of local Qwen calls and confirm that outputs are draft GradeSuggestions requiring teacher review.</span>
+        </label>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            className={buttonClass}
+            type="button"
+            disabled={dispatchBusy || !localQwenReady || !gradingQueue?.id || !selectedRun}
+            onClick={() => void handleCohortPreflight()}
+          >
+            {dispatchBusy ? "Checking..." : "Run question-wise preflight"}
+          </button>
+          <Link className={buttonClass} href={`/assessments/${assessmentId}#grading-queue`}>
+            Prepare or refresh grading queue
+          </Link>
+        </div>
+
+        {dispatchPreflight ? (
+          <section className="grid gap-3 rounded border border-cyan-800 bg-cyan-950/20 p-4" data-testid="cohort-preflight-result">
+            <h3 className="text-lg font-semibold">Preflight result</h3>
+            <div className="grid gap-2 text-sm md:grid-cols-4 lg:grid-cols-7">
+              <SummaryMetric label="fresh" value={dispatchPreflight.fresh_count} />
+              <SummaryMetric label="refused" value={dispatchPreflight.refused_count} />
+              <SummaryMetric label="existing" value={dispatchPreflight.existing_count} />
+              <SummaryMetric label="stale" value={dispatchPreflight.stale_count} />
+              <SummaryMetric label="active" value={dispatchPreflight.active_job_count} />
+              <SummaryMetric label="eligible" value={dispatchPreflight.eligible_count} />
+              <SummaryMetric label="selected calls" value={dispatchPreflight.selected_call_count} />
+            </div>
+            <div className="text-sm text-slate-300">
+              <p>Provider/model: {dispatchPreflight.provider} / {dispatchPreflight.model_name}</p>
+              <p>Marking policy: {dispatchPreflight.marking_policy}</p>
+              <p>Requested calls: {dispatchPreflight.requested_call_limit} · hard ceiling: {dispatchPreflight.server_call_ceiling}</p>
+            </div>
+            {dispatchPreflight.items.some((item) => item.reason) ? (
+              <div className="max-h-48 overflow-y-auto rounded border border-slate-800 p-3 text-xs">
+                {dispatchPreflight.items.filter((item) => item.reason).map((item) => (
+                  <p key={item.queue_item_id}>Region #{item.answer_region_id}: {item.status} — {item.reason}</p>
+                ))}
+              </div>
+            ) : null}
+            <button
+              className={buttonClass}
+              type="button"
+              disabled={dispatchBusy || dispatchPreflight.selected_call_count === 0}
+              onClick={() => void handleCreateCohortDispatch()}
+            >
+              Authorize {dispatchPreflight.selected_call_count} draft-only Qwen call{dispatchPreflight.selected_call_count === 1 ? "" : "s"}
+            </button>
+          </section>
+        ) : null}
+
+        {dispatchRun ? <DispatchProgressPanel
+          run={dispatchRun}
+          busy={dispatchBusy}
+          assessmentId={assessmentId}
+          onStop={handleStopDispatch}
+          onResume={handleResumeDispatch}
+        /> : null}
       </section>
 
       <form onSubmit={handleUpdateRun} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
@@ -524,7 +813,7 @@ export function CustomControlledGradingRunClient({
           </a>
         </div>
         <p className="mt-3 text-sm text-slate-400">
-          Run mock batch grading from this gated dashboard or use existing controlled grading actions only after teacher-confirmed materials are ready.
+          Run mock grading by default, or use the explicit capped local-Qwen preflight only after teacher-confirmed materials and evidence are ready.
         </p>
       </section>
     </div>
@@ -561,5 +850,77 @@ function SummaryMetric({ label, value }: Readonly<{ label: string; value: string
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold">{value}</p>
     </div>
+  );
+}
+
+function SafetyStatus({ label, ready }: Readonly<{ label: string; ready: boolean }>) {
+  return (
+    <div className={`rounded border p-3 text-sm ${ready ? "border-emerald-700 bg-emerald-950/20 text-emerald-100" : "border-red-700 bg-red-950/20 text-red-100"}`}>
+      <p className="font-semibold">{label}</p>
+      <p>{ready ? "enabled / available" : "blocked"}</p>
+    </div>
+  );
+}
+
+function DispatchProgressPanel({
+  run,
+  busy,
+  assessmentId,
+  onStop,
+  onResume,
+}: Readonly<{
+  run: GradingDispatchRun;
+  busy: boolean;
+  assessmentId: number;
+  onStop: () => Promise<void>;
+  onResume: () => Promise<void>;
+}>) {
+  const canStop = ["queued", "running", "stopping", "failed"].includes(run.status) && run.status !== "stopping";
+  const canResume = ["stopped", "failed"].includes(run.status) && run.pending_count > 0;
+  const attentionItems = run.items.filter((item) =>
+    ["failed", "refused", "uncertain", "running", "pending"].includes(item.status),
+  );
+  return (
+    <section className="grid gap-3 rounded border border-emerald-800 bg-emerald-950/10 p-4" data-testid="grading-dispatch-progress">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold">Dispatch #{run.id}: {run.status}</h3>
+          <p className="text-sm text-slate-300">{run.provider} / {run.model_name} · {run.marking_policy} marking</p>
+          <p className="text-xs text-amber-200">Stop prevents the next call; it does not interrupt a call already running.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {canStop ? <button className={buttonClass} disabled={busy} type="button" onClick={() => void onStop()}>Stop before next call</button> : null}
+          {canResume ? <button className={buttonClass} disabled={busy} type="button" onClick={() => void onResume()}>Resume never-started items</button> : null}
+          <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>Open review queue</Link>
+        </div>
+      </div>
+      <div className="grid gap-2 md:grid-cols-4 lg:grid-cols-8">
+        <SummaryMetric label="selected" value={run.selected_count} />
+        <SummaryMetric label="calls started" value={run.calls_started} />
+        <SummaryMetric label="remaining" value={run.pending_count} />
+        <SummaryMetric label="running" value={run.running_count} />
+        <SummaryMetric label="succeeded" value={run.succeeded_count} />
+        <SummaryMetric label="failed" value={run.failed_count} />
+        <SummaryMetric label="refused" value={run.refused_count} />
+        <SummaryMetric label="uncertain" value={run.uncertain_count} />
+      </div>
+      {run.uncertain_count > 0 ? (
+        <p className="rounded border border-red-700 bg-red-950/30 p-3 text-sm text-red-100">
+          Uncertain means a worker stopped during a provider call. These items are never retried automatically; inspect them manually.
+        </p>
+      ) : null}
+      {attentionItems.length > 0 ? (
+        <div className="max-h-64 overflow-y-auto rounded border border-slate-800 p-3 text-sm">
+          {attentionItems.map((item) => (
+            <article key={item.id} className="border-b border-slate-800 py-2 last:border-b-0">
+              <p>Region #{item.answer_region_id} · {item.status} · attempt {item.attempt_count}/1</p>
+              {item.refusal_reason ? <p className="text-amber-200">{item.refusal_reason}</p> : null}
+              {item.error ? <p className="text-red-200">{item.error}</p> : null}
+              <Link className="text-cyan-300 underline" href={`/assessments/${assessmentId}#answer-region-${item.answer_region_id}`}>Inspect answer evidence</Link>
+            </article>
+          ))}
+        </div>
+      ) : <p className="text-sm text-emerald-200">No remaining or attention-required items.</p>}
+    </section>
   );
 }

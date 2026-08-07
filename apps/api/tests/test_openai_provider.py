@@ -117,7 +117,12 @@ def test_adapter_uses_mock_provider_by_default_without_openai_key(
 
 
 def test_openai_provider_requires_api_key() -> None:
-    settings = Settings(BRAIN_PROVIDER="openai", OPENAI_API_KEY="", OPENAI_MODEL="gpt-test")
+    settings = Settings(
+        BRAIN_PROVIDER="openai",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        OPENAI_API_KEY="",
+        OPENAI_MODEL="gpt-test",
+    )
 
     with pytest.raises(BrainProviderConfigurationError, match="OPENAI_API_KEY is required"):
         BrainAdapter.from_settings(settings)

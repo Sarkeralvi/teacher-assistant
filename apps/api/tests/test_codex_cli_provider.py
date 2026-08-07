@@ -498,7 +498,11 @@ def test_codex_cli_validation_failure_is_not_silently_accepted() -> None:
 
 
 def test_codex_cli_adapter_does_not_require_openai_api_key() -> None:
-    settings = Settings(BRAIN_PROVIDER="codex_cli", OPENAI_API_KEY="")
+    settings = Settings(
+        BRAIN_PROVIDER="codex_cli",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        OPENAI_API_KEY="",
+    )
 
     adapter = BrainAdapter.from_settings(settings)
 

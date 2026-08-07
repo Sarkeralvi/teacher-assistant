@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 const requiredFiles = [
   "lib/api.ts",
@@ -48,9 +49,8 @@ for (const [scriptName, scriptValue] of [
 const api = readFileSync(join(root, "lib/api.ts"), "utf8");
 for (const symbol of [
   "API_BASE_URL",
-  "createUser",
   "listUsers",
-  "createCourse",
+  "createAuthenticatedCourse",
   "listCourses",
   "getCourse",
   "createAssessment",
@@ -102,12 +102,25 @@ for (const symbol of [
   "login",
   "register",
   "Authorization",
-  "createAuthenticatedCourse",
   "AssessmentSummary",
   "GradeSuggestion",
   "FinalGrade",
   "ReviewQueueItem",
   "GradingRun",
+  "LocalAiStatus",
+  "getLocalAiStatus",
+  "AnswerRegionOcrRun",
+  "createAnswerRegionOcrRun",
+  "listAnswerRegionOcrRuns",
+  "confirmAnswerRegionOcrRun",
+  "CohortDispatchRequest",
+  "CohortDispatchPreflight",
+  "GradingDispatchRun",
+  "preflightCohortDispatch",
+  "createCohortDispatch",
+  "getGradingDispatchRun",
+  "stopGradingDispatchRun",
+  "resumeGradingDispatchRun",
   "createCustomGradingRun",
   "listAssessmentGradingRuns",
   "getGradingRun",
@@ -192,14 +205,16 @@ if (!dashboard.includes("Users / teacher setup") || !dashboard.includes("Courses
 }
 
 const demoTeacherSelector = readFileSync(join(root, "components/DemoTeacherSelector.tsx"), "utf8");
+const demoTeacherStorage = readFileSync(join(root, "lib/demoTeacher.ts"), "utf8");
 const assessmentDetail = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
 const assessmentDetailUi = assessmentDetail + demoTeacherSelector;
 for (const text of [
   "Custom Controlled V0 — Manual Evidence Grading",
   "Teacher supplies question, model answer, active rubric, and student answer evidence before grading.",
   "Manual answer text is required for V0 reliable grading.",
-  "Real grading is single-packet only and creates a draft GradeSuggestion only.",
-  "Teacher review is required. No batch, autonomous mode, FinalGrade, or export without teacher approval.",
+  "Every real-provider result is a draft GradeSuggestion only.",
+  "Local Qwen cohort dispatch is available only from the grading-run page after an explicit capped preflight.",
+  "Teacher review is required. No autonomous mode, automatic FinalGrade, or export without teacher approval.",
   "Custom Controlled V0 step map",
   "Reference-material upload helper is support for Step 1 only; it is not a separate workflow.",
   "Step 1: Reference materials",
@@ -335,12 +350,17 @@ for (const text of [
   "Import questions from reference paper",
   "Draft extraction. Teacher review required.",
   "Default extraction is mock/simple.",
-  "Real Codex extraction must be explicitly enabled.",
-  "If real extraction is not enabled, uploaded images will not be treated as understood question papers.",
+  "Local PaddleOCR + Qwen is an explicit, local-only draft option.",
+  "Local extraction OCRs pages in order",
+  "local_paddle_qwen",
   "Question paper file",
   "handleQuestionImportFileChange",
   "selectedQuestionImportFileName",
-  "importQuestionsFromPaper(assessmentId, selectedFile)",
+  "importQuestionsFromPaper(assessmentId, selectedFile, questionImportProvider)",
+  "Draft text with local PaddleOCR",
+  "OCR output is a draft.",
+  "Confirm edited text as manual answer",
+  "Text confirmation does not mark the region complete or ready.",
   "Create selected questions",
   "acceptQuestionImportDrafts",
   "Manual question creation remains available",
@@ -387,7 +407,7 @@ for (const text of [
   "Labels like 1(a)(i) and max marks must match the paper/rubric.",
   "Upload scripts",
   "Create answer regions manually",
-  "Run mock batch grading",
+  "Preflight and run draft grading",
   "Review suggestions",
   "Approve selected / export",
   "No automatic answer-region detection",
@@ -421,7 +441,16 @@ for (const text of [
   "General: normal",
   "Easy: more lenient",
   "marking_policy: markingPolicy",
-  "Mock grading only. Real Codex batch grading is not enabled.",
+  "Mock remains the default.",
+  "Local Qwen cohort grading — draft suggestions only",
+  "No provider fallback, no automatic retry, no final-grade creation.",
+  "Run question-wise preflight",
+  "server ceiling 25",
+  "preflightCohortDispatch",
+  "createCohortDispatch",
+  "Stop before next call",
+  "Resume never-started items",
+  "Uncertain means a worker stopped during a provider call.",
   "Review queue",
   "Bulk mock grading result",
   "confirmGradingRunMaterials",
@@ -546,7 +575,7 @@ for (const text of [
   }
 }
 
-const usersClient = readFileSync(join(root, "components/UsersClient.tsx"), "utf8") + demoTeacherSelector;
+const usersClient = readFileSync(join(root, "components/UsersClient.tsx"), "utf8") + demoTeacherSelector + demoTeacherStorage;
 for (const text of ["Set as current demo teacher", "Current demo teacher", "localStorage"]) {
   if (!usersClient.includes(text)) {
     throw new Error(`Users page must include demo teacher selector marker: ${text}`);

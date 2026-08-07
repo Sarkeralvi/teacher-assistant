@@ -10,13 +10,15 @@ FinalGrade exists or is exported.
 - Backend: FastAPI, Pydantic, SQLAlchemy 2.x, Alembic
 - Database: PostgreSQL
 - Cache/Queue: Redis + RQ (`worker` service in docker-compose runs
-  `python -m app.worker.run`). Only `POST /answer-regions/{id}/grade-async`
-  uses it so far; the synchronous grading routes are unchanged.
+  `python -m app.worker.run`) for explicit asynchronous single-region work
+  and safe sequential cohort dispatch orchestration.
 - Storage: local filesystem behind future storage adapter
 - AI boundary: the Brain Adapter (`apps/api/packages/brain`) is the only
-  module allowed to call model providers. Providers: `mock` (default),
-  `gemini`, `openai`, `codex_cli` — selected with `BRAIN_PROVIDER`; all
-  real providers are off unless explicitly configured.
+  module allowed to call grading/extraction language-model providers.
+  Providers include `mock` (default), `gemini`, `openai`, `codex_cli`, and
+  loopback-only `llama_cpp_qwen`. Local PaddleOCR is isolated behind its
+  authenticated image-only sidecar. All real/local providers are off unless
+  explicitly configured.
 
 ## First Run
 
@@ -30,6 +32,7 @@ make down
 ```
 
 For a reliable local demo path and troubleshooting notes, see `docs/DEMO_RUNBOOK.md`.
+For Windows-host Qwen/PaddleOCR operation, see `docs/LOCAL_AI_RUNBOOK.md`.
 
 ## Local service URLs
 

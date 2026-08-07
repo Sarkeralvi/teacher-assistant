@@ -44,6 +44,9 @@ class GradeSuggestionOutput(BaseModel):
     prompt_version: str = Field(min_length=1)
     cost_estimate: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
     latency_ms: int = Field(default=0, ge=0)
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
 
     @field_validator("review_flags")
     @classmethod

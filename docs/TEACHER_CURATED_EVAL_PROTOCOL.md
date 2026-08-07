@@ -27,6 +27,33 @@ TA-W1-032 defines a safe process for collecting real teacher-curated grading exa
 
 A tiny synthetic dataset can validate the pipeline, but it is not enough for production trust.
 
+### Local PaddleOCR + Qwen pilot gate
+
+The first local-provider teacher pilot is blocked until at least 20 mixed curated cases have completed the full draft-evidence and grading review path. Use this minimum allocation:
+
+- 3 correct
+- 3 partial
+- 3 wrong
+- 2 blank
+- 2 irrelevant
+- 3 difficult-handwriting
+- 2 formula-heavy
+- 2 multi-step-work cases
+
+Record PaddleOCR draft text, warnings, teacher-edited confirmed text, Qwen structured suggestion, review flags, and teacher/reference score for every case. Difficult handwriting and formula cases must measure OCR transcription quality separately from grading quality; a teacher correction can make grading accurate without proving OCR accurate.
+
+The local pilot remains blocked if any case shows:
+
+- a severe false-confident grading error
+- systematic or repeated over-scoring of blank/irrelevant answers
+- automatic grade finalization or an unapproved export
+- Qwen grading unconfirmed OCR/manual text
+- cross-teacher access to OCR, dispatch, review, or export data
+- a hidden provider call, cloud call, fallback provider, or automatic provider retry
+- an uncertain worker outcome being retried automatically
+
+The report must name the local provider/model aliases, Paddle versions/models/device, prompt version, call cap, and whether Qwen and CPU OCR stayed healthy concurrently. Passing this gate permits only a supervised Custom Controlled pilot; it does not activate Semi-Automated or Fully Automated modes.
+
 ## 4. Case categories
 
 Each pilot dataset should include examples from these categories:

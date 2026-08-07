@@ -9,6 +9,23 @@ class ORMBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LocalAiServiceStatusRead(BaseModel):
+    enabled: bool
+    available: bool
+    provider: str
+    model: str
+    layout_model: str | None = None
+    device: str
+    detail: str | None = None
+
+
+class LocalAiStatusRead(BaseModel):
+    real_providers_allowed: bool
+    cohort_model_grading_enabled: bool
+    qwen: LocalAiServiceStatusRead
+    ocr: LocalAiServiceStatusRead
+
+
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=3, max_length=320)
@@ -696,6 +713,39 @@ class AnswerRegionRead(ORMBase):
     updated_at: datetime
 
 
+class OcrBlockRead(BaseModel):
+    page: int
+    order: int
+    label: str
+    text: str
+    bbox: list[float] | None = None
+
+
+class AnswerRegionOcrRunRead(ORMBase):
+    id: int
+    answer_region_id: int
+    requested_by_teacher_id: int
+    request_id: str
+    status: Literal["running", "succeeded", "failed", "confirmed"]
+    provider: Literal["local_paddle_qwen"] | str
+    model_name: str
+    layout_model_name: str | None
+    draft_text: str | None
+    normalized_result: dict[str, Any] | None
+    warnings: list[str] = Field(default_factory=list)
+    latency_ms: int | None
+    error: str | None
+    confirmed_text: str | None
+    confirmed_by_teacher_id: int | None
+    confirmed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OcrConfirmationRequest(BaseModel):
+    confirmed_text: str = Field(max_length=10000)
+
+
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
 
@@ -1005,6 +1055,97 @@ class CohortGradeDispatchResponse(BaseModel):
     queued_jobs: list[GradingJobRead]
     skipped: list[dict[str, Any]]
     refused: list[dict[str, Any]]
+
+
+class CohortDispatchRequest(BaseModel):
+    queue_run_id: int = Field(gt=0)
+    grading_run_id: int = Field(gt=0)
+    provider: Literal["mock", "llama_cpp_qwen"]
+    expected_model: str = Field(min_length=1, max_length=255)
+    call_limit: int = Field(ge=1, le=25)
+    draft_only_confirmed: Literal[True]
+
+
+class CohortDispatchPreflightItem(BaseModel):
+    queue_item_id: int
+    answer_region_id: int
+    status: Literal["eligible", "selected", "existing", "active", "stale", "refused"]
+    reason: str | None = None
+    evidence_snapshot_hash: str | None = None
+
+
+class CohortDispatchPreflightRead(BaseModel):
+    assessment_id: int
+    question_id: int
+    queue_run_id: int
+    grading_run_id: int
+    provider: str
+    model_name: str
+    marking_policy: MarkingPolicy
+    server_call_ceiling: int
+    requested_call_limit: int
+    total_queue_items: int
+    fresh_count: int
+    refused_count: int
+    existing_count: int
+    stale_count: int
+    active_job_count: int
+    eligible_count: int
+    selected_call_count: int
+    items: list[CohortDispatchPreflightItem]
+
+
+class GradingDispatchItemRead(ORMBase):
+    id: int
+    dispatch_run_id: int
+    queue_item_id: int
+    answer_region_id: int
+    grading_job_id: int | None
+    rubric_id: int
+    evidence_snapshot_hash: str
+    rubric_snapshot_hash: str
+    status: Literal[
+        "pending", "running", "succeeded", "failed", "refused", "skipped", "uncertain"
+    ]
+    attempt_count: int
+    refusal_reason: str | None
+    error: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class GradingDispatchRunRead(ORMBase):
+    id: int
+    queue_run_id: int
+    grading_run_id: int
+    assessment_id: int
+    question_id: int
+    created_by_teacher_id: int
+    provider: str
+    model_name: str
+    marking_policy: MarkingPolicy
+    maximum_calls: int
+    draft_only_confirmed: bool
+    status: Literal["queued", "running", "stopping", "stopped", "completed", "failed"]
+    stop_requested: bool
+    total_count: int
+    selected_count: int
+    pending_count: int
+    running_count: int
+    succeeded_count: int
+    failed_count: int
+    refused_count: int
+    skipped_count: int
+    uncertain_count: int
+    calls_started: int
+    heartbeat_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    items: list[GradingDispatchItemRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
 
 
 class CohortGradeItem(BaseModel):

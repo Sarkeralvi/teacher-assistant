@@ -14,7 +14,9 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -313,7 +315,8 @@ class ExtractionRun(TimestampMixin, Base):
             name="ck_extraction_runs_type",
         ),
         CheckConstraint(
-            "provider in ('host_bridge_codex', 'mock', 'disabled', 'gemini')",
+            "provider in ('host_bridge_codex', 'mock', 'disabled', 'gemini', "
+            "'local_paddle_qwen')",
             name="ck_extraction_runs_provider",
         ),
         CheckConstraint(
@@ -523,6 +526,53 @@ class AnswerRegion(TimestampMixin, Base):
     grade_suggestions: Mapped[list[GradeSuggestion]] = relationship(back_populates="answer_region")
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="answer_region")
     mapping_links: Mapped[list[AnswerRegionMapping]] = relationship(back_populates="answer_region")
+    ocr_runs: Mapped[list[AnswerRegionOcrRun]] = relationship(
+        back_populates="answer_region",
+        cascade="all, delete-orphan",
+        order_by="AnswerRegionOcrRun.id",
+    )
+
+
+class AnswerRegionOcrRun(TimestampMixin, Base):
+    __tablename__ = "answer_region_ocr_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('running', 'succeeded', 'failed', 'confirmed')",
+            name="ck_answer_region_ocr_runs_status",
+        ),
+        Index("ix_answer_region_ocr_runs_answer_region_id", "answer_region_id"),
+        Index("ix_answer_region_ocr_runs_requested_by_teacher_id", "requested_by_teacher_id"),
+        Index("ux_answer_region_ocr_runs_request_id", "request_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    answer_region_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_regions.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_by_teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    layout_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    draft_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_result: Mapped[dict[str, Any] | None] = mapped_column(
+        "normalized_result_json", JSONB, nullable=True
+    )
+    warnings: Mapped[list[str]] = mapped_column(
+        "warnings_json", JSONB, nullable=False, default=list
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmed_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    answer_region: Mapped[AnswerRegion] = relationship(back_populates="ocr_runs")
 
 
 class AnswerRegionSegment(TimestampMixin, Base):
@@ -613,6 +663,14 @@ class AnswerRegionMapping(TimestampMixin, Base):
 
 class GradingJob(Base):
     __tablename__ = "grading_jobs"
+    __table_args__ = (
+        Index(
+            "ux_grading_jobs_active_answer_region",
+            "answer_region_id",
+            unique=True,
+            postgresql_where=text("status in ('queued', 'running')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     answer_region_id: Mapped[int] = mapped_column(
@@ -637,6 +695,7 @@ class GradeSuggestion(Base):
             name="ck_grade_suggestions_marking_policy",
         ),
         Index("ix_grade_suggestions_answer_region_id", "answer_region_id"),
+        UniqueConstraint("grading_job_id", name="uq_grade_suggestions_grading_job_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -671,6 +730,120 @@ class GradeSuggestion(Base):
     answer_region: Mapped[AnswerRegion] = relationship(back_populates="grade_suggestions")
     question: Mapped[Question] = relationship(back_populates="grade_suggestions")
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="suggestion")
+
+
+class GradingDispatchRun(TimestampMixin, Base):
+    __tablename__ = "grading_dispatch_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('queued', 'running', 'stopping', 'stopped', 'completed', 'failed')",
+            name="ck_grading_dispatch_runs_status",
+        ),
+        CheckConstraint(
+            "marking_policy in ('tough', 'general', 'easy')",
+            name="ck_grading_dispatch_runs_marking_policy",
+        ),
+        CheckConstraint(
+            "maximum_calls >= 1 and maximum_calls <= 25",
+            name="ck_grading_dispatch_runs_maximum_calls",
+        ),
+        Index("ix_grading_dispatch_runs_queue_run_id", "queue_run_id"),
+        Index("ix_grading_dispatch_runs_grading_run_id", "grading_run_id"),
+        Index("ix_grading_dispatch_runs_assessment_question", "assessment_id", "question_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    queue_run_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_queue_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    grading_run_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    marking_policy: Mapped[str] = mapped_column(String(16), nullable=False)
+    maximum_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    draft_only_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    stop_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    selected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pending_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    running_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    refused_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    uncertain_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    calls_started: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    items: Mapped[list[GradingDispatchItem]] = relationship(
+        back_populates="dispatch_run",
+        cascade="all, delete-orphan",
+        order_by="GradingDispatchItem.id",
+    )
+
+
+class GradingDispatchItem(TimestampMixin, Base):
+    __tablename__ = "grading_dispatch_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'running', 'succeeded', 'failed', 'refused', "
+            "'skipped', 'uncertain')",
+            name="ck_grading_dispatch_items_status",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0 and attempt_count <= 1",
+            name="ck_grading_dispatch_items_attempt_count",
+        ),
+        UniqueConstraint(
+            "dispatch_run_id",
+            "queue_item_id",
+            name="uq_grading_dispatch_items_run_queue_item",
+        ),
+        UniqueConstraint("grading_job_id", name="uq_grading_dispatch_items_grading_job_id"),
+        Index("ix_grading_dispatch_items_dispatch_run_id", "dispatch_run_id"),
+        Index("ix_grading_dispatch_items_answer_region_id", "answer_region_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dispatch_run_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_dispatch_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    queue_item_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_queue_items.id", ondelete="CASCADE"), nullable=False
+    )
+    answer_region_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_regions.id", ondelete="CASCADE"), nullable=False
+    )
+    grading_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("grading_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    rubric_id: Mapped[int] = mapped_column(
+        ForeignKey("rubrics.id", ondelete="RESTRICT"), nullable=False
+    )
+    evidence_snapshot_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    rubric_snapshot_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    dispatch_run: Mapped[GradingDispatchRun] = relationship(back_populates="items")
 
 
 class FinalGrade(TimestampMixin, Base):

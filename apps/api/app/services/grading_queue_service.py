@@ -166,6 +166,13 @@ class GradingQueueService:
         }
 
     def snapshot_from_packet(self, packet: dict[str, Any]) -> dict[str, Any]:
+        answer_region_id = packet.get("answer_region_id")
+        region = (
+            self.db.get(AnswerRegion, int(answer_region_id))
+            if answer_region_id is not None
+            else None
+        )
+        manual_text = (region.manual_answer_text or "").strip() if region is not None else ""
         return {
             "submission_id": packet["submission_id"],
             "student_identifier": packet.get("student_identifier"),
@@ -181,6 +188,12 @@ class GradingQueueService:
             "segment_count": packet["segment_count"],
             "pages_covered": list(packet.get("pages_covered", [])),
             "segment_signature": self.segment_signature(packet.get("answer_region_id")),
+            "manual_answer_text_sha256": hashlib.sha256(
+                manual_text.encode("utf-8")
+            ).hexdigest(),
+            "full_answer_confirmed": (
+                region.full_answer_confirmed if region is not None else None
+            ),
         }
 
     def segment_signature(self, answer_region_id: int | str | None) -> list[dict[str, Any]]:

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    AnswerRegion,
     Assessment,
     Course,
     ExtractionRun,
@@ -18,6 +19,7 @@ from app.models import (
     QuestionNode,
     Rubric,
     RubricExtractionCriterion,
+    Submission,
     User,
 )
 
@@ -121,3 +123,18 @@ def get_owned_question_import_job_or_404(
     if job is None:
         raise _not_found("Question import job not found")
     return job
+
+
+def get_owned_answer_region_or_404(
+    answer_region_id: int, db: Session, teacher: User
+) -> AnswerRegion:
+    region = db.scalars(
+        select(AnswerRegion)
+        .join(Submission, Submission.id == AnswerRegion.submission_id)
+        .join(Assessment, Assessment.id == Submission.assessment_id)
+        .join(Course, Course.id == Assessment.course_id)
+        .where(AnswerRegion.id == answer_region_id, Course.teacher_id == teacher.id)
+    ).first()
+    if region is None:
+        raise _not_found("Answer region not found")
+    return region

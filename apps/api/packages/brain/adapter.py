@@ -8,6 +8,7 @@ from app.core.config import Settings
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.image_input import build_image_data_url
+from packages.brain.llama_cpp_qwen_provider import LlamaCppQwenProvider
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.openai_provider import OpenAICompatibleProvider
 from packages.brain.prompt_registry import (
@@ -21,6 +22,9 @@ from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
 class BrainProviderConfigurationError(RuntimeError):
     """Raised when provider configuration is incomplete or unsupported."""
+
+
+REAL_PROVIDER_NAMES = {"openai", "codex_cli", "gemini", "llama_cpp_qwen"}
 
 
 _API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
@@ -46,9 +50,17 @@ class BrainAdapter:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "BrainAdapter":
-        provider_name = settings.brain_provider.strip().lower()
+        return cls.for_provider(settings, settings.brain_provider)
+
+    @classmethod
+    def for_provider(cls, settings: Settings, requested_provider: str) -> "BrainAdapter":
+        provider_name = requested_provider.strip().lower()
         if provider_name in {"", "mock", "fake"}:
             return cls(MockBrainProvider())
+        if not settings.brain_allow_real_providers:
+            raise BrainProviderConfigurationError(
+                "BRAIN_ALLOW_REAL_PROVIDERS must be true before a non-mock provider can initialize"
+            )
         if provider_name == "openai":
             if not settings.openai_api_key:
                 raise BrainProviderConfigurationError(
@@ -100,6 +112,29 @@ class BrainAdapter:
                 image_input_enabled=settings.codex_cli_image_input_enabled,
                 storage_root=settings.local_storage_root,
             )
+        if provider_name == "llama_cpp_qwen":
+            if not settings.local_qwen_enabled:
+                raise BrainProviderConfigurationError(
+                    "LOCAL_QWEN_ENABLED must be true for BRAIN_PROVIDER=llama_cpp_qwen"
+                )
+            if not settings.local_qwen_api_key:
+                raise BrainProviderConfigurationError(
+                    "LOCAL_QWEN_API_KEY is required for BRAIN_PROVIDER=llama_cpp_qwen"
+                )
+            try:
+                provider = LlamaCppQwenProvider(
+                    api_key=settings.local_qwen_api_key,
+                    model_name=settings.local_qwen_model,
+                    base_url=settings.local_qwen_base_url,
+                    timeout_seconds=settings.local_qwen_timeout_seconds,
+                )
+            except ValueError as exc:
+                raise BrainProviderConfigurationError(str(exc)) from exc
+            return cls(
+                provider,
+                image_input_enabled=False,
+                storage_root=settings.local_storage_root,
+            )
         raise BrainProviderConfigurationError(f"Unsupported BRAIN_PROVIDER: {provider_name}")
 
     def grade_answer_region(
@@ -116,26 +151,30 @@ class BrainAdapter:
         normalized_marking_policy = marking_policy.strip().lower()
         if normalized_marking_policy not in MARKING_POLICY_INSTRUCTIONS:
             normalized_marking_policy = "general"
-        real_providers = {"openai", "codex_cli", "gemini"}
         resolved_policy = policy or (
             ModelPolicy.REAL_GRADING
-            if self.provider.provider_name in real_providers
+            if self.provider.provider_name in REAL_PROVIDER_NAMES
             else ModelPolicy.MOCK_GRADING
         )
         should_send_image = (
-            self.provider.provider_name in real_providers and self.image_input_enabled
+            self.provider.provider_name in REAL_PROVIDER_NAMES and self.image_input_enabled
+        )
+        prompt_answer_image_path = (
+            "[image input disabled]"
+            if self.provider.provider_name == "llama_cpp_qwen"
+            else answer_image_path
         )
         prompt_version = get_prompt_version(resolved_policy)
         messages = build_grading_prompt(
             question_text=question_text,
             rubric_json=rubric_json,
-            answer_image_path=answer_image_path,
+            answer_image_path=prompt_answer_image_path,
             student_answer_text=student_answer_text,
             image_input_enabled=should_send_image,
             marking_policy=normalized_marking_policy,
         )
         image_data_url = None
-        provider_answer_image_path = answer_image_path
+        provider_answer_image_path = prompt_answer_image_path
         if should_send_image and self.provider.provider_name in {"openai", "gemini"}:
             image_data_url = build_image_data_url(
                 image_path=answer_image_path,
@@ -178,5 +217,31 @@ class BrainAdapter:
             return self.provider.extract_rubric_from_pdf(file_path)
         except (ValueError, NotImplementedError):
             raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
+    def extract_questions_from_ocr_pages(
+        self, pages: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        try:
+            return self.provider.extract_questions_from_ocr_pages(pages)
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
+    def extract_rubric_from_ocr_pages(
+        self, pages: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        try:
+            return self.provider.extract_rubric_from_ocr_pages(pages)
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
+    def verify_available_model(self) -> None:
+        try:
+            self.provider.verify_available_model()
         except Exception as exc:
             raise RuntimeError(sanitize_provider_error(str(exc))) from exc

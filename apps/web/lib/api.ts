@@ -91,7 +91,7 @@ export type DraftQuestion = {
   needs_review: boolean;
 };
 
-export type QuestionImportProvider = "mock" | "codex_cli_question_extractor";
+export type QuestionImportProvider = "mock" | "codex_cli_question_extractor" | "local_paddle_qwen";
 
 export type QuestionImportJob = {
   id: number;
@@ -326,6 +326,40 @@ export type AnswerRegion = {
   segments: AnswerRegionSegment[];
   created_at: string;
   updated_at: string;
+};
+
+export type OcrBlock = {
+  order: number;
+  text: string;
+  markdown: string | null;
+  block_type: string | null;
+  bounding_box: number[] | null;
+  page_no?: number | null;
+};
+
+export type AnswerRegionOcrRun = {
+  id: number;
+  answer_region_id: number;
+  requested_by_teacher_id: number;
+  request_id: string;
+  status: "running" | "succeeded" | "failed" | "confirmed";
+  provider: "local_paddle_qwen" | string;
+  model_name: string;
+  layout_model_name: string | null;
+  draft_text: string | null;
+  normalized_result: Record<string, unknown> | null;
+  warnings: string[];
+  latency_ms: number | null;
+  error: string | null;
+  confirmed_text: string | null;
+  confirmed_by_teacher_id: number | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OcrConfirmationRequest = {
+  confirmed_text: string;
 };
 
 export type AnswerRegionMappingStatus = "mapped" | "uncertain" | "blocked" | "teacher_confirmed";
@@ -680,6 +714,114 @@ export type GradingQueueRun = {
   updated_at: string | null;
 };
 
+export type LocalAiServiceStatus = {
+  enabled: boolean;
+  available: boolean;
+  provider: string;
+  model: string;
+  layout_model: string | null;
+  device: string;
+  detail: string | null;
+};
+
+export type LocalAiStatus = {
+  real_providers_allowed: boolean;
+  cohort_model_grading_enabled: boolean;
+  qwen: LocalAiServiceStatus;
+  ocr: LocalAiServiceStatus;
+};
+
+export type CohortDispatchProvider = "mock" | "llama_cpp_qwen";
+
+export type CohortDispatchRequest = {
+  queue_run_id: number;
+  grading_run_id: number;
+  provider: CohortDispatchProvider;
+  expected_model: string;
+  call_limit: number;
+  draft_only_confirmed: true;
+};
+
+export type CohortDispatchPreflightItem = {
+  queue_item_id: number;
+  answer_region_id: number;
+  status: "eligible" | "selected" | "existing" | "active" | "stale" | "refused";
+  reason: string | null;
+  evidence_snapshot_hash: string | null;
+};
+
+export type CohortDispatchPreflight = {
+  assessment_id: number;
+  question_id: number;
+  queue_run_id: number;
+  grading_run_id: number;
+  provider: string;
+  model_name: string;
+  marking_policy: MarkingPolicy;
+  server_call_ceiling: number;
+  requested_call_limit: number;
+  total_queue_items: number;
+  fresh_count: number;
+  refused_count: number;
+  existing_count: number;
+  stale_count: number;
+  active_job_count: number;
+  eligible_count: number;
+  selected_call_count: number;
+  items: CohortDispatchPreflightItem[];
+};
+
+export type GradingDispatchItem = {
+  id: number;
+  dispatch_run_id: number;
+  queue_item_id: number;
+  answer_region_id: number;
+  grading_job_id: number | null;
+  rubric_id: number;
+  evidence_snapshot_hash: string;
+  rubric_snapshot_hash: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "refused" | "skipped" | "uncertain";
+  attempt_count: number;
+  refusal_reason: string | null;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GradingDispatchRun = {
+  id: number;
+  queue_run_id: number;
+  grading_run_id: number;
+  assessment_id: number;
+  question_id: number;
+  created_by_teacher_id: number;
+  provider: string;
+  model_name: string;
+  marking_policy: MarkingPolicy;
+  maximum_calls: number;
+  draft_only_confirmed: boolean;
+  status: "queued" | "running" | "stopping" | "stopped" | "completed" | "failed";
+  stop_requested: boolean;
+  total_count: number;
+  selected_count: number;
+  pending_count: number;
+  running_count: number;
+  succeeded_count: number;
+  failed_count: number;
+  refused_count: number;
+  skipped_count: number;
+  uncertain_count: number;
+  calls_started: number;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  items: GradingDispatchItem[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type BrowserCodexGradeResponse = {
   job: {
     id: number;
@@ -842,6 +984,10 @@ export function login(payload: AuthLogin) {
 
 export function getCurrentUser(token = getStoredAuthToken()) {
   return apiRequest<User>("/auth/me", { token });
+}
+
+export function getLocalAiStatus() {
+  return apiRequest<LocalAiStatus>("/local-ai/status");
 }
 
 export async function logout() {
@@ -1228,6 +1374,31 @@ export function listAssessmentAnswerRegions(assessmentId: number, questionId?: n
   return apiRequest<AnswerRegion[]>(`/assessments/${assessmentId}/answer-regions${query}`);
 }
 
+export function createAnswerRegionOcrRun(answerRegionId: number) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs`, {
+    method: "POST",
+  });
+}
+
+export function listAnswerRegionOcrRuns(answerRegionId: number) {
+  return apiRequest<AnswerRegionOcrRun[]>(`/answer-regions/${answerRegionId}/ocr-runs`);
+}
+
+export function getAnswerRegionOcrRun(runId: number) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-region-ocr-runs/${runId}`);
+}
+
+export function confirmAnswerRegionOcrRun(
+  answerRegionId: number,
+  runId: number,
+  payload: OcrConfirmationRequest,
+) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs/${runId}/confirm`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
 export function getAnswerRegionImageUrl(answerRegionId: number) {
   return `${resolveApiBaseUrl()}/answer-regions/${answerRegionId}/image`;
 }
@@ -1260,6 +1431,44 @@ export function createGradingQueueRun(assessmentId: number) {
     method: "POST",
     token: getStoredAuthToken(),
     authErrorMessage: "Please log in again before preparing the grading queue.",
+  });
+}
+
+export function preflightCohortDispatch(
+  assessmentId: number,
+  questionId: number,
+  payload: CohortDispatchRequest,
+) {
+  return apiRequest<CohortDispatchPreflight>(
+    `/assessments/${assessmentId}/questions/${questionId}/grade-cohort/preflight`,
+    { method: "POST", body: payload },
+  );
+}
+
+export function createCohortDispatch(
+  assessmentId: number,
+  questionId: number,
+  payload: CohortDispatchRequest,
+) {
+  return apiRequest<GradingDispatchRun>(
+    `/assessments/${assessmentId}/questions/${questionId}/grade-cohort`,
+    { method: "POST", body: payload },
+  );
+}
+
+export function getGradingDispatchRun(runId: number) {
+  return apiRequest<GradingDispatchRun>(`/grading-dispatch-runs/${runId}`);
+}
+
+export function stopGradingDispatchRun(runId: number) {
+  return apiRequest<GradingDispatchRun>(`/grading-dispatch-runs/${runId}/stop`, {
+    method: "POST",
+  });
+}
+
+export function resumeGradingDispatchRun(runId: number) {
+  return apiRequest<GradingDispatchRun>(`/grading-dispatch-runs/${runId}/resume`, {
+    method: "POST",
   });
 }
 
