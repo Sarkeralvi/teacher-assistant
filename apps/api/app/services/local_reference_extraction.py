@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import fitz
+from PIL import Image, ImageOps
 
 from app.core.config import Settings, get_settings
 from app.services.local_ocr_client import LocalOcrClient
@@ -77,6 +79,7 @@ class LocalReferenceExtractor:
         content_type: str,
         *,
         on_call_started: Callable[[int], None] | None = None,
+        supplemental_rubric_focus: bool = False,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         rendered = self.render_pages(file_path, content_type)
         pages: list[dict[str, Any]] = []
@@ -92,16 +95,62 @@ class LocalReferenceExtractor:
                 mode="document",
             )
             warnings.extend(f"page {page_no}: {warning}" for warning in result.warnings)
+            normalized_text = result.normalized_text
+            markdown = result.markdown
+            blocks = [block.model_dump(mode="json") for block in result.blocks]
+            latency_ms = result.latency_ms
+            if supplemental_rubric_focus:
+                # Handwritten rubrics are commonly sparse and affected by
+                # reverse-side bleed-through.  Keep the full-page document OCR,
+                # then add a high-contrast left-page reading that preserves the
+                # row labels/marks for the text-only Qwen linker.
+                focused_bytes = _prepare_rubric_focus_png(image_bytes)
+                if on_call_started is not None:
+                    on_call_started(page_no)
+                focused = self.ocr_client.ocr_image(
+                    image_bytes=focused_bytes,
+                    content_type="image/png",
+                    request_id=f"{request_prefix}-page-{page_no}-rubric-focus",
+                    mode="answer_region",
+                )
+                warnings.extend(
+                    f"page {page_no} rubric focus: {warning}"
+                    for warning in focused.warnings
+                )
+                focused_text = focused.normalized_text.strip()
+                if focused_text:
+                    normalized_text = (
+                        f"{normalized_text.strip()}\n\n"
+                        "[RUBRIC HANDWRITING FOCUS]\n"
+                        f"{focused_text}"
+                    ).strip()
+                    markdown = (
+                        f"{markdown.strip()}\n\n"
+                        "## Rubric handwriting focus\n\n"
+                        f"{focused.markdown.strip()}"
+                    ).strip()
+                order_offset = max(
+                    (int(block.get("order") or 0) for block in blocks), default=0
+                )
+                blocks.extend(
+                    {
+                        **block.model_dump(mode="json"),
+                        "order": order_offset + index,
+                        "label": f"rubric_focus_{block.label}",
+                    }
+                    for index, block in enumerate(focused.blocks, start=1)
+                )
+                latency_ms += focused.latency_ms
             pages.append(
                 {
                     "page": page_no,
-                    "text": result.normalized_text,
-                    "markdown": result.markdown,
-                    "blocks": [block.model_dump(mode="json") for block in result.blocks],
+                    "text": normalized_text,
+                    "markdown": markdown,
+                    "blocks": blocks,
                     "device": result.device,
                     "model": result.model,
                     "layout_model": result.layout_model,
-                    "latency_ms": result.latency_ms,
+                    "latency_ms": latency_ms,
                 }
             )
         if not any(str(page["text"]).strip() for page in pages):
@@ -138,3 +187,25 @@ class LocalReferenceExtractor:
         raise LocalReferenceExtractionError(
             "local_paddle_qwen supports PDF, PNG, and JPEG reference files"
         )
+
+
+def _prepare_rubric_focus_png(image_bytes: bytes) -> bytes:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            image = source.convert("RGB")
+    except Exception as exc:
+        raise LocalReferenceExtractionError(
+            "Rubric page could not be prepared for handwriting OCR"
+        ) from exc
+    # This is a supplemental view: the uncropped full-page OCR remains in the
+    # Qwen context.  Most handwritten mark tables place labels and allocations
+    # in the left two-thirds, while this crop removes unrelated reverse-side
+    # writing that otherwise collapses rows into a single OCR line.
+    image = image.crop((0, 0, max(1, int(image.width * 0.62)), image.height))
+    contrasted = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=1)
+    thresholded = contrasted.point(lambda value: 0 if value < 185 else 255).convert(
+        "RGB"
+    )
+    output = io.BytesIO()
+    thresholded.save(output, format="PNG")
+    return output.getvalue()

@@ -54,8 +54,17 @@ class FakeExtractor:
         self.ocr_client = FakeOcrClient()
         self.qwen_calls = 0
 
-    def ocr_pages(self, file_path: Path, _content_type: str, *, on_call_started):
+    def ocr_pages(
+        self,
+        file_path: Path,
+        _content_type: str,
+        *,
+        on_call_started,
+        supplemental_rubric_focus: bool = False,
+    ):
         on_call_started(1)
+        if supplemental_rubric_focus:
+            on_call_started(1)
         return (
             [
                 {
@@ -231,7 +240,7 @@ def test_reference_bundle_runs_gpu_ocr_then_qwen_and_requires_teacher_confirmati
     result = service.serialize(run)
     assert result["status"] == "succeeded"
     assert result["stage"] == "teacher_review_required"
-    assert result["ocr_call_count"] == 3
+    assert result["ocr_call_count"] == 4
     assert result["qwen_call_count"] == 1
     assert phases.phases == ["OcrGpu", "Qwen"]
     assert extractor.qwen_calls == 1

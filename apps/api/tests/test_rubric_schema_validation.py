@@ -173,6 +173,21 @@ def test_accepts_valid_rubric_schema(client: TestClient) -> None:
             lambda data: data.update({"total_marks": 6}),
             "Sum of criterion.max_marks must equal rubric_json.total_marks",
         ),
+        (
+            lambda data: data["criteria"][1].update({"depends_on": ["missing"]}),
+            "criterion.depends_on references an unknown criterion ID",
+        ),
+        (
+            lambda data: data["criteria"][0].update({"depends_on": ["concept"]}),
+            "criterion cannot depend on itself",
+        ),
+        (
+            lambda data: (
+                data["criteria"][0].update({"depends_on": ["method"]}),
+                data["criteria"][1].update({"depends_on": ["concept"]}),
+            ),
+            "criterion dependencies must not contain a cycle",
+        ),
     ],
 )
 def test_rejects_invalid_rubric_schema_payloads(client: TestClient, mutate, message: str) -> None:

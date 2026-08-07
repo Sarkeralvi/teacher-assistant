@@ -6,9 +6,9 @@
 - Scope: local llama.cpp Qwen provider, CPU/GPU PaddleOCR sidecar, teacher-confirmed OCR evidence, local reference extraction, immutable queue safety, explicit capped cohort dispatch, teacher UI, evaluation gate, and operator documentation.
 - Implemented: Gates 5A–5E code paths, migrations `0018`/`0019`, unified reference extraction migration `0020`, sequential GPU OCR→Qwen phase switching, provider/sidecar tests, progressive frontend workflow, and local runbook.
 - Safety: disabled by default; explicit teacher actions; text-only Qwen; OCR drafts require confirmation; manual mapping remains canonical; maximum 25 sequential calls; zero automatic retries; stop on first provider failure; no fallback; no automatic final grades; approved-only export unchanged.
-- Verification completed: 360 backend tests, Ruff, migration head `0020`, PowerShell parsing, frontend type/static/production-build checks, two browser E2E flows, live GPU OCR on all four supplied pages, and verified GPU release before Qwen startup.
-- Verification remaining: run one newly teacher-authorized supplied-bundle extraction against the tightened Qwen output contract; then execute curated run `lc_20260807_teacher01` from its current `prepared` state through all three mandatory teacher sign-offs and obtain a passing report.
-- Pilot status: Blocked until all remaining verification and quality gates pass.
+- Verification completed: 373 backend tests, Ruff, migration head `0020`, all PowerShell parsing, frontend type/static/production-build checks, four browser E2E flows, managed runtime restart synchronization, and safe loopback model lifecycle checks. The supplied three-PDF bundle completed exactly five GPU OCR calls followed by one Qwen call and produced all seven expected linked leaves. The engineering-only 20-case rehearsal recorded 20 OCR calls, two blank refusals, and 18/18 exact Qwen scores under `real-grading-v2`, with zero retry/fallback/final-grade calls. A separate live Qwen smoke used the supplied question, linked solution/rubric, and confirmed synthetic answer and returned the expected 6/6.
+- Verification remaining: prepare a fresh curated run under `real-grading-v2` and complete all three independent teacher sign-offs. The earlier prepared `lc_20260807_teacher01` manifest predates the tightened grading contract and cannot be used to unblock the pilot.
+- Pilot status: Engineering checks pass; real cohort grading remains blocked only by the fresh signed curated evaluation.
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
 

@@ -474,6 +474,8 @@ class RubricCriterionSchema(BaseModel):
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     max_marks: Decimal
+    depends_on: list[str] = Field(default_factory=list)
+    allow_follow_through: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -533,6 +535,33 @@ class RubricJsonSchema(BaseModel):
         ids = [criterion.id for criterion in value]
         if len(ids) != len(set(ids)):
             raise ValueError("criterion.id must be unique within the rubric")
+        known_ids = set(ids)
+        dependencies = {criterion.id: criterion.depends_on for criterion in value}
+        for criterion in value:
+            if len(criterion.depends_on) != len(set(criterion.depends_on)):
+                raise ValueError("criterion.depends_on must contain unique IDs")
+            if criterion.id in criterion.depends_on:
+                raise ValueError("criterion cannot depend on itself")
+            unknown = set(criterion.depends_on) - known_ids
+            if unknown:
+                raise ValueError("criterion.depends_on references an unknown criterion ID")
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(criterion_id: str) -> None:
+            if criterion_id in visiting:
+                raise ValueError("criterion dependencies must not contain a cycle")
+            if criterion_id in visited:
+                return
+            visiting.add(criterion_id)
+            for dependency_id in dependencies[criterion_id]:
+                visit(dependency_id)
+            visiting.remove(criterion_id)
+            visited.add(criterion_id)
+
+        for criterion_id in ids:
+            visit(criterion_id)
         return value
 
     @model_validator(mode="after")
@@ -740,6 +769,7 @@ class ReferenceRubricCriterionDraftRead(BaseModel):
     description: str
     max_marks: Decimal | None
     confidence: Decimal | None
+    blocker: str | None
 
 
 class ReferenceQuestionDraftRead(BaseModel):

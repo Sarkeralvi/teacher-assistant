@@ -55,7 +55,7 @@ class Settings(BaseSettings):
         default=20, alias="LOCAL_REFERENCE_MAX_OCR_CALLS", ge=1, le=100
     )
     local_reference_job_timeout_seconds: int = Field(
-        default=900, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
+        default=1800, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
     )
     cohort_model_grading_enabled: bool = Field(
         default=False, alias="COHORT_MODEL_GRADING_ENABLED"

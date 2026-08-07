@@ -377,10 +377,12 @@ def test_grading_uses_padded_context_crop_without_changing_region_coordinates(
         def __init__(self) -> None:
             self.answer_image_path: str | None = None
             self.student_answer_text: str | None = None
+            self.rubric_json: dict[str, object] | None = None
 
         def grade_answer_region(self, **kwargs: object) -> GradeSuggestionOutput:
             self.answer_image_path = str(kwargs["answer_image_path"])
             self.student_answer_text = str(kwargs["student_answer_text"])
+            self.rubric_json = dict(kwargs["rubric_json"])  # type: ignore[arg-type]
             return GradeSuggestionOutput(
                 model_provider="mock",
                 model_name="mock-grader-v1",
@@ -415,6 +417,11 @@ def test_grading_uses_padded_context_crop_without_changing_region_coordinates(
 
     assert recording_adapter.answer_image_path is not None
     assert recording_adapter.student_answer_text == "A complete answer explains the concept."
+    assert recording_adapter.rubric_json is not None
+    assert (
+        recording_adapter.rubric_json["model_answer"]
+        == "A complete answer explains the concept."
+    )
     assert recording_adapter.answer_image_path != original_image_path
     assert "grading_context" in recording_adapter.answer_image_path
     padded_path = service.storage.resolve_relative(recording_adapter.answer_image_path)
@@ -1118,6 +1125,9 @@ def test_prompt_construction_includes_dependent_rubric_instruction() -> None:
     assert (
         "Do not award marks for a dependent criterion when its prerequisite claim is incorrect"
         in rendered
+    )
+    assert (
+        "A substitution criterion requires substitution into the correct formula" in rendered
     )
     assert (
         "Phrase, detail, justification, or identifying-description marks must refer to the"

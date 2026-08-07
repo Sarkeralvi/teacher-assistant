@@ -10,6 +10,8 @@ type CriterionDraft = {
   name: string;
   description: string;
   max_marks: string;
+  depends_on: string;
+  allow_follow_through: boolean;
 };
 
 const defaultCriteria: CriterionDraft[] = [
@@ -18,12 +20,16 @@ const defaultCriteria: CriterionDraft[] = [
     name: "Core concept",
     description: "Identifies the correct principle or idea.",
     max_marks: "2",
+    depends_on: "",
+    allow_follow_through: false,
   },
   {
     id: "method",
     name: "Method and reasoning",
     description: "Shows correct step-by-step reasoning.",
     max_marks: "3",
+    depends_on: "",
+    allow_follow_through: false,
   },
 ];
 
@@ -35,6 +41,11 @@ function buildRubricJson(totalMarks: string, criteria: CriterionDraft[]) {
       name: criterion.name,
       description: criterion.description,
       max_marks: Number(criterion.max_marks),
+      depends_on: criterion.depends_on
+        .split(",")
+        .map((criterionId) => criterionId.trim())
+        .filter(Boolean),
+      allow_follow_through: criterion.allow_follow_through,
     })),
   };
 }
@@ -79,7 +90,11 @@ export function QuestionDetailClient({ questionId }: Readonly<{ questionId: numb
     void load();
   }, [questionId]);
 
-  function updateCriterion(index: number, field: keyof CriterionDraft, value: string) {
+  function updateCriterion<Field extends keyof CriterionDraft>(
+    index: number,
+    field: Field,
+    value: CriterionDraft[Field],
+  ) {
     setCriteria((current) =>
       current.map((criterion, criterionIndex) =>
         criterionIndex === index ? { ...criterion, [field]: value } : criterion,
@@ -90,7 +105,14 @@ export function QuestionDetailClient({ questionId }: Readonly<{ questionId: numb
   function addCriterion() {
     setCriteria((current) => [
       ...current,
-      { id: `criterion-${current.length + 1}`, name: "", description: "", max_marks: "1" },
+      {
+        id: `criterion-${current.length + 1}`,
+        name: "",
+        description: "",
+        max_marks: "1",
+        depends_on: "",
+        allow_follow_through: false,
+      },
     ]);
   }
 
@@ -136,6 +158,10 @@ export function QuestionDetailClient({ questionId }: Readonly<{ questionId: numb
 
       <form onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Rubric editor</h2>
+        <p className="text-sm text-slate-400">
+          Use prerequisite IDs when a later mark is valid only after an earlier criterion is
+          fully met. Enable follow-through only when your marking policy explicitly allows it.
+        </p>
         <input className={inputClass} placeholder="Version" type="number" min="1" value={version} onChange={(event) => setVersion(event.target.value)} required />
         <label className="grid gap-1 text-sm text-slate-300">
           Total marks
@@ -158,6 +184,22 @@ export function QuestionDetailClient({ questionId }: Readonly<{ questionId: numb
               <input className={inputClass} placeholder="Criterion name" value={criterion.name} onChange={(event) => updateCriterion(index, "name", event.target.value)} required />
               <textarea className={inputClass} placeholder="Criterion description" value={criterion.description} onChange={(event) => updateCriterion(index, "description", event.target.value)} required />
               <input className={inputClass} placeholder="Criterion max marks" type="number" min="0.01" step="0.01" value={criterion.max_marks} onChange={(event) => updateCriterion(index, "max_marks", event.target.value)} required />
+              <input
+                className={inputClass}
+                placeholder="Prerequisite criterion IDs, comma-separated"
+                value={criterion.depends_on}
+                onChange={(event) => updateCriterion(index, "depends_on", event.target.value)}
+              />
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  checked={criterion.allow_follow_through}
+                  onChange={(event) =>
+                    updateCriterion(index, "allow_follow_through", event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                Allow follow-through credit when a prerequisite is not fully met
+              </label>
             </fieldset>
           ))}
         </div>

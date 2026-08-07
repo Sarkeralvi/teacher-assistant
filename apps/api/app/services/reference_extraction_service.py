@@ -198,6 +198,7 @@ class ReferenceExtractionService:
                     paths[document_type],
                     "application/pdf",
                     on_call_started=lambda _page: self._record_ocr_call(grading_run),
+                    supplemental_rubric_focus=document_type == "rubric",
                 )
                 for page in pages:
                     if page.get("device") not in {None, "gpu:0"}:
@@ -444,6 +445,7 @@ class ReferenceExtractionService:
                             "description": criterion.description,
                             "max_marks": criterion.max_marks,
                             "confidence": criterion.confidence,
+                            "blocker": criterion.blocker,
                         }
                         for criterion in grouped.get(node.question_number, [])
                     ],

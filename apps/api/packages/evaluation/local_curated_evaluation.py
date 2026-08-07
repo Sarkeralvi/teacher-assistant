@@ -31,7 +31,7 @@ EXPECTED_QWEN_MODEL = "qwen3.6-35b-a3b-q4km"
 EXPECTED_OCR_MODEL = "PaddleOCR-VL-1.6"
 EXPECTED_LAYOUT_MODEL = "PP-DocLayoutV3"
 EXPECTED_LLAMA_CPP_BUILD = "10249"
-EXPECTED_PROMPT_VERSION = "real-grading-v1"
+EXPECTED_PROMPT_VERSION = "real-grading-v2"
 EXPECTED_PADDLE_PACKAGES = {
     "paddleocr": "3.7.0",
     "paddlex": "3.7.2",
@@ -120,6 +120,8 @@ class RubricCriterion(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(min_length=1)
     max_marks: Decimal = Field(gt=Decimal("0"))
+    depends_on: list[str] = Field(default_factory=list)
+    allow_follow_through: bool = False
 
 
 class LocalCuratedCaseDefinition(BaseModel):
@@ -230,7 +232,7 @@ class LocalCuratedEvaluationManifest(BaseModel):
     expected_qwen_model: str = EXPECTED_QWEN_MODEL
     expected_ocr_model: str = EXPECTED_OCR_MODEL
     expected_layout_model: str = EXPECTED_LAYOUT_MODEL
-    prompt_version: Literal["real-grading-v1"] = EXPECTED_PROMPT_VERSION
+    prompt_version: Literal["real-grading-v2"] = EXPECTED_PROMPT_VERSION
     operator_assets: OperatorAssetMetadata
     transport: Literal["direct_host_eval"] = "direct_host_eval"
     ocr_call_limit: Literal[20] = OCR_CALL_LIMIT
@@ -586,20 +588,37 @@ def _criterion(
     name: str,
     description: str,
     marks: str,
+    *,
+    depends_on: tuple[str, ...] = (),
+    allow_follow_through: bool = False,
 ) -> RubricCriterion:
     return RubricCriterion(
         id=criterion_id,
         name=name,
         description=description,
         max_marks=Decimal(marks),
+        depends_on=list(depends_on),
+        allow_follow_through=allow_follow_through,
     )
 
 
 def build_case_blueprint() -> list[LocalCuratedCaseDefinition]:
     algebra_rubric = [
         _criterion("a_derive", "Derive 2x=8", "Subtracts 3 correctly.", "1"),
-        _criterion("a_divide", "Divide by 2", "Divides both sides by 2.", "1"),
-        _criterion("a_final", "Final answer", "States x=4.", "1"),
+        _criterion(
+            "a_divide",
+            "Divide by 2",
+            "Divides both sides by 2.",
+            "1",
+            depends_on=("a_derive",),
+        ),
+        _criterion(
+            "a_final",
+            "Final answer",
+            "States x=4.",
+            "1",
+            depends_on=("a_divide",),
+        ),
     ]
     biology_rubric = [
         _criterion(
@@ -617,8 +636,20 @@ def build_case_blueprint() -> list[LocalCuratedCaseDefinition]:
     ]
     kinetic_rubric = [
         _criterion("c_formula", "Formula", "Uses KE = 1/2 mv^2.", "2"),
-        _criterion("c_substitution", "Substitution", "Substitutes m=2 and v=3.", "1"),
-        _criterion("c_arithmetic", "Arithmetic", "Calculates 9.", "1"),
+        _criterion(
+            "c_substitution",
+            "Substitution",
+            "Substitutes m=2 and v=3.",
+            "1",
+            depends_on=("c_formula",),
+        ),
+        _criterion(
+            "c_arithmetic",
+            "Arithmetic",
+            "Calculates 9.",
+            "1",
+            depends_on=("c_substitution",),
+        ),
         _criterion("c_unit", "Unit", "Uses joules (J).", "1"),
     ]
     bayes_rubric = [
@@ -630,13 +661,37 @@ def build_case_blueprint() -> list[LocalCuratedCaseDefinition]:
             "Calculates 0.90 x 0.20 = 0.18.",
             "1",
         ),
-        _criterion("d_denominator", "Denominator", "Calculates 0.08 + 0.18 = 0.26.", "1"),
-        _criterion("d_final", "Posterior", "Obtains 4/13 or approximately 0.3077.", "1"),
+        _criterion(
+            "d_denominator",
+            "Denominator",
+            "Calculates 0.08 + 0.18 = 0.26.",
+            "1",
+            depends_on=("d_joint_d", "d_joint_not_d"),
+        ),
+        _criterion(
+            "d_final",
+            "Posterior",
+            "Obtains 4/13 or approximately 0.3077.",
+            "1",
+            depends_on=("d_denominator",),
+        ),
     ]
     height_rubric = [
         _criterion("e_relation", "Valid relation", "Uses a valid kinematic relation.", "2"),
-        _criterion("e_sign", "Signs and substitution", "Uses u=20 and a=-10 correctly.", "1"),
-        _criterion("e_magnitude", "Magnitude", "Obtains a maximum height of 20.", "1"),
+        _criterion(
+            "e_sign",
+            "Signs and substitution",
+            "Uses u=20 and a=-10 correctly.",
+            "1",
+            depends_on=("e_relation",),
+        ),
+        _criterion(
+            "e_magnitude",
+            "Magnitude",
+            "Obtains a maximum height of 20.",
+            "1",
+            depends_on=("e_sign",),
+        ),
         _criterion("e_unit", "Unit", "Uses metres (m).", "1"),
     ]
 
@@ -2033,6 +2088,8 @@ def _seed_production_evaluation(
                         "name": criterion.name,
                         "description": criterion.description,
                         "max_marks": str(criterion.max_marks),
+                        "depends_on": criterion.depends_on,
+                        "allow_follow_through": criterion.allow_follow_through,
                     }
                     for criterion in representative.rubric
                 ],

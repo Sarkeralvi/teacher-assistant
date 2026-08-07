@@ -220,8 +220,12 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
         payload = _result_payload(result, "json")
         markdown_payload = _result_payload(result, "markdown")
         markdown = _markdown_text(markdown_payload)
-        if markdown:
+        if markdown and not _is_decoration_only_text(markdown):
             markdown_pages.append(markdown.strip())
+        elif markdown:
+            warnings.append(
+                f"page {page_index}: page-line decoration was treated as blank"
+            )
         page_blocks = payload.get("parsing_res_list", []) if isinstance(payload, dict) else []
         if not isinstance(page_blocks, list):
             page_blocks = []
@@ -231,6 +235,11 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
                 continue
             content = str(raw_block.get("block_content") or "").strip()
             if not content:
+                continue
+            if _is_decoration_only_text(content):
+                warnings.append(
+                    f"page {page_index}: page-line decoration was treated as blank"
+                )
                 continue
             bbox = raw_block.get("block_bbox")
             if not (
@@ -262,6 +271,19 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
         "blocks": blocks,
         "warnings": list(dict.fromkeys(warnings)),
     }
+
+
+def _is_decoration_only_text(value: str) -> bool:
+    normalized = str(value or "").strip()
+    for mojibake_dash in ("â€”", "â€“", "âˆ’"):
+        normalized = normalized.replace(mojibake_dash, "-")
+    normalized = normalized.translate(
+        str.maketrans({"—": "-", "–": "-", "−": "-", "‑": "-"})
+    )
+    compact = "".join(normalized.split())
+    return bool(compact) and all(
+        character in "-_=~|/\\.·•" for character in compact
+    )
 
 
 def _result_payload(result: Any, attribute: str) -> dict[str, Any]:

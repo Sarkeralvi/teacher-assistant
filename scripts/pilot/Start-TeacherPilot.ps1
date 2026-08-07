@@ -1,4 +1,8 @@
 param(
+    [switch]$StartLocalAi,
+    # Kept for backwards compatibility with the previous pilot command.  Local
+    # models are now on-demand by default, so this switch has the same effect
+    # as omitting -StartLocalAi.
     [switch]$SkipLocalAi,
     [switch]$RebuildFrontend,
     [ValidateSet("Concurrent", "OcrGpu", "OcrCpu", "Qwen")]
@@ -11,6 +15,39 @@ param(
 $paths = Get-PilotPaths
 Assert-PilotRuntime -Paths $paths
 Import-PilotEnvironment -Paths $paths
+
+function Get-NewestSourceWriteTimeUtc {
+    param([Parameter(Mandatory = $true)][string[]]$SourcePaths)
+
+    $newest = [DateTime]::MinValue
+    foreach ($sourcePath in $SourcePaths) {
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            continue
+        }
+        $item = Get-Item -LiteralPath $sourcePath
+        if (-not $item.PSIsContainer) {
+            if ($item.LastWriteTimeUtc -gt $newest) {
+                $newest = $item.LastWriteTimeUtc
+            }
+            continue
+        }
+        $newestChild = Get-ChildItem -LiteralPath $sourcePath -Recurse -File |
+            Where-Object {
+                $_.Extension -in @(".py", ".ini", ".toml") -and
+                $_.FullName -notmatch "[\\/]__pycache__[\\/]"
+            } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        if ($null -ne $newestChild -and $newestChild.LastWriteTimeUtc -gt $newest) {
+            $newest = $newestChild.LastWriteTimeUtc
+        }
+    }
+    return $newest
+}
+
+if ($StartLocalAi -and $SkipLocalAi) {
+    throw "Use either -StartLocalAi or -SkipLocalAi, not both."
+}
 
 $pgCtl = Join-Path $paths.PostgresBin "pg_ctl.exe"
 $pgStatusOutput = & $pgCtl status -D $paths.PostgresData 2>&1
@@ -70,10 +107,15 @@ try {
     Pop-Location
 }
 
-if (-not $SkipLocalAi) {
+# Qwen and PaddleOCR compete for the host GPU.  Keep both off during ordinary
+# pilot startup; a teacher's explicit extraction action phase-switches the
+# required service, or an operator can opt in with -StartLocalAi.
+if ($StartLocalAi) {
     $qwenReady = $false
     $ocrReady = $false
     try {
+        $null = Invoke-RestMethod -Uri "http://127.0.0.1:8080/props" `
+            -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN_API_KEY" } -TimeoutSec 3
         $models = Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/models" `
             -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN_API_KEY" } -TimeoutSec 3
         $qwenReady = @($models.data.id) -contains $env:LOCAL_QWEN_MODEL
@@ -99,6 +141,36 @@ if (-not $SkipLocalAi) {
     } else {
         Write-Host "Local AI phase '$LocalAiMode' is already healthy."
     }
+} else {
+    Write-Host "Local AI is on demand and was not started by this pilot command."
+}
+
+$backendSourceTimestamp = Get-NewestSourceWriteTimeUtc -SourcePaths @(
+    (Join-Path $paths.ApiDirectory "app"),
+    (Join-Path $paths.ApiDirectory "packages"),
+    (Join-Path $paths.ApiDirectory "alembic"),
+    (Join-Path $paths.ApiDirectory "alembic.ini"),
+    (Join-Path $paths.RepositoryRoot ".env.local-ai")
+)
+$existingApi = Get-PilotOwnedProcess -Paths $paths -Name "api" `
+    -ExpectedExecutable $paths.ApiPython
+$existingWorker = Get-PilotOwnedProcess -Paths $paths -Name "worker" `
+    -ExpectedExecutable $paths.ApiPython
+$backendRuntimeStale = (
+    $null -ne $existingApi -and
+    $backendSourceTimestamp -gt $existingApi.StartTime.ToUniversalTime()
+) -or (
+    $null -ne $existingWorker -and
+    $backendSourceTimestamp -gt $existingWorker.StartTime.ToUniversalTime()
+)
+if ($backendRuntimeStale) {
+    if ($null -ne $existingWorker) {
+        Stop-PilotProcess -Paths $paths -Name "worker" -ExpectedExecutable $paths.ApiPython
+    }
+    if ($null -ne $existingApi) {
+        Stop-PilotProcess -Paths $paths -Name "api" -ExpectedExecutable $paths.ApiPython
+    }
+    Write-Host "Backend source or local configuration changed; API and worker will restart."
 }
 
 $apiProcess = Start-PilotProcess -Paths $paths -Name "api" `
@@ -137,7 +209,49 @@ if ($workerProcess.HasExited) {
 }
 
 $buildId = Join-Path $paths.WebDirectory ".next\BUILD_ID"
-if ($RebuildFrontend -or -not (Test-Path -LiteralPath $buildId -PathType Leaf)) {
+$frontendBuildStale = -not (Test-Path -LiteralPath $buildId -PathType Leaf)
+if (-not $frontendBuildStale) {
+    $buildTimestamp = (Get-Item -LiteralPath $buildId).LastWriteTimeUtc
+    $frontendSourcePaths = @(
+        (Join-Path $paths.WebDirectory "app"),
+        (Join-Path $paths.WebDirectory "components"),
+        (Join-Path $paths.WebDirectory "e2e"),
+        (Join-Path $paths.WebDirectory "lib"),
+        (Join-Path $paths.WebDirectory "next.config.ts"),
+        (Join-Path $paths.WebDirectory "package.json"),
+        (Join-Path $paths.WebDirectory "package-lock.json"),
+        (Join-Path $paths.WebDirectory "tsconfig.json")
+    )
+    foreach ($sourcePath in $frontendSourcePaths) {
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            continue
+        }
+        $sourceItem = Get-Item -LiteralPath $sourcePath
+        if (-not $sourceItem.PSIsContainer -and $sourceItem.LastWriteTimeUtc -gt $buildTimestamp) {
+            $frontendBuildStale = $true
+            break
+        }
+        if ($sourceItem.PSIsContainer) {
+            $newerSource = Get-ChildItem -LiteralPath $sourcePath -Recurse -File | Where-Object {
+                $_.LastWriteTimeUtc -gt $buildTimestamp
+            } | Select-Object -First 1
+            if ($null -ne $newerSource) {
+                $frontendBuildStale = $true
+                break
+            }
+        }
+    }
+}
+$frontendNeedsBuild = $RebuildFrontend -or $frontendBuildStale
+$existingFrontend = Get-PilotOwnedProcess -Paths $paths -Name "frontend" `
+    -ExpectedExecutable $paths.Node
+if ($frontendNeedsBuild -and $null -ne $existingFrontend) {
+    # Never replace .next beneath a running Next server. Doing so can leave the
+    # browser requesting chunks from a different build until a manual restart.
+    Stop-PilotProcess -Paths $paths -Name "frontend" -ExpectedExecutable $paths.Node
+    $existingFrontend = $null
+}
+if ($frontendNeedsBuild) {
     Push-Location $paths.WebDirectory
     try {
         & $paths.Npm run build
@@ -147,6 +261,14 @@ if ($RebuildFrontend -or -not (Test-Path -LiteralPath $buildId -PathType Leaf)) 
     } finally {
         Pop-Location
     }
+}
+$buildIdTimestamp = (Get-Item -LiteralPath $buildId).LastWriteTimeUtc
+if (
+    $null -ne $existingFrontend -and
+    $buildIdTimestamp -gt $existingFrontend.StartTime.ToUniversalTime()
+) {
+    Stop-PilotProcess -Paths $paths -Name "frontend" -ExpectedExecutable $paths.Node
+    Write-Host "Frontend build changed; the Next server will restart."
 }
 $nextEntry = Join-Path $paths.WebDirectory "node_modules\next\dist\bin\next"
 $frontendProcess = Start-PilotProcess -Paths $paths -Name "frontend" `
@@ -161,7 +283,11 @@ if ($frontendProcess.HasExited) {
 Write-Host "Teacher Assistant host environment is healthy."
 Write-Host "Frontend: http://localhost:3000"
 Write-Host "Backend:  http://localhost:8000/health"
-Write-Host "Local AI startup phase: $LocalAiMode"
+if ($StartLocalAi) {
+    Write-Host "Local AI startup phase: $LocalAiMode"
+} else {
+    Write-Host "Local AI startup phase: on demand (not started)"
+}
 Write-Host "Cohort model grading enabled: $env:COHORT_MODEL_GRADING_ENABLED"
 if ($env:COHORT_MODEL_GRADING_ENABLED -ne "true") {
     Write-Host "Real cohort grading remains safety-locked until the curated evaluation reports PASS."

@@ -239,7 +239,7 @@ def _grading_result(run_dir: Path) -> GradingRunResult:
                 ],
                 model_provider="llama_cpp_qwen",
                 model_name="qwen3.6-35b-a3b-q4km",
-                prompt_version="real-grading-v1",
+                prompt_version="real-grading-v2",
                 marking_policy="general",
                 token_usage={
                     "prompt_tokens": 60,

@@ -348,6 +348,7 @@ export type ReferenceRubricCriterionDraft = {
   description: string;
   max_marks: string | number | null;
   confidence: string | number | null;
+  blocker: string | null;
 };
 
 export type ReferenceQuestionDraft = {

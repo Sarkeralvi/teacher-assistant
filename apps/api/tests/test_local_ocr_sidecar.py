@@ -44,6 +44,23 @@ class FakePaddleResult:
         self.markdown = {"res": {"markdown_texts": "First line\n\n$x^2$"}}
 
 
+class FakeBlankDecorationResult:
+    def __init__(self) -> None:
+        self.json = {
+            "res": {
+                "parsing_res_list": [
+                    {
+                        "block_label": "text",
+                        "block_content": "â€”â€”",
+                        "block_bbox": [1, 2, 30, 4],
+                        "block_order": 1,
+                    }
+                ]
+            }
+        }
+        self.markdown = {"res": {"markdown_texts": "——"}}
+
+
 class FakeEngine:
     model_name = "PaddleOCR-VL-1.6"
     layout_model_name = "PP-DocLayoutV3"
@@ -86,6 +103,16 @@ def test_sidecar_normalizes_text_markdown_blocks_and_boxes() -> None:
         "text": "First line",
         "bbox": [1, 2, 30, 40],
     }
+
+
+def test_sidecar_treats_page_line_decoration_as_blank_draft() -> None:
+    result = normalize_paddle_results([FakeBlankDecorationResult()])
+
+    assert result["normalized_text"] == ""
+    assert result["markdown"] == ""
+    assert result["blocks"] == []
+    assert "page 1: page-line decoration was treated as blank" in result["warnings"]
+    assert "OCR returned no recognized text" in result["warnings"]
 
 
 def test_sidecar_service_is_image_only_size_limited_and_cpu() -> None:

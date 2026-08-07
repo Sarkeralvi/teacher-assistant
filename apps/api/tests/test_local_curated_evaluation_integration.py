@@ -84,7 +84,7 @@ class FakeLocalQwenProvider(BrainProvider):
         assert answer_image_path == "[image input disabled]"
         assert image_data_url is None
         assert student_answer_text
-        assert prompt_version == "real-grading-v1"
+        assert prompt_version == "real-grading-v2"
         assert marking_policy == "general"
         self.calls.append(student_answer_text)
         criteria = rubric_json["criteria"]

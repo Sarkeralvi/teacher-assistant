@@ -272,6 +272,15 @@ export function CustomControlledGradingRunClient({
     if (materialsUploaded) return 1;
     return 0;
   }, [referencesConfirmed, extraction?.status, materialsUploaded]);
+  const criterionBlockerById = useMemo(() => {
+    const blockers = new Map<number, string>();
+    for (const question of extraction?.questions ?? []) {
+      for (const criterion of question.criteria) {
+        if (criterion.blocker) blockers.set(criterion.id, criterion.blocker);
+      }
+    }
+    return blockers;
+  }, [extraction?.questions]);
 
   if (loading) {
     return <LoadingState />;
@@ -425,6 +434,11 @@ export function CustomControlledGradingRunClient({
           <div className="grid gap-5">
             {drafts.map((question, questionIndex) => (
               <article className="grid gap-4 rounded-xl border border-slate-700 bg-slate-950/35 p-5" key={question.id}>
+                {(!question.model_answer.trim() || !String(question.total_marks).trim()) ? (
+                  <p className="rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
+                    Qwen could not link every required answer or mark. Complete the highlighted empty fields before confirmation.
+                  </p>
+                ) : null}
                 <div className="grid gap-4 md:grid-cols-[10rem_1fr]">
                   <label className="grid gap-2 text-sm text-slate-300">
                     Question number
@@ -480,6 +494,11 @@ export function CustomControlledGradingRunClient({
                           value={criterion.description}
                           onChange={(event) => updateCriterion(questionIndex, criterionIndex, { description: event.target.value })}
                         />
+                        {criterionBlockerById.get(criterion.id) ? (
+                          <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-100">
+                            {criterionBlockerById.get(criterion.id)}
+                          </p>
+                        ) : null}
                       </div>
                       <label className="grid content-start gap-2 text-xs text-slate-400">
                         Marks

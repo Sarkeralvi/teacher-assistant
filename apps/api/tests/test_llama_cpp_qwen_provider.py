@@ -31,14 +31,18 @@ class FakeClient:
         completion: dict[str, Any],
         *,
         models: list[str] | None = None,
+        auth_status_code: int = 200,
     ) -> None:
         self.completion = completion
         self.models = models or ["qwen3.6-35b-a3b-q4km"]
+        self.auth_status_code = auth_status_code
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_calls: list[tuple[str, dict[str, Any]]] = []
 
     def get(self, path: str, **kwargs: Any) -> FakeResponse:
         self.get_calls.append((path, kwargs))
+        if path == "../props":
+            return FakeResponse({"model_path": "redacted"}, status_code=self.auth_status_code)
         return FakeResponse({"data": [{"id": model} for model in self.models]})
 
     def post(self, path: str, **kwargs: Any) -> FakeResponse:
@@ -76,19 +80,21 @@ def valid_completion() -> dict[str, Any]:
             {
                 "criterion_id": "concept",
                 "criterion": "Concept",
+                "criterion_status": "partially_met",
                 "max_marks": "6.00",
                 "awarded_marks": "5.00",
                 "reason": "Mostly correct",
-                "evidence": "Teacher-confirmed text",
+                "evidence": "Confirmed",
                 "confidence": "0.70",
             },
             {
                 "criterion_id": "working",
                 "criterion": "Working",
+                "criterion_status": "partially_met",
                 "max_marks": "4.00",
                 "awarded_marks": "2.00",
                 "reason": "Some working",
-                "evidence": "Teacher-confirmed text",
+                "evidence": "Confirmed",
                 "confidence": "0.65",
             },
         ],
@@ -170,7 +176,7 @@ def test_qwen_provider_verifies_alias_and_returns_strict_text_only_draft() -> No
         rubric_json=rubric(),
         answer_image_path="private/path.png",
         student_answer_text="Teacher-confirmed answer.",
-        prompt_version="real-grading-v1",
+        prompt_version="real-grading-v2",
         messages=[{"role": "user", "content": "Grade the confirmed text."}],
     )
 
@@ -182,9 +188,10 @@ def test_qwen_provider_verifies_alias_and_returns_strict_text_only_draft() -> No
     assert {"teacher_review_required", "image_input_disabled", "local_provider"} <= set(
         result.review_flags
     )
-    assert client.get_calls[0][0] == "models"
+    assert [call[0] for call in client.get_calls] == ["../props", "models"]
     request = client.post_calls[0][1]["json"]
     assert request["model"] == "qwen3.6-35b-a3b-q4km"
+    assert request["max_tokens"] == 1600
     assert request["chat_template_kwargs"] == {"enable_thinking": False}
     assert request["response_format"]["type"] == "json_schema"
     wire_schema = json.dumps(request["response_format"]["json_schema"]["schema"])
@@ -217,7 +224,13 @@ def test_qwen_links_three_ocr_documents_in_one_strict_draft_call() -> None:
 
     result = provider.extract_reference_bundle_from_ocr_documents(
         {
-            "question_paper": [{"page": 1, "text": "QUESTION OCR"}],
+            "question_paper": [
+                {
+                    "page": 1,
+                    "text": "QUESTION OCR",
+                    "markdown": "DUPLICATED QUESTION MARKDOWN",
+                }
+            ],
             "solution": [{"page": 1, "text": "SOLUTION OCR"}],
             "rubric": [{"page": 1, "text": "RUBRIC OCR"}],
         }
@@ -229,17 +242,71 @@ def test_qwen_links_three_ocr_documents_in_one_strict_draft_call() -> None:
     request = client.post_calls[0][1]["json"]
     prompt = json.dumps(request["messages"])
     assert "QUESTION OCR" in prompt
+    assert "DUPLICATED QUESTION MARKDOWN" not in prompt
     assert "SOLUTION OCR" in prompt
     assert "RUBRIC OCR" in prompt
     assert request["response_format"]["json_schema"]["strict"] is True
-    assert request["max_tokens"] == 5000
+    assert request["max_tokens"] == 3500
     schema = request["response_format"]["json_schema"]["schema"]
     assert schema["properties"]["questions"]["maxItems"] == 20
     question_schema = schema["$defs"]["QwenReferenceQuestionDraft"]
+    assert "criteria" in question_schema["required"]
+    assert question_schema["properties"]["criteria"]["minItems"] == 1
     assert question_schema["properties"]["criteria"]["maxItems"] == 8
     model_answer_options = question_schema["properties"]["model_answer"]["anyOf"]
     assert any(option.get("maxLength") == 1800 for option in model_answer_options)
     assert "exactly one object per gradable leaf" in prompt
+    assert "successive worked-answer blocks" in prompt
+    assert "[RUBRIC HANDWRITING FOCUS]" in prompt
+
+
+def test_qwen_reference_bundle_rejects_a_leaf_without_rubric_criteria() -> None:
+    completion = valid_reference_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["questions"][0]["criteria"] = []
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    with pytest.raises(ValueError, match="invalid structured output"):
+        make_provider(FakeClient(completion)).extract_reference_bundle_from_ocr_documents(
+            {
+                "question_paper": [{"page": 1, "text": "QUESTION OCR"}],
+                "solution": [{"page": 1, "text": "SOLUTION OCR"}],
+                "rubric": [{"page": 1, "text": "RUBRIC OCR"}],
+            }
+        )
+
+
+def test_qwen_reference_bundle_derives_missing_marks_from_complete_criteria() -> None:
+    completion = valid_reference_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["questions"][0]["marks"] = None
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    result = make_provider(FakeClient(completion)).extract_reference_bundle_from_ocr_documents(
+        {
+            "question_paper": [{"page": 1, "text": "QUESTION OCR"}],
+            "solution": [{"page": 1, "text": "SOLUTION OCR"}],
+            "rubric": [{"page": 1, "text": "RUBRIC OCR"}],
+        }
+    )
+
+    assert result["questions"][0]["marks"] == "5.00"
+
+
+def test_qwen_reference_bundle_rejects_marks_that_disagree_with_criteria() -> None:
+    completion = valid_reference_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["questions"][0]["marks"] = "6.00"
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    with pytest.raises(ValueError, match="invalid structured output"):
+        make_provider(FakeClient(completion)).extract_reference_bundle_from_ocr_documents(
+            {
+                "question_paper": [{"page": 1, "text": "QUESTION OCR"}],
+                "solution": [{"page": 1, "text": "SOLUTION OCR"}],
+                "rubric": [{"page": 1, "text": "RUBRIC OCR"}],
+            }
+        )
 
 
 def test_reference_structure_scanner_finds_nested_leaf_questions() -> None:
@@ -283,10 +350,20 @@ def test_qwen_provider_refuses_model_alias_mismatch_before_completion() -> None:
             rubric_json=rubric(),
             answer_image_path="unused.png",
             student_answer_text="Confirmed.",
-            prompt_version="real-grading-v1",
+            prompt_version="real-grading-v2",
             messages=[],
         )
 
+    assert client.post_calls == []
+
+
+def test_qwen_provider_requires_authenticated_protected_endpoint() -> None:
+    client = FakeClient(valid_completion(), auth_status_code=401)
+
+    with pytest.raises(RuntimeError, match="API-key authentication failed"):
+        make_provider(client).verify_available_model()
+
+    assert [call[0] for call in client.get_calls] == ["../props"]
     assert client.post_calls == []
 
 
@@ -299,9 +376,98 @@ def test_qwen_provider_rejects_malformed_or_contract_changing_output() -> None:
             rubric_json=rubric(),
             answer_image_path="unused.png",
             student_answer_text="Confirmed.",
-            prompt_version="real-grading-v1",
+            prompt_version="real-grading-v2",
             messages=[],
         )
+
+
+def test_qwen_provider_reconciles_score_from_auditable_breakdown() -> None:
+    completion = valid_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["score"] = "8.00"
+    body["confidence"] = "0.95"
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    result = make_provider(FakeClient(completion)).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric(),
+        answer_image_path="unused.png",
+        student_answer_text="Confirmed.",
+        prompt_version="real-grading-v2",
+        messages=[],
+    )
+
+    assert result.score == Decimal("7.00")
+    assert result.confidence == Decimal("0.75")
+    assert "score_reconciled_from_breakdown" in result.review_flags
+
+
+def test_qwen_provider_removes_credit_for_a_not_met_criterion() -> None:
+    completion = valid_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["rubric_breakdown"][0]["criterion_status"] = "not_met"
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    result = make_provider(FakeClient(completion)).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric(),
+        answer_image_path="unused.png",
+        student_answer_text="Confirmed.",
+        prompt_version="real-grading-v2",
+        messages=[],
+    )
+
+    assert result.score == Decimal("2.00")
+    assert result.rubric_breakdown[0].awarded_marks == Decimal("0")
+    assert result.confidence == Decimal("0.70")
+    assert "criterion_status_reconciled" in result.review_flags
+
+
+def test_qwen_provider_removes_credit_without_verbatim_student_evidence() -> None:
+    completion = valid_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["rubric_breakdown"][0]["evidence"] = "x = 4"
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    result = make_provider(FakeClient(completion)).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric(),
+        answer_image_path="unused.png",
+        student_answer_text="Confirmed.",
+        prompt_version="real-grading-v2",
+        messages=[],
+    )
+
+    assert result.score == Decimal("2.00")
+    assert result.rubric_breakdown[0].awarded_marks == Decimal("0")
+    assert result.confidence == Decimal("0.70")
+    assert "unsupported_criterion_evidence_removed" in result.review_flags
+
+
+def test_qwen_provider_removes_credit_when_rubric_prerequisite_failed() -> None:
+    completion = valid_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["rubric_breakdown"][0]["criterion_status"] = "not_met"
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+    dependent_rubric = rubric()
+    dependent_rubric["criteria"][1]["depends_on"] = ["concept"]
+
+    result = make_provider(FakeClient(completion)).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=dependent_rubric,
+        answer_image_path="unused.png",
+        student_answer_text="Confirmed.",
+        prompt_version="real-grading-v2",
+        messages=[],
+    )
+
+    assert result.score == Decimal("0")
+    assert all(item.awarded_marks == 0 for item in result.rubric_breakdown)
+    assert "dependent_criterion_credit_removed" in result.review_flags
 
     changed = valid_completion()
     body = json.loads(changed["choices"][0]["message"]["content"])
@@ -314,7 +480,7 @@ def test_qwen_provider_rejects_malformed_or_contract_changing_output() -> None:
             rubric_json=rubric(),
             answer_image_path="unused.png",
             student_answer_text="Confirmed.",
-            prompt_version="real-grading-v1",
+            prompt_version="real-grading-v2",
             messages=[],
         )
 

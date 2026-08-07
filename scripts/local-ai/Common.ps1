@@ -35,3 +35,81 @@ function Assert-RequiredEnvironmentValue {
 function Get-RepositoryRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
+
+function Test-LocalAiLoopbackAddress {
+    param([Parameter(Mandatory = $true)][string]$Address)
+
+    $parsedAddress = $null
+    if (-not [Net.IPAddress]::TryParse($Address, [ref]$parsedAddress)) {
+        return $false
+    }
+    return [Net.IPAddress]::IsLoopback($parsedAddress)
+}
+
+function Get-LocalAiListenerInfo {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    $seenProcessIds = @{}
+    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    foreach ($listener in $listeners) {
+        $processId = [int]$listener.OwningProcess
+        $key = "$processId|$($listener.LocalAddress)"
+        if ($seenProcessIds.ContainsKey($key)) {
+            continue
+        }
+        $seenProcessIds[$key] = $true
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
+        [pscustomobject]@{
+            Address = [string]$listener.LocalAddress
+            Port = $Port
+            ProcessId = $processId
+            ExecutablePath = if ($null -ne $process) { [string]$process.ExecutablePath } else { $null }
+            CommandLine = if ($null -ne $process) { [string]$process.CommandLine } else { $null }
+            IsLoopback = Test-LocalAiLoopbackAddress -Address ([string]$listener.LocalAddress)
+        }
+    }
+}
+
+function Test-LocalAiExecutablePath {
+    param(
+        [AllowNull()][string]$ActualPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ActualPath)) {
+        return $false
+    }
+    $resolvedExpectedPath = (Resolve-Path -LiteralPath $ExpectedPath).Path
+    $resolvedActualPath = [IO.Path]::GetFullPath($ActualPath)
+    return [string]::Equals(
+        $resolvedActualPath,
+        $resolvedExpectedPath,
+        [StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Assert-LocalAiListenerOwnership {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
+        [int]$ExpectedProcessId = 0
+    )
+
+    $listeners = @(Get-LocalAiListenerInfo -Port $Port)
+    if ($listeners.Count -eq 0) {
+        throw "Local AI service did not create a listener on port $Port."
+    }
+    foreach ($listener in $listeners) {
+        if (-not $listener.IsLoopback) {
+            throw "Local AI service on port $Port is not loopback-only."
+        }
+        if (-not (Test-LocalAiExecutablePath `
+            -ActualPath $listener.ExecutablePath `
+            -ExpectedPath $ExpectedExecutable)) {
+            throw "Local AI listener on port $Port belongs to an unexpected executable."
+        }
+        if ($ExpectedProcessId -gt 0 -and $listener.ProcessId -ne $ExpectedProcessId) {
+            throw "Local AI listener on port $Port is not owned by the started process."
+        }
+    }
+}

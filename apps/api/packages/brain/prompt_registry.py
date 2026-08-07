@@ -4,7 +4,7 @@ from packages.brain.schemas import ModelPolicy
 
 PROMPT_VERSIONS: dict[ModelPolicy, str] = {
     ModelPolicy.MOCK_GRADING: "mock-grading-v1",
-    ModelPolicy.REAL_GRADING: "real-grading-v1",
+    ModelPolicy.REAL_GRADING: "real-grading-v2",
 }
 
 MARKING_POLICY_INSTRUCTIONS: dict[str, tuple[str, ...]] = {
@@ -97,6 +97,9 @@ DEPENDENT_RUBRIC_GRADING_GUIDANCE: tuple[str, ...] = (
     "- Evaluate rubric criteria in context, not as isolated keyword checks.",
     "- Do not award marks for a dependent criterion when its prerequisite claim is incorrect,",
     "  unless the rubric explicitly allows unrelated partial credit.",
+    "- A substitution criterion requires substitution into the correct formula or relation;",
+    "  do not award it for inserting values into an incorrect formula unless the rubric",
+    "  explicitly grants follow-through credit.",
     "- Phrase, detail, justification, or identifying-description marks must refer to the",
     "  correct entity or answer required by the question and model answer.",
     "- If a detail supports a wrong entity or wrong primary answer, do not award that detail",
@@ -169,20 +172,25 @@ def build_grading_prompt(
     dependent_rubric_guidance = build_dependent_rubric_guidance()
     user_prompt = f"""
 Task: answer_region_grading
-Question text:
+<question>
 {question_text}
+</question>
 
-Model answer:
+<model_answer_reference_only>
 {model_answer}
+</model_answer_reference_only>
 
-Rubric JSON:
+<rubric>
 {rubric_json}
+</rubric>
 
 Image evidence path label:
 {answer_image_path}
 
 Teacher-confirmed student answer text:
+<teacher_confirmed_student_answer>
 {answer_text_block}
+</teacher_confirmed_student_answer>
 
 Image instructions:
 {image_note}
@@ -203,8 +211,14 @@ because of policy. Include marking_policy:{normalized_policy} in review_flags.
 Return strict JSON with these fields:
 score, max_score, confidence, needs_review, rubric_breakdown, detected_answer_summary,
 major_errors, feedback_to_student, review_flags.
-Every rubric_breakdown item must include criterion_id, criterion, max_marks, awarded_marks,
-reason, evidence, confidence. Awarded marks must sum to score. Set needs_review=true and include
+Every rubric_breakdown item must include criterion_id, criterion, criterion_status, max_marks,
+awarded_marks, reason, evidence, confidence. criterion_status must be met, partially_met, or
+not_met. A not_met criterion must receive zero. Never award a criterion that is absent from or
+contradicted by the teacher-confirmed student answer. For every positive award, evidence must be
+a short verbatim substring copied only from <teacher_confirmed_student_answer>; do not add a
+label, explanation, or text from the model answer. Use null evidence for zero awards. Before
+returning, verify that every credited claim is actually present in the student answer and that
+the awarded marks sum to score. Set needs_review=true and include
 teacher_review_required in review_flags. This is a suggestion only; teacher final review
 is required.
 """

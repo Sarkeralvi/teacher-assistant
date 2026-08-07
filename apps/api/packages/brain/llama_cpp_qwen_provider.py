@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from copy import deepcopy
 from decimal import Decimal
 from typing import Any, Literal
@@ -23,6 +24,7 @@ class QwenRubricBreakdownItem(BaseModel):
 
     criterion_id: str = Field(min_length=1)
     criterion: str = Field(min_length=1)
+    criterion_status: Literal["met", "partially_met", "not_met"]
     max_marks: Decimal = Field(ge=Decimal("0"))
     awarded_marks: Decimal = Field(ge=Decimal("0"))
     reason: str = Field(min_length=1)
@@ -50,14 +52,32 @@ class QwenGradePayload(BaseModel):
     review_flags: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def score_must_match_breakdown(self) -> QwenGradePayload:
+    def reconcile_score_with_breakdown(self) -> QwenGradePayload:
         if self.score > self.max_score:
             raise ValueError("score cannot exceed max_score")
+        status_reconciled = False
+        for item in self.rubric_breakdown:
+            if item.criterion_status == "not_met" and item.awarded_marks != 0:
+                item.awarded_marks = Decimal("0")
+                item.confidence = min(item.confidence, Decimal("0.75"))
+                status_reconciled = True
+        if status_reconciled:
+            self.confidence = min(self.confidence, Decimal("0.75"))
+            if "criterion_status_reconciled" not in self.review_flags:
+                self.review_flags.append("criterion_status_reconciled")
         total = sum(
             (item.awarded_marks for item in self.rubric_breakdown), Decimal("0")
         )
         if total != self.score:
-            raise ValueError("rubric breakdown awarded marks must sum to score")
+            # The criterion-level decisions are the auditable grading result.
+            # llama.cpp's JSON grammar cannot express this cross-field sum, so
+            # reconcile deterministically instead of issuing a second model
+            # call.  Keep the inconsistency visible to the teacher and lower
+            # confidence in the draft.
+            self.score = total
+            self.confidence = min(self.confidence, Decimal("0.75"))
+            if "score_reconciled_from_breakdown" not in self.review_flags:
+                self.review_flags.append("score_reconciled_from_breakdown")
         return self
 
 
@@ -127,7 +147,11 @@ class QwenReferenceQuestionDraft(BaseModel):
     source_solution_pages: list[int] = Field(default_factory=list, max_length=5)
     source_text_excerpt: str = Field(min_length=1, max_length=300)
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    criteria: list[QwenReferenceCriterionDraft] = Field(default_factory=list, max_length=8)
+    # A leaf is not actionable in the review screen without at least one
+    # rubric row.  Do not let an omitted optional field silently turn into an
+    # empty list: llama.cpp's JSON grammar will require this property and
+    # Pydantic will reject an empty response before it reaches persistence.
+    criteria: list[QwenReferenceCriterionDraft] = Field(min_length=1, max_length=8)
     blockers: list[str] = Field(default_factory=list, max_length=8)
     needs_review: Literal[True]
 
@@ -143,6 +167,23 @@ class QwenReferenceBundlePayload(BaseModel):
         numbers = [item.question_number.strip().casefold() for item in self.questions]
         if len(numbers) != len(set(numbers)):
             raise ValueError("reference question numbers must be unique")
+        for item in self.questions:
+            criterion_marks = [criterion.max_marks for criterion in item.criteria]
+            if not criterion_marks or any(mark is None for mark in criterion_marks):
+                continue
+            criterion_total = sum(
+                (mark for mark in criterion_marks if mark is not None), Decimal("0")
+            )
+            if item.marks is None:
+                # This is a deterministic copy of the complete rubric
+                # allocation, not a model inference.  It keeps the editable
+                # question draft internally consistent while teacher review is
+                # still mandatory.
+                item.marks = criterion_total
+            elif item.marks != criterion_total:
+                raise ValueError(
+                    "reference question marks must equal the rubric criterion total"
+                )
         return self
 
 
@@ -151,6 +192,10 @@ _DATA_URL_PATTERN = re.compile(
     r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+", re.IGNORECASE
 )
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+# A grading suggestion is deliberately concise.  Bound generation so an
+# unavailable or rambling local model cannot occupy the single Qwen slot
+# indefinitely; the strict schema still requires a complete rubric breakdown.
+_GRADE_MAX_TOKENS = 1600
 
 
 class LlamaCppQwenProvider(BrainProvider):
@@ -213,8 +258,11 @@ class LlamaCppQwenProvider(BrainProvider):
             messages=messages or [],
             response_model=QwenGradePayload,
             schema_name="grade_suggestion",
+            max_tokens=_GRADE_MAX_TOKENS,
         )
         assert isinstance(payload, QwenGradePayload)
+        self._remove_unsupported_criterion_credit(payload, student_answer_text)
+        self._enforce_rubric_dependencies(payload, rubric_json)
         self._validate_grade_contract(payload, question_total_marks, rubric_json)
         flags = list(payload.review_flags)
         for flag in (
@@ -230,7 +278,9 @@ class LlamaCppQwenProvider(BrainProvider):
             confidence=payload.confidence,
             needs_review=True,
             rubric_breakdown=[
-                RubricBreakdownItem.model_validate(item.model_dump())
+                RubricBreakdownItem.model_validate(
+                    item.model_dump(exclude={"criterion_status"})
+                )
                 for item in payload.rubric_breakdown
             ],
             detected_answer_summary=payload.detected_answer_summary,
@@ -245,6 +295,73 @@ class LlamaCppQwenProvider(BrainProvider):
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
         )
+
+    def _remove_unsupported_criterion_credit(
+        self, payload: QwenGradePayload, student_answer_text: str
+    ) -> None:
+        changed = False
+        for item in payload.rubric_breakdown:
+            if item.awarded_marks <= 0:
+                continue
+            if _evidence_is_verbatim_student_text(item.evidence, student_answer_text):
+                continue
+            item.awarded_marks = Decimal("0")
+            item.confidence = min(item.confidence, Decimal("0.75"))
+            changed = True
+        if not changed:
+            return
+        payload.score = sum(
+            (item.awarded_marks for item in payload.rubric_breakdown), Decimal("0")
+        )
+        payload.confidence = min(payload.confidence, Decimal("0.75"))
+        if "unsupported_criterion_evidence_removed" not in payload.review_flags:
+            payload.review_flags.append("unsupported_criterion_evidence_removed")
+
+    def _enforce_rubric_dependencies(
+        self, payload: QwenGradePayload, rubric_json: dict[str, Any]
+    ) -> None:
+        criteria = rubric_json.get("criteria")
+        if not isinstance(criteria, list):
+            return
+        requirements = {
+            str(criterion.get("id")): tuple(
+                str(dependency_id)
+                for dependency_id in criterion.get("depends_on", [])
+            )
+            for criterion in criteria
+            if isinstance(criterion, dict)
+            and criterion.get("id") is not None
+            and not bool(criterion.get("allow_follow_through", False))
+        }
+        breakdown = {item.criterion_id: item for item in payload.rubric_breakdown}
+        changed = False
+        pending = True
+        while pending:
+            pending = False
+            for criterion_id, dependency_ids in requirements.items():
+                item = breakdown.get(criterion_id)
+                if item is None or item.awarded_marks <= 0 or not dependency_ids:
+                    continue
+                prerequisites_met = all(
+                    dependency_id in breakdown
+                    and breakdown[dependency_id].awarded_marks
+                    == breakdown[dependency_id].max_marks
+                    for dependency_id in dependency_ids
+                )
+                if prerequisites_met:
+                    continue
+                item.awarded_marks = Decimal("0")
+                item.confidence = min(item.confidence, Decimal("0.75"))
+                changed = True
+                pending = True
+        if not changed:
+            return
+        payload.score = sum(
+            (item.awarded_marks for item in payload.rubric_breakdown), Decimal("0")
+        )
+        payload.confidence = min(payload.confidence, Decimal("0.75"))
+        if "dependent_criterion_credit_removed" not in payload.review_flags:
+            payload.review_flags.append("dependent_criterion_credit_removed")
 
     def extract_questions_from_ocr_pages(
         self, pages: list[dict[str, Any]]
@@ -331,11 +448,22 @@ class LlamaCppQwenProvider(BrainProvider):
                     "For every gradable question or subquestion, extract the exact question "
                     "text, the matching model answer from SOLUTION, total marks, and matching "
                     "rubric criteria from RUBRIC. Include source page numbers and confidence. "
-                    "Use blockers for missing, ambiguous, or unmatched material. Never invent "
-                    "an answer, mark, or criterion. Create exactly one object per gradable leaf "
+                    "Use blockers for missing, ambiguous, or unmatched material. Every leaf MUST "
+                    "contain at least one criterion object. When the rubric wording cannot be "
+                    "read or linked, use one explicit draft placeholder with a descriptive "
+                    "criterion_label, max_marks null, and a blocker saying that the teacher must "
+                    "supply or correct the rubric; do not invent marks. Otherwise extract the "
+                    "actual rubric criterion. Create exactly one object per gradable leaf "
                     "part: when a parent has (i), (ii), or similar children, output the children "
-                    "and do not also output the parent. Never duplicate a question number. Keep "
-                    "model answers and rubric descriptions concise while preserving calculations. "
+                    "and do not also output the parent. Never duplicate a question number. "
+                    "When a SOLUTION section names only a parent such as Question 1(a), map its "
+                    "successive worked-answer blocks to that parent's leaf parts in question-paper "
+                    "order and record the solution page on each leaf. When the RUBRIC includes a "
+                    "[RUBRIC HANDWRITING FOCUS] section, prefer that structured reading for exact "
+                    "leaf labels and mark allocations; use the full-page reading only as context. "
+                    "For a single criterion row, its max_marks must equal the leaf marks. "
+                    "Keep model answers and rubric descriptions concise while preserving "
+                    "calculations. "
                     "Stop immediately after the last source question; never add filler entries."
                     + structure_instruction
                     + "\n\n"
@@ -347,7 +475,7 @@ class LlamaCppQwenProvider(BrainProvider):
             messages=messages,
             response_model=QwenReferenceBundlePayload,
             schema_name="reference_bundle_extraction",
-            max_tokens=5000,
+            max_tokens=3500,
         )
         assert isinstance(payload, QwenReferenceBundlePayload)
         if question_hints:
@@ -365,6 +493,13 @@ class LlamaCppQwenProvider(BrainProvider):
         if self._model_verified:
             return
         try:
+            # llama.cpp intentionally leaves /v1/models readable, even when
+            # --api-key is configured. Verify the key against a lightweight
+            # protected endpoint before trusting model-alias health.
+            auth_response = self.client.get("../props", headers=self._headers())
+            if getattr(auth_response, "status_code", None) in {401, 403}:
+                raise RuntimeError("Local Qwen API-key authentication failed")
+            auth_response.raise_for_status()
             response = self.client.get("models", headers=self._headers())
             response.raise_for_status()
             payload = response.json()
@@ -497,10 +632,14 @@ class LlamaCppQwenProvider(BrainProvider):
             page_chunks: list[str] = []
             for page in pages:
                 page_no = page.get("page", page.get("page_no", "?"))
+                # Normalized OCR text contains the same semantic evidence as the
+                # rendered Markdown without repeating layout markup and table
+                # scaffolding.  Prefer it so one local extraction remains well
+                # inside the 32K context and the host job timeout.
                 content = str(
-                    page.get("markdown")
-                    or page.get("text")
+                    page.get("text")
                     or page.get("normalized_text")
+                    or page.get("markdown")
                     or ""
                 ).strip()
                 if content:
@@ -568,6 +707,29 @@ def _prefer_json_numbers(value: Any) -> Any:
         return {**filtered[0], **metadata}
     normalized["anyOf"] = filtered
     return normalized
+
+
+def _evidence_is_verbatim_student_text(
+    evidence: str | None, student_answer_text: str
+) -> bool:
+    if not (evidence or "").strip():
+        return False
+    candidate = str(evidence).strip()
+    candidate = re.sub(
+        r"(?i)^\s*(?:student(?:'s)?\s+(?:answer|work)|answer|evidence)\s*:\s*",
+        "",
+        candidate,
+    ).strip()
+    candidate = candidate.strip("'\"`“”‘’ ")
+    normalized_candidate = _normalize_evidence_text(candidate)
+    normalized_answer = _normalize_evidence_text(student_answer_text)
+    return bool(normalized_candidate) and normalized_candidate in normalized_answer
+
+
+def _normalize_evidence_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    normalized = normalized.replace("×", "x").replace("−", "-")
+    return " ".join(normalized.split()).strip(" .;,'\"`“”‘’")
 
 
 def _reference_question_number_hints(

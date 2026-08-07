@@ -88,6 +88,8 @@ try {
         }
         if (-not $qwenReady) {
             try {
+                $null = Invoke-RestMethod -Uri "http://127.0.0.1:8080/props" `
+                    -Headers @{ Authorization = "Bearer $qwenKey" } -TimeoutSec 3
                 $models = Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/models" `
                     -Headers @{ Authorization = "Bearer $qwenKey" } -TimeoutSec 3
                 $qwenReady = @($models.data.id) -contains "qwen3.6-35b-a3b-q4km"
@@ -111,6 +113,14 @@ try {
 
     if (-not $qwenReady -or -not $ocrReady) {
         throw "Local AI phase did not become healthy. Inspect .local-ai/logs."
+    }
+    if ($startQwen) {
+        Assert-LocalAiListenerOwnership -Port 8080 `
+            -ExpectedExecutable $qwenBinary -ExpectedProcessId $qwenProcess.Id
+    }
+    if ($startOcr) {
+        Assert-LocalAiListenerOwnership -Port 8090 `
+            -ExpectedExecutable $ocrPython -ExpectedProcessId $ocrProcess.Id
     }
     Write-Host "Local AI phase '$Mode' is healthy on loopback."
     if ($null -ne $qwenProcess) {

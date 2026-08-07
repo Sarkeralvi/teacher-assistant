@@ -172,7 +172,7 @@ def test_openai_provider_mocked_response_validates_to_grade_suggestion() -> None
 
     assert result.model_provider == "openai"
     assert result.model_name == "gpt-test"
-    assert result.prompt_version == "real-grading-v1"
+    assert result.prompt_version == "real-grading-v2"
     assert result.needs_review is True
     assert "teacher_review_required" in result.review_flags
     assert result.score == Decimal("3")

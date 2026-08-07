@@ -18,11 +18,16 @@ This runbook executes the 20-case synthetic, teacher-supervised PaddleOCR and Qw
 From `apps/api`, choose a lowercase run ID containing only letters, digits, and underscores. Record the reviewed local-integration commit and current clean harness commit:
 
 ```powershell
-$runId = 'lc_20260807_teacher01'
-$integrationCommit = 'd77c324be425e002e0f5a1c655c38a0671cbf268'
+$runId = 'lc_20260808_teacher01_v2'
+$integrationCommit = '<full-reviewed-integration-commit-hash>'
 $harnessCommit = git rev-parse HEAD
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation prepare --run-id $runId --integration-commit $integrationCommit --harness-commit $harnessCommit
 ```
+
+Do not reuse `lc_20260807_teacher01`: it was prepared before
+`real-grading-v2` tightened criterion evidence and dependency handling. A
+fresh run ID is required so its manifest, images, sign-offs, and prompt hash
+form one consistent lock chain.
 
 This requires a clean worktree and the ignored `.env.local-ai` path settings. It hashes the local Qwen and Paddle model assets, verifies llama.cpp build `10249` and Paddle package versions, then records those values in the run manifest. It also generates 20 deterministic PNGs and `ground_truth_review.xlsx`. It starts no service and makes zero OCR or Qwen calls; hashing the 20.61 GiB GGUF may take several minutes.
 

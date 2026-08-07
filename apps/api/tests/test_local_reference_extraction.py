@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ class FakeOcrClient:
         return LocalOcrResult.model_validate(
             {
                 "request_id": kwargs["request_id"],
-                "mode": "document",
+                "mode": kwargs["mode"],
                 "text": "Q1 Explain gravity. [5 marks] Model answer: attraction.",
                 "normalized_text": (
                     "Q1 Explain gravity. [5 marks] Model answer: attraction."
@@ -124,6 +125,31 @@ def test_local_reference_pipeline_uses_page_order_and_returns_teacher_drafts(
     assert result["warnings"] == [
         "page 1: review_formula_layout",
         "teacher_confirmation_required",
+    ]
+
+
+def test_rubric_focus_keeps_full_page_ocr_and_adds_handwriting_view(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "rubric.png"
+    make_image(image_path)
+    extractor, ocr, _qwen = make_extractor()
+
+    pages, warnings = extractor.ocr_pages(
+        image_path,
+        "image/png",
+        supplemental_rubric_focus=True,
+    )
+
+    assert [call["mode"] for call in ocr.calls] == ["document", "answer_region"]
+    with Image.open(io.BytesIO(ocr.calls[1]["image_bytes"])) as focused:
+        assert focused.width < 80
+        assert focused.height == 60
+    assert "[RUBRIC HANDWRITING FOCUS]" in pages[0]["text"]
+    assert any(block["label"].startswith("rubric_focus_") for block in pages[0]["blocks"])
+    assert warnings == [
+        "page 1: review_formula_layout",
+        "page 1 rubric focus: review_formula_layout",
     ]
 
 

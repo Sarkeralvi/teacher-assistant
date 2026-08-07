@@ -43,9 +43,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 foreach ($port in @(8080, 8090)) {
-    $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-    if ($listener) {
-        throw "Port $port is already listening. Stop or identify that process before startup."
+    $listeners = @(Get-LocalAiListenerInfo -Port $port)
+    if ($listeners.Count -gt 0) {
+        $binding = if (@($listeners | Where-Object { -not $_.IsLoopback }).Count -gt 0) {
+            "an unsafe non-loopback binding"
+        } else {
+            "an existing loopback binding"
+        }
+        throw "Port $port already has $binding. Stop or identify that process before startup."
     }
 }
 

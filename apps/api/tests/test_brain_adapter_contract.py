@@ -52,6 +52,7 @@ def test_mock_brain_adapter_returns_schema_valid_mock_grade_suggestion() -> None
     assert validated.prompt_version == get_prompt_version(ModelPolicy.MOCK_GRADING)
     assert "mock_provider" in validated.review_flags
     assert "teacher_review_required" in validated.review_flags
+    assert "marking_policy:general" in validated.review_flags
     assert "No real answer understanding" in validated.detected_answer_summary
     assert [item.criterion_id for item in validated.rubric_breakdown] == ["concept", "working"]
     awarded_marks = [item.awarded_marks for item in validated.rubric_breakdown]

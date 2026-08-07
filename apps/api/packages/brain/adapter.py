@@ -202,7 +202,16 @@ class BrainAdapter:
             raise RuntimeError(sanitized) from exc
         latency_ms = int((time.perf_counter() - start) * 1000)
         validated = GradeSuggestionOutput.model_validate(output.model_dump())
-        return validated.model_copy(update={"latency_ms": latency_ms})
+        # Marking policy is authorization metadata, not model-authored prose.
+        # Persist it deterministically even when a provider abbreviates or
+        # omits the requested review flag.
+        review_flags = list(validated.review_flags)
+        policy_flag = f"marking_policy:{normalized_marking_policy}"
+        if policy_flag not in review_flags:
+            review_flags.append(policy_flag)
+        return validated.model_copy(
+            update={"latency_ms": latency_ms, "review_flags": review_flags}
+        )
 
     def extract_questions_from_document(self, file_path: str) -> dict[str, Any]:
         try:
