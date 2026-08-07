@@ -103,6 +103,49 @@ class QwenRubricExtractionPayload(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class QwenReferenceCriterionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criterion_label: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=400)
+    max_marks: Decimal | None = Field(default=None, gt=Decimal("0"))
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    source_rubric_pages: list[int] = Field(default_factory=list, max_length=5)
+    blocker: str | None = Field(default=None, max_length=400)
+
+
+class QwenReferenceQuestionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_number: str = Field(min_length=1, max_length=32)
+    parent_question_number: str | None = Field(default=None, max_length=32)
+    node_type: Literal["question", "subquestion"]
+    question_text: str = Field(min_length=1, max_length=1800)
+    model_answer: str | None = Field(default=None, max_length=1800)
+    marks: Decimal | None = Field(default=None, gt=Decimal("0"))
+    source_question_pages: list[int] = Field(min_length=1, max_length=5)
+    source_solution_pages: list[int] = Field(default_factory=list, max_length=5)
+    source_text_excerpt: str = Field(min_length=1, max_length=300)
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    criteria: list[QwenReferenceCriterionDraft] = Field(default_factory=list, max_length=8)
+    blockers: list[str] = Field(default_factory=list, max_length=8)
+    needs_review: Literal[True]
+
+
+class QwenReferenceBundlePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    questions: list[QwenReferenceQuestionDraft] = Field(min_length=1, max_length=20)
+    warnings: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def question_numbers_must_be_unique(self) -> QwenReferenceBundlePayload:
+        numbers = [item.question_number.strip().casefold() for item in self.questions]
+        if len(numbers) != len(set(numbers)):
+            raise ValueError("reference question numbers must be unique")
+        return self
+
+
 _API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
 _DATA_URL_PATTERN = re.compile(
     r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+", re.IGNORECASE
@@ -260,6 +303,64 @@ class LlamaCppQwenProvider(BrainProvider):
         assert isinstance(payload, QwenRubricExtractionPayload)
         return payload.model_dump(mode="json")
 
+    def extract_reference_bundle_from_ocr_documents(
+        self, documents: dict[str, list[dict[str, Any]]]
+    ) -> dict[str, Any]:
+        context = self._ocr_document_context(documents)
+        question_hints = _reference_question_number_hints(documents)
+        structure_instruction = ""
+        if question_hints:
+            structure_instruction = (
+                " A deterministic structure scan found these gradable leaf labels: "
+                + ", ".join(question_hints)
+                + ". Return each label exactly once and return no other question labels."
+            )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Link a question paper, its worked solution/model answer, and its "
+                    "marking rubric from local OCR text. Use only supplied text. Preserve "
+                    "question numbering and mathematics. Every output is an editable draft; "
+                    "needs_review must be true. Return strict JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "For every gradable question or subquestion, extract the exact question "
+                    "text, the matching model answer from SOLUTION, total marks, and matching "
+                    "rubric criteria from RUBRIC. Include source page numbers and confidence. "
+                    "Use blockers for missing, ambiguous, or unmatched material. Never invent "
+                    "an answer, mark, or criterion. Create exactly one object per gradable leaf "
+                    "part: when a parent has (i), (ii), or similar children, output the children "
+                    "and do not also output the parent. Never duplicate a question number. Keep "
+                    "model answers and rubric descriptions concise while preserving calculations. "
+                    "Stop immediately after the last source question; never add filler entries."
+                    + structure_instruction
+                    + "\n\n"
+                    + context
+                ),
+            },
+        ]
+        payload, usage = self._structured_completion(
+            messages=messages,
+            response_model=QwenReferenceBundlePayload,
+            schema_name="reference_bundle_extraction",
+            max_tokens=5000,
+        )
+        assert isinstance(payload, QwenReferenceBundlePayload)
+        if question_hints:
+            actual = [item.question_number.strip().casefold() for item in payload.questions]
+            expected = [item.casefold() for item in question_hints]
+            if actual != expected:
+                raise ValueError(
+                    "Local Qwen output did not match the detected source question structure"
+                )
+        result = payload.model_dump(mode="json")
+        result["usage"] = usage
+        return result
+
     def verify_model(self) -> None:
         if self._model_verified:
             return
@@ -294,27 +395,31 @@ class LlamaCppQwenProvider(BrainProvider):
         messages: list[dict[str, Any]],
         response_model: type[BaseModel],
         schema_name: str,
+        max_tokens: int | None = None,
     ) -> tuple[BaseModel, dict[str, int]]:
         self.verify_model()
         try:
+            request_json: dict[str, Any] = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0,
+                "stream": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": _llama_cpp_json_schema(response_model),
+                    },
+                },
+            }
+            if max_tokens is not None:
+                request_json["max_tokens"] = max_tokens
             response = self.client.post(
                 "chat/completions",
                 headers=self._headers(),
-                json={
-                    "model": self.model_name,
-                    "messages": messages,
-                    "temperature": 0,
-                    "stream": False,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": schema_name,
-                            "strict": True,
-                            "schema": _llama_cpp_json_schema(response_model),
-                        },
-                    },
-                },
+                json=request_json,
             )
             response.raise_for_status()
             body = response.json()
@@ -378,6 +483,33 @@ class LlamaCppQwenProvider(BrainProvider):
             raise ValueError("Local OCR returned no text to extract")
         return "\n\n".join(chunks)
 
+    def _ocr_document_context(
+        self, documents: dict[str, list[dict[str, Any]]]
+    ) -> str:
+        chunks: list[str] = []
+        labels = {
+            "question_paper": "QUESTION PAPER",
+            "solution": "SOLUTION / MODEL ANSWER",
+            "rubric": "RUBRIC",
+        }
+        for document_type in ("question_paper", "solution", "rubric"):
+            pages = documents.get(document_type, [])
+            page_chunks: list[str] = []
+            for page in pages:
+                page_no = page.get("page", page.get("page_no", "?"))
+                content = str(
+                    page.get("markdown")
+                    or page.get("text")
+                    or page.get("normalized_text")
+                    or ""
+                ).strip()
+                if content:
+                    page_chunks.append(f"--- {labels[document_type]} PAGE {page_no} ---\n{content}")
+            if not page_chunks:
+                raise ValueError(f"Local OCR returned no text for {labels[document_type]}")
+            chunks.extend(page_chunks)
+        return "\n\n".join(chunks)
+
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"}
 
@@ -436,3 +568,52 @@ def _prefer_json_numbers(value: Any) -> Any:
         return {**filtered[0], **metadata}
     normalized["anyOf"] = filtered
     return normalized
+
+
+def _reference_question_number_hints(
+    documents: dict[str, list[dict[str, Any]]],
+) -> list[str]:
+    """Return high-confidence nested leaf labels from the question paper OCR.
+
+    Hints are emitted only when at least two lettered parents contain roman
+    children, which avoids constraining less structured papers.
+    """
+
+    pages = documents.get("question_paper", [])
+    text = "\n".join(
+        str(page.get("text") or page.get("normalized_text") or "") for page in pages
+    )
+    current_number: str | None = None
+    current_parent: str | None = None
+    parent_count = 0
+    leaves: list[str] = []
+    roman_pattern = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("-*• ")
+        if not line:
+            continue
+        number_match = re.match(r"^(\d+)\s*[.)]?\s*(.*)$", line)
+        remainder = line
+        if number_match:
+            current_number = number_match.group(1)
+            current_parent = None
+            remainder = number_match.group(2).lstrip()
+        marker_match = re.match(r"^\(([A-Za-z]+)\)", remainder)
+        if marker_match is None or current_number is None:
+            continue
+        marker = marker_match.group(1).lower()
+        if len(marker) == 1 and marker in "abcdefgh":
+            current_parent = marker
+            parent_count += 1
+            continue
+        if roman_pattern.fullmatch(marker):
+            label = (
+                f"{current_number}({current_parent})({marker})"
+                if current_parent
+                else f"{current_number}({marker})"
+            )
+            if label not in leaves:
+                leaves.append(label)
+
+    return leaves if parent_count >= 2 and len(leaves) >= 2 else []

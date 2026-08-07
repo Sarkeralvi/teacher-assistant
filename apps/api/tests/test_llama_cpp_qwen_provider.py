@@ -6,7 +6,10 @@ import pytest
 
 from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
-from packages.brain.llama_cpp_qwen_provider import LlamaCppQwenProvider
+from packages.brain.llama_cpp_qwen_provider import (
+    LlamaCppQwenProvider,
+    _reference_question_number_hints,
+)
 
 
 class FakeResponse:
@@ -104,6 +107,50 @@ def valid_completion() -> dict[str, Any]:
     }
 
 
+def valid_reference_completion() -> dict[str, Any]:
+    content = {
+        "questions": [
+            {
+                "question_number": "1(a)",
+                "parent_question_number": "1",
+                "node_type": "subquestion",
+                "question_text": "Calculate the probability.",
+                "model_answer": "Use total probability to obtain 31/120.",
+                "marks": "5.00",
+                "source_question_pages": [1],
+                "source_solution_pages": [1],
+                "source_text_excerpt": "Calculate the probability.",
+                "confidence": "0.90",
+                "criteria": [
+                    {
+                        "criterion_label": "Method",
+                        "description": "Uses total probability.",
+                        "max_marks": "3.00",
+                        "confidence": "0.90",
+                        "source_rubric_pages": [1],
+                        "blocker": None,
+                    },
+                    {
+                        "criterion_label": "Answer",
+                        "description": "Obtains 31/120.",
+                        "max_marks": "2.00",
+                        "confidence": "0.90",
+                        "source_rubric_pages": [1],
+                        "blocker": None,
+                    },
+                ],
+                "blockers": [],
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+    return {
+        "choices": [{"message": {"content": json.dumps(content)}}],
+        "usage": {"prompt_tokens": 300, "completion_tokens": 200, "total_tokens": 500},
+    }
+
+
 def make_provider(client: FakeClient) -> LlamaCppQwenProvider:
     return LlamaCppQwenProvider(
         api_key="key-local-secret",
@@ -162,6 +209,68 @@ def test_qwen_adapter_does_not_send_the_answer_image_path() -> None:
     serialized = json.dumps(request)
     assert "private/student/path.png" not in serialized
     assert "Teacher-confirmed answer." in serialized
+
+
+def test_qwen_links_three_ocr_documents_in_one_strict_draft_call() -> None:
+    client = FakeClient(valid_reference_completion())
+    provider = make_provider(client)
+
+    result = provider.extract_reference_bundle_from_ocr_documents(
+        {
+            "question_paper": [{"page": 1, "text": "QUESTION OCR"}],
+            "solution": [{"page": 1, "text": "SOLUTION OCR"}],
+            "rubric": [{"page": 1, "text": "RUBRIC OCR"}],
+        }
+    )
+
+    assert result["questions"][0]["needs_review"] is True
+    assert result["usage"]["total_tokens"] == 500
+    assert len(client.post_calls) == 1
+    request = client.post_calls[0][1]["json"]
+    prompt = json.dumps(request["messages"])
+    assert "QUESTION OCR" in prompt
+    assert "SOLUTION OCR" in prompt
+    assert "RUBRIC OCR" in prompt
+    assert request["response_format"]["json_schema"]["strict"] is True
+    assert request["max_tokens"] == 5000
+    schema = request["response_format"]["json_schema"]["schema"]
+    assert schema["properties"]["questions"]["maxItems"] == 20
+    question_schema = schema["$defs"]["QwenReferenceQuestionDraft"]
+    assert question_schema["properties"]["criteria"]["maxItems"] == 8
+    model_answer_options = question_schema["properties"]["model_answer"]["anyOf"]
+    assert any(option.get("maxLength") == 1800 for option in model_answer_options)
+    assert "exactly one object per gradable leaf" in prompt
+
+
+def test_reference_structure_scanner_finds_nested_leaf_questions() -> None:
+    hints = _reference_question_number_hints(
+        {
+            "question_paper": [
+                {
+                    "text": """1. (a) Probability stem
+(i) First part
+(ii) Second part
+(b) Bayes stem
+(i) Bus
+(ii) Car
+(c) Inspection stem
+(i) Sample space
+(ii) First inspection
+(iii) Four inspections"""
+                }
+            ]
+        }
+    )
+
+    assert hints == [
+        "1(a)(i)",
+        "1(a)(ii)",
+        "1(b)(i)",
+        "1(b)(ii)",
+        "1(c)(i)",
+        "1(c)(ii)",
+        "1(c)(iii)",
+    ]
 
 
 def test_qwen_provider_refuses_model_alias_mismatch_before_completion() -> None:

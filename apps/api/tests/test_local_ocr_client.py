@@ -75,6 +75,27 @@ def test_local_ocr_client_posts_only_bytes_with_auth_and_metadata() -> None:
     assert "url" not in kwargs
 
 
+def test_local_ocr_client_accepts_gpu_phase_metadata() -> None:
+    payload = valid_payload()
+    payload["device"] = "gpu:0"
+    client = LocalOcrClient(
+        base_url="http://127.0.0.1:8090",
+        api_key="local-secret",
+        timeout_seconds=5,
+        max_image_bytes=100,
+        client=FakeClient(payload),
+    )
+
+    result = client.ocr_image(
+        image_bytes=b"image-bytes",
+        content_type="image/png",
+        request_id="region-1",
+        mode="document",
+    )
+
+    assert result.device == "gpu:0"
+
+
 def test_local_ocr_client_requires_kill_switch_flag_key_and_loopback() -> None:
     with pytest.raises(LocalOcrConfigurationError, match="BRAIN_ALLOW_REAL_PROVIDERS"):
         LocalOcrClient.from_settings(

@@ -8,5 +8,4 @@ test("auth smoke registers, logs out, and logs back in through the browser", asy
   await browserAuthSmoke(page, credentials);
 
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.name);
-  await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
 });

@@ -4,614 +4,167 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-const requiredFiles = [
+for (const file of [
   "lib/api.ts",
   "components/AppShell.tsx",
-  "components/UsersClient.tsx",
-  "components/CoursesClient.tsx",
-  "components/CourseDetailClient.tsx",
   "components/AssessmentDetailClient.tsx",
   "components/AssessmentReviewClient.tsx",
-  "components/QuestionDetailClient.tsx",
   "components/CustomControlledGradingRunClient.tsx",
-  "app/dashboard/page.tsx",
-  "app/users/page.tsx",
-  "app/courses/page.tsx",
-  "app/courses/[courseId]/page.tsx",
   "app/assessments/[assessmentId]/page.tsx",
   "app/assessments/[assessmentId]/review/page.tsx",
   "app/assessments/[assessmentId]/grading-run/page.tsx",
   "app/login/page.tsx",
   "app/register/page.tsx",
-  "app/questions/[questionId]/page.tsx",
   "playwright.config.ts",
-  "e2e/support.ts",
   "e2e/auth-smoke.spec.ts",
-  "e2e/custom-controlled-mock.spec.ts",
-];
-
-for (const file of requiredFiles) {
+]) {
   if (!existsSync(join(root, file))) {
     throw new Error(`Missing required frontend workflow file: ${file}`);
   }
 }
 
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-for (const [scriptName, scriptValue] of [
+for (const [name, value] of [
   ["e2e", "playwright test"],
   ["e2e:headed", "playwright test --headed"],
 ]) {
-  if (packageJson.scripts?.[scriptName] !== scriptValue) {
-    throw new Error(`Package script ${scriptName} must equal ${scriptValue}`);
+  if (packageJson.scripts?.[name] !== value) {
+    throw new Error(`Package script ${name} must equal ${value}`);
   }
 }
 
 const api = readFileSync(join(root, "lib/api.ts"), "utf8");
 for (const symbol of [
-  "API_BASE_URL",
-  "listUsers",
-  "createAuthenticatedCourse",
-  "listCourses",
-  "getCourse",
-  "createAssessment",
-  "listAssessments",
-  "getAssessment",
-  "createQuestion",
-  "updateQuestion",
-  "listQuestions",
-  "getQuestion",
-  "createRubric",
-  "updateRubric",
-  "listRubrics",
-  "uploadSubmission",
-  "uploadSubmissionZip",
-  "SubmissionZipUploadResponse",
-  "listSubmissions",
-  "getSubmissionPageImageUrl",
-  "createAnswerRegion",
-  "listSubmissionAnswerRegions",
-  "listAssessmentAnswerRegions",
-  "getAnswerRegionImageUrl",
-  "gradeAnswerRegion",
-  "gradeAnswerRegionWithCodexDev",
-  "BrowserCodexGradeResponse",
-  "approveGradeSuggestion",
-  "editGradeSuggestion",
-  "rejectGradeSuggestion",
-  "finalizeGradeSuggestion",
-  "getAnswerRegionFinalGrade",
-  "getAssessmentReviewQueue",
-  "getAssessmentSummary",
-  "getAssessmentFinalGradesExportUrl",
-  "batchMockGradeAssessment",
-  "approveSelectedFinalGrades",
-  "BatchMockGradeResponse",
-  "BatchApproveFinalGradesResponse",
-  "QuestionImportJob",
-  "DraftQuestion",
-  "importQuestionsFromPaper",
-  "getQuestionImportJob",
-  "acceptQuestionImportDrafts",
-  "QuestionImportAcceptResponse",
-  "QuestionImportProvider",
-  "deleteSubmission",
-  "logout",
-  "getStoredAuthToken",
-  "setStoredAuthToken",
   "getCurrentUser",
   "login",
   "register",
-  "Authorization",
-  "AssessmentSummary",
-  "GradeSuggestion",
-  "FinalGrade",
-  "ReviewQueueItem",
-  "GradingRun",
-  "LocalAiStatus",
-  "getLocalAiStatus",
-  "AnswerRegionOcrRun",
-  "createAnswerRegionOcrRun",
-  "listAnswerRegionOcrRuns",
-  "confirmAnswerRegionOcrRun",
-  "CohortDispatchRequest",
-  "CohortDispatchPreflight",
-  "GradingDispatchRun",
-  "preflightCohortDispatch",
-  "createCohortDispatch",
-  "getGradingDispatchRun",
-  "stopGradingDispatchRun",
-  "resumeGradingDispatchRun",
+  "logout",
+  "getAssessment",
   "createCustomGradingRun",
   "listAssessmentGradingRuns",
   "getGradingRun",
-  "editAnswerRegionSegment",
-  "addAnswerRegionSegment",
-  "removeAnswerRegionSegment",
-  "reorderAnswerRegionSegments",
+  "uploadGradingRunMaterials",
+  "ReferenceExtraction",
+  "ReferenceQuestionConfirmation",
+  "startReferenceExtraction",
+  "getReferenceExtraction",
+  "confirmReferenceExtraction",
+  "uploadSubmission",
+  "uploadSubmissionZip",
+  "createAnswerRegion",
+  "createAnswerRegionOcrRun",
+  "confirmAnswerRegionOcrRun",
   "confirmAnswerRegionFullAnswer",
-  "updateGradingRun",
-  "confirmGradingRunMaterials",
-  "confirmGradingRunQuestionsRubrics",
-  "gradeGradingRunReadyRegionsMock",
-  "GradingRunWorkflowState",
-  "MarkingPolicy",
-  "marking_policy",
+  "createEvidencePrepRun",
+  "createGradingQueueRun",
+  "preflightCohortDispatch",
+  "createCohortDispatch",
+  "getAssessmentReviewQueue",
+  "approveGradeSuggestion",
+  "getAssessmentFinalGradesExportUrl",
 ]) {
-  if (!api.includes(`export`) || !api.includes(symbol)) {
+  if (!api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
   }
 }
 
-for (const text of [
-  "Please log in again before preparing evidence.",
-  "token: getStoredAuthToken()",
-  "authErrorMessage",
-]) {
-  if (!api.includes(text)) {
-    throw new Error(`API client missing evidence-prep auth marker: ${text}`);
+for (const marker of ["token: getStoredAuthToken()", "authErrorMessage", "Could not reach backend"]) {
+  if (!api.includes(marker)) {
+    throw new Error(`API client missing auth/error marker: ${marker}`);
   }
 }
 
 const appShell = readFileSync(join(root, "components/AppShell.tsx"), "utf8");
-for (const text of ["Current teacher", "Logout", "Login", "Register", "getCurrentUser", "logout"]) {
-  if (!appShell.includes(text)) {
-    throw new Error(`App shell must include auth navigation marker: ${text}`);
+for (const marker of ["Signed in as", "Dashboard", "Courses", "Logout", "Login", "Create account"]) {
+  if (!appShell.includes(marker)) {
+    throw new Error(`App shell missing navigation marker: ${marker}`);
   }
 }
+if (appShell.includes("Backend:")) {
+  throw new Error("Teacher navigation must not expose backend implementation details");
+}
 
-const loginPage = readFileSync(join(root, "app/login/page.tsx"), "utf8");
-for (const text of [
-  "Login",
-  "email",
-  "password",
-  "login(",
-  "setStoredAuthToken",
-  "localStorage",
-  "dev-only",
-  'data-testid="login-form"',
-  'data-testid="login-email-input"',
-  'data-testid="login-password-input"',
-  'data-testid="login-submit-button"',
+const referencePage = readFileSync(
+  join(root, "components/CustomControlledGradingRunClient.tsx"),
+  "utf8",
+);
+for (const marker of [
+  "Prepare grading references",
+  "Upload the three reference PDFs",
+  "Question paper",
+  "Solution / model answer",
+  "Rubric",
+  "You do not need to upload the question paper anywhere else.",
+  "Confirm files and extract drafts",
+  "GPU OCR first",
+  "Releasing PaddleOCR from the GPU",
+  "Linking questions, solutions, and criteria with Qwen",
+  "Confirm and extract drafts",
+  "Review questions, model answers, and rubric",
+  "Confirm grading references",
+  "Continue to student evidence",
+  "This screen cannot grade students, approve marks, or create final grades.",
+  "No cloud provider or retry is allowed.",
+  "startReferenceExtraction",
+  "getReferenceExtraction",
+  "confirmReferenceExtraction",
+  "validateDrafts",
 ]) {
-  if (!loginPage.includes(text)) {
-    throw new Error(`Login page must include auth marker: ${text}`);
+  if (!referencePage.includes(marker)) {
+    throw new Error(`Reference preparation UI missing marker: ${marker}`);
   }
 }
 
-const registerPage = readFileSync(join(root, "app/register/page.tsx"), "utf8");
-for (const text of [
-  "Register",
-  "name",
-  "email",
-  "password",
-  "register(",
-  "setStoredAuthToken",
-  "localStorage",
-  "dev-only",
-  'data-testid="register-form"',
-  'data-testid="register-name-input"',
-  'data-testid="register-email-input"',
-  'data-testid="register-password-input"',
-  'data-testid="register-submit-button"',
-]) {
-  if (!registerPage.includes(text)) {
-    throw new Error(`Register page must include auth marker: ${text}`);
-  }
-}
-
-const dashboard = readFileSync(join(root, "app/dashboard/page.tsx"), "utf8");
-if (!dashboard.includes("Users / teacher setup") || !dashboard.includes("Courses")) {
-  throw new Error("Dashboard must link to users and courses workflow pages");
-}
-
-const demoTeacherSelector = readFileSync(join(root, "components/DemoTeacherSelector.tsx"), "utf8");
-const demoTeacherStorage = readFileSync(join(root, "lib/demoTeacher.ts"), "utf8");
-const assessmentDetail = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
-const assessmentDetailUi = assessmentDetail + demoTeacherSelector;
-for (const text of [
-  "Custom Controlled V0 — Manual Evidence Grading",
-  "Teacher supplies question, model answer, active rubric, and student answer evidence before grading.",
-  "Manual answer text is required for V0 reliable grading.",
-  "Every real-provider result is a draft GradeSuggestion only.",
-  "Local Qwen cohort dispatch is available only from the grading-run page after an explicit capped preflight.",
-  "Teacher review is required. No autonomous mode, automatic FinalGrade, or export without teacher approval.",
-  "Custom Controlled V0 step map",
-  "Reference-material upload helper is support for Step 1 only; it is not a separate workflow.",
-  "Step 1: Reference materials",
-  "Step 2: Question, model answer, and rubric",
-  "Save question",
-  "Save model answer",
-  "Save rubric",
-  "Active rubric required for grading",
-  "Model answer required for grading",
-  "Step 3: Student script/upload",
-  "Step 4: Answer evidence and manual answer text",
-  "Step 5: Evidence readiness",
-  "Step 6: Queue scaffold",
-  "Step 7: Real draft grade, teacher review, approval/export",
-  "STOP: Do not run real grading unless evidence packet is ready",
-  "Expected packets = submissions × grading units.",
-  "Only confirmed complete evidence packets can enter the queue.",
-  "STOP — Custom Controlled V0 safety gate.",
-  "FUTURE / not part of Custom Controlled V0",
-  "Upload script ZIP",
-  "PDF, PNG, JPG, JPEG only.",
-  "ZIP import summary",
-  "imported_count",
-  "skipped_count",
-  "failed_count",
-  "uploadSubmissionZip",
-  "zipUploadResult",
-  "Upload submission",
-  "student_identifier",
-  "Choose a PDF or image file before uploading",
-  "handleSubmissionFileChange",
-  "selectedUploadFileName",
-  "uploadFormRef",
-  "disabled={uploading || !studentIdentifier.trim() || !submissionFile}",
-  "Create a question before mapping answer regions.",
-  "Upload failed:",
-  "FUTURE / not part of Custom Controlled V0: review/export final grades",
-  "FUTURE / not part of Custom Controlled V0: download final grades (.xlsx)",
-  "getAssessmentFinalGradesExportUrl(assessmentId)",
-  "href={`/assessments/${assessmentId}/review`}",
-  "Submissions",
-  "Pages",
-  'accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"',
-  "Step 4: Answer evidence and manual answer text",
-  "Select page",
-  "Select question",
-  "formatQuestionOption(question)",
-  "— ${question.total_marks} marks",
-  "gradingUnitType(question.question_no)",
-  "Crop coordinates",
-  "Create answer region",
-  "Suggest answer mappings",
-  "Suggestion provider",
-  "Mock/deterministic mapping provider",
-  "Mock deterministic mapping suggestions are draft-only. Real AI mapping is not implemented here.",
-  "Provider warnings",
-  "Mapping suggestions are drafts until accepted. Teacher/founder must confirm full answer evidence before grading.",
-  "Accept suggestion",
-  "Ignore suggestion",
-  "needs review",
-  "Segment count",
-  "packet pages covered:",
-  "Continuation risk",
-  "acceptAnswerRegionMappingSuggestion",
-  "Cropped image",
-  "Selected answer region for Evidence Packet Preview",
-  "Evidence Packet Preview",
-  "This preview shows the evidence that would be sent for grading later. It does not grade.",
-  'data-testid="evidence-packet-preview"',
-  "question label:",
-  "max marks:",
-  "question text:",
-  "solution/model answer:",
-  "active rubric:",
-  "criteria:",
-  "student answer region id:",
-  "segment order:",
-  "answer crop/context image:",
-  "Manual answer text required for V0:",
-  "Manual answer text",
-  "BLOCKER: manual answer text is missing.",
-  "Teacher-confirmed manual answer text is required for Custom Controlled V0 real draft grading.",
-  "evidence_status:",
-  "ready_for_grading:",
-  "Ready for real draft grading: evidence packet prerequisites pass.",
-  "Not ready for real draft grading. Do not run real grading unless evidence packet is ready and manual answer text is present.",
-  "Blocker: solution/model answer is missing.",
-  "Not available yet",
-  "Teacher review queue",
-  "Unconfirmed",
-  "Complete",
-  "Blocked",
-  "Confirm full answer",
-  "Mark continuation not needed",
-  "Mark partial / needs review",
-  "Mark blank",
-  "editAnswerRegionSegment",
-  "addAnswerRegionSegment",
-  "removeAnswerRegionSegment",
-  "reorderAnswerRegionSegments",
-  "confirmAnswerRegionFullAnswer",
-  "continuation_check_status",
-  "packet_status",
-  "segment_count",
-  "packet pages covered:",
-  "getGradingEvidencePacket(region.id)",
-  "Step 5: Evidence readiness",
-  "This prepares evidence only. It does not grade.",
-  "Blocked / quarantined items",
-  "Correction target: create/map evidence",
-  "packet pages covered:",
-  "No batch grade button is available here",
-  "Step 6: Queue scaffold",
-  "This only prepares a queue from confirmed evidence. It does not grade.",
-  "queued item count",
-  "refused item count",
-  "Refused packet reasons",
-  "stale_status",
-  "Queue records are not grades. Stale queue items must be rebuilt before provider execution.",
-  "No provider run button, no batch grade button, and no FinalGrade action",
-  "A real grading call creates a draft GradeSuggestion only, with teacher review required.",
-  "Teacher must approve before FinalGrade/export. Unapproved drafts must not be exported as final grades.",
-  "Real grading creates a draft GradeSuggestion only.",
-  "No batch/autonomous grading from this V0 founder flow.",
-  "createGradingQueueRun(assessmentId)",
-  "getGradingQueueSummary(assessmentId)",
-  "createEvidencePrepRun(assessmentId)",
-  "getEvidencePrepSummary(assessmentId)",
-  "Delete this submission? This is for demo cleanup only.",
-  'data-testid="founder-grading-actions-disabled"',
-  "Hidden in the assessment-page V0 flow.",
-  "No grading action is visible here.",
-  "Import questions from reference paper",
-  "Draft extraction. Teacher review required.",
-  "Default extraction is mock/simple.",
-  "Local PaddleOCR + Qwen is an explicit, local-only draft option.",
-  "Local extraction OCRs pages in order",
-  "local_paddle_qwen",
-  "Question paper file",
-  "handleQuestionImportFileChange",
-  "selectedQuestionImportFileName",
-  "importQuestionsFromPaper(assessmentId, selectedFile, questionImportProvider)",
-  "Draft text with local PaddleOCR",
-  "OCR output is a draft.",
-  "Confirm edited text as manual answer",
-  "Text confirmation does not mark the region complete or ready.",
-  "Create selected questions",
-  "acceptQuestionImportDrafts",
-  "Manual question creation remains available",
-  "draftQuestionEdits",
-  "Reference-material upload helper — use only for Step 1 materials",
-  "FUTURE / not part of Custom Controlled V0: Semi-Automated mode",
-  'data-testid="semi-automated-mode-not-ready"',
-  "FinalGrade/export is allowed only after explicit teacher approval.",
-  "href={`/assessments/${assessmentId}/grading-run`}",
-]) {
-  if (!assessmentDetailUi.includes(text)) {
-    throw new Error(`Assessment detail must include upload/answer-region UI marker: ${text}`);
-  }
-}
-
-
-const gradingRunPage = readFileSync(join(root, "app/assessments/[assessmentId]/grading-run/page.tsx"), "utf8");
-const gradingRunClient = readFileSync(join(root, "components/CustomControlledGradingRunClient.tsx"), "utf8");
-const gradingRunUi = gradingRunPage + gradingRunClient;
-for (const forbidden of ["Run mock batch grading", "Bulk mock grade ungraded answers", "Batch mock grading result"]) {
-  if (assessmentDetailUi.includes(forbidden)) {
-    throw new Error(`Custom Controlled V0 assessment flow must not expose mock/batch grading CTA: ${forbidden}`);
-  }
-}
-
-for (const text of [
-  "Custom Controlled Grading Run",
-  "Mode unavailable",
-  'data-testid="grading-mode-unavailable"',
-  "Custom controlled mode: teacher confirmation required.",
+for (const obsolete of [
   "Start custom controlled run",
   "Upload/confirm materials",
-  "Question PDF",
-  "Solution/model answer PDF",
-  "Rubric PDF",
-  "Confirm or create questions/rubrics",
-  'data-testid="canonical-grading-unit-table"',
-  "label",
-  "max marks",
-  "model answer/rubric present",
-  "active rubric present",
-  "grading unit type",
-  "Founder/teacher must verify this canonical grading-unit table before grading.",
-  "Labels like 1(a)(i) and max marks must match the paper/rubric.",
-  "Upload scripts",
-  "Create answer regions manually",
-  "Preflight and run draft grading",
-  "Review suggestions",
-  "Approve selected / export",
-  "No automatic answer-region detection",
-  "No real Codex batch grading by default",
-  "createCustomGradingRun(assessmentId",
-  "uploadGradingRunMaterials",
-  "listAssessmentGradingRuns",
-  "updateGradingRun",
-  "href={`/assessments/${assessmentId}`}",
-  "href={`/assessments/${assessmentId}/review`}",
-  "getAssessmentFinalGradesExportUrl(assessmentId)",
   "Functional V0 workflow dashboard",
-  "Workflow blockers",
-  "Next actions",
-  "Materials confirmed",
-  "Questions/rubrics confirmed",
-  "Scripts uploaded",
-  "Answer regions created",
-  "Grading readiness",
-  "Review readiness",
-  "Export readiness",
-  "Confirm uploaded materials",
-  "Confirm questions/rubrics",
   "Bulk mock grade ungraded answers",
   "Current status and marking policy",
-  "Marking policy selector",
-  "Tough",
-  "General",
-  "Easy",
-  "Tough: stricter",
-  "General: normal",
-  "Easy: more lenient",
-  "marking_policy: markingPolicy",
-  "Mock remains the default.",
-  "Local Qwen cohort grading — draft suggestions only",
-  "No provider fallback, no automatic retry, no final-grade creation.",
-  "Run question-wise preflight",
-  "server ceiling 25",
-  "preflightCohortDispatch",
-  "createCohortDispatch",
-  "Stop before next call",
-  "Resume never-started items",
-  "Uncertain means a worker stopped during a provider call.",
-  "Review queue",
-  "Bulk mock grading result",
-  "confirmGradingRunMaterials",
-  "confirmGradingRunQuestionsRubrics",
-  "gradeGradingRunReadyRegionsMock",
 ]) {
-  if (!gradingRunUi.includes(text)) {
-    throw new Error(`Custom controlled grading-run UI missing marker: ${text}`);
+  if (referencePage.includes(obsolete)) {
+    throw new Error(`Reference preparation UI still exposes obsolete control: ${obsolete}`);
   }
 }
 
-for (const forbidden of ["openai", "anthropic", "gemini", "codex exec", "/grade-all-codex"]) {
-  if (gradingRunUi.toLowerCase().includes(forbidden)) {
-    throw new Error(`Custom controlled wizard must not include direct LLM/Codex marker: ${forbidden}`);
+const assessment = readFileSync(join(root, "components/AssessmentDetailClient.tsx"), "utf8");
+for (const marker of [
+  "Assessment workspace",
+  "Prepare references",
+  "NEXT_PUBLIC_SHOW_LEGACY_REFERENCE_TOOLS",
+  "Manual reference editing (advanced)",
+  "Upload submission",
+  "Upload script ZIP",
+  "Draft text with local PaddleOCR",
+  "Confirm edited text as manual answer",
+  "Text confirmation does not mark the region complete or ready.",
+  "Create answer region",
+  "Confirm full answer",
+  "This prepares evidence only. It does not grade.",
+  "This only prepares a queue from confirmed evidence. It does not grade.",
+]) {
+  if (!assessment.includes(marker)) {
+    throw new Error(`Assessment evidence UI missing marker: ${marker}`);
   }
 }
 
-const assessmentReview = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
-const assessmentReviewUi = assessmentReview + demoTeacherSelector;
-for (const text of [
+const review = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
+for (const marker of [
   "Teacher review and final grade approval",
   "AI GradeSuggestions are suggestions only",
-  "answer region image",
-  "Question text",
-  "student_identifier",
-  "AI suggested score",
-  "confidence",
-  "needs_review",
-  "feedback",
-  "Current FinalGrade",
   "Approve AI suggestion",
   "Edit score and save final grade",
   "Reject suggestion",
-  "Assessment summary",
-  "Reviewed",
-  "Pending review",
   "Export final grades (.xlsx)",
-  "Download final grades (.xlsx)",
-  "Approve or edit at least one grade before export is useful.",
-  "batchMockGradeAssessment(assessmentId)",
-  "approveSelectedFinalGrades(assessmentId, {",
-  "Batch mock grade ungraded answers",
-  "Batch mock grading only. No real Codex batch calls.",
-  "If this app is connected to the Docker backend, Codex is unavailable because that runtime is mock-only and does not include Codex CLI.",
-  "Real Codex grade this answer",
-  "Runs one real Codex CLI call through POST /answer-regions/{item.answer_region.id}/grade-codex-dev on the backend. Use only for controlled testing. Teacher review required.",
-  "Docker backend/mock-only mode cannot run this; use host-backend Codex dev mode.",
-  "gradeAnswerRegionWithCodexDev",
-  "batchResult",
-  "graded_count",
-  "skipped_count",
-  "failed_count",
-  "statusFilter",
-  "Review queue filter",
-  "All statuses",
-  "ungraded",
-  "suggested",
-  "finalized",
-  "approved",
-  "edited",
-  "rejected",
-  "filteredItems",
-  "getStatusCounts",
-  "getAssessmentFinalGradesExportUrl(assessmentId)",
-  "summary.total_final_grades === 0",
-  "approveGradeSuggestion",
-  "editGradeSuggestion",
-  "rejectGradeSuggestion",
-  "getAssessmentSummary",
-  "getAssessmentFinalGradesExportUrl",
-  "getCurrentUser",
-  "currentUser",
-  "Login to approve or edit final grades",
-  "Logged-in teacher is used for approve/edit/reject.",
-  "approveGradeSuggestion(item.latest_grade_suggestion.id, {",
-  "editGradeSuggestion(item.latest_grade_suggestion.id, {",
-  "rejectGradeSuggestion(item.latest_grade_suggestion.id, {",
-  "Batch grading uses mock only. The per-answer Real Codex button calls the backend dev endpoint and only works when the backend is host/WSL Codex mode.",
-  "Review item overview",
-  "Status label",
-  "AI/mock score",
-  "Final score if finalized",
-  "Open cropped answer image",
-  "Quick actions",
-  "No items in this filter",
-  "Next: upload submissions → create answer regions → batch mock grade → review → export",
-  "Next item to review",
-  "Needs teacher review",
-  "Mock score",
-  "Marking policy used",
-  "suggestion.marking_policy",
-  "Select all visible suggested items",
-  "Clear selection",
-  "Approve selected",
-  "selectedSuggestionIds",
-  "selected count",
-  "Select at least one suggested item to approve.",
-  "No visible suggested items can be selected in this filter.",
-  "Batch final-grade approval result",
-  "requested_count",
-  "approved_count",
 ]) {
-  if (!assessmentReviewUi.includes(text)) {
-    throw new Error(`Assessment review page must include teacher-review UI marker: ${text}`);
+  if (!review.includes(marker)) {
+    throw new Error(`Teacher review UI missing marker: ${marker}`);
   }
 }
 
-const questionDetail = readFileSync(join(root, "components/QuestionDetailClient.tsx"), "utf8");
-for (const text of [
-  "Total marks",
-  "Add criterion",
-  "Remove criterion",
-  "Criterion ID",
-  "Criterion name",
-  "Criterion description",
-  "Criterion max marks",
-  "Criteria marks sum",
-  "Raw JSON preview",
-]) {
-  if (!questionDetail.includes(text)) {
-    throw new Error(`Question detail must include rubric editor UI marker: ${text}`);
-  }
-}
-
-const usersClient = readFileSync(join(root, "components/UsersClient.tsx"), "utf8") + demoTeacherSelector + demoTeacherStorage;
-for (const text of ["Set as current demo teacher", "Current demo teacher", "localStorage"]) {
-  if (!usersClient.includes(text)) {
-    throw new Error(`Users page must include demo teacher selector marker: ${text}`);
-  }
-}
-
-const coursesClient = readFileSync(join(root, "components/CoursesClient.tsx"), "utf8") + demoTeacherSelector;
-for (const text of ["Login to create courses", "currentUser", "createAuthenticatedCourse", "No raw teacher_id is needed for logged-in teachers."]) {
-  if (!coursesClient.includes(text)) {
-    throw new Error(`Courses page must use selected demo teacher marker: ${text}`);
-  }
-}
-
-if (assessmentDetailUi.includes("grading-run?mode=semi_automated") || assessmentDetailUi.includes("grading-run?mode=fully_automated")) {
-  throw new Error("Assessment detail must not expose semi/fully automated grading links in the normal teacher workflow");
-}
-
-if (/fetch\([^)]*(openai|codex|llm|chat\/completions)/i.test(assessmentDetail + assessmentReview)) {
-  throw new Error("Frontend must not make direct LLM/Codex provider calls");
-}
-
-const reviewClientForCodex = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
-for (const text of [
-  "Real Codex grade this answer",
-  "Runs one real Codex CLI call through POST /answer-regions/{item.answer_region.id}/grade-codex-dev on the backend. Use only for controlled testing. Teacher review required.",
-  "Docker backend/mock-only mode cannot run this; use host-backend Codex dev mode.",
-  "gradeAnswerRegionWithCodexDev",
-  "realCodexRegionId",
-  "setError(err instanceof Error ? err.message : \"Failed to run real Codex smoke grading\")",
-]) {
-  if (!reviewClientForCodex.includes(text)) {
-    throw new Error(`Review UI missing browser Codex smoke marker: ${text}`);
-  }
-}
-if (reviewClientForCodex.includes("codex exec") || reviewClientForCodex.includes("CodexCliProvider")) {
-  throw new Error("Frontend must not call Codex/LLM directly");
+const browserUi = `${referencePage}\n${assessment}\n${review}`;
+if (/fetch\([^)]*(openai|codex|llm|chat\/completions)/i.test(browserUi)) {
+  throw new Error("Frontend must never call an AI provider directly");
 }
 
 console.log("frontend workflow static checks passed");

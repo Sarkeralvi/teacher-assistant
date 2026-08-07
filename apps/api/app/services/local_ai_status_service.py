@@ -64,7 +64,7 @@ class LocalAiStatusService:
             "provider": "local_paddle_qwen",
             "model": "PaddleOCR-VL-1.6",
             "layout_model": "PP-DocLayoutV3",
-            "device": "cpu",
+            "device": self.settings.local_ocr_device,
             "detail": None,
         }
         if not self.settings.local_ocr_enabled:
@@ -81,5 +81,6 @@ class LocalAiStatusService:
         base["available"] = health.get("status") == "ready"
         base["model"] = str(health.get("model") or base["model"])
         base["layout_model"] = str(health.get("layout_model") or base["layout_model"])
+        base["device"] = str(health.get("device") or base["device"])
         base["detail"] = "ready" if base["available"] else "unavailable"
         return base

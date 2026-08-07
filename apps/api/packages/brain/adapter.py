@@ -240,6 +240,16 @@ class BrainAdapter:
         except Exception as exc:
             raise RuntimeError(sanitize_provider_error(str(exc))) from exc
 
+    def extract_reference_bundle_from_ocr_documents(
+        self, documents: dict[str, list[dict[str, Any]]]
+    ) -> dict[str, Any]:
+        try:
+            return self.provider.extract_reference_bundle_from_ocr_documents(documents)
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
     def verify_available_model(self) -> None:
         try:
             self.provider.verify_available_model()

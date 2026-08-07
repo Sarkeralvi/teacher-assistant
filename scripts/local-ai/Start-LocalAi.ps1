@@ -1,6 +1,8 @@
 param(
     [string]$ConfigPath,
-    [int]$HealthTimeoutSeconds = 240
+    [int]$HealthTimeoutSeconds = 240,
+    [ValidateSet("Concurrent", "OcrGpu", "OcrCpu", "Qwen")]
+    [string]$Mode = "Concurrent"
 )
 
 . (Join-Path $PSScriptRoot "Common.ps1")
@@ -12,11 +14,24 @@ if (-not $ConfigPath) {
 & (Join-Path $PSScriptRoot "Test-LocalAiPreflight.ps1") -ConfigPath $ConfigPath
 Import-LocalAiEnvironment -Path $ConfigPath
 
+$startQwen = $Mode -in @("Concurrent", "Qwen")
+$startOcr = $Mode -in @("Concurrent", "OcrGpu", "OcrCpu")
+$ocrDevice = if ($Mode -eq "OcrGpu") { "gpu:0" } else { "cpu" }
+
 $qwenBinary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
 $qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
 $ocrPython = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_PYTHON_PATH"
 $qwenKey = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
 $ocrKey = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_API_KEY"
+
+if ($Mode -eq "OcrGpu") {
+    $env:CUDA_VISIBLE_DEVICES = "0"
+    & $ocrPython -c "import paddle; assert paddle.is_compiled_with_cuda(); assert paddle.device.cuda.device_count() >= 1; paddle.set_device('gpu:0'); assert paddle.device.get_device() == 'gpu:0'"
+    if ($LASTEXITCODE -ne 0) {
+        throw "PaddleOCR GPU preflight failed."
+    }
+}
+$env:LOCAL_OCR_DEVICE = $ocrDevice
 
 $runtimeDirectory = Join-Path $repositoryRoot ".local-ai"
 $logDirectory = Join-Path $runtimeDirectory "logs"
@@ -46,26 +61,29 @@ $env:LLAMA_API_KEY = $qwenKey
 $qwenProcess = $null
 $ocrProcess = $null
 try {
-    $qwenProcess = Start-Process -FilePath $qwenBinary -ArgumentList $qwenArguments `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $logDirectory "qwen.stdout.log") `
-        -RedirectStandardError (Join-Path $logDirectory "qwen.stderr.log")
+    if ($startQwen) {
+        $qwenProcess = Start-Process -FilePath $qwenBinary -ArgumentList $qwenArguments `
+            -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $logDirectory "qwen.stdout.log") `
+            -RedirectStandardError (Join-Path $logDirectory "qwen.stderr.log")
+        [IO.File]::WriteAllText((Join-Path $runtimeDirectory "qwen.pid"), [string]$qwenProcess.Id)
+    }
 
-    $ocrProcess = Start-Process -FilePath $ocrPython `
-        -ArgumentList @("-m", "packages.local_ocr_sidecar.server") `
-        -WorkingDirectory (Join-Path $repositoryRoot "apps\api") `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $logDirectory "ocr.stdout.log") `
-        -RedirectStandardError (Join-Path $logDirectory "ocr.stderr.log")
-
-    [IO.File]::WriteAllText((Join-Path $runtimeDirectory "qwen.pid"), [string]$qwenProcess.Id)
-    [IO.File]::WriteAllText((Join-Path $runtimeDirectory "ocr.pid"), [string]$ocrProcess.Id)
+    if ($startOcr) {
+        $ocrProcess = Start-Process -FilePath $ocrPython `
+            -ArgumentList @("-m", "packages.local_ocr_sidecar.server") `
+            -WorkingDirectory (Join-Path $repositoryRoot "apps\api") `
+            -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $logDirectory "ocr.stdout.log") `
+            -RedirectStandardError (Join-Path $logDirectory "ocr.stderr.log")
+        [IO.File]::WriteAllText((Join-Path $runtimeDirectory "ocr.pid"), [string]$ocrProcess.Id)
+    }
 
     $deadline = [DateTime]::UtcNow.AddSeconds($HealthTimeoutSeconds)
-    $qwenReady = $false
-    $ocrReady = $false
+    $qwenReady = -not $startQwen
+    $ocrReady = -not $startOcr
     while ([DateTime]::UtcNow -lt $deadline -and (-not $qwenReady -or -not $ocrReady)) {
-        if ($qwenProcess.HasExited -or $ocrProcess.HasExited) {
+        if (($null -ne $qwenProcess -and $qwenProcess.HasExited) -or ($null -ne $ocrProcess -and $ocrProcess.HasExited)) {
             throw "A local AI service exited during startup. Inspect .local-ai/logs."
         }
         if (-not $qwenReady) {
@@ -81,7 +99,7 @@ try {
             try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:8090/health" `
                     -Headers @{ Authorization = "Bearer $ocrKey" } -TimeoutSec 3
-                $ocrReady = $health.status -eq "ready"
+                $ocrReady = $health.status -eq "ready" -and $health.device -eq $ocrDevice
             } catch {
                 $ocrReady = $false
             }
@@ -92,17 +110,26 @@ try {
     }
 
     if (-not $qwenReady -or -not $ocrReady) {
-        throw "Local AI services did not become healthy. Inspect .local-ai/logs."
+        throw "Local AI phase did not become healthy. Inspect .local-ai/logs."
     }
-    Write-Host "Local AI services are healthy on loopback."
-    Write-Host "Qwen PID: $($qwenProcess.Id); OCR PID: $($ocrProcess.Id)"
+    Write-Host "Local AI phase '$Mode' is healthy on loopback."
+    if ($null -ne $qwenProcess) {
+        Write-Host "Qwen PID: $($qwenProcess.Id)"
+    }
+    if ($null -ne $ocrProcess) {
+        Write-Host "PaddleOCR PID: $($ocrProcess.Id); device: $ocrDevice"
+    }
 } catch {
     foreach ($process in @($qwenProcess, $ocrProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         }
     }
-    Remove-Item -LiteralPath (Join-Path $runtimeDirectory "qwen.pid") -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $runtimeDirectory "ocr.pid") -Force -ErrorAction SilentlyContinue
+    if ($null -ne $qwenProcess) {
+        Remove-Item -LiteralPath (Join-Path $runtimeDirectory "qwen.pid") -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $ocrProcess) {
+        Remove-Item -LiteralPath (Join-Path $runtimeDirectory "ocr.pid") -Force -ErrorAction SilentlyContinue
+    }
     throw
 }

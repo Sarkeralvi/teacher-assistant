@@ -3,11 +3,11 @@
 - Recorded at: 2026-08-07
 - Canonical roadmap: `docs/PRODUCT_ROADMAP.md`
 - Workflow type: Custom Controlled, Windows-host local models
-- Scope: local llama.cpp Qwen provider, CPU PaddleOCR sidecar, teacher-confirmed OCR evidence, local reference extraction, immutable queue safety, explicit capped cohort dispatch, teacher UI, evaluation gate, and operator documentation.
-- Implemented: Gates 5A–5E code paths, migrations `0018`/`0019`, provider/sidecar tests, frontend workflow, and local runbook.
+- Scope: local llama.cpp Qwen provider, CPU/GPU PaddleOCR sidecar, teacher-confirmed OCR evidence, local reference extraction, immutable queue safety, explicit capped cohort dispatch, teacher UI, evaluation gate, and operator documentation.
+- Implemented: Gates 5A–5E code paths, migrations `0018`/`0019`, unified reference extraction migration `0020`, sequential GPU OCR→Qwen phase switching, provider/sidecar tests, progressive frontend workflow, and local runbook.
 - Safety: disabled by default; explicit teacher actions; text-only Qwen; OCR drafts require confirmation; manual mapping remains canonical; maximum 25 sequential calls; zero automatic retries; stop on first provider failure; no fallback; no automatic final grades; approved-only export unchanged.
-- Verification completed: PostgreSQL migration/API suite, frontend production build, live Qwen/OCR health and structured calls, CPU/GPU coexistence, and the two-student synthetic OCR-to-approved-XLSX smoke.
-- Verification remaining: execute the implemented 20-case curated harness through all three mandatory teacher sign-offs and obtain a passing report.
+- Verification completed: 360 backend tests, Ruff, migration head `0020`, PowerShell parsing, frontend type/static/production-build checks, two browser E2E flows, live GPU OCR on all four supplied pages, and verified GPU release before Qwen startup.
+- Verification remaining: run one newly teacher-authorized supplied-bundle extraction against the tightened Qwen output contract; then execute curated run `lc_20260807_teacher01` from its current `prepared` state through all three mandatory teacher sign-offs and obtain a passing report.
 - Pilot status: Blocked until all remaining verification and quality gates pass.
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
@@ -31,7 +31,7 @@
 - Workflow type: bounded UI polish task.
 - Scope: improve founder/teacher-facing clarity for the Custom Controlled V0 pilot without changing grading authority or provider behavior.
 - Safety: no grading, no provider/model call, no batch grading, no approval/export unless separately approved.
-- Status: Planned
+- Status: Done — duplicate reference upload/extraction controls and the always-visible seven-step scaffold were replaced by progressive teacher actions on 2026-08-07.
 
 ## TA-PILOT-009 — Two-submission human-facing rehearsal
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -28,9 +29,22 @@ from app.models import (
     SubmissionPage,
     User,
 )
-from app.schemas import GradingRunCreate, GradingRunRead, GradingRunUpdate
+from app.schemas import (
+    GradingRunCreate,
+    GradingRunRead,
+    GradingRunUpdate,
+    ReferenceExtractionConfirmationRequest,
+    ReferenceExtractionRead,
+    ReferenceExtractionStartRequest,
+)
 from app.services.grading_service import GradingService
+from app.services.reference_extraction_service import (
+    ReferenceExtractionError,
+    ReferenceExtractionService,
+)
 from app.services.storage import LocalStorage
+from app.worker.jobs import run_reference_extraction_job
+from app.worker.rq_app import get_default_queue
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -474,9 +488,22 @@ def serialize_grading_run(grading_run: GradingRun, db: Session) -> dict[str, obj
         "question_pdf_path": grading_run.question_pdf_path,
         "solution_pdf_path": grading_run.solution_pdf_path,
         "rubric_pdf_path": grading_run.rubric_pdf_path,
+        "question_pdf_name": grading_run.question_pdf_name,
+        "solution_pdf_name": grading_run.solution_pdf_name,
+        "rubric_pdf_name": grading_run.rubric_pdf_name,
         "materials_confirmed_at": grading_run.materials_confirmed_at,
         "questions_confirmed_at": grading_run.questions_confirmed_at,
         "rubrics_confirmed_at": grading_run.rubrics_confirmed_at,
+        "reference_extraction_status": grading_run.reference_extraction_status,
+        "reference_extraction_stage": grading_run.reference_extraction_stage,
+        "reference_extraction_error": grading_run.reference_extraction_error,
+        "reference_extraction_warnings": grading_run.reference_extraction_warnings,
+        "reference_question_run_id": grading_run.reference_question_run_id,
+        "reference_rubric_run_id": grading_run.reference_rubric_run_id,
+        "reference_ocr_call_count": grading_run.reference_ocr_call_count,
+        "reference_qwen_call_count": grading_run.reference_qwen_call_count,
+        "reference_extraction_started_at": grading_run.reference_extraction_started_at,
+        "reference_extraction_completed_at": grading_run.reference_extraction_completed_at,
         "notes": grading_run.notes,
         "workflow_state": build_workflow_state(grading_run, db),
         "created_at": grading_run.created_at,
@@ -575,6 +602,11 @@ def upload_grading_run_materials(
 ) -> dict[str, object]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
     require_grading_mode_available(grading_run.mode)
+    if grading_run.reference_extraction_status in {"queued", "running"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Wait for reference extraction to finish before replacing materials",
+        )
     if grading_run.mode == "semi_automated":
         if question_pdf is None:
             raise HTTPException(
@@ -611,10 +643,99 @@ def upload_grading_run_materials(
             upload, grading_run_id, material_type, PDF_SUFFIX
         )
         setattr(grading_run, field_name, stored.relative_path)
+        name_field = field_name.replace("_path", "_name")
+        setattr(
+            grading_run,
+            name_field,
+            Path(upload.filename or f"{material_type}.pdf").name[:255],
+        )
 
     grading_run.status = "materials_uploaded"
     grading_run.materials_confirmed_at = None
+    grading_run.questions_confirmed_at = None
+    grading_run.rubrics_confirmed_at = None
+    grading_run.reference_extraction_status = "not_started"
+    grading_run.reference_extraction_stage = "not_started"
+    grading_run.reference_extraction_error = None
+    grading_run.reference_extraction_warnings = []
+    grading_run.reference_material_hashes = {}
+    grading_run.reference_question_run_id = None
+    grading_run.reference_rubric_run_id = None
+    grading_run.reference_ocr_call_count = 0
+    grading_run.reference_qwen_call_count = 0
+    grading_run.reference_extraction_started_at = None
+    grading_run.reference_extraction_completed_at = None
     db.commit()
+    db.refresh(grading_run)
+    return serialize_grading_run(grading_run, db)
+
+
+@router.post(
+    "/grading-runs/{grading_run_id}/reference-extraction",
+    response_model=ReferenceExtractionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_reference_extraction(
+    grading_run_id: int,
+    payload: ReferenceExtractionStartRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, Any]:
+    grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    service = ReferenceExtractionService(db)
+    try:
+        result = service.create(
+            grading_run,
+            teacher_id=current_user.id,
+            expected_model=payload.expected_model,
+        )
+    except ReferenceExtractionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    try:
+        get_default_queue().enqueue(
+            run_reference_extraction_job,
+            grading_run.id,
+            job_timeout=get_settings().local_reference_job_timeout_seconds,
+        )
+    except Exception as exc:
+        service.mark_enqueue_failed(grading_run.id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Reference extraction could not be queued",
+        ) from exc
+    return result
+
+
+@router.get(
+    "/grading-runs/{grading_run_id}/reference-extraction",
+    response_model=ReferenceExtractionRead,
+)
+def get_reference_extraction(
+    grading_run_id: int, db: DbSession, current_user: CurrentUser
+) -> dict[str, Any]:
+    grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    return ReferenceExtractionService(db).serialize(grading_run)
+
+
+@router.post(
+    "/grading-runs/{grading_run_id}/reference-extraction/confirm",
+    response_model=GradingRunRead,
+)
+def confirm_reference_extraction(
+    grading_run_id: int,
+    payload: ReferenceExtractionConfirmationRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    try:
+        ReferenceExtractionService(db).confirm(
+            grading_run,
+            teacher_id=current_user.id,
+            request=payload,
+        )
+    except ReferenceExtractionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     db.refresh(grading_run)
     return serialize_grading_run(grading_run, db)
 

@@ -200,7 +200,7 @@ class AnswerRegionOcrService:
                 or result.model != "PaddleOCR-VL-1.6"
                 or result.layout_model != "PP-DocLayoutV3"
                 or result.version != "3.7.0"
-                or result.device != "cpu"
+                or result.device not in {"cpu", "gpu:0"}
             ):
                 raise RuntimeError("Local OCR provider metadata does not match the baseline")
             text = result.normalized_text.strip()

@@ -52,4 +52,5 @@ foreach ($port in @(8080, 8090)) {
 Write-Host "Local AI preflight passed."
 Write-Host "llama.cpp: $($versionOutput | Select-Object -First 1)"
 Write-Host "Qwen model alias: $env:LOCAL_QWEN_MODEL"
-Write-Host "OCR device: cpu; maximum concurrency: 1"
+$configuredOcrDevice = if ($env:LOCAL_OCR_DEVICE) { $env:LOCAL_OCR_DEVICE } else { "cpu" }
+Write-Host "Configured OCR device: $configuredOcrDevice; maximum concurrency: 1"

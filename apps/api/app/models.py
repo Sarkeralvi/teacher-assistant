@@ -132,6 +132,11 @@ class GradingRun(TimestampMixin, Base):
             "marking_policy in ('tough', 'general', 'easy')",
             name="ck_grading_runs_marking_policy",
         ),
+        CheckConstraint(
+            "reference_extraction_status in "
+            "('not_started', 'queued', 'running', 'succeeded', 'failed')",
+            name="ck_grading_runs_reference_extraction_status",
+        ),
         Index("ix_grading_runs_assessment_id", "assessment_id"),
     )
 
@@ -148,6 +153,9 @@ class GradingRun(TimestampMixin, Base):
     question_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     solution_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     rubric_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    question_pdf_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    solution_pdf_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rubric_pdf_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     materials_confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -155,6 +163,33 @@ class GradingRun(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     rubrics_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reference_extraction_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_started"
+    )
+    reference_extraction_stage: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="not_started"
+    )
+    reference_extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_extraction_warnings: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    reference_material_hashes: Mapped[dict[str, str]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    reference_question_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    reference_rubric_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    reference_ocr_call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reference_qwen_call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reference_extraction_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reference_extraction_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

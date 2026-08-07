@@ -75,11 +75,12 @@ def test_api_request_has_clear_auth_and_backend_unreachable_messages() -> None:
 
 def test_controlled_grading_upload_refreshes_material_state_after_success() -> None:
     source = _read(CONTROLLED_WIZARD)
-    upload_start = source.index("async function handleUploadMaterials")
-    upload_end = source.index("async function handleUpdateRun")
+    upload_start = source.index("async function handleUpload(")
+    upload_end = source.index("async function handleStartExtraction")
     upload_handler = source[upload_start:upload_end]
 
-    assert "await load();" in upload_handler
+    assert "setRun(updated)" in upload_handler
+    assert "getReferenceExtraction(updated.id)" in upload_handler
 
 
 def test_assessment_workflow_has_stable_browser_target_markers() -> None:

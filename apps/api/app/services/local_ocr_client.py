@@ -43,7 +43,7 @@ class LocalOcrResult(BaseModel):
     model: str
     layout_model: str
     version: str
-    device: Literal["cpu"]
+    device: Literal["cpu", "gpu:0"]
     latency_ms: int = Field(ge=0)
 
 

@@ -51,6 +51,13 @@ class BrainProvider(ABC):
             f"Provider {self.provider_name} does not support OCR-text rubric extraction"
         )
 
+    def extract_reference_bundle_from_ocr_documents(
+        self, documents: dict[str, list[dict[str, Any]]]
+    ) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support bundled reference extraction"
+        )
+
     def verify_available_model(self) -> None:
         """Optionally verify a configured provider without running inference."""
         return None

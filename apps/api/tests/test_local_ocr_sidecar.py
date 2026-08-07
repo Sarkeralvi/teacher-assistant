@@ -127,6 +127,17 @@ def test_sidecar_hides_cuda_before_paddle_initialization(
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "-1"
 
 
+def test_sidecar_config_accepts_explicit_gpu_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCAL_OCR_API_KEY", "local-secret")
+    monkeypatch.setenv("LOCAL_OCR_VL_MODEL_PATH", str(tmp_path / "vl"))
+    monkeypatch.setenv("LOCAL_OCR_LAYOUT_MODEL_PATH", str(tmp_path / "layout"))
+    monkeypatch.setenv("LOCAL_OCR_DEVICE", "gpu:0")
+
+    assert SidecarConfig.from_environment().device == "gpu:0"
+
+
 def test_sidecar_enforces_single_concurrent_inference() -> None:
     engine = BlockingEngine()
     service = OcrService(engine, max_image_bytes=4096)

@@ -45,6 +45,7 @@ class SidecarConfig:
     host: str = "127.0.0.1"
     port: int = 8090
     max_image_bytes: int = 20 * 1024 * 1024
+    device: str = "cpu"
 
     @classmethod
     def from_environment(cls) -> SidecarConfig:
@@ -60,6 +61,9 @@ class SidecarConfig:
         host = os.environ.get("LOCAL_OCR_HOST", "127.0.0.1")
         if host not in LOOPBACK_HOSTS:
             raise RuntimeError("The OCR sidecar may bind only to a loopback host")
+        device = os.environ.get("LOCAL_OCR_DEVICE", "cpu").strip().lower()
+        if device not in {"cpu", "gpu:0"}:
+            raise RuntimeError("LOCAL_OCR_DEVICE must be cpu or gpu:0")
         return cls(
             api_key=api_key,
             vl_model_path=Path(vl_path),
@@ -69,6 +73,7 @@ class SidecarConfig:
             max_image_bytes=int(
                 os.environ.get("LOCAL_OCR_MAX_IMAGE_BYTES", str(20 * 1024 * 1024))
             ),
+            device=device,
         )
 
 
@@ -76,35 +81,40 @@ class PaddleOcrVlEngine:
     model_name = "PaddleOCR-VL-1.6"
     layout_model_name = "PP-DocLayoutV3"
     version = "3.7.0"
-    device = "cpu"
-
-    def __init__(self, *, vl_model_path: Path, layout_model_path: Path) -> None:
+    def __init__(
+        self, *, vl_model_path: Path, layout_model_path: Path, device: str = "cpu"
+    ) -> None:
         self._assert_local_model(vl_model_path, "model.safetensors")
         self._assert_local_model(layout_model_path, "inference.pdiparams")
+        if device not in {"cpu", "gpu:0"}:
+            raise RuntimeError("OCR device must be cpu or gpu:0")
+        self.device = device
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-        _configure_cpu_only_environment()
+        if device == "cpu":
+            _configure_cpu_only_environment()
         import paddle
         from paddlex.utils import env as paddlex_environment
 
-        paddle.set_device("cpu")
-        if paddle.device.get_device() != "cpu":
-            raise RuntimeError("PaddleOCR failed to initialize on CPU")
+        paddle.set_device(device)
+        if paddle.device.get_device() != device:
+            raise RuntimeError(f"PaddleOCR failed to initialize on {device}")
 
-        def cpu_compute_capability() -> None:
-            return None
+        if device == "cpu":
+            def cpu_compute_capability() -> None:
+                return None
 
-        # PaddleX 3.7.2 checks whether the wheel was compiled with CUDA instead
-        # of whether this pipeline selected CUDA, then probes a hidden device.
-        # Returning no capability disables only its optional GPU SDPA path.
-        paddlex_environment.get_gpu_compute_capability = cpu_compute_capability
+            # PaddleX 3.7.2 checks whether the wheel was compiled with CUDA instead
+            # of whether this pipeline selected CUDA, then probes a hidden device.
+            # Returning no capability disables only its optional GPU SDPA path.
+            paddlex_environment.get_gpu_compute_capability = cpu_compute_capability
         from paddleocr import PaddleOCRVL
 
         self.pipeline = PaddleOCRVL(
             pipeline_version="v1.6",
             vl_rec_model_dir=str(vl_model_path.resolve()),
             layout_detection_model_dir=str(layout_model_path.resolve()),
-            device="cpu",
+            device=device,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_layout_detection=True,
@@ -365,6 +375,7 @@ def build_server(config: SidecarConfig, engine: OcrEngine | None = None) -> Thre
     resolved_engine = engine or PaddleOcrVlEngine(
         vl_model_path=config.vl_model_path,
         layout_model_path=config.layout_model_path,
+        device=config.device,
     )
     service = OcrService(resolved_engine, max_image_bytes=config.max_image_bytes)
     server = ThreadingHTTPServer((config.host, config.port), make_handler(service, config.api_key))

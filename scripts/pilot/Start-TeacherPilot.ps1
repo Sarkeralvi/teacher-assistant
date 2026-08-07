@@ -1,6 +1,8 @@
 param(
     [switch]$SkipLocalAi,
     [switch]$RebuildFrontend,
+    [ValidateSet("Concurrent", "OcrGpu", "OcrCpu", "Qwen")]
+    [string]$LocalAiMode = "Qwen",
     [int]$HealthTimeoutSeconds = 600
 )
 
@@ -85,14 +87,17 @@ if (-not $SkipLocalAi) {
     } catch {
         $ocrReady = $false
     }
-    if ($qwenReady -xor $ocrReady) {
-        throw "Only one local AI service is healthy. Stop local AI and restart both together."
+    $desiredReady = switch ($LocalAiMode) {
+        "Concurrent" { $qwenReady -and $ocrReady }
+        "Qwen" { $qwenReady -and -not $ocrReady }
+        { $_ -in @("OcrGpu", "OcrCpu") } { $ocrReady -and -not $qwenReady }
     }
-    if (-not $qwenReady) {
+    if (-not $desiredReady) {
+        & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Stop-LocalAi.ps1")
         & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Start-LocalAi.ps1") `
-            -HealthTimeoutSeconds $HealthTimeoutSeconds
+            -HealthTimeoutSeconds $HealthTimeoutSeconds -Mode $LocalAiMode
     } else {
-        Write-Host "Local Qwen and PaddleOCR are already healthy."
+        Write-Host "Local AI phase '$LocalAiMode' is already healthy."
     }
 }
 
@@ -103,6 +108,24 @@ $apiProcess = Start-PilotProcess -Paths $paths -Name "api" `
 Wait-PilotHttp -Uri "http://127.0.0.1:8000/health" -TimeoutSeconds 60
 if ($apiProcess.HasExited) {
     throw "Backend exited during startup."
+}
+
+$existingWorker = Get-PilotOwnedProcess -Paths $paths -Name "worker" `
+    -ExpectedExecutable $paths.ApiPython
+if ($null -eq $existingWorker) {
+    # An interrupted Windows host session can leave the RQ worker registration
+    # in Redis after its process has gone. Remove only this pilot's fixed worker
+    # name before launching its replacement.
+    Push-Location $paths.ApiDirectory
+    try {
+        & $paths.ApiPython -c `
+            "from app.redis_client import get_redis_client; from rq import Worker; c=get_redis_client(); [w.register_death() for w in Worker.all(connection=c) if w.name == 'teacher-assistant-windows-pilot']"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Stale RQ worker cleanup failed."
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
 $workerProcess = Start-PilotProcess -Paths $paths -Name "worker" `
@@ -138,6 +161,7 @@ if ($frontendProcess.HasExited) {
 Write-Host "Teacher Assistant host environment is healthy."
 Write-Host "Frontend: http://localhost:3000"
 Write-Host "Backend:  http://localhost:8000/health"
+Write-Host "Local AI startup phase: $LocalAiMode"
 Write-Host "Cohort model grading enabled: $env:COHORT_MODEL_GRADING_ENABLED"
 if ($env:COHORT_MODEL_GRADING_ENABLED -ne "true") {
     Write-Host "Real cohort grading remains safety-locked until the curated evaluation reports PASS."

@@ -66,13 +66,12 @@ export async function registerTeacherViaBrowser(page: Page, credentials: Teacher
     "register-submit-button",
   );
   await expect(page.getByTestId("current-teacher")).toContainText(credentials.name);
-  await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
 }
 
 
 export async function logoutViaBrowser(page: Page) {
   await page.getByTestId("logout-button").click();
-  await expect(page.getByText("No teacher logged in.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Login" })).toBeVisible();
 }
 
 export async function loginTeacherViaBrowser(page: Page, credentials: TeacherCredentials) {
@@ -86,7 +85,7 @@ export async function loginTeacherViaBrowser(page: Page, credentials: TeacherCre
     ],
     "login-submit-button",
   );
-  await expect(page.getByTestId("current-teacher")).toContainText(credentials.email);
+  await expect(page.getByTestId("current-teacher")).toContainText(credentials.name);
 }
 
 export async function browserAuthSmoke(page: Page, credentials: TeacherCredentials) {

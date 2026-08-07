@@ -118,6 +118,14 @@ def make_question_paper_pdf(path: Path) -> None:
     Image.new("RGB", (160, 120), color="white").save(path, format="PDF")
 
 
+class CapturingQueue:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    def enqueue(self, function: object, *args: object, **kwargs: object) -> None:
+        self.calls.append((function, args, kwargs))
+
+
 def test_create_and_list_custom_grading_run_requires_auth_and_assessment_scope(
     client: TestClient,
 ) -> None:
@@ -230,6 +238,78 @@ def test_material_upload_rejects_non_pdf_and_wrong_teacher(client: TestClient) -
     )
     assert traversal_name.status_code == 200
     assert ".." not in Path(traversal_name.json()["question_pdf_path"]).parts
+
+
+def test_reference_extraction_route_uses_confirmed_bundle_and_enqueues_once(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("LOCAL_QWEN_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN_API_KEY", "key-local-test")
+    monkeypatch.setenv("LOCAL_OCR_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_OCR_API_KEY", "key-ocr-test")
+    monkeypatch.setenv("LOCAL_REFERENCE_EXTRACTION_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_AI_PHASE_SWITCH_ENABLED", "true")
+    get_settings.cache_clear()
+    queue = CapturingQueue()
+    monkeypatch.setattr(
+        "app.api.routes.grading_runs.get_default_queue", lambda: queue
+    )
+
+    teacher, token = register_teacher(client, "reference-owner")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    run = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    upload = client.post(
+        f"/grading-runs/{run['id']}/materials",
+        headers={"Authorization": f"Bearer {token}"},
+        files={
+            "question_pdf": ("Question.pdf", b"%PDF question", "application/pdf"),
+            "solution_pdf": ("Solution.pdf", b"%PDF solution", "application/pdf"),
+            "rubric_pdf": ("rubric.pdf", b"%PDF rubric", "application/pdf"),
+        },
+    )
+    assert upload.status_code == 200
+    assert upload.json()["question_pdf_name"] == "Question.pdf"
+
+    mismatch = client.post(
+        f"/grading-runs/{run['id']}/reference-extraction",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "local_paddle_qwen",
+            "expected_model": "wrong-model",
+            "materials_confirmed": True,
+            "draft_only_confirmed": True,
+        },
+    )
+    assert mismatch.status_code == 409
+    assert queue.calls == []
+
+    started = client.post(
+        f"/grading-runs/{run['id']}/reference-extraction",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "local_paddle_qwen",
+            "expected_model": "qwen3.6-35b-a3b-q4km",
+            "materials_confirmed": True,
+            "draft_only_confirmed": True,
+        },
+    )
+    assert started.status_code == 202
+    assert started.json()["status"] == "queued"
+    assert started.json()["questions"] == []
+    assert len(queue.calls) == 1
+    assert queue.calls[0][1] == (run["id"],)
+    assert queue.calls[0][2] == {"job_timeout": 900}
+
+    _, intruder_token = register_teacher(client, "reference-intruder")
+    hidden = client.get(
+        f"/grading-runs/{run['id']}/reference-extraction",
+        headers={"Authorization": f"Bearer {intruder_token}"},
+    )
+    assert hidden.status_code == 404
 
 
 def test_status_update_allows_controlled_workflow_statuses(client: TestClient) -> None:

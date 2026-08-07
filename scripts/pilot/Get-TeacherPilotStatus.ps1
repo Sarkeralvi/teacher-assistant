@@ -34,10 +34,14 @@ try {
     $qwenReady = $false
 }
 $ocrReady = $false
+$ocrDevice = "not running"
 try {
     $ocrHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8090/health" `
         -Headers @{ Authorization = "Bearer $env:LOCAL_OCR_API_KEY" } -TimeoutSec 5
-    $ocrReady = $ocrHealth.status -eq "ready" -and $ocrHealth.device -eq "cpu"
+    $ocrReady = $ocrHealth.status -eq "ready" -and $ocrHealth.device -in @("cpu", "gpu:0")
+    if ($ocrReady) {
+        $ocrDevice = [string]$ocrHealth.device
+    }
 } catch {
     $ocrReady = $false
 }
@@ -50,10 +54,14 @@ $status = @(
     [pscustomobject]@{ Service = "RQ worker"; Ready = $workerReady; Endpoint = "teacher-assistant-default" },
     [pscustomobject]@{ Service = "Frontend"; Ready = (Test-HttpEndpoint "http://127.0.0.1:3000"); Endpoint = "http://localhost:3000" },
     [pscustomobject]@{ Service = "Local Qwen"; Ready = $qwenReady; Endpoint = "127.0.0.1:8080" },
-    [pscustomobject]@{ Service = "PaddleOCR CPU"; Ready = $ocrReady; Endpoint = "127.0.0.1:8090" }
+    [pscustomobject]@{ Service = "PaddleOCR ($ocrDevice)"; Ready = $ocrReady; Endpoint = "127.0.0.1:8090" }
 )
 $status | Format-Table -AutoSize
 Write-Host "Cohort model grading enabled: $env:COHORT_MODEL_GRADING_ENABLED"
-if ($RequireAll -and $status.Ready -contains $false) {
+$coreReady = $postgresReady -and $redisReady -and $workerReady `
+    -and (Test-HttpEndpoint "http://127.0.0.1:8000/health") `
+    -and (Test-HttpEndpoint "http://127.0.0.1:3000")
+$localPhaseReady = $qwenReady -or $ocrReady
+if ($RequireAll -and (-not $coreReady -or -not $localPhaseReady)) {
     exit 1
 }

@@ -186,9 +186,22 @@ export type GradingRun = {
   question_pdf_path: string | null;
   solution_pdf_path: string | null;
   rubric_pdf_path: string | null;
+  question_pdf_name: string | null;
+  solution_pdf_name: string | null;
+  rubric_pdf_name: string | null;
   materials_confirmed_at: string | null;
   questions_confirmed_at: string | null;
   rubrics_confirmed_at: string | null;
+  reference_extraction_status: "not_started" | "queued" | "running" | "succeeded" | "failed";
+  reference_extraction_stage: string;
+  reference_extraction_error: string | null;
+  reference_extraction_warnings: string[];
+  reference_question_run_id: number | null;
+  reference_rubric_run_id: number | null;
+  reference_ocr_call_count: number;
+  reference_qwen_call_count: number;
+  reference_extraction_started_at: string | null;
+  reference_extraction_completed_at: string | null;
   notes: string | null;
   workflow_state: GradingRunWorkflowState;
   created_at: string;
@@ -326,6 +339,60 @@ export type AnswerRegion = {
   segments: AnswerRegionSegment[];
   created_at: string;
   updated_at: string;
+};
+
+export type ReferenceRubricCriterionDraft = {
+  id: number;
+  question_number: string | null;
+  criterion_label: string;
+  description: string;
+  max_marks: string | number | null;
+  confidence: string | number | null;
+};
+
+export type ReferenceQuestionDraft = {
+  id: number;
+  question_number: string;
+  question_text: string;
+  model_answer: string | null;
+  total_marks: string | number | null;
+  confidence: string | number | null;
+  source_page: number | null;
+  criteria: ReferenceRubricCriterionDraft[];
+};
+
+export type ReferenceExtraction = {
+  grading_run_id: number;
+  status: "not_started" | "queued" | "running" | "succeeded" | "failed";
+  stage: string;
+  provider: "local_paddle_qwen";
+  model: string;
+  ocr_device: string;
+  question_run_id: number | null;
+  rubric_run_id: number | null;
+  ocr_call_count: number;
+  qwen_call_count: number;
+  warnings: string[];
+  error: string | null;
+  questions: ReferenceQuestionDraft[];
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type ReferenceRubricCriterionConfirmation = {
+  id: number;
+  criterion_label: string;
+  description: string;
+  max_marks: string | number;
+};
+
+export type ReferenceQuestionConfirmation = {
+  id: number;
+  question_number: string;
+  question_text: string;
+  model_answer: string;
+  total_marks: string | number;
+  criteria: ReferenceRubricCriterionConfirmation[];
 };
 
 export type OcrBlock = {
@@ -1372,6 +1439,39 @@ export function listSubmissionAnswerRegions(submissionId: number) {
 export function listAssessmentAnswerRegions(assessmentId: number, questionId?: number) {
   const query = questionId ? `?question_id=${questionId}` : "";
   return apiRequest<AnswerRegion[]>(`/assessments/${assessmentId}/answer-regions${query}`);
+}
+
+export function startReferenceExtraction(gradingRunId: number) {
+  return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
+    method: "POST",
+    body: {
+      provider: "local_paddle_qwen",
+      expected_model: "qwen3.6-35b-a3b-q4km",
+      materials_confirmed: true,
+      draft_only_confirmed: true,
+    },
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function getReferenceExtraction(gradingRunId: number) {
+  return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function confirmReferenceExtraction(
+  gradingRunId: number,
+  questions: ReferenceQuestionConfirmation[],
+) {
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}/reference-extraction/confirm`, {
+    method: "POST",
+    body: { teacher_confirmed: true, questions },
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
 }
 
 export function createAnswerRegionOcrRun(answerRegionId: number) {

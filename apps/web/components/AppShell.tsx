@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { API_BASE_URL, getCurrentUser, logout, type User } from "../lib/api";
+import { getCurrentUser, logout, type User } from "../lib/api";
 
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -30,40 +30,44 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900/80">
+      <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-col gap-3 px-6 py-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <Link href="/dashboard" className="text-xl font-semibold">
-              Teacher Assistant
+          <div className="flex items-center gap-3">
+            <Link href="/dashboard" className="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400 font-bold text-slate-950">
+              TA
             </Link>
-            <p className="text-sm text-slate-400">Backend: {API_BASE_URL}</p>
+            <div>
+              <Link href="/dashboard" className="text-lg font-semibold tracking-tight">
+                Teacher Assistant
+              </Link>
             {currentUser ? (
-              <p data-testid="current-teacher" className="text-sm text-emerald-300">Current teacher: {currentUser.name} ({currentUser.email})</p>
+                <p data-testid="current-teacher" className="text-xs text-slate-400">Signed in as {currentUser.name}</p>
             ) : (
-              <p className="text-sm text-amber-200">No teacher logged in.</p>
+                <p className="text-xs text-slate-500">Teacher-controlled grading</p>
             )}
+            </div>
           </div>
           <nav className="flex flex-wrap gap-3 text-sm">
             <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/dashboard">
               Dashboard
             </Link>
-            <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/users">
-              Users
-            </Link>
             <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/courses">
               Courses
-            </Link>
-            <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/login">
-              Login
-            </Link>
-            <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/register">
-              Register
             </Link>
             {currentUser ? (
               <button data-testid="logout-button" className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" type="button" onClick={() => void handleLogout()}>
                 Logout
               </button>
-            ) : null}
+            ) : (
+              <>
+                <Link className="rounded border border-slate-700 px-3 py-2 hover:bg-slate-800" href="/login">
+                  Login
+                </Link>
+                <Link className="rounded bg-cyan-400 px-3 py-2 font-semibold text-slate-950 hover:bg-cyan-300" href="/register">
+                  Create account
+                </Link>
+              </>
+            )}
           </nav>
         </div>
       </header>

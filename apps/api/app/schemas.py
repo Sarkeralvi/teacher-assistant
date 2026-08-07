@@ -195,9 +195,22 @@ class GradingRunRead(ORMBase):
     question_pdf_path: str | None
     solution_pdf_path: str | None
     rubric_pdf_path: str | None
+    question_pdf_name: str | None
+    solution_pdf_name: str | None
+    rubric_pdf_name: str | None
     materials_confirmed_at: datetime | None
     questions_confirmed_at: datetime | None
     rubrics_confirmed_at: datetime | None
+    reference_extraction_status: str
+    reference_extraction_stage: str
+    reference_extraction_error: str | None
+    reference_extraction_warnings: list[str]
+    reference_question_run_id: int | None
+    reference_rubric_run_id: int | None
+    reference_ocr_call_count: int
+    reference_qwen_call_count: int
+    reference_extraction_started_at: datetime | None
+    reference_extraction_completed_at: datetime | None
     notes: str | None
     workflow_state: GradingRunWorkflowState
     created_at: datetime
@@ -711,6 +724,101 @@ class AnswerRegionRead(ORMBase):
     segments: list[AnswerRegionSegmentRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class ReferenceExtractionStartRequest(BaseModel):
+    provider: Literal["local_paddle_qwen"]
+    expected_model: str = Field(min_length=1, max_length=255)
+    materials_confirmed: Literal[True]
+    draft_only_confirmed: Literal[True]
+
+
+class ReferenceRubricCriterionDraftRead(BaseModel):
+    id: int
+    question_number: str | None
+    criterion_label: str
+    description: str
+    max_marks: Decimal | None
+    confidence: Decimal | None
+
+
+class ReferenceQuestionDraftRead(BaseModel):
+    id: int
+    question_number: str
+    question_text: str
+    model_answer: str | None
+    total_marks: Decimal | None
+    confidence: Decimal | None
+    source_page: int | None
+    criteria: list[ReferenceRubricCriterionDraftRead]
+
+
+class ReferenceExtractionRead(BaseModel):
+    grading_run_id: int
+    status: str
+    stage: str
+    provider: Literal["local_paddle_qwen"]
+    model: str
+    ocr_device: str
+    question_run_id: int | None
+    rubric_run_id: int | None
+    ocr_call_count: int
+    qwen_call_count: int
+    warnings: list[str]
+    error: str | None
+    questions: list[ReferenceQuestionDraftRead]
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class ReferenceRubricCriterionConfirmation(BaseModel):
+    id: int = Field(gt=0)
+    criterion_label: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1)
+    max_marks: Decimal = Field(gt=Decimal("0"))
+
+
+class ReferenceQuestionConfirmation(BaseModel):
+    id: int = Field(gt=0)
+    question_number: str = Field(min_length=1, max_length=32)
+    question_text: str = Field(min_length=1)
+    model_answer: str = Field(min_length=1)
+    total_marks: Decimal = Field(gt=Decimal("0"))
+    criteria: list[ReferenceRubricCriterionConfirmation] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def criteria_must_match_total(self) -> "ReferenceQuestionConfirmation":
+        criterion_ids = [criterion.id for criterion in self.criteria]
+        if len(criterion_ids) != len(set(criterion_ids)):
+            raise ValueError("Rubric criterion IDs must be unique")
+        criteria_total = sum(
+            (criterion.max_marks for criterion in self.criteria), Decimal("0")
+        )
+        if criteria_total != self.total_marks:
+            raise ValueError("Rubric criterion marks must sum to question total marks")
+        return self
+
+
+class ReferenceExtractionConfirmationRequest(BaseModel):
+    teacher_confirmed: Literal[True]
+    questions: list[ReferenceQuestionConfirmation] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def question_identity_must_be_unique(self) -> "ReferenceExtractionConfirmationRequest":
+        ids = [question.id for question in self.questions]
+        labels = [question.question_number.strip() for question in self.questions]
+        criterion_ids = [
+            criterion.id
+            for question in self.questions
+            for criterion in question.criteria
+        ]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Question draft IDs must be unique")
+        if len(labels) != len(set(labels)):
+            raise ValueError("Question numbers must be unique")
+        if len(criterion_ids) != len(set(criterion_ids)):
+            raise ValueError("Rubric criterion IDs must be unique across questions")
+        return self
 
 
 class OcrBlockRead(BaseModel):

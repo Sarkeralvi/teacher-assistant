@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-EXPECTED_REVISION_ID = "0019_grading_dispatch_runs"
+EXPECTED_REVISION_ID = "0020_reference_extraction"
 
 
 def test_initial_alembic_migration_exists_and_is_importable() -> None:
