@@ -27,6 +27,7 @@ Project documentation and decisions.
 ## Local-first AI integration
 
 - [Windows Local AI Runbook](LOCAL_AI_RUNBOOK.md)
+- [20-Case Local Curated Evaluation Runbook](LOCAL_CURATED_EVAL_RUNBOOK.md)
 - [Teacher-Curated Grading Evaluation Protocol](TEACHER_CURATED_EVAL_PROTOCOL.md)
 - [Provider Usage Policy](PROVIDER_USAGE_POLICY.md)
 - [Product Roadmap](PRODUCT_ROADMAP.md)

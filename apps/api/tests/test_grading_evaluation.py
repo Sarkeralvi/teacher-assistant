@@ -166,6 +166,16 @@ def test_evaluation_runner_rejects_real_provider_without_explicit_enable() -> No
         runner.validate_provider_mode([case("case_001")])
 
 
+def test_evaluation_runner_treats_local_qwen_as_a_real_provider() -> None:
+    runner = GradingEvaluationRunner(
+        provider_mode="llama_cpp_qwen",
+        allow_real_provider=False,
+    )
+
+    with pytest.raises(GradingEvaluationError, match="explicitly enabled"):
+        runner.validate_provider_mode([case("case_001")])
+
+
 def test_evaluation_runner_enforces_max_real_cases() -> None:
     runner = GradingEvaluationRunner(
         provider_mode="codex_cli", allow_real_provider=True, max_real_cases=1

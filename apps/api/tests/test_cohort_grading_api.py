@@ -34,6 +34,8 @@ from app.models import (
     User,
 )
 from app.worker.jobs import run_grading_dispatch_job
+from packages.brain.adapter import BrainAdapter
+from packages.brain.mock_provider import MockBrainProvider
 
 CLEANUP_MODELS = (
     AuditLog,
@@ -405,6 +407,55 @@ def test_rubric_change_is_refused_immediately_before_provider_call(
     assert finished.status == "completed"
     assert finished.refused_count == 1
     assert finished.calls_started == 0
+    assert db_session.scalars(select(GradeSuggestion)).all() == []
+
+
+def test_dispatch_stops_on_first_provider_failure_without_retry(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = build_cohort(client, tmp_path, student_count=3)
+
+    class FailingProvider(MockBrainProvider):
+        calls = 0
+
+        def grade(self, **kwargs: object) -> object:
+            del kwargs
+            type(self).calls += 1
+            raise RuntimeError("synthetic provider failure")
+
+    adapter = BrainAdapter(FailingProvider())
+
+    def fake_for_provider(
+        cls: type[BrainAdapter], settings: object, requested_provider: str
+    ) -> BrainAdapter:
+        del cls, settings
+        assert requested_provider == "mock"
+        return adapter
+
+    monkeypatch.setattr(BrainAdapter, "for_provider", classmethod(fake_for_provider))
+    run = client.post(
+        dispatch_url(data), headers=data["headers"], json=dispatch_payload(data)
+    ).json()
+
+    run_grading_dispatch_job(run["id"])
+
+    db_session.expire_all()
+    finished = db_session.get(GradingDispatchRun, run["id"])
+    assert finished is not None
+    assert finished.status == "failed"
+    assert finished.calls_started == 1
+    assert finished.failed_count == 1
+    assert FailingProvider.calls == 1
+    items = db_session.scalars(
+        select(GradingDispatchItem)
+        .where(GradingDispatchItem.dispatch_run_id == run["id"])
+        .order_by(GradingDispatchItem.id)
+    ).all()
+    assert [item.attempt_count for item in items] == [1, 0, 0]
+    assert [item.status for item in items] == ["failed", "pending", "pending"]
     assert db_session.scalars(select(GradeSuggestion)).all() == []
 
 

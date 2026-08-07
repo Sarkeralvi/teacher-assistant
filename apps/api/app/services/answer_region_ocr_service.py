@@ -195,6 +195,14 @@ class AnswerRegionOcrService:
         normalized_segments: list[dict[str, object]] = []
         total_latency = 0
         for order, (segment_id, page_id, result) in enumerate(results, start=1):
+            if (
+                result.provider != "local_paddle_qwen"
+                or result.model != "PaddleOCR-VL-1.6"
+                or result.layout_model != "PP-DocLayoutV3"
+                or result.version != "3.7.0"
+                or result.device != "cpu"
+            ):
+                raise RuntimeError("Local OCR provider metadata does not match the baseline")
             text = result.normalized_text.strip()
             if text:
                 text_parts.append(text)

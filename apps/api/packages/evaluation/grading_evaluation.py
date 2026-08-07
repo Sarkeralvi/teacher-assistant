@@ -32,7 +32,7 @@ from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 _FALSE_CONFIDENT_THRESHOLD = Decimal("0.8")
 _FALSE_CONFIDENT_ERROR_MARKS = Decimal("1")
 _DEFAULT_MAX_REAL_CASES = 5
-_REAL_PROVIDER_MODES = {"codex_cli", "openai"}
+_REAL_PROVIDER_MODES = {"codex_cli", "llama_cpp_qwen", "openai"}
 
 
 class GradingEvaluationError(RuntimeError):

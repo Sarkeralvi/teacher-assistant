@@ -7,7 +7,7 @@
 - Implemented: Gates 5A–5E code paths, migrations `0018`/`0019`, provider/sidecar tests, frontend workflow, and local runbook.
 - Safety: disabled by default; explicit teacher actions; text-only Qwen; OCR drafts require confirmation; manual mapping remains canonical; maximum 25 sequential calls; zero automatic retries; stop on first provider failure; no fallback; no automatic final grades; approved-only export unchanged.
 - Verification completed: PostgreSQL migration/API suite, frontend production build, live Qwen/OCR health and structured calls, CPU/GPU coexistence, and the two-student synthetic OCR-to-approved-XLSX smoke.
-- Verification remaining: the required 20-case curated OCR/grading evaluation.
+- Verification remaining: execute the implemented 20-case curated harness through all three mandatory teacher sign-offs and obtain a passing report.
 - Pilot status: Blocked until all remaining verification and quality gates pass.
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
@@ -676,11 +676,11 @@ Priority: P0
 Dependencies: TA-W1-032
 Files affected: To be decided; likely ignored evaluation artifacts plus optional sanitized docs updates.
 Goal: Collect the first 20 teacher-curated grading evaluation cases under the TA-W1-032 protocol.
-Implementation notes: Use anonymized, synthetic, or consented examples only. Keep teacher marks as ground truth. Do not commit sensitive answer images or raw student data. Do not change production grading behavior during collection.
-Acceptance criteria: 20 cases exist with required fields, category coverage is recorded, privacy/anonymization status is documented, and no sensitive artifacts are committed.
-Tests required: Validate dataset shape; run approved evaluation only after data is reviewed; keep git status clean except approved sanitized files.
-Risks: Privacy/anonymization errors or unrepresentative cases could make the dataset unsafe or misleading.
-Status: Partial/Pending
+Implementation notes: Implemented a deterministic synthetic 20-case harness with the exact category allocation, image generation, blind ground-truth workbook, OCR and grading review workbooks, append-only hash-chain ledger, dedicated-database guard, production OCR/dispatch execution, blank no-call policy, ownership/audit/finalization checks, conservative metrics, and PASS/NO_GO_QUALITY/INVALID_RUN reporting. Runtime artifacts remain ignored. No curated model run is counted until a teacher signs ground truth before OCR, confirms OCR before Qwen, and signs grading review before reporting.
+Acceptance criteria: Harness shape/integrity/safety tests pass; 20 cases exist with exact coverage; a qualified teacher completes all three gates; real execution uses exactly 20 OCR and 18 Qwen calls with zero retries/fallback/final grades; sanitized report records the verdict.
+Tests required: Focused harness tests with no providers; full backend/Ruff/migrations/frontend/PowerShell checks; bounded real execution only after teacher ground-truth lock.
+Risks: Synthetic handwriting is only a controlled proxy for classroom writing. A quality failure or any invalid safety process keeps the pilot blocked.
+Status: In Progress — harness implemented; mandatory teacher ground-truth sign-off pending
 
 TASK-ID: TA-W1-033B
 Title: Stage teacher-marked answer-sheet evaluation cases

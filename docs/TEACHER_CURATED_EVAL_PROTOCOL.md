@@ -40,7 +40,7 @@ The first local-provider teacher pilot is blocked until at least 20 mixed curate
 - 2 formula-heavy
 - 2 multi-step-work cases
 
-Record PaddleOCR draft text, warnings, teacher-edited confirmed text, Qwen structured suggestion, review flags, and teacher/reference score for every case. Difficult handwriting and formula cases must measure OCR transcription quality separately from grading quality; a teacher correction can make grading accurate without proving OCR accurate.
+Record PaddleOCR draft text, warnings, teacher-edited confirmed text, review flags, and teacher/reference score for every case. Record a Qwen structured suggestion for each of the 18 nonblank grading-ready cases. The two blank cases must be confirmed as blank, refused before dispatch, and recorded as `not_called_blank_safety_gate`; sending placeholder text to Qwen would invalidate the run. Difficult handwriting and formula cases must measure OCR transcription quality separately from grading quality; a teacher correction can make grading accurate without proving OCR accurate.
 
 The local pilot remains blocked if any case shows:
 
@@ -53,6 +53,8 @@ The local pilot remains blocked if any case shows:
 - an uncertain worker outcome being retried automatically
 
 The report must name the local provider/model aliases, Paddle versions/models/device, prompt version, call cap, and whether Qwen and CPU OCR stayed healthy concurrently. Passing this gate permits only a supervised Custom Controlled pilot; it does not activate Semi-Automated or Fully Automated modes.
+
+The canonical local harness is `packages.evaluation.local_curated_evaluation`. It enforces the ordered states `prepared`, `ground_truth_locked`, `ocr_completed`, `ocr_confirmed`, `grading_completed`, `review_completed`, and `reported`, with `invalid` as an irreversible terminal state. Its operator workflow and conservative thresholds are documented in `LOCAL_CURATED_EVAL_RUNBOOK.md`.
 
 ## 4. Case categories
 

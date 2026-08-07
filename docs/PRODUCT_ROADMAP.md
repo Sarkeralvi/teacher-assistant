@@ -11,7 +11,7 @@ Status date: 2026-08-07. This section is the canonical status for local OCR/Qwen
 - **Safe cohort execution:** implemented as question-wise, immutable-snapshot dispatches with exact provider/model authorization, a 25-call ceiling, sequential execution, stop-on-failure, stop/resume controls, zero automatic retries, no fallback, and draft suggestions only.
 - **Teacher UI:** implemented for local status, OCR draft review, preflight counts, dispatch progress/failures/uncertain items, and links to the existing review/approval/export workflow.
 - **Verification completed:** PostgreSQL migrations/API regression, frontend production build, real local-service health, one synthetic OCR page, one strict structured Qwen call, CPU/GPU coexistence, and the two-student OCR-to-approved-XLSX host smoke passed on 2026-08-07.
-- **Verification remaining:** the 20-case curated grading/OCR quality gate. The teacher pilot remains blocked until it passes with no severe stop condition.
+- **Verification remaining:** the deterministic 20-case harness and conservative verdict rules are implemented; the first run is awaiting mandatory teacher ground-truth, OCR-confirmation, and grading-review sign-offs. The teacher pilot remains blocked until a run passes with no severe stop condition.
 - **Semi-Automated:** experimental and disabled; local integration does not activate it.
 - **Fully Automated:** unreleased and disabled; automatic mapping/finalization remain out of scope.
 

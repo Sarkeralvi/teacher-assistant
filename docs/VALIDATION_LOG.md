@@ -1482,3 +1482,39 @@ The successful two-student smoke exercised local-service status, OCR drafting, e
 ## Remaining gate
 
 The 20-case curated OCR/grading evaluation has not been run. The teacher pilot remains blocked until it passes every stop condition in `TEACHER_CURATED_EVAL_PROTOCOL.md`.
+
+
+# TA-LOCAL-EVAL-001 — 20-case local curated evaluation harness
+
+- Recorded at: 2026-08-07
+- Reviewed integration commit: `d77c324be425e002e0f5a1c655c38a0671cbf268`
+- Workflow type: Custom Controlled, deterministic synthetic evaluation
+- Provider policy during engineering validation: fake providers only
+
+## Scope result
+
+The evaluation-only harness now defines the exact A1–E4 dataset, deterministic image generation, blind teacher workbooks, locked model/package metadata, a hash-chained state ledger, exact disposable-database guard, production OCR confirmation and cohort-dispatch execution, blank no-call policy, ownership/privacy/finalization checks, conservative OCR/grading metrics, and `PASS`/`NO_GO_QUALITY`/`INVALID_RUN` reporting. Runtime artifacts remain under ignored `data/evaluation/<run_id>/`.
+
+A full fake-provider rehearsal exercised all 20 production OCR routes, 20 teacher confirmations, 18 synchronous production dispatch calls across five questions, two blank safety refusals, all owner/intruder checks, the pending review queue, a zero-row approved-only export, grading review lock, and report generation. The deliberately zero-scoring fake grader correctly produced `NO_GO_QUALITY`. The rehearsal found and fixed missing canonical answer-region segments and an incorrect 18-row review-queue assumption before any real curated run.
+
+## Safety record
+
+No local Qwen or PaddleOCR service was started for harness validation. No real model, cloud, Codex, OpenAI, Gemini, or fallback call was made. The rehearsal used in-process fakes only. It created no `FinalGrade`; all database rows and generated rehearsal artifacts were disposable. The real 20-case run remains stopped before the first human ground-truth sign-off.
+
+## Checks run
+
+- Backend full suite: `348 passed, 2 skipped` with one existing Starlette/httpx deprecation warning.
+- Ruff full backend tree: passed.
+- Focused local-provider/evaluation suite: `28 passed` before the final full-suite run.
+- Fake 20-OCR/18-grading production-path rehearsal: passed.
+- Alembic upgrade/current: `0019_grading_dispatch_runs (head)`.
+- Frontend workflow static test and TypeScript `--noEmit`: passed.
+- Next.js production build: passed; the existing ESLint flat-config warning remained non-fatal.
+- Local OCR/Qwen client, sidecar, schema, and integration tests: passed.
+- PowerShell parser: passed for all five local-AI scripts.
+- `git diff --check`: passed, with only Git's existing LF-to-CRLF notices.
+- Secret/path scan: no API key, local model path, raw answer text, or generated evaluation artifact is present in the tracked implementation.
+
+## Remaining gate
+
+Prepare the ignored run from the clean harness commit, have a qualified teacher independently complete and sign `ground_truth_review.xlsx`, and only then authorize exactly 20 local OCR calls. Qwen remains blocked until the second teacher confirmation gate. Only a final `PASS` report can unblock a supervised pilot.

@@ -45,6 +45,12 @@ class FakeOcrClient:
         )
 
 
+class MismatchedOcrClient(FakeOcrClient):
+    def ocr_image(self, **kwargs: Any) -> LocalOcrResult:
+        result = super().ocr_image(**kwargs)
+        return result.model_copy(update={"model": "unexpected-ocr-model"})
+
+
 @pytest.fixture()
 def db_session() -> Iterator[Session]:
     db = SessionLocal()
@@ -188,3 +194,32 @@ def test_ocr_runs_cascade_when_answer_region_is_deleted(
         )
     )
     assert remaining == 0
+
+
+def test_ocr_provider_metadata_mismatch_fails_without_creating_draft(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.answer_region_ocr_service.LocalOcrClient.from_settings",
+        lambda: MismatchedOcrClient(),
+    )
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    response = client.post(
+        f"/answer-regions/{region['id']}/ocr-runs",
+        headers=region["_auth_headers"],
+    )
+
+    assert response.status_code == 502
+    db_session.expire_all()
+    run = db_session.scalars(
+        select(AnswerRegionOcrRun).where(
+            AnswerRegionOcrRun.answer_region_id == region["id"]
+        )
+    ).one()
+    assert run.status == "failed"
+    assert run.draft_text is None
+    assert run.error == "Local OCR provider metadata does not match the baseline"
