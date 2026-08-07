@@ -33,6 +33,8 @@ make down
 
 For a reliable local demo path and troubleshooting notes, see `docs/DEMO_RUNBOOK.md`.
 For Windows-host Qwen/PaddleOCR operation, see `docs/LOCAL_AI_RUNBOOK.md`.
+For the complete Windows teacher-pilot service stack, see
+`docs/WINDOWS_TEACHER_PILOT_RUNTIME.md`.
 
 ## Local service URLs
 
