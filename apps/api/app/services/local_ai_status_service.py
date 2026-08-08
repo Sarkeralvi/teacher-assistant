@@ -17,6 +17,12 @@ class LocalAiStatusService:
         return {
             "real_providers_allowed": self.settings.brain_allow_real_providers,
             "cohort_model_grading_enabled": self.settings.cohort_model_grading_enabled,
+            "local_script_preparation_enabled": (
+                self.settings.local_script_preparation_enabled
+            ),
+            "local_single_answer_grading_enabled": (
+                self.settings.local_single_answer_grading_enabled
+            ),
             "qwen": self._qwen_status(),
             "ocr": self._ocr_status(),
         }

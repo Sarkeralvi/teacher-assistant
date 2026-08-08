@@ -37,16 +37,12 @@ class BrainProvider(ABC):
             f"Provider {self.provider_name} does not support rubric extraction"
         )
 
-    def extract_questions_from_ocr_pages(
-        self, pages: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def extract_questions_from_ocr_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
         raise NotImplementedError(
             f"Provider {self.provider_name} does not support OCR-text question extraction"
         )
 
-    def extract_rubric_from_ocr_pages(
-        self, pages: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def extract_rubric_from_ocr_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
         raise NotImplementedError(
             f"Provider {self.provider_name} does not support OCR-text rubric extraction"
         )
@@ -56,6 +52,16 @@ class BrainProvider(ABC):
     ) -> dict[str, Any]:
         raise NotImplementedError(
             f"Provider {self.provider_name} does not support bundled reference extraction"
+        )
+
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support submission answer mapping"
         )
 
     def verify_available_model(self) -> None:

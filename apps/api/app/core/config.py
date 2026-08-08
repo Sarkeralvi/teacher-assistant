@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     local_reference_extraction_enabled: bool = Field(
         default=False, alias="LOCAL_REFERENCE_EXTRACTION_ENABLED"
     )
+    local_script_preparation_enabled: bool = Field(
+        default=False, alias="LOCAL_SCRIPT_PREPARATION_ENABLED"
+    )
+    local_single_answer_grading_enabled: bool = Field(
+        default=False, alias="LOCAL_SINGLE_ANSWER_GRADING_ENABLED"
+    )
     local_ai_phase_switch_enabled: bool = Field(
         default=False, alias="LOCAL_AI_PHASE_SWITCH_ENABLED"
     )

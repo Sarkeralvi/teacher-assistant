@@ -63,6 +63,10 @@ from app.services.answer_region_mapping_service import (
     upsert_answer_region_for_mapping,
 )
 from app.services.answer_region_processing import crop_answer_region_image
+from app.services.local_script_preparation import (
+    LocalScriptPreparationError,
+    LocalScriptPreparationService,
+)
 from app.services.storage import LocalStorage
 from packages.brain.answer_region_suggestion_codex_provider import (
     CodexAnswerRegionSuggestionProvider,
@@ -1019,6 +1023,38 @@ def run_submission_question_node_mappings(
     submission = get_submission_or_404(submission_id, db)
     get_owned_assessment_or_404(submission.assessment_id, db, current_user)
     request = payload or AnswerRegionMappingRunRequest()
+    if request.provider == "local_paddle_qwen":
+        try:
+            mappings = LocalScriptPreparationService(db).prepare(
+                submission=submission,
+                teacher=current_user,
+                expected_model=request.expected_model or "",
+                replace_existing=request.replace_existing,
+                maximum_ocr_calls=request.maximum_ocr_calls,
+            )
+        except LocalScriptPreparationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Local PaddleOCR/Qwen script preparation failed",
+            ) from exc
+        return AnswerRegionMappingRunResponse(
+            message=(
+                "PaddleOCR and Qwen prepared draft answer mappings. "
+                "Teacher confirmation is required before grading."
+            ),
+            created_count=len(mappings),
+            mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),
+            uncertain_count=sum(
+                1 for item in mappings if item.mapping_status == "uncertain"
+            ),
+            blocked_count=sum(1 for item in mappings if item.mapping_status == "blocked"),
+            mappings=mappings,
+        )
     if request.replace_existing:
         existing = db.scalars(
             select(AnswerRegionMapping)
@@ -1273,11 +1309,18 @@ def confirm_question_node_mapping(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot confirm a mapping without an answer region",
             )
-        if mapping.mapping_status not in {"mapped", "teacher_confirmed"}:
+        if mapping.mapping_status not in {"mapped", "uncertain", "teacher_confirmed"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only mapped regions can be teacher-confirmed",
+                detail="Only a proposed region can be teacher-confirmed",
             )
+        if mapping.provider == "local_paddle_qwen":
+            if request.confirmed_text is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Teacher-confirmed OCR text is required for a local mapping",
+                )
+            mapping.answer_region.manual_answer_text = request.confirmed_text.strip() or None
         mapping.teacher_confirmed = True
         mapping.mapping_status = "teacher_confirmed"
     else:

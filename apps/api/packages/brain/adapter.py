@@ -209,9 +209,7 @@ class BrainAdapter:
         policy_flag = f"marking_policy:{normalized_marking_policy}"
         if policy_flag not in review_flags:
             review_flags.append(policy_flag)
-        return validated.model_copy(
-            update={"latency_ms": latency_ms, "review_flags": review_flags}
-        )
+        return validated.model_copy(update={"latency_ms": latency_ms, "review_flags": review_flags})
 
     def extract_questions_from_document(self, file_path: str) -> dict[str, Any]:
         try:
@@ -229,9 +227,7 @@ class BrainAdapter:
         except Exception as exc:
             raise RuntimeError(sanitize_provider_error(str(exc))) from exc
 
-    def extract_questions_from_ocr_pages(
-        self, pages: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def extract_questions_from_ocr_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
         try:
             return self.provider.extract_questions_from_ocr_pages(pages)
         except (ValueError, NotImplementedError):
@@ -239,9 +235,7 @@ class BrainAdapter:
         except Exception as exc:
             raise RuntimeError(sanitize_provider_error(str(exc))) from exc
 
-    def extract_rubric_from_ocr_pages(
-        self, pages: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def extract_rubric_from_ocr_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
         try:
             return self.provider.extract_rubric_from_ocr_pages(pages)
         except (ValueError, NotImplementedError):
@@ -254,6 +248,22 @@ class BrainAdapter:
     ) -> dict[str, Any]:
         try:
             return self.provider.extract_reference_bundle_from_ocr_documents(documents)
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return self.provider.map_submission_answers_from_ocr_pages(
+                pages=pages,
+                questions=questions,
+            )
         except (ValueError, NotImplementedError):
             raise
         except Exception as exc:

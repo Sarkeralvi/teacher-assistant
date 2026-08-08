@@ -157,6 +157,27 @@ def valid_reference_completion() -> dict[str, Any]:
     }
 
 
+def valid_submission_mapping_completion() -> dict[str, Any]:
+    content = {
+        "mappings": [
+            {
+                "question_id": 41,
+                "question_no": "1(a)",
+                "status": "mapped",
+                "block_references": [{"page_no": 1, "block_orders": [2, 3]}],
+                "confidence": "0.88",
+                "warnings": [],
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+    return {
+        "choices": [{"message": {"content": json.dumps(content)}}],
+        "usage": {"prompt_tokens": 40, "completion_tokens": 20, "total_tokens": 60},
+    }
+
+
 def make_provider(client: FakeClient) -> LlamaCppQwenProvider:
     return LlamaCppQwenProvider(
         api_key="key-local-secret",
@@ -164,6 +185,39 @@ def make_provider(client: FakeClient) -> LlamaCppQwenProvider:
         base_url="http://127.0.0.1:8080/v1",
         client=client,
     )
+
+
+def test_qwen_maps_only_supplied_submission_ocr_block_ids() -> None:
+    client = FakeClient(valid_submission_mapping_completion())
+    provider = make_provider(client)
+
+    result = provider.map_submission_answers_from_ocr_pages(
+        pages=[
+            {
+                "page": 1,
+                "blocks": [
+                    {"order": 2, "text": "1(a) working", "bbox": [1, 2, 30, 20]},
+                    {"order": 3, "text": "answer 10 N", "bbox": [1, 22, 30, 40]},
+                ],
+            }
+        ],
+        questions=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)",
+                "question_text": "Calculate force",
+                "model_answer": "10 N",
+                "rubric": {"criteria": []},
+            }
+        ],
+    )
+
+    assert result["mappings"][0]["block_references"] == [{"page_no": 1, "block_orders": [2, 3]}]
+    request = client.post_calls[0][1]["json"]
+    prompt = request["messages"][1]["content"]
+    assert "[page=1 block=2] 1(a) working" in prompt
+    assert "Do not grade" in request["messages"][0]["content"]
+    assert request["response_format"]["json_schema"]["name"] == ("submission_answer_mapping")
 
 
 def test_qwen_provider_verifies_alias_and_returns_strict_text_only_draft() -> None:

@@ -1,0 +1,554 @@
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from PIL import Image
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.core.config import Settings, get_settings
+from app.models import (
+    AnswerRegion,
+    AnswerRegionMapping,
+    AnswerRegionSegment,
+    AuditLog,
+    Question,
+    QuestionNode,
+    Rubric,
+    Submission,
+    User,
+)
+from app.services.answer_region_processing import crop_answer_region_image
+from app.services.local_ai_phase_manager import LocalAiPhaseManager
+from app.services.local_ocr_client import LocalOcrClient
+from app.services.storage import LocalStorage
+from packages.brain.adapter import BrainAdapter
+
+
+class LocalScriptPreparationError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class PreparedSegment:
+    page_id: int
+    page_no: int
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    block_orders: list[int]
+
+
+class LocalScriptPreparationService:
+    """Prepare draft answer regions from full script pages without manual cropping."""
+
+    def __init__(
+        self,
+        db: Session,
+        *,
+        settings: Settings | None = None,
+        storage: LocalStorage | None = None,
+        ocr_client: LocalOcrClient | None = None,
+        qwen_adapter: BrainAdapter | None = None,
+        phase_manager: LocalAiPhaseManager | None = None,
+    ) -> None:
+        self.db = db
+        self.settings = settings or get_settings()
+        self.storage = storage or LocalStorage()
+        self._ocr_client = ocr_client
+        self._qwen_adapter = qwen_adapter
+        self.phase_manager = phase_manager or LocalAiPhaseManager(settings=self.settings)
+
+    def prepare(
+        self,
+        *,
+        submission: Submission,
+        teacher: User,
+        expected_model: str,
+        replace_existing: bool,
+        maximum_ocr_calls: int,
+    ) -> list[AnswerRegionMapping]:
+        self._validate_authorization(expected_model)
+        pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
+        if not pages:
+            raise LocalScriptPreparationError("The uploaded script has no rendered pages")
+        if len(pages) > maximum_ocr_calls:
+            raise LocalScriptPreparationError(
+                "Script page count exceeds the explicitly authorized OCR call limit"
+            )
+        questions, nodes, references = self._load_finalized_references(submission)
+        existing = self._load_existing(submission.id)
+        if existing and not replace_existing:
+            raise LocalScriptPreparationError(
+                "Draft mappings already exist; explicitly replace them to prepare again"
+            )
+        self._assert_replace_is_safe(existing)
+
+        self.phase_manager.switch("OcrGpu")
+        ocr_pages, ocr_warnings = self._ocr_pages(pages)
+        self.phase_manager.switch("Qwen")
+        adapter = self._qwen_adapter or BrainAdapter.for_provider(self.settings, "llama_cpp_qwen")
+        adapter.verify_available_model()
+        result = adapter.map_submission_answers_from_ocr_pages(
+            pages=ocr_pages,
+            questions=references,
+        )
+        drafts = result.get("mappings")
+        if not isinstance(drafts, list):
+            raise LocalScriptPreparationError("Local Qwen returned no mapping drafts")
+        self._validate_draft_set(drafts, questions)
+        question_order = {question.id: index for index, question in enumerate(questions)}
+        drafts.sort(key=lambda item: question_order[int(item["question_id"])])
+
+        block_index = self._block_index(ocr_pages)
+        prepared: list[tuple[dict[str, Any], list[PreparedSegment], str]] = []
+        used_blocks: set[tuple[int, int]] = set()
+        for draft in drafts:
+            segments, draft_text = self._resolve_draft(
+                draft=draft,
+                pages=pages,
+                block_index=block_index,
+                used_blocks=used_blocks,
+            )
+            prepared.append((draft, segments, draft_text))
+        _apply_adjacent_continuation_boundary_fallback(prepared, block_index)
+        visible_ocr_characters = sum(len(str(page.get("text") or "").strip()) for page in ocr_pages)
+        if visible_ocr_characters >= 100 and not any(
+            segments for _draft, segments, _text in prepared
+        ):
+            raise LocalScriptPreparationError(
+                "Qwen mapped no answer regions despite substantial visible OCR text"
+            )
+
+        for mapping in existing:
+            region = mapping.answer_region
+            self.db.delete(mapping)
+            if region is not None:
+                self.db.delete(region)
+        self.db.flush()
+
+        question_by_id = {question.id: question for question in questions}
+        created: list[AnswerRegionMapping] = []
+        for draft, segments, draft_text in prepared:
+            question = question_by_id[int(draft["question_id"])]
+            node = nodes[question.id]
+            mapping = self._create_mapping(
+                submission=submission,
+                question=question,
+                node=node,
+                draft=draft,
+                segments=segments,
+                draft_text=draft_text,
+                ocr_warnings=ocr_warnings,
+                qwen_warnings=list(result.get("warnings") or []),
+            )
+            self.db.add(mapping)
+            created.append(mapping)
+        self.db.add(
+            AuditLog(
+                actor_type="teacher",
+                actor_id=teacher.id,
+                event_type="submission_script_draft_prepared",
+                entity_type="submission",
+                entity_id=submission.id,
+                payload_json={
+                    "assessment_id": submission.assessment_id,
+                    "provider": "local_paddle_qwen",
+                    "expected_qwen_model": expected_model,
+                    "ocr_call_count": len(pages),
+                    "qwen_call_count": 1,
+                    "mapping_count": len(created),
+                    "mapped_count": sum(1 for draft, segments, _text in prepared if segments),
+                    "draft_text_sha256": hashlib.sha256(
+                        "\n".join(text for _draft, _segments, text in prepared).encode("utf-8")
+                    ).hexdigest(),
+                },
+            )
+        )
+        self.db.commit()
+        return self._load_existing(submission.id)
+
+    def _validate_authorization(self, expected_model: str) -> None:
+        if not self.settings.brain_allow_real_providers:
+            raise LocalScriptPreparationError("Real local providers are disabled")
+        if not self.settings.local_script_preparation_enabled:
+            raise LocalScriptPreparationError("Local script preparation is disabled")
+        if not self.settings.local_ocr_enabled or not self.settings.local_qwen_enabled:
+            raise LocalScriptPreparationError("Local OCR and Qwen must both be enabled")
+        if expected_model != self.settings.local_qwen_model:
+            raise LocalScriptPreparationError("Expected local Qwen model alias does not match")
+
+    def _load_finalized_references(
+        self, submission: Submission
+    ) -> tuple[list[Question], dict[int, QuestionNode], list[dict[str, Any]]]:
+        questions = list(
+            self.db.scalars(
+                select(Question)
+                .where(Question.assessment_id == submission.assessment_id)
+                .order_by(Question.id)
+            ).all()
+        )
+        if not questions:
+            raise LocalScriptPreparationError("No finalized questions are available")
+        nodes = list(
+            self.db.scalars(
+                select(QuestionNode)
+                .where(QuestionNode.assessment_id == submission.assessment_id)
+                .where(QuestionNode.teacher_confirmed.is_(True))
+                .where(QuestionNode.node_type.in_(["question", "subquestion"]))
+            ).all()
+        )
+        node_by_label: dict[str, QuestionNode] = {}
+        for node in nodes:
+            for value in (node.label, node.question_number):
+                node_by_label.setdefault(value.strip().casefold(), node)
+        node_by_question: dict[int, QuestionNode] = {}
+        references: list[dict[str, Any]] = []
+        for question in questions:
+            node = node_by_label.get(question.question_no.strip().casefold())
+            if node is None:
+                raise LocalScriptPreparationError(
+                    f"Finalized question {question.question_no} has no confirmed question node"
+                )
+            rubric = self.db.scalars(
+                select(Rubric)
+                .where(Rubric.question_id == question.id)
+                .where(Rubric.is_active.is_(True))
+                .order_by(Rubric.version.desc(), Rubric.id.desc())
+            ).first()
+            if not (question.model_answer or "").strip() or rubric is None:
+                raise LocalScriptPreparationError(
+                    f"Finalized question {question.question_no} is missing its solution or rubric"
+                )
+            node_by_question[question.id] = node
+            references.append(
+                {
+                    "question_id": question.id,
+                    "question_no": question.question_no,
+                    "question_text": question.question_text,
+                    "model_answer": question.model_answer,
+                    "total_marks": str(question.total_marks),
+                    "rubric": rubric.rubric_json,
+                }
+            )
+        return questions, node_by_question, references
+
+    def _ocr_pages(self, pages: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+        client = self._ocr_client or LocalOcrClient.from_settings(self.settings)
+        request_prefix = f"script-{uuid4().hex}"
+        output: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for page in pages:
+            path = self.storage.resolve_relative(page.image_path)
+            image_bytes = path.read_bytes()
+            content_type = _image_content_type(path)
+            result = client.ocr_image(
+                image_bytes=image_bytes,
+                content_type=content_type,
+                request_id=f"{request_prefix}-page-{page.page_no}",
+                mode="document",
+            )
+            page_blocks = []
+            for block in result.blocks:
+                payload = block.model_dump(mode="json")
+                payload["page"] = page.page_no
+                page_blocks.append(payload)
+            output.append(
+                {
+                    "page": page.page_no,
+                    "text": result.normalized_text,
+                    "markdown": result.markdown,
+                    "blocks": page_blocks,
+                    "model": result.model,
+                    "layout_model": result.layout_model,
+                    "device": result.device,
+                    "latency_ms": result.latency_ms,
+                }
+            )
+            warnings.extend(f"page {page.page_no}: {item}" for item in result.warnings)
+        return output, list(dict.fromkeys(warnings))
+
+    def _block_index(self, pages: list[dict[str, Any]]) -> dict[tuple[int, int], dict[str, Any]]:
+        index: dict[tuple[int, int], dict[str, Any]] = {}
+        for page in pages:
+            page_no = int(page["page"])
+            for block in page["blocks"]:
+                key = (page_no, int(block["order"]))
+                if key in index:
+                    raise LocalScriptPreparationError("OCR block identifiers are duplicated")
+                index[key] = block
+        return index
+
+    def _validate_draft_set(self, drafts: list[dict[str, Any]], questions: list[Question]) -> None:
+        expected = {question.id for question in questions}
+        actual = {int(draft.get("question_id") or 0) for draft in drafts}
+        if actual != expected or len(drafts) != len(expected):
+            raise LocalScriptPreparationError(
+                "Local Qwen did not return exactly one draft per finalized question"
+            )
+
+    def _resolve_draft(
+        self,
+        *,
+        draft: dict[str, Any],
+        pages: list[Any],
+        block_index: dict[tuple[int, int], dict[str, Any]],
+        used_blocks: set[tuple[int, int]],
+    ) -> tuple[list[PreparedSegment], str]:
+        if draft.get("status") == "not_found":
+            return [], ""
+        selected: dict[int, list[dict[str, Any]]] = {}
+        local_keys: set[tuple[int, int]] = set()
+        for reference in draft.get("block_references") or []:
+            page_no = int(reference["page_no"])
+            for order in reference["block_orders"]:
+                key = (page_no, int(order))
+                block = block_index.get(key)
+                if block is None:
+                    raise LocalScriptPreparationError("Qwen selected an unknown OCR block")
+                if key in local_keys:
+                    raise LocalScriptPreparationError(
+                        "Qwen repeated one OCR block inside the same answer"
+                    )
+                if key in used_blocks:
+                    raise LocalScriptPreparationError(
+                        "Qwen assigned one OCR block to multiple answers"
+                    )
+                bbox = block.get("bbox")
+                if not _valid_bbox(bbox):
+                    raise LocalScriptPreparationError(
+                        "A selected OCR block has no usable bounding box"
+                    )
+                local_keys.add(key)
+                selected.setdefault(page_no, []).append(block)
+        used_blocks.update(local_keys)
+        page_by_no = {page.page_no: page for page in pages}
+        segments: list[PreparedSegment] = []
+        text_parts: list[str] = []
+        for page_no in sorted(selected):
+            page = page_by_no.get(page_no)
+            if page is None:
+                raise LocalScriptPreparationError("Qwen selected an unknown script page")
+            blocks = sorted(selected[page_no], key=lambda item: int(item["order"]))
+            text_parts.extend(str(block["text"]).strip() for block in blocks)
+            with Image.open(self.storage.resolve_relative(page.image_path)) as image:
+                x, y, width, height = _union_box(blocks, image.width, image.height)
+            segments.append(
+                PreparedSegment(
+                    page_id=page.id,
+                    page_no=page_no,
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    block_orders=[int(block["order"]) for block in blocks],
+                )
+            )
+        if not segments:
+            raise LocalScriptPreparationError("A mapped Qwen draft selected no OCR blocks")
+        return segments, "\n".join(text_parts).strip()
+
+    def _create_mapping(
+        self,
+        *,
+        submission: Submission,
+        question: Question,
+        node: QuestionNode,
+        draft: dict[str, Any],
+        segments: list[PreparedSegment],
+        draft_text: str,
+        ocr_warnings: list[str],
+        qwen_warnings: list[str],
+    ) -> AnswerRegionMapping:
+        status = "blocked" if not segments else str(draft["status"])
+        if status == "not_found":
+            status = "blocked"
+        warnings = list(
+            dict.fromkeys([*ocr_warnings, *qwen_warnings, *list(draft.get("warnings") or [])])
+        )
+        mapping = AnswerRegionMapping(
+            assessment_id=submission.assessment_id,
+            submission_id=submission.id,
+            question_node_id=node.id,
+            question_id=question.id,
+            source_page=segments[0].page_no if segments else None,
+            source_reference={
+                "ocr_draft_text": draft_text,
+                "ocr_draft_text_sha256": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
+                "segments": [
+                    {"page_no": item.page_no, "block_orders": item.block_orders}
+                    for item in segments
+                ],
+                "warnings": warnings,
+                "teacher_review_required": True,
+                "text_source": "selected_paddle_ocr_blocks",
+            },
+            confidence=Decimal(str(draft["confidence"])),
+            mapping_status=status,
+            blocker_reason=(
+                "No answer blocks were found for this question"
+                if not segments
+                else ("Qwen marked this mapping uncertain" if status == "uncertain" else None)
+            ),
+            provider="local_paddle_qwen",
+            teacher_confirmed=False,
+        )
+        if not segments:
+            return mapping
+        primary = segments[0]
+        primary_page = next(page for page in submission.pages if page.id == primary.page_id)
+        primary_crop = crop_answer_region_image(
+            storage=self.storage,
+            source_image_path=primary_page.image_path,
+            submission_id=submission.id,
+            x=primary.x,
+            y=primary.y,
+            width=primary.width,
+            height=primary.height,
+        )
+        region = AnswerRegion(
+            submission_id=submission.id,
+            question_id=question.id,
+            question_node_id=node.id,
+            page_id=primary.page_id,
+            x=primary.x,
+            y=primary.y,
+            width=primary.width,
+            height=primary.height,
+            image_path=primary_crop,
+            manual_answer_text=None,
+            full_answer_confirmed=False,
+            evidence_status="unconfirmed",
+            continuation_check_status="not_checked",
+        )
+        for index, segment in enumerate(segments, start=1):
+            page = next(page for page in submission.pages if page.id == segment.page_id)
+            image_path = (
+                primary_crop
+                if index == 1
+                else crop_answer_region_image(
+                    storage=self.storage,
+                    source_image_path=page.image_path,
+                    submission_id=submission.id,
+                    x=segment.x,
+                    y=segment.y,
+                    width=segment.width,
+                    height=segment.height,
+                )
+            )
+            region.segments.append(
+                AnswerRegionSegment(
+                    submission_page_id=segment.page_id,
+                    order_index=index,
+                    x=segment.x,
+                    y=segment.y,
+                    width=segment.width,
+                    height=segment.height,
+                    image_path=image_path,
+                    source="suggestion",
+                    confirmed=False,
+                    is_primary=index == 1,
+                )
+            )
+        mapping.answer_region = region
+        return mapping
+
+    def _load_existing(self, submission_id: int) -> list[AnswerRegionMapping]:
+        return list(
+            self.db.scalars(
+                select(AnswerRegionMapping)
+                .options(
+                    selectinload(AnswerRegionMapping.answer_region).selectinload(
+                        AnswerRegion.segments
+                    )
+                )
+                .where(AnswerRegionMapping.submission_id == submission_id)
+                .order_by(AnswerRegionMapping.id)
+            ).all()
+        )
+
+    def _assert_replace_is_safe(self, mappings: list[AnswerRegionMapping]) -> None:
+        for mapping in mappings:
+            region = mapping.answer_region
+            if region is None:
+                continue
+            if region.full_answer_confirmed or region.grading_jobs or region.final_grades:
+                raise LocalScriptPreparationError(
+                    "Confirmed or graded mappings cannot be replaced automatically"
+                )
+
+
+def _image_content_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    raise LocalScriptPreparationError("Stored script page is not PNG or JPEG")
+
+
+def _apply_adjacent_continuation_boundary_fallback(
+    prepared: list[tuple[dict[str, Any], list[PreparedSegment], str]],
+    block_index: dict[tuple[int, int], dict[str, Any]],
+) -> None:
+    """Expose a mixed continuation block to the next subquestion for review.
+
+    Paddle layout can merge the final line of one multi-page answer and the
+    beginning of the immediately following answer into one block. Reusing only
+    that last block is safer than inventing a crop: both drafts remain
+    uncertain and the teacher must edit/confirm their text independently.
+    """
+
+    for index in range(1, len(prepared)):
+        draft, segments, _draft_text = prepared[index]
+        previous_draft, previous_segments, _previous_text = prepared[index - 1]
+        if segments or draft.get("status") != "not_found":
+            continue
+        if len(previous_segments) < 2:
+            continue
+        shared = previous_segments[-1]
+        if shared.page_no <= previous_segments[0].page_no:
+            continue
+        blocks = [block_index[(shared.page_no, order)] for order in shared.block_orders]
+        shared_text = "\n".join(str(block.get("text") or "").strip() for block in blocks).strip()
+        if not shared_text:
+            continue
+        warning = "shared_continuation_boundary_requires_teacher_text_edit"
+        draft["status"] = "uncertain"
+        draft["confidence"] = "0.35"
+        draft["warnings"] = list(dict.fromkeys([*draft.get("warnings", []), warning]))
+        previous_draft["status"] = "uncertain"
+        previous_draft["warnings"] = list(
+            dict.fromkeys([*previous_draft.get("warnings", []), warning])
+        )
+        prepared[index] = (draft, [shared], shared_text)
+
+
+def _valid_bbox(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 4
+        and all(isinstance(item, (int, float)) for item in value)
+        and float(value[2]) > float(value[0])
+        and float(value[3]) > float(value[1])
+    )
+
+
+def _union_box(
+    blocks: list[dict[str, Any]], image_width: int, image_height: int
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    boxes = [block["bbox"] for block in blocks]
+    padding = 12.0
+    left = max(0.0, min(float(box[0]) for box in boxes) - padding)
+    top = max(0.0, min(float(box[1]) for box in boxes) - padding)
+    right = min(float(image_width), max(float(box[2]) for box in boxes) + padding)
+    bottom = min(float(image_height), max(float(box[3]) for box in boxes) + padding)
+    if right <= left or bottom <= top:
+        raise LocalScriptPreparationError("OCR blocks produced an invalid answer region")
+    return tuple(Decimal(str(round(value, 2))) for value in (left, top, right - left, bottom - top))

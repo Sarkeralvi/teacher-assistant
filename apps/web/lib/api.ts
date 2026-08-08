@@ -795,6 +795,8 @@ export type LocalAiServiceStatus = {
 export type LocalAiStatus = {
   real_providers_allowed: boolean;
   cohort_model_grading_enabled: boolean;
+  local_script_preparation_enabled: boolean;
+  local_single_answer_grading_enabled: boolean;
   qwen: LocalAiServiceStatus;
   ocr: LocalAiServiceStatus;
 };
@@ -1368,7 +1370,13 @@ export function suggestAnswerRegionMappings(
 
 export function runSubmissionQuestionNodeMappings(
   submissionId: number,
-  payload: { replace_existing?: boolean } = {},
+  payload: {
+    replace_existing?: boolean;
+    provider?: "deterministic_layout" | "local_paddle_qwen";
+    expected_model?: string;
+    draft_only_confirmed?: boolean;
+    maximum_ocr_calls?: number;
+  } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse>(`/submissions/${submissionId}/question-node-mappings/run`, {
     method: "POST",
@@ -1380,7 +1388,13 @@ export function runSubmissionQuestionNodeMappings(
 
 export function runAssessmentQuestionNodeMappings(
   assessmentId: number,
-  payload: { replace_existing?: boolean } = {},
+  payload: {
+    replace_existing?: boolean;
+    provider?: "deterministic_layout" | "local_paddle_qwen";
+    expected_model?: string;
+    draft_only_confirmed?: boolean;
+    maximum_ocr_calls?: number;
+  } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse[]>(`/assessments/${assessmentId}/question-node-mappings/run`, {
     method: "POST",
@@ -1406,10 +1420,14 @@ export function updateQuestionNodeMapping(mappingId: number, payload: AnswerRegi
   });
 }
 
-export function confirmQuestionNodeMapping(mappingId: number, teacher_confirmed = true) {
+export function confirmQuestionNodeMapping(
+  mappingId: number,
+  teacher_confirmed = true,
+  confirmed_text?: string,
+) {
   return apiRequest<AnswerRegionMapping>(`/question-node-mappings/${mappingId}/confirm`, {
     method: "POST",
-    body: { teacher_confirmed },
+    body: { teacher_confirmed, confirmed_text },
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
@@ -1625,6 +1643,26 @@ export function gradeAnswerRegion(answerRegionId: number) {
   return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {
     method: "POST",
   });
+}
+
+export function gradeAnswerRegionWithLocalQwen(
+  answerRegionId: number,
+  payload: {
+    grading_run_id: number;
+    provider: "llama_cpp_qwen";
+    expected_model: string;
+    draft_only_confirmed: true;
+  },
+) {
+  return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(
+    `/answer-regions/${answerRegionId}/grade-local-qwen`,
+    {
+      method: "POST",
+      body: payload,
+      token: getStoredAuthToken(),
+      authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+    },
+  );
 }
 
 export function gradeAnswerRegionWithCodexDev(answerRegionId: number) {

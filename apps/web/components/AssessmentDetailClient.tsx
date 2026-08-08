@@ -27,8 +27,10 @@ import {
   getGradingQueueSummary,
   getLocalAiStatus,
   getSubmissionPageImageUrl,
+  gradeAnswerRegionWithLocalQwen,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
+  listAssessmentGradingRuns,
   listAnswerRegionOcrRuns,
   listAssessmentQuestionNodeMappings,
   listQuestionNodes,
@@ -57,6 +59,7 @@ import {
   type FinalGrade,
   type GradingEvidencePacket,
   type GradingQueueRun,
+  type GradingRun,
   type LocalAiStatus,
   type Question,
   type QuestionImportJob,
@@ -156,6 +159,18 @@ function buildSingleCriterionRubric(question: Question, draft: ManualSetupDraft)
   };
 }
 
+function localMappingDraftText(mapping: AnswerRegionMapping): string {
+  const value = mapping.source_reference?.ocr_draft_text;
+  return typeof value === "string" ? value : "";
+}
+
+function localMappingWarnings(mapping: AnswerRegionMapping): string[] {
+  const value = mapping.source_reference?.warnings;
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const uploadFormRef = useRef<HTMLFormElement | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -178,6 +193,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [runningOcrRegionId, setRunningOcrRegionId] = useState<number | null>(null);
   const [confirmingOcrRunId, setConfirmingOcrRunId] = useState<number | null>(null);
   const [questionNodeMappings, setQuestionNodeMappings] = useState<QuestionNodeMappingGroup[]>([]);
+  const [mappingDraftTextById, setMappingDraftTextById] = useState<Record<number, string>>({});
   const [selectedMappingQuestionNodeId, setSelectedMappingQuestionNodeId] = useState("");
   const [mappingPageId, setMappingPageId] = useState("");
   const [mappingX, setMappingX] = useState("24");
@@ -186,11 +202,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [mappingHeight, setMappingHeight] = useState("300");
   const [mappingManualAnswerText, setMappingManualAnswerText] = useState("");
   const [runningMappings, setRunningMappings] = useState(false);
+  const [scriptPreparationMessage, setScriptPreparationMessage] = useState<string | null>(null);
+  const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
   const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
   const [gradingQueueSummary, setGradingQueueSummary] = useState<GradingQueueRun | null>(null);
+  const [gradingRuns, setGradingRuns] = useState<GradingRun[]>([]);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [questionNo, setQuestionNo] = useState("");
   const [questionText, setQuestionText] = useState("");
@@ -302,6 +321,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     questions.every(
       (question) => Boolean(question.model_answer?.trim()) && Boolean(activeRubricFor(question.id)),
     );
+  const activeGradingRun = [...gradingRuns]
+    .filter((run) => run.mode === "custom_controlled")
+    .sort((left, right) => right.id - left.id)[0] ?? null;
+  const localScriptPreparationAuthorized = Boolean(
+    localAiStatus?.real_providers_allowed &&
+    localAiStatus.local_script_preparation_enabled &&
+    localAiStatus.ocr.enabled &&
+    localAiStatus.qwen.enabled,
+  );
+  const localSingleGradeAuthorized = Boolean(
+    localAiStatus?.real_providers_allowed &&
+    localAiStatus.local_single_answer_grading_enabled &&
+    localAiStatus.qwen.enabled,
+  );
 
   function statusForRegion(regionId: number): "finalized" | "graded" | "mapped" {
     if (finalizedRegionIds.has(regionId)) {
@@ -378,6 +411,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         evidencePrepData,
         gradingQueueData,
         localAiData,
+        gradingRunData,
       ] =
         await Promise.all([
           getAssessment(assessmentId),
@@ -391,6 +425,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           getEvidencePrepSummary(assessmentId).catch(() => null),
           getGradingQueueSummary(assessmentId).catch(() => null),
           getLocalAiStatus().catch(() => null),
+          listAssessmentGradingRuns(assessmentId).catch(() => [] as GradingRun[]),
         ]);
 
       setAssessment(assessmentData);
@@ -431,6 +466,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
       setQuestionNodeMappings(questionNodeMappingData);
+      setMappingDraftTextById((current) => {
+        const next = { ...current };
+        for (const group of questionNodeMappingData) {
+          for (const mapping of group.mappings) {
+            if (next[mapping.id] === undefined) {
+              next[mapping.id] = localMappingDraftText(mapping);
+            }
+          }
+        }
+        return next;
+      });
       if (!selectedPreviewRegionId && answerRegionData[0]) {
         setSelectedPreviewRegionId(String(answerRegionData[0].id));
       }
@@ -460,6 +506,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setEvidencePrepSummary(evidencePrepData);
       setGradingQueueSummary(gradingQueueData);
       setLocalAiStatus(localAiData);
+      setGradingRuns(gradingRunData);
       if (!selectedPageId && submissionData[0]?.pages[0]) {
         setSelectedPageId(String(submissionData[0].pages[0].id));
       }
@@ -788,26 +835,63 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   async function handleRunAutomaticMappings() {
     setRunningMappings(true);
     setError(null);
+    setScriptPreparationMessage(null);
     try {
-      await runAssessmentQuestionNodeMappings(assessmentId, { replace_existing: true });
+      const responses = await runAssessmentQuestionNodeMappings(assessmentId, {
+        replace_existing: true,
+        provider: "local_paddle_qwen",
+        expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
+        draft_only_confirmed: true,
+        maximum_ocr_calls: Math.max(pages.length, 1),
+      });
+      setScriptPreparationMessage(
+        `${responses.reduce((total, response) => total + response.mapped_count, 0)} draft answer mappings prepared. Review every crop and OCR text before confirmation.`,
+      );
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run automatic question-node mappings");
+      setError(err instanceof Error ? err.message : "Failed to prepare the answer script with local AI");
     } finally {
       setRunningMappings(false);
     }
   }
 
-  async function handleConfirmMapping(mappingId: number) {
-    setConfirmingMappingId(mappingId);
+  async function handleConfirmMapping(mapping: AnswerRegionMapping) {
+    const confirmedText = mappingDraftTextById[mapping.id] ?? localMappingDraftText(mapping);
+    if (mapping.provider === "local_paddle_qwen" && !confirmedText.trim()) {
+      setError("Review and confirm the PaddleOCR answer text before accepting this mapping.");
+      return;
+    }
+    setConfirmingMappingId(mapping.id);
     setError(null);
     try {
-      await confirmQuestionNodeMapping(mappingId, true);
+      await confirmQuestionNodeMapping(mapping.id, true, confirmedText);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to confirm mapping");
     } finally {
       setConfirmingMappingId(null);
+    }
+  }
+
+  async function handleLocalQwenGrade(answerRegionId: number) {
+    if (!activeGradingRun) {
+      setError("Start a Custom Controlled grading run before local Qwen grading.");
+      return;
+    }
+    setGradingRegionId(answerRegionId);
+    setError(null);
+    try {
+      await gradeAnswerRegionWithLocalQwen(answerRegionId, {
+        grading_run_id: activeGradingRun.id,
+        provider: "llama_cpp_qwen",
+        expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
+        draft_only_confirmed: true,
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local Qwen grading failed");
+    } finally {
+      setGradingRegionId(null);
     }
   }
 
@@ -1488,6 +1572,104 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </section>
 
       {submissions.length > 0 ? <>
+      <section className="grid gap-4 rounded border border-cyan-800 bg-slate-900 p-5" data-testid="local-script-preparation">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-3xl">
+            <h2 className="text-xl font-semibold">Prepare answer script automatically</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              PaddleOCR reads every complete script page on the GPU. Qwen then links only those OCR blocks to the finalized questions. You do not crop or enter coordinates.
+            </p>
+            <p className="mt-1 text-sm text-amber-200">
+              The result is draft evidence. Check each generated crop and edit its OCR text before confirming it.
+            </p>
+          </div>
+          <button
+            className={buttonClass}
+            type="button"
+            disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
+            onClick={() => void handleRunAutomaticMappings()}
+          >
+            {runningMappings ? "OCR running, then Qwen mapping..." : "Prepare scripts with PaddleOCR + Qwen"}
+          </button>
+        </div>
+        <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-4">
+          <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
+          <p>Script pages: {pages.length}</p>
+          <p>OCR phase: {localAiStatus?.ocr.enabled ? "enabled" : "disabled"}</p>
+          <p>Qwen phase: {localAiStatus?.qwen.enabled ? "enabled" : "disabled"}</p>
+        </div>
+        {!localScriptPreparationAuthorized ? (
+          <p className="rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-100">
+            Local script preparation is disabled in the host configuration. It must be explicitly enabled for this supervised rehearsal.
+          </p>
+        ) : null}
+        {scriptPreparationMessage ? (
+          <p className="rounded border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-100">{scriptPreparationMessage}</p>
+        ) : null}
+        {flatMappings.length === 0 ? (
+          <EmptyState message="No prepared answer mappings yet. Run PaddleOCR + Qwen after uploading the script." />
+        ) : (
+          <div className="grid gap-3">
+            {questionNodeMappings.flatMap((group) =>
+              group.mappings.map((mapping) => {
+                const draftText = mappingDraftTextById[mapping.id] ?? localMappingDraftText(mapping);
+                const warnings = localMappingWarnings(mapping);
+                return (
+                  <article key={mapping.id} className="grid gap-3 rounded border border-slate-700 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h3 className="font-semibold">{group.question_node.label} · submission #{mapping.submission_id}</h3>
+                        <p className="text-xs text-slate-400">
+                          {mapping.mapping_status} · confidence {mapping.confidence ?? "n/a"} · {mapping.provider}
+                        </p>
+                      </div>
+                      <span className={`rounded-full border px-2 py-1 text-xs ${mapping.teacher_confirmed ? "border-emerald-700 text-emerald-200" : "border-amber-700 text-amber-200"}`}>
+                        {mapping.teacher_confirmed ? "teacher confirmed" : "teacher review required"}
+                      </span>
+                    </div>
+                    {mapping.blocker_reason ? <p className="text-sm text-red-200">{mapping.blocker_reason}</p> : null}
+                    {mapping.answer_region_id ? (
+                      <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(mapping.answer_region_id)} target="_blank" rel="noreferrer">
+                        Open automatically prepared answer crop
+                      </a>
+                    ) : null}
+                    {warnings.length > 0 ? (
+                      <ul className="list-disc pl-5 text-xs text-amber-200">
+                        {warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                      </ul>
+                    ) : null}
+                    {mapping.answer_region_id ? (
+                      <label className="grid gap-2 text-sm">
+                        PaddleOCR draft text — edit before confirmation
+                        <textarea
+                          className={inputClass}
+                          rows={5}
+                          disabled={mapping.teacher_confirmed}
+                          value={draftText}
+                          onChange={(event) => setMappingDraftTextById((current) => ({
+                            ...current,
+                            [mapping.id]: event.target.value,
+                          }))}
+                        />
+                      </label>
+                    ) : null}
+                    {!mapping.teacher_confirmed && mapping.answer_region_id ? (
+                      <button
+                        className={buttonClass}
+                        type="button"
+                        disabled={confirmingMappingId === mapping.id || !draftText.trim()}
+                        onClick={() => void handleConfirmMapping(mapping)}
+                      >
+                        {confirmingMappingId === mapping.id ? "Confirming..." : "Confirm crop link and edited OCR text"}
+                      </button>
+                    ) : null}
+                  </article>
+                );
+              }),
+            )}
+          </div>
+        )}
+      </section>
       {process.env.NEXT_PUBLIC_SHOW_LEGACY_REFERENCE_TOOLS === "true" ? (
       <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
         <div>
@@ -1555,7 +1737,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       <button className="rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-200 hover:border-cyan-500" type="button" disabled={savingMappingId === mapping.id} onClick={() => void handleSaveManualMapping(mapping)}>
                         {savingMappingId === mapping.id ? "Saving..." : "Save manual correction"}
                       </button>
-                      <button className="rounded border border-emerald-700 px-3 py-1 text-xs text-emerald-200 hover:border-emerald-500" type="button" disabled={confirmingMappingId === mapping.id || mapping.answer_region_id == null} onClick={() => void handleConfirmMapping(mapping.id)}>
+                      <button className="rounded border border-emerald-700 px-3 py-1 text-xs text-emerald-200 hover:border-emerald-500" type="button" disabled={confirmingMappingId === mapping.id || mapping.answer_region_id == null} onClick={() => void handleConfirmMapping(mapping)}>
                         {confirmingMappingId === mapping.id ? "Confirming..." : "Confirm mapping"}
                       </button>
                     </div>
@@ -1570,9 +1752,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
-          <h2 className="text-xl font-semibold">Step 4: Answer evidence and manual answer text</h2>
+          <h2 className="text-xl font-semibold">Review prepared answer evidence</h2>
           <p className="text-sm text-slate-400">Create or correct the answer evidence for each student × grading unit. Multi-page answers must be represented with ordered segments and confirmed before evidence can be ready.</p>
-          <p className="text-sm text-red-200">Manual answer text is required before V0 real draft grading.</p>
+          <p className="text-sm text-amber-200">Teacher confirmation is required before local Qwen can create a draft score.</p>
           <p className="mt-1 text-sm text-slate-400">
             Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
           </p>
@@ -1687,7 +1869,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         {!loading && questions.length === 0 ? (
           <p className="text-sm text-amber-200">Create a question before mapping answer regions.</p>
         ) : null}
-        <label className="grid gap-2 text-sm">
+        <label className="hidden gap-2 text-sm">
           Select page
           <select data-testid="answer-region-page-select" className={inputClass} value={selectedPageId} onChange={(event) => setSelectedPageId(event.target.value)} required>
             <option value="">Select page</option>
@@ -1700,7 +1882,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             )}
           </select>
         </label>
-        <label className="grid gap-2 text-sm">
+        <label className="hidden gap-2 text-sm">
           Select question
           <select data-testid="answer-region-question-select" className={inputClass} value={selectedQuestionId} onChange={(event) => setSelectedQuestionId(event.target.value)} required>
             <option value="">Select question</option>
@@ -1709,7 +1891,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             ))}
           </select>
         </label>
-        <div>
+        <div className="hidden">
           <p className="text-sm font-medium">Crop coordinates</p>
           <div className="mt-2 grid gap-2 md:grid-cols-4">
             <input className={inputClass} aria-label="Crop x" placeholder="x" value={regionX} onChange={(event) => setRegionX(event.target.value)} required />
@@ -1719,7 +1901,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           </div>
           <textarea className={inputClass} aria-label="Manual answer evidence text" placeholder="Teacher-confirmed student answer text for real grading" value={manualAnswerText} onChange={(event) => setManualAnswerText(event.target.value)} rows={3} />
         </div>
-        <button className={buttonClass} disabled={creatingRegion || pages.length === 0 || questions.length === 0} type="submit">
+        <button className={`hidden ${buttonClass}`} disabled={creatingRegion || pages.length === 0 || questions.length === 0} type="submit">
           {creatingRegion ? "Creating..." : "Create answer region"}
         </button>
 
@@ -1760,6 +1942,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const manualAnswerText = packetAnswer?.manual_answer_text?.trim() ?? region.manual_answer_text?.trim() ?? "";
             const manualAnswerMissing = manualAnswerText.length === 0;
             const readyForRealDraftGrading = Boolean(readiness?.ready_for_grading) && !manualAnswerMissing;
+            const localPreparedMapping = flatMappings.find(
+              (mapping) => mapping.answer_region_id === region.id && mapping.provider === "local_paddle_qwen",
+            ) ?? null;
             const latestOcrRun = (ocrRunsByRegionId[region.id] ?? [])[0] ?? null;
             const ocrEditableText = latestOcrRun
               ? (ocrConfirmedTextByRunId[latestOcrRun.id] ?? latestOcrRun.confirmed_text ?? latestOcrRun.draft_text ?? "")
@@ -1778,7 +1963,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 <p className="text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</p>
                 <a className="text-xs text-cyan-300 underline" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer">Open crop preview · Cropped image</a>
 
-                <section className="grid gap-3 rounded border border-violet-800 bg-violet-950/20 p-3" data-testid="local-ocr-draft-panel">
+                <section className={`${localPreparedMapping ? "hidden" : "grid"} gap-3 rounded border border-violet-800 bg-violet-950/20 p-3`} data-testid="local-ocr-draft-panel">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="font-semibold text-violet-100">Local PaddleOCR draft evidence</h3>
@@ -1899,6 +2084,27 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Mark partial / needs review</button>
                     <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
+                  </div>
+                  <div className="rounded border border-cyan-800 bg-cyan-950/20 p-3">
+                    <p className="font-semibold text-cyan-100">Local Qwen draft grading</p>
+                    <p className="mt-1 text-xs text-slate-300">
+                      Qwen receives the finalized question, solution, active rubric, and only the teacher-confirmed answer text. It creates a review-required draft and cannot finalize a grade.
+                    </p>
+                    <button
+                      className={`mt-3 ${buttonClass}`}
+                      type="button"
+                      disabled={!readyForRealDraftGrading || !localSingleGradeAuthorized || !activeGradingRun || gradingRegionId === region.id || gradedRegionIds.has(region.id) || finalizedRegionIds.has(region.id)}
+                      onClick={() => void handleLocalQwenGrade(region.id)}
+                    >
+                      {gradingRegionId === region.id
+                        ? "Starting Qwen and grading..."
+                        : gradedRegionIds.has(region.id) || finalizedRegionIds.has(region.id)
+                          ? "Draft already created"
+                          : "Grade confirmed answer with local Qwen"}
+                    </button>
+                    {!localSingleGradeAuthorized ? (
+                      <p className="mt-2 text-xs text-red-200">Local single-answer grading is disabled in the host configuration.</p>
+                    ) : null}
                   </div>
                 </section>
               </article>

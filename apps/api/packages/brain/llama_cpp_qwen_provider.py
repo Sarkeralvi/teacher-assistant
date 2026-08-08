@@ -65,9 +65,7 @@ class QwenGradePayload(BaseModel):
             self.confidence = min(self.confidence, Decimal("0.75"))
             if "criterion_status_reconciled" not in self.review_flags:
                 self.review_flags.append("criterion_status_reconciled")
-        total = sum(
-            (item.awarded_marks for item in self.rubric_breakdown), Decimal("0")
-        )
+        total = sum((item.awarded_marks for item in self.rubric_breakdown), Decimal("0"))
         if total != self.score:
             # The criterion-level decisions are the auditable grading result.
             # llama.cpp's JSON grammar cannot express this cross-field sum, so
@@ -181,16 +179,59 @@ class QwenReferenceBundlePayload(BaseModel):
                 # still mandatory.
                 item.marks = criterion_total
             elif item.marks != criterion_total:
-                raise ValueError(
-                    "reference question marks must equal the rubric criterion total"
-                )
+                raise ValueError("reference question marks must equal the rubric criterion total")
+        return self
+
+
+class QwenAnswerBlockReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page_no: int = Field(ge=1)
+    block_orders: list[int] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def block_orders_must_be_unique(self) -> QwenAnswerBlockReference:
+        if len(self.block_orders) != len(set(self.block_orders)):
+            raise ValueError("answer block orders must be unique")
+        return self
+
+
+class QwenSubmissionAnswerMappingDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: int = Field(gt=0)
+    question_no: str = Field(min_length=1, max_length=32)
+    status: Literal["mapped", "uncertain", "not_found"]
+    block_references: list[QwenAnswerBlockReference] = Field(default_factory=list)
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    warnings: list[str] = Field(default_factory=list, max_length=8)
+    needs_review: Literal[True]
+
+    @model_validator(mode="after")
+    def mapped_answers_require_blocks(self) -> QwenSubmissionAnswerMappingDraft:
+        if self.status in {"mapped", "uncertain"} and not self.block_references:
+            raise ValueError("mapped or uncertain answers require OCR block references")
+        if self.status == "not_found" and self.block_references:
+            raise ValueError("not_found answers cannot contain OCR block references")
+        return self
+
+
+class QwenSubmissionAnswerMappingPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mappings: list[QwenSubmissionAnswerMappingDraft] = Field(min_length=1, max_length=100)
+    warnings: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def question_ids_must_be_unique(self) -> QwenSubmissionAnswerMappingPayload:
+        question_ids = [item.question_id for item in self.mappings]
+        if len(question_ids) != len(set(question_ids)):
+            raise ValueError("submission answer mapping question IDs must be unique")
         return self
 
 
 _API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
-_DATA_URL_PATTERN = re.compile(
-    r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+", re.IGNORECASE
-)
+_DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+", re.IGNORECASE)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # A grading suggestion is deliberately concise.  Bound generation so an
 # unavailable or rambling local model cannot occupy the single Qwen slot
@@ -278,9 +319,7 @@ class LlamaCppQwenProvider(BrainProvider):
             confidence=payload.confidence,
             needs_review=True,
             rubric_breakdown=[
-                RubricBreakdownItem.model_validate(
-                    item.model_dump(exclude={"criterion_status"})
-                )
+                RubricBreakdownItem.model_validate(item.model_dump(exclude={"criterion_status"}))
                 for item in payload.rubric_breakdown
             ],
             detected_answer_summary=payload.detected_answer_summary,
@@ -310,9 +349,7 @@ class LlamaCppQwenProvider(BrainProvider):
             changed = True
         if not changed:
             return
-        payload.score = sum(
-            (item.awarded_marks for item in payload.rubric_breakdown), Decimal("0")
-        )
+        payload.score = sum((item.awarded_marks for item in payload.rubric_breakdown), Decimal("0"))
         payload.confidence = min(payload.confidence, Decimal("0.75"))
         if "unsupported_criterion_evidence_removed" not in payload.review_flags:
             payload.review_flags.append("unsupported_criterion_evidence_removed")
@@ -325,8 +362,7 @@ class LlamaCppQwenProvider(BrainProvider):
             return
         requirements = {
             str(criterion.get("id")): tuple(
-                str(dependency_id)
-                for dependency_id in criterion.get("depends_on", [])
+                str(dependency_id) for dependency_id in criterion.get("depends_on", [])
             )
             for criterion in criteria
             if isinstance(criterion, dict)
@@ -344,8 +380,7 @@ class LlamaCppQwenProvider(BrainProvider):
                     continue
                 prerequisites_met = all(
                     dependency_id in breakdown
-                    and breakdown[dependency_id].awarded_marks
-                    == breakdown[dependency_id].max_marks
+                    and breakdown[dependency_id].awarded_marks == breakdown[dependency_id].max_marks
                     for dependency_id in dependency_ids
                 )
                 if prerequisites_met:
@@ -356,16 +391,12 @@ class LlamaCppQwenProvider(BrainProvider):
                 pending = True
         if not changed:
             return
-        payload.score = sum(
-            (item.awarded_marks for item in payload.rubric_breakdown), Decimal("0")
-        )
+        payload.score = sum((item.awarded_marks for item in payload.rubric_breakdown), Decimal("0"))
         payload.confidence = min(payload.confidence, Decimal("0.75"))
         if "dependent_criterion_credit_removed" not in payload.review_flags:
             payload.review_flags.append("dependent_criterion_credit_removed")
 
-    def extract_questions_from_ocr_pages(
-        self, pages: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def extract_questions_from_ocr_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
         context = self._ocr_context(pages)
         messages = [
             {
@@ -392,9 +423,7 @@ class LlamaCppQwenProvider(BrainProvider):
         assert isinstance(payload, QwenQuestionExtractionPayload)
         return payload.model_dump(mode="json")
 
-    def extract_rubric_from_ocr_pages(
-        self, pages: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def extract_rubric_from_ocr_pages(self, pages: list[dict[str, Any]]) -> dict[str, Any]:
         context = self._ocr_context(pages)
         messages = [
             {
@@ -489,6 +518,59 @@ class LlamaCppQwenProvider(BrainProvider):
         result["usage"] = usage
         return result
 
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not questions:
+            raise ValueError("Finalized questions are required for answer mapping")
+        page_context = _submission_ocr_block_context(pages)
+        reference_context = json.dumps(questions, ensure_ascii=False, separators=(",", ":"))
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Map OCR blocks from a student's complete answer script to finalized "
+                    "question IDs. Use only supplied block IDs. Do not grade, transcribe, "
+                    "rewrite, infer missing answer text, or create coordinates. Return every "
+                    "finalized question exactly once. Every mapping needs teacher review."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "For each finalized question, select all and only the ordered OCR blocks "
+                    "that belong to that student's answer, including continuation blocks on "
+                    "later pages. Question labels may help locate boundaries. Use status "
+                    "not_found with no blocks when there is no visible answer. Use uncertain "
+                    "when a boundary or question link is ambiguous. Preserve exact question_id "
+                    "and question_no values.\n\nFINALIZED REFERENCES\n"
+                    + reference_context
+                    + "\n\nSCRIPT OCR BLOCKS\n"
+                    + page_context
+                ),
+            },
+        ]
+        payload, usage = self._structured_completion(
+            messages=messages,
+            response_model=QwenSubmissionAnswerMappingPayload,
+            schema_name="submission_answer_mapping",
+            max_tokens=2400,
+        )
+        assert isinstance(payload, QwenSubmissionAnswerMappingPayload)
+        expected = {
+            (int(question["question_id"]), str(question["question_no"]).strip())
+            for question in questions
+        }
+        actual = {(item.question_id, item.question_no.strip()) for item in payload.mappings}
+        if actual != expected:
+            raise ValueError("Local Qwen changed or omitted finalized question references")
+        result = payload.model_dump(mode="json")
+        result["usage"] = usage
+        return result
+
     def verify_model(self) -> None:
         if self._model_verified:
             return
@@ -561,8 +643,15 @@ class LlamaCppQwenProvider(BrainProvider):
             content = self._extract_content(body)
             raw = json.loads(content)
             validated = response_model.model_validate(raw)
-        except (json.JSONDecodeError, ValidationError):
-            raise ValueError("Local Qwen returned invalid structured output") from None
+        except json.JSONDecodeError:
+            raise ValueError("Local Qwen returned invalid structured output (JSON)") from None
+        except ValidationError as exc:
+            first = exc.errors(include_input=False)[0]
+            location = ".".join(str(item) for item in first.get("loc", ())) or "root"
+            error_type = str(first.get("type") or "validation_error")
+            raise ValueError(
+                f"Local Qwen returned invalid structured output at {location} ({error_type})"
+            ) from None
         except Exception as exc:
             raise RuntimeError(self._sanitize(str(exc))) from exc
         usage_payload = body.get("usage") if isinstance(body, dict) else None
@@ -618,9 +707,7 @@ class LlamaCppQwenProvider(BrainProvider):
             raise ValueError("Local OCR returned no text to extract")
         return "\n\n".join(chunks)
 
-    def _ocr_document_context(
-        self, documents: dict[str, list[dict[str, Any]]]
-    ) -> str:
+    def _ocr_document_context(self, documents: dict[str, list[dict[str, Any]]]) -> str:
         chunks: list[str] = []
         labels = {
             "question_paper": "QUESTION PAPER",
@@ -637,10 +724,7 @@ class LlamaCppQwenProvider(BrainProvider):
                 # scaffolding.  Prefer it so one local extraction remains well
                 # inside the 32K context and the host job timeout.
                 content = str(
-                    page.get("text")
-                    or page.get("normalized_text")
-                    or page.get("markdown")
-                    or ""
+                    page.get("text") or page.get("normalized_text") or page.get("markdown") or ""
                 ).strip()
                 if content:
                     page_chunks.append(f"--- {labels[document_type]} PAGE {page_no} ---\n{content}")
@@ -682,19 +766,14 @@ def _prefer_json_numbers(value: Any) -> Any:
         return normalized
 
     has_number = any(
-        isinstance(option, dict) and option.get("type") == "number"
-        for option in alternatives
+        isinstance(option, dict) and option.get("type") == "number" for option in alternatives
     )
     if not has_number:
         return normalized
     filtered = [
         option
         for option in alternatives
-        if not (
-            isinstance(option, dict)
-            and option.get("type") == "string"
-            and "pattern" in option
-        )
+        if not (isinstance(option, dict) and option.get("type") == "string" and "pattern" in option)
     ]
     if len(filtered) == len(alternatives):
         return normalized
@@ -709,9 +788,7 @@ def _prefer_json_numbers(value: Any) -> Any:
     return normalized
 
 
-def _evidence_is_verbatim_student_text(
-    evidence: str | None, student_answer_text: str
-) -> bool:
+def _evidence_is_verbatim_student_text(evidence: str | None, student_answer_text: str) -> bool:
     if not (evidence or "").strip():
         return False
     candidate = str(evidence).strip()
@@ -732,6 +809,35 @@ def _normalize_evidence_text(value: str) -> str:
     return " ".join(normalized.split()).strip(" .;,'\"`“”‘’")
 
 
+def _submission_ocr_block_context(pages: list[dict[str, Any]]) -> str:
+    chunks: list[str] = []
+    seen: set[tuple[int, int]] = set()
+    for page in pages:
+        page_no = int(page.get("page") or page.get("page_no") or 0)
+        if page_no < 1:
+            raise ValueError("Submission OCR page number is invalid")
+        blocks = page.get("blocks")
+        if not isinstance(blocks, list):
+            raise ValueError("Submission OCR blocks are missing")
+        lines: list[str] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                raise ValueError("Submission OCR block is invalid")
+            order = int(block.get("order") or 0)
+            block_text = str(block.get("text") or "").strip()
+            if order < 1 or not block_text:
+                continue
+            key = (page_no, order)
+            if key in seen:
+                raise ValueError("Submission OCR block IDs are not unique")
+            seen.add(key)
+            lines.append(f"[page={page_no} block={order}] {block_text}")
+        chunks.append(f"--- SCRIPT PAGE {page_no} ---\n" + "\n".join(lines))
+    if not seen:
+        raise ValueError("Local OCR returned no submission text blocks")
+    return "\n\n".join(chunks)
+
+
 def _reference_question_number_hints(
     documents: dict[str, list[dict[str, Any]]],
 ) -> list[str]:
@@ -742,9 +848,7 @@ def _reference_question_number_hints(
     """
 
     pages = documents.get("question_paper", [])
-    text = "\n".join(
-        str(page.get("text") or page.get("normalized_text") or "") for page in pages
-    )
+    text = "\n".join(str(page.get("text") or page.get("normalized_text") or "") for page in pages)
     current_number: str | None = None
     current_parent: str | None = None
     parent_count = 0

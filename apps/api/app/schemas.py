@@ -22,6 +22,8 @@ class LocalAiServiceStatusRead(BaseModel):
 class LocalAiStatusRead(BaseModel):
     real_providers_allowed: bool
     cohort_model_grading_enabled: bool
+    local_script_preparation_enabled: bool = False
+    local_single_answer_grading_enabled: bool = False
     qwen: LocalAiServiceStatusRead
     ocr: LocalAiServiceStatusRead
 
@@ -821,9 +823,7 @@ class ReferenceQuestionConfirmation(BaseModel):
         criterion_ids = [criterion.id for criterion in self.criteria]
         if len(criterion_ids) != len(set(criterion_ids)):
             raise ValueError("Rubric criterion IDs must be unique")
-        criteria_total = sum(
-            (criterion.max_marks for criterion in self.criteria), Decimal("0")
-        )
+        criteria_total = sum((criterion.max_marks for criterion in self.criteria), Decimal("0"))
         if criteria_total != self.total_marks:
             raise ValueError("Rubric criterion marks must sum to question total marks")
         return self
@@ -838,9 +838,7 @@ class ReferenceExtractionConfirmationRequest(BaseModel):
         ids = [question.id for question in self.questions]
         labels = [question.question_number.strip() for question in self.questions]
         criterion_ids = [
-            criterion.id
-            for question in self.questions
-            for criterion in question.criteria
+            criterion.id for question in self.questions for criterion in question.criteria
         ]
         if len(ids) != len(set(ids)):
             raise ValueError("Question draft IDs must be unique")
@@ -886,6 +884,21 @@ class OcrConfirmationRequest(BaseModel):
 
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
+    provider: Literal["deterministic_layout", "local_paddle_qwen"] = "deterministic_layout"
+    expected_model: str | None = Field(default=None, max_length=255)
+    draft_only_confirmed: bool = False
+    maximum_ocr_calls: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def local_provider_requires_explicit_authorization(
+        self,
+    ) -> "AnswerRegionMappingRunRequest":
+        if self.provider == "local_paddle_qwen":
+            if not self.draft_only_confirmed:
+                raise ValueError("Local script preparation requires draft-only confirmation")
+            if not (self.expected_model or "").strip():
+                raise ValueError("Local script preparation requires the expected Qwen model")
+        return self
 
 
 class AnswerRegionMappingUpdate(BaseModel):
@@ -904,6 +917,7 @@ class AnswerRegionMappingUpdate(BaseModel):
 
 class AnswerRegionMappingConfirmRequest(BaseModel):
     teacher_confirmed: bool = True
+    confirmed_text: str | None = Field(default=None, max_length=10000)
 
 
 class AnswerRegionMappingRead(ORMBase):
@@ -1170,6 +1184,13 @@ class GradeAnswerRegionResponse(BaseModel):
     suggestion: GradeSuggestionRead
 
 
+class LocalQwenGradeRequest(BaseModel):
+    grading_run_id: int = Field(gt=0)
+    provider: Literal["llama_cpp_qwen"]
+    expected_model: str = Field(min_length=1, max_length=255)
+    draft_only_confirmed: Literal[True]
+
+
 class BrowserCodexGradeResponse(BaseModel):
     job: GradingJobRead
     suggestion: BrowserCodexGradeSuggestionRead
@@ -1242,9 +1263,7 @@ class GradingDispatchItemRead(ORMBase):
     rubric_id: int
     evidence_snapshot_hash: str
     rubric_snapshot_hash: str
-    status: Literal[
-        "pending", "running", "succeeded", "failed", "refused", "skipped", "uncertain"
-    ]
+    status: Literal["pending", "running", "succeeded", "failed", "refused", "skipped", "uncertain"]
     attempt_count: int
     refusal_reason: str | None
     error: str | None

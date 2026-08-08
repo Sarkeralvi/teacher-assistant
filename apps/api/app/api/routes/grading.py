@@ -12,10 +12,13 @@ from app.db.session import get_db
 from app.models import (
     AnswerRegion,
     Assessment,
+    AuditLog,
     Course,
     GradeSuggestion,
     GradingDispatchRun,
     GradingJob,
+    GradingRun,
+    Rubric,
     Submission,
     User,
 )
@@ -30,11 +33,15 @@ from app.schemas import (
     GradingDispatchRunRead,
     GradingEvidencePacketRead,
     GradingJobRead,
+    LocalQwenGradeRequest,
 )
 from app.services.grading_dispatch_service import GradingDispatchService
+from app.services.grading_integrity import canonical_json_hash, rubric_snapshot_hash
 from app.services.grading_service import GradingService
+from app.services.local_ai_phase_manager import LocalAiPhaseError, LocalAiPhaseManager
 from app.worker.jobs import run_grade_answer_region_job, run_grading_dispatch_job
 from app.worker.rq_app import get_default_queue
+from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -110,6 +117,121 @@ def grade_answer_region(
 ) -> dict[str, object]:
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
     job, suggestion = GradingService(db).grade_answer_region(answer_region_id)
+    return {"job": job, "suggestion": suggestion}
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/grade-local-qwen",
+    response_model=GradeAnswerRegionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def grade_answer_region_with_local_qwen(
+    answer_region_id: int,
+    payload: LocalQwenGradeRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    region = assert_teacher_owns_answer_region(answer_region_id, db, current_user)
+    settings = get_settings()
+    if not settings.brain_allow_real_providers:
+        raise HTTPException(status_code=409, detail="Real local providers are disabled")
+    if not settings.local_single_answer_grading_enabled:
+        raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
+    if not settings.local_qwen_enabled:
+        raise HTTPException(status_code=409, detail="Local Qwen is disabled")
+    if payload.expected_model != settings.local_qwen_model:
+        raise HTTPException(
+            status_code=409, detail="Expected local Qwen model alias does not match"
+        )
+    grading_run = db.get(GradingRun, payload.grading_run_id)
+    if (
+        grading_run is None
+        or grading_run.created_by_teacher_id != current_user.id
+        or grading_run.assessment_id != region.submission.assessment_id
+    ):
+        raise HTTPException(status_code=404, detail="Grading run not found")
+    existing = db.scalars(
+        select(GradeSuggestion).where(GradeSuggestion.answer_region_id == region.id)
+    ).first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This answer already has an AI draft suggestion for teacher review",
+        )
+
+    preflight_service = GradingService(db, use_configured_adapter=False)
+    before_packet = preflight_service.get_grading_evidence_packet(region.id)
+    before_hash = canonical_json_hash(before_packet)
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="local_qwen_single_grade_requested",
+            entity_type="answer_region",
+            entity_id=region.id,
+            payload_json={
+                "grading_run_id": grading_run.id,
+                "provider": payload.provider,
+                "expected_model": payload.expected_model,
+                "draft_only": True,
+                "evidence_hash": before_hash,
+            },
+        )
+    )
+    db.commit()
+    try:
+        LocalAiPhaseManager(settings=settings).switch("Qwen")
+        adapter = BrainAdapter.for_provider(settings, "llama_cpp_qwen")
+        adapter.verify_available_model()
+    except (LocalAiPhaseError, BrainProviderConfigurationError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Local Qwen could not be prepared with the expected model",
+        ) from exc
+
+    region = assert_teacher_owns_answer_region(answer_region_id, db, current_user)
+    grading_service = GradingService(db, adapter=adapter)
+    after_packet = grading_service.get_grading_evidence_packet(region.id)
+    if canonical_json_hash(after_packet) != before_hash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Grading evidence changed while local Qwen was starting",
+        )
+    rubric = db.scalars(
+        select(Rubric)
+        .where(Rubric.question_id == region.question_id)
+        .where(Rubric.is_active.is_(True))
+        .order_by(Rubric.version.desc(), Rubric.id.desc())
+    ).first()
+    if rubric is None:
+        raise HTTPException(status_code=409, detail="Active rubric is unavailable")
+    pinned_hash = rubric_snapshot_hash(region.question, rubric)
+    job = grading_service.create_queued_grading_job(region.id)
+    job, suggestion = grading_service.run_queued_job(
+        job.id,
+        marking_policy=grading_run.marking_policy,
+        expected_rubric_id=rubric.id,
+        expected_rubric_hash=pinned_hash,
+    )
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="local_qwen_single_grade_succeeded",
+            entity_type="grading_job",
+            entity_id=job.id,
+            payload_json={
+                "answer_region_id": region.id,
+                "suggestion_id": suggestion.id,
+                "provider": suggestion.model_provider,
+                "model": suggestion.model_name,
+                "rubric_hash": pinned_hash,
+                "evidence_hash": before_hash,
+                "needs_review": True,
+            },
+        )
+    )
+    db.commit()
     return {"job": job, "suggestion": suggestion}
 
 
@@ -331,9 +453,7 @@ def get_grade_suggestion(
 
 
 @router.get("/grading-jobs/{grading_job_id}", response_model=GradingJobRead)
-def get_grading_job(
-    grading_job_id: int, db: DbSession, current_user: CurrentUser
-) -> GradingJob:
+def get_grading_job(grading_job_id: int, db: DbSession, current_user: CurrentUser) -> GradingJob:
     job = db.get(GradingJob, grading_job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grading job not found")
