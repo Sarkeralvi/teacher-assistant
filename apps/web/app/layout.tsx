@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Teacher Assistant",
-  description: "Independent AI-powered Teacher Assistant scaffold",
+  description: "Local-first, teacher-controlled answer preparation and draft grading",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

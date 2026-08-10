@@ -65,7 +65,7 @@ export function CourseDetailClient({ courseId }: Readonly<{ courseId: number }>)
         <section className="rounded border border-slate-800 bg-slate-900 p-5">
           <p className="text-sm text-slate-400">Course #{course.id}</p>
           <h1 className="text-3xl font-semibold">{course.code}: {course.title}</h1>
-          <p className="mt-2 text-slate-400">teacher_id: {course.teacher_id}</p>
+          <p className="mt-2 text-slate-400">Create or open an assessment for this course.</p>
         </section>
       ) : null}
 

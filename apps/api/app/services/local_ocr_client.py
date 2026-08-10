@@ -104,6 +104,7 @@ class LocalOcrClient:
         content_type: Literal["image/png", "image/jpeg"],
         request_id: str,
         mode: Literal["document", "answer_region"],
+        prompt_label: Literal["ocr", "formula"] = "ocr",
     ) -> LocalOcrResult:
         if not image_bytes:
             raise ValueError("OCR image is empty")
@@ -117,6 +118,7 @@ class LocalOcrClient:
                     "Content-Type": content_type,
                     "X-Request-ID": request_id,
                     "X-OCR-Mode": mode,
+                    "X-OCR-Prompt-Label": prompt_label,
                 },
                 content=image_bytes,
             )

@@ -8,6 +8,7 @@ import os
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +35,9 @@ class OcrEngine(Protocol):
     version: str
     device: str
 
-    def predict(self, image_path: Path, mode: str) -> list[Any]: ...
+    def predict(
+        self, image_path: Path, mode: str, prompt_label: str = "ocr"
+    ) -> list[Any]: ...
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,15 @@ class PaddleOcrVlEngine:
             # of whether this pipeline selected CUDA, then probes a hidden device.
             # Returning no capability disables only its optional GPU SDPA path.
             paddlex_environment.get_gpu_compute_capability = cpu_compute_capability
+        else:
+            # PaddleX 3.7.2 selects bfloat16 for this Blackwell GPU.  In this
+            # installed Paddle 3.2.1 build, the generated OCR logits can become
+            # numerically invalid and select one of the padded vocabulary rows.
+            # Float32 remains GPU-accelerated and is the stable host mode for
+            # this exact local runtime.
+            from paddlex.inference.models.doc_vlm import predictor as doc_vlm_predictor
+
+            doc_vlm_predictor.is_bfloat16_available = lambda _device: False
         from paddleocr import PaddleOCRVL
 
         self.pipeline = PaddleOCRVL(
@@ -123,8 +135,24 @@ class PaddleOcrVlEngine:
             use_ocr_for_image_block=False,
             use_queues=False,
         )
+        vl_predictor = self.pipeline.paddlex_pipeline.vl_rec_model
+        self.precision = str(vl_predictor.dtype)
+        if self.precision != "float32":
+            raise RuntimeError("Local OCR must use the validated float32 precision")
+        # PaddleOCR-VL-1.6 has a padded 103,424-row language-model head, while
+        # the bundled SentencePiece vocabulary plus registered added tokens
+        # contains only 101,314 decodable IDs.  The local GPU kernel can select
+        # one of those padding rows, which then crashes SentencePiece with an
+        # out-of-range ID.  Mask only the non-token padding rows at the logits
+        # boundary; valid token scores and model assets remain unchanged.
+        self.blocked_padding_token_count = _install_valid_token_logits_guard(
+            self.pipeline,
+            paddle_module=paddle,
+        )
 
-    def predict(self, image_path: Path, mode: str) -> list[Any]:
+    def predict(
+        self, image_path: Path, mode: str, prompt_label: str = "ocr"
+    ) -> list[Any]:
         return self.pipeline.predict(
             str(image_path),
             use_doc_orientation_classify=False,
@@ -134,12 +162,78 @@ class PaddleOcrVlEngine:
             use_seal_recognition=False,
             use_ocr_for_image_block=False,
             use_queues=False,
+            prompt_label=prompt_label if mode == "answer_region" else None,
             temperature=0.0,
         )
 
     def _assert_local_model(self, directory: Path, required_file: str) -> None:
         if not directory.is_dir() or not (directory / required_file).is_file():
             raise RuntimeError(f"Configured local OCR model is incomplete: {directory.name}")
+
+
+def _tokenizer_valid_id_limit(tokenizer: Any) -> int:
+    sp_model = getattr(tokenizer, "sp_model", None)
+    get_piece_size = getattr(sp_model, "get_piece_size", None)
+    if not callable(get_piece_size):
+        raise RuntimeError("Local OCR tokenizer does not expose its SentencePiece size")
+    sentencepiece_size = int(get_piece_size())
+    if sentencepiece_size <= 0:
+        raise RuntimeError("Local OCR tokenizer SentencePiece vocabulary is empty")
+    added_decoder = getattr(tokenizer, "added_tokens_decoder", None)
+    if not isinstance(added_decoder, dict):
+        raise RuntimeError("Local OCR tokenizer does not expose its added-token IDs")
+    added_ids = sorted(
+        int(token_id)
+        for token_id in added_decoder
+        if int(token_id) >= sentencepiece_size
+    )
+    expected_added_ids = list(
+        range(sentencepiece_size, sentencepiece_size + len(added_ids))
+    )
+    if added_ids != expected_added_ids:
+        raise RuntimeError("Local OCR tokenizer has non-contiguous decodable token IDs")
+    return sentencepiece_size + len(added_ids)
+
+
+def _install_valid_token_logits_guard(
+    pipeline: Any,
+    *,
+    paddle_module: Any,
+) -> int:
+    paddlex_pipeline = getattr(pipeline, "paddlex_pipeline", None)
+    predictor = getattr(paddlex_pipeline, "vl_rec_model", None)
+    processor = getattr(predictor, "processor", None)
+    tokenizer = getattr(processor, "tokenizer", None)
+    model = getattr(predictor, "infer", None)
+    model_config = getattr(model, "config", None)
+    lm_head = getattr(model, "lm_head", None)
+    original_forward = getattr(lm_head, "forward", None)
+    if tokenizer is None or model_config is None or not callable(original_forward):
+        raise RuntimeError("Local OCR predictor internals do not support vocabulary guarding")
+
+    valid_id_limit = _tokenizer_valid_id_limit(tokenizer)
+    model_vocab_size = int(getattr(model_config, "vocab_size", 0))
+    if model_vocab_size < valid_id_limit:
+        raise RuntimeError("Local OCR model vocabulary is smaller than its tokenizer")
+    blocked_count = model_vocab_size - valid_id_limit
+    if blocked_count == 0:
+        return 0
+
+    def guarded_forward(*args: Any, **kwargs: Any) -> Any:
+        logits = original_forward(*args, **kwargs)
+        if int(logits.shape[-1]) != model_vocab_size:
+            raise RuntimeError("Local OCR language-model head changed vocabulary size")
+        valid_logits = logits[..., :valid_id_limit]
+        invalid_logits = paddle_module.full_like(
+            logits[..., valid_id_limit:],
+            float("-inf"),
+        )
+        return paddle_module.concat((valid_logits, invalid_logits), axis=-1)
+
+    # ``forward`` is stored on this layer instance so repository code owns the
+    # compatibility guard without modifying the downloaded model or site-packages.
+    lm_head.forward = guarded_forward
+    return blocked_count
 
 
 class OcrBusyError(RuntimeError):
@@ -160,8 +254,12 @@ class OcrService:
             "layout_model": self.engine.layout_model_name,
             "version": self.engine.version,
             "device": self.engine.device,
+            "precision": str(getattr(self.engine, "precision", "unknown")),
             "max_concurrency": 1,
             "offline": True,
+            "blocked_padding_token_count": int(
+                getattr(self.engine, "blocked_padding_token_count", 0)
+            ),
         }
 
     def run(
@@ -171,11 +269,16 @@ class OcrService:
         content_type: str,
         request_id: str,
         mode: str,
+        prompt_label: str = "ocr",
     ) -> dict[str, Any]:
         if content_type not in ALLOWED_CONTENT_TYPES:
             raise ValueError("Only PNG and JPEG image bytes are accepted")
         if mode not in ALLOWED_MODES:
             raise ValueError("OCR mode must be document or answer_region")
+        if prompt_label not in {"ocr", "formula"}:
+            raise ValueError("OCR prompt label must be ocr or formula")
+        if mode == "document" and prompt_label != "ocr":
+            raise ValueError("Formula prompting is supported only for answer regions")
         if not request_id.strip() or len(request_id) > 128:
             raise ValueError("A request ID of at most 128 characters is required")
         if not image_bytes:
@@ -192,7 +295,7 @@ class OcrService:
                 temporary.write(image_bytes)
                 image_path = Path(temporary.name)
             try:
-                raw_results = self.engine.predict(image_path, mode)
+                raw_results = self.engine.predict(image_path, mode, prompt_label)
             finally:
                 image_path.unlink(missing_ok=True)
             normalized = normalize_paddle_results(raw_results)
@@ -356,6 +459,7 @@ def make_handler(service: OcrService, api_key: str) -> type[BaseHTTPRequestHandl
                     content_type=content_type,
                     request_id=self.headers.get("X-Request-ID", ""),
                     mode=self.headers.get("X-OCR-Mode", ""),
+                    prompt_label=self.headers.get("X-OCR-Prompt-Label", "ocr"),
                 )
             except OverflowError as exc:
                 self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"detail": str(exc)})
@@ -364,6 +468,10 @@ def make_handler(service: OcrService, api_key: str) -> type[BaseHTTPRequestHandl
             except ValueError as exc:
                 self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"detail": str(exc)})
             except Exception:
+                # The HTTP response remains sanitized, while the ignored
+                # operator log retains the local traceback needed to diagnose
+                # driver/model synchronization failures.
+                traceback.print_exc()
                 self._json(HTTPStatus.BAD_GATEWAY, {"detail": "Local OCR inference failed"})
             else:
                 self._json(HTTPStatus.OK, result)

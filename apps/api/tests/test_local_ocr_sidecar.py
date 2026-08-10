@@ -16,6 +16,8 @@ from packages.local_ocr_sidecar.server import (
     OcrService,
     SidecarConfig,
     _configure_cpu_only_environment,
+    _install_valid_token_logits_guard,
+    _tokenizer_valid_id_limit,
     build_server,
     normalize_paddle_results,
 )
@@ -67,9 +69,12 @@ class FakeEngine:
     version = "3.7.0"
     device = "cpu"
 
-    def predict(self, image_path: Path, mode: str) -> list[Any]:
+    def predict(
+        self, image_path: Path, mode: str, prompt_label: str = "ocr"
+    ) -> list[Any]:
         assert image_path.is_file()
         assert mode in {"document", "answer_region"}
+        assert prompt_label in {"ocr", "formula"}
         return [FakePaddleResult()]
 
 
@@ -78,11 +83,61 @@ class BlockingEngine(FakeEngine):
         self.entered = threading.Event()
         self.release = threading.Event()
 
-    def predict(self, image_path: Path, mode: str) -> list[Any]:
-        del image_path, mode
+    def predict(
+        self, image_path: Path, mode: str, prompt_label: str = "ocr"
+    ) -> list[Any]:
+        del image_path, mode, prompt_label
         self.entered.set()
         self.release.wait(timeout=3)
         return [FakePaddleResult()]
+
+
+class FakeSentencePiece:
+    def get_piece_size(self) -> int:
+        return 3
+
+
+class FakeTokenizer:
+    sp_model = FakeSentencePiece()
+    added_tokens_decoder = {3: "<image>", 4: "<layout>"}
+
+
+class FakeLogits:
+    shape = (1, 7)
+
+    def __getitem__(self, key: Any) -> tuple[str, Any]:
+        return ("slice", key)
+
+
+class FakeLmHead:
+    def forward(self, value: Any) -> FakeLogits:
+        del value
+        return FakeLogits()
+
+
+class FakePaddleModule:
+    @staticmethod
+    def full_like(value: Any, fill_value: float) -> tuple[str, Any, float]:
+        return ("full_like", value, fill_value)
+
+    @staticmethod
+    def concat(values: Any, axis: int) -> tuple[str, Any, int]:
+        return ("concat", values, axis)
+
+
+class FakeVlPredictor:
+    processor = type("Processor", (), {"tokenizer": FakeTokenizer()})()
+    infer = type(
+        "Model",
+        (),
+        {"config": type("Config", (), {"vocab_size": 7})(), "lm_head": FakeLmHead()},
+    )()
+
+
+class FakePaddlePipeline:
+    paddlex_pipeline = type(
+        "Pipeline", (), {"vl_rec_model": FakeVlPredictor()}
+    )()
 
 
 def png_bytes() -> bytes:
@@ -128,6 +183,22 @@ def test_sidecar_service_is_image_only_size_limited_and_cpu() -> None:
     assert result["device"] == "cpu"
     assert result["provider"] == "local_paddle_qwen"
     assert result["request_id"] == "request-1"
+    formula_result = service.run(
+        image_bytes=png_bytes(),
+        content_type="image/png",
+        request_id="request-formula",
+        mode="answer_region",
+        prompt_label="formula",
+    )
+    assert formula_result["request_id"] == "request-formula"
+    with pytest.raises(ValueError, match="only for answer regions"):
+        service.run(
+            image_bytes=png_bytes(),
+            content_type="image/png",
+            request_id="request-document-formula",
+            mode="document",
+            prompt_label="formula",
+        )
     with pytest.raises(ValueError, match="Only PNG and JPEG"):
         service.run(
             image_bytes=b'{"url":"https://example.test/image.png"}',
@@ -163,6 +234,33 @@ def test_sidecar_config_accepts_explicit_gpu_phase(
     monkeypatch.setenv("LOCAL_OCR_DEVICE", "gpu:0")
 
     assert SidecarConfig.from_environment().device == "gpu:0"
+
+
+def test_sidecar_masks_only_non_token_padding_logits() -> None:
+    pipeline = FakePaddlePipeline()
+
+    assert _tokenizer_valid_id_limit(FakeTokenizer()) == 5
+    assert (
+        _install_valid_token_logits_guard(
+            pipeline,
+            paddle_module=FakePaddleModule,
+        )
+        == 2
+    )
+
+    masked = pipeline.paddlex_pipeline.vl_rec_model.infer.lm_head.forward("hidden")
+    assert masked[0] == "concat"
+    assert masked[2] == -1
+    assert masked[1][0][1][-1] == slice(None, 5)
+    assert masked[1][1][0] == "full_like"
+
+
+def test_sidecar_rejects_tokenizer_id_gaps() -> None:
+    tokenizer = FakeTokenizer()
+    tokenizer.added_tokens_decoder = {3: "<image>", 5: "<layout>"}
+
+    with pytest.raises(RuntimeError, match="non-contiguous"):
+        _tokenizer_valid_id_limit(tokenizer)
 
 
 def test_sidecar_enforces_single_concurrent_inference() -> None:

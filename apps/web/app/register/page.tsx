@@ -39,7 +39,7 @@ export default function RegisterPage() {
     <div className="mx-auto max-w-xl space-y-6">
       <div>
         <h1 className="text-3xl font-semibold">Register</h1>
-        <p className="mt-2 text-sm text-slate-400">Creates a teacher account. Token storage uses localStorage and is dev-only.</p>
+        <p className="mt-2 text-sm text-slate-400">Create the teacher account that will own and review all grading work.</p>
       </div>
       {error ? <ErrorState message={error} /> : null}
       <form data-testid="register-form" onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">

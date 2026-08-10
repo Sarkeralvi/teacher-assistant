@@ -8,6 +8,8 @@ from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 from packages.brain.llama_cpp_qwen_provider import (
     LlamaCppQwenProvider,
+    QwenPreparedStudentAnswerPayload,
+    _llama_cpp_json_schema,
     _reference_question_number_hints,
 )
 
@@ -178,6 +180,30 @@ def valid_submission_mapping_completion() -> dict[str, Any]:
     }
 
 
+def valid_prepared_answer_completion() -> dict[str, Any]:
+    content = {
+        "answers": [
+            {
+                "question_id": 41,
+                "question_no": "1(a)",
+                "status": "prepared",
+                "prepared_text": "P(X) = 7/12 and the final answer is 7/10.",
+                "alternative_prepared_texts": [],
+                "confidence": "0.86",
+                "uncertainties": [],
+                "source_candidate_ids": ["q41-whole", "q41-focus"],
+                "transcription_complete": True,
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+    return {
+        "choices": [{"message": {"content": json.dumps(content)}}],
+        "usage": {"prompt_tokens": 90, "completion_tokens": 40, "total_tokens": 130},
+    }
+
+
 def make_provider(client: FakeClient) -> LlamaCppQwenProvider:
     return LlamaCppQwenProvider(
         api_key="key-local-secret",
@@ -218,6 +244,101 @@ def test_qwen_maps_only_supplied_submission_ocr_block_ids() -> None:
     assert "[page=1 block=2] 1(a) working" in prompt
     assert "Do not grade" in request["messages"][0]["content"]
     assert request["response_format"]["json_schema"]["name"] == ("submission_answer_mapping")
+
+
+def test_qwen_prepares_student_answer_from_known_ocr_candidates_only() -> None:
+    client = FakeClient(valid_prepared_answer_completion())
+    result = make_provider(client).prepare_student_answers_from_ocr_candidates(
+        answers=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)",
+                "question_text": "Calculate the conditional probability.",
+                "ocr_candidates": [
+                    {
+                        "id": "q41-whole",
+                        "kind": "cleaned_whole_segment",
+                        "text": "P(X)=7/12",
+                    },
+                    {"id": "q41-focus", "kind": "focused_final_ocr", "text": "=7/10"},
+                ],
+            }
+        ]
+    )
+
+    assert result["answers"][0]["prepared_text"].endswith("7/10.")
+    request = client.post_calls[0][1]["json"]
+    prompt = request["messages"][1]["content"]
+    assert "<model_answer" not in prompt
+    assert "q41-focus" in prompt
+    assert "Do not summarize" in request["messages"][0]["content"]
+
+
+def test_qwen_rejects_omitted_whole_segment_or_substantive_working() -> None:
+    missing_source = valid_prepared_answer_completion()
+    body = json.loads(missing_source["choices"][0]["message"]["content"])
+    body["answers"][0]["source_candidate_ids"] = ["q41-focus"]
+    missing_source["choices"][0]["message"]["content"] = json.dumps(body)
+    answers = [
+        {
+            "question_id": 41,
+            "question_no": "1(a)",
+            "question_text": "Calculate.",
+            "ocr_candidates": [
+                {
+                    "id": "q41-whole",
+                    "kind": "cleaned_whole_segment",
+                    "text": "First line of working. Second line of working. Final line.",
+                },
+                {"id": "q41-focus", "kind": "focused_final_ocr", "text": "7/10"},
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="whole-segment transcription source"):
+        make_provider(FakeClient(missing_source)).prepare_student_answers_from_ocr_candidates(
+            answers=answers
+        )
+
+    shortened = valid_prepared_answer_completion()
+    body = json.loads(shortened["choices"][0]["message"]["content"])
+    body["answers"][0]["prepared_text"] = "7/10"
+    shortened["choices"][0]["message"]["content"] = json.dumps(body)
+    with pytest.raises(ValueError, match="substantive student working"):
+        make_provider(FakeClient(shortened)).prepare_student_answers_from_ocr_candidates(
+            answers=answers
+        )
+
+
+def test_prepared_answer_schema_avoids_llama_cpp_oversized_string_repetition() -> None:
+    wire_schema = json.dumps(_llama_cpp_json_schema(QwenPreparedStudentAnswerPayload))
+
+    assert '"maxLength": 10000' not in wire_schema
+    oversized = json.loads(valid_prepared_answer_completion()["choices"][0]["message"]["content"])
+    oversized["answers"][0]["prepared_text"] = "x" * 10001
+    with pytest.raises(ValueError, match="application limit"):
+        QwenPreparedStudentAnswerPayload.model_validate(oversized)
+
+
+def test_qwen_rejects_unknown_prepared_answer_candidate_id() -> None:
+    completion = valid_prepared_answer_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["answers"][0]["source_candidate_ids"] = ["invented-candidate"]
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    with pytest.raises(ValueError, match="unknown OCR candidate"):
+        make_provider(FakeClient(completion)).prepare_student_answers_from_ocr_candidates(
+            answers=[
+                {
+                    "question_id": 41,
+                    "question_no": "1(a)",
+                    "question_text": "Calculate.",
+                    "ocr_candidates": [
+                        {"id": "q41-whole", "kind": "whole", "text": "7/10"}
+                    ],
+                }
+            ]
+        )
 
 
 def test_qwen_provider_verifies_alias_and_returns_strict_text_only_draft() -> None:

@@ -159,8 +159,59 @@ function buildSingleCriterionRubric(question: Question, draft: ManualSetupDraft)
   };
 }
 
-function localMappingDraftText(mapping: AnswerRegionMapping): string {
-  const value = mapping.source_reference?.ocr_draft_text;
+function localMappingPreparedText(mapping: AnswerRegionMapping): string {
+  const value = mapping.source_reference?.model_prepared_answer_text;
+  if (typeof value === "string") {
+    return value;
+  }
+  const legacyValue = mapping.source_reference?.ocr_draft_text;
+  return typeof legacyValue === "string" ? legacyValue : "";
+}
+
+type LocalPreparedEvidenceChoice = {
+  text: string;
+  sha256: string;
+  primary: boolean;
+  label: string;
+};
+
+function localMappingPreparedChoices(
+  mapping: AnswerRegionMapping,
+): LocalPreparedEvidenceChoice[] {
+  const source = mapping.source_reference;
+  if (!source) {
+    return [];
+  }
+  const primaryText = localMappingPreparedText(mapping).trim();
+  const primaryHash = source.model_prepared_answer_text_sha256;
+  const choices: LocalPreparedEvidenceChoice[] = [];
+  if (primaryText && typeof primaryHash === "string") {
+    choices.push({
+      text: primaryText,
+      sha256: primaryHash,
+      primary: true,
+      label: "Model-preferred reading",
+    });
+  }
+  const alternatives = source.model_prepared_answer_alternatives;
+  if (Array.isArray(alternatives)) {
+    for (const item of alternatives) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const text = "text" in item && typeof item.text === "string" ? item.text.trim() : "";
+      const sha256 = "sha256" in item && typeof item.sha256 === "string" ? item.sha256 : "";
+      const label = "label" in item && typeof item.label === "string" ? item.label : "Alternate reading";
+      if (text && sha256 && !choices.some((choice) => choice.sha256 === sha256)) {
+        choices.push({ text, sha256, primary: false, label });
+      }
+    }
+  }
+  return choices;
+}
+
+function localMappingPreparedStatus(mapping: AnswerRegionMapping): string {
+  const value = mapping.source_reference?.prepared_answer_status;
   return typeof value === "string" ? value : "";
 }
 
@@ -193,7 +244,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [runningOcrRegionId, setRunningOcrRegionId] = useState<number | null>(null);
   const [confirmingOcrRunId, setConfirmingOcrRunId] = useState<number | null>(null);
   const [questionNodeMappings, setQuestionNodeMappings] = useState<QuestionNodeMappingGroup[]>([]);
-  const [mappingDraftTextById, setMappingDraftTextById] = useState<Record<number, string>>({});
   const [selectedMappingQuestionNodeId, setSelectedMappingQuestionNodeId] = useState("");
   const [mappingPageId, setMappingPageId] = useState("");
   const [mappingX, setMappingX] = useState("24");
@@ -205,6 +255,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [scriptPreparationMessage, setScriptPreparationMessage] = useState<string | null>(null);
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
+  const [selectedPreparedEvidenceHashByMappingId, setSelectedPreparedEvidenceHashByMappingId] = useState<Record<number, string>>({});
   const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
@@ -466,17 +517,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
       setQuestionNodeMappings(questionNodeMappingData);
-      setMappingDraftTextById((current) => {
-        const next = { ...current };
-        for (const group of questionNodeMappingData) {
-          for (const mapping of group.mappings) {
-            if (next[mapping.id] === undefined) {
-              next[mapping.id] = localMappingDraftText(mapping);
-            }
-          }
-        }
-        return next;
-      });
       if (!selectedPreviewRegionId && answerRegionData[0]) {
         setSelectedPreviewRegionId(String(answerRegionData[0].id));
       }
@@ -842,10 +882,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         provider: "local_paddle_qwen",
         expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
         draft_only_confirmed: true,
-        maximum_ocr_calls: Math.max(pages.length, 1),
+        maximum_ocr_calls: 20,
       });
       setScriptPreparationMessage(
-        `${responses.reduce((total, response) => total + response.mapped_count, 0)} draft answer mappings prepared. Review every crop and OCR text before confirmation.`,
+        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answers prepared. Review each prepared image and the model-prepared evidence; no cropping or transcription is required.`,
       );
       await load();
     } catch (err) {
@@ -856,15 +896,21 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   }
 
   async function handleConfirmMapping(mapping: AnswerRegionMapping) {
-    const confirmedText = mappingDraftTextById[mapping.id] ?? localMappingDraftText(mapping);
-    if (mapping.provider === "local_paddle_qwen" && !confirmedText.trim()) {
-      setError("Review and confirm the PaddleOCR answer text before accepting this mapping.");
+    const choices = localMappingPreparedChoices(mapping);
+    const selectedHash = selectedPreparedEvidenceHashByMappingId[mapping.id] ?? choices[0]?.sha256;
+    const preparedText = choices.find((choice) => choice.sha256 === selectedHash)?.text ?? localMappingPreparedText(mapping);
+    if (mapping.provider === "local_paddle_qwen" && !preparedText.trim()) {
+      setError("This answer has no model-prepared evidence to approve. Prepare the script again.");
       return;
     }
     setConfirmingMappingId(mapping.id);
     setError(null);
     try {
-      await confirmQuestionNodeMapping(mapping.id, true, confirmedText);
+      await confirmQuestionNodeMapping(mapping.id, true, {
+        accept_model_prepared_text: mapping.provider === "local_paddle_qwen",
+        selected_prepared_text_sha256:
+          mapping.provider === "local_paddle_qwen" ? selectedHash : undefined,
+      });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to confirm mapping");
@@ -1577,10 +1623,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <div className="max-w-3xl">
             <h2 className="text-xl font-semibold">Prepare answer script automatically</h2>
             <p className="mt-1 text-sm text-slate-300">
-              PaddleOCR reads every complete script page on the GPU. Qwen then links only those OCR blocks to the finalized questions. You do not crop or enter coordinates.
+              PaddleOCR reads the complete script and focused answer details on the GPU. Qwen links and reconciles those readings against the finalized question labels. You do not crop, enter coordinates, or retype an answer.
             </p>
             <p className="mt-1 text-sm text-amber-200">
-              The result is draft evidence. Check each generated crop and edit its OCR text before confirming it.
+              Review the prepared image and evidence, then approve or reject it. The finalized question, solution, and rubric are reused automatically and remain read-only here.
             </p>
           </div>
           <button
@@ -1589,7 +1635,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
             onClick={() => void handleRunAutomaticMappings()}
           >
-            {runningMappings ? "OCR running, then Qwen mapping..." : "Prepare scripts with PaddleOCR + Qwen"}
+            {runningMappings ? "OCR and Qwen are preparing evidence..." : "Prepare scripts with PaddleOCR + Qwen"}
           </button>
         </div>
         <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-4">
@@ -1612,55 +1658,92 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <div className="grid gap-3">
             {questionNodeMappings.flatMap((group) =>
               group.mappings.map((mapping) => {
-                const draftText = mappingDraftTextById[mapping.id] ?? localMappingDraftText(mapping);
+                const preparedChoices = localMappingPreparedChoices(mapping);
+                const selectedPreparedHash =
+                  selectedPreparedEvidenceHashByMappingId[mapping.id] ??
+                  preparedChoices[0]?.sha256;
+                const preparedText =
+                  preparedChoices.find(
+                    (choice) => choice.sha256 === selectedPreparedHash,
+                  )?.text ?? localMappingPreparedText(mapping);
+                const preparedStatus = localMappingPreparedStatus(mapping);
                 const warnings = localMappingWarnings(mapping);
+                const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
                 return (
                   <article key={mapping.id} className="grid gap-3 rounded border border-slate-700 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
                         <h3 className="font-semibold">{group.question_node.label} · submission #{mapping.submission_id}</h3>
                         <p className="text-xs text-slate-400">
-                          {mapping.mapping_status} · confidence {mapping.confidence ?? "n/a"} · {mapping.provider}
+                          {mapping.mapping_status} · mapping confidence {mapping.confidence ?? "n/a"} · {mapping.provider}
                         </p>
                       </div>
-                      <span className={`rounded-full border px-2 py-1 text-xs ${mapping.teacher_confirmed ? "border-emerald-700 text-emerald-200" : "border-amber-700 text-amber-200"}`}>
-                        {mapping.teacher_confirmed ? "teacher confirmed" : "teacher review required"}
+                      <span className={`rounded-full border px-2 py-1 text-xs ${mapping.teacher_confirmed || blankSafetyGate ? "border-emerald-700 text-emerald-200" : "border-amber-700 text-amber-200"}`}>
+                        {mapping.teacher_confirmed ? "approved evidence" : blankSafetyGate ? "blank safety gate" : "approval required"}
                       </span>
                     </div>
-                    {mapping.blocker_reason ? <p className="text-sm text-red-200">{mapping.blocker_reason}</p> : null}
+                    {blankSafetyGate ? (
+                      <p className="rounded border border-emerald-900 bg-emerald-950/20 p-3 text-sm text-emerald-100">
+                        No visible answer was found. This question is excluded from local Qwen grading; no answer text will be fabricated.
+                      </p>
+                    ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
                     {mapping.answer_region_id ? (
                       <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(mapping.answer_region_id)} target="_blank" rel="noreferrer">
-                        Open automatically prepared answer crop
+                        Open prepared answer image
                       </a>
                     ) : null}
                     {warnings.length > 0 ? (
-                      <ul className="list-disc pl-5 text-xs text-amber-200">
-                        {warnings.map((warning) => <li key={warning}>{warning}</li>)}
-                      </ul>
+                      <details className="rounded border border-amber-900/70 p-3 text-xs text-amber-100">
+                        <summary>OCR and mapping notes ({warnings.length})</summary>
+                        <ul className="mt-2 list-disc pl-5">
+                          {warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                        </ul>
+                      </details>
                     ) : null}
                     {mapping.answer_region_id ? (
-                      <label className="grid gap-2 text-sm">
-                        PaddleOCR draft text — edit before confirmation
-                        <textarea
-                          className={inputClass}
-                          rows={5}
-                          disabled={mapping.teacher_confirmed}
-                          value={draftText}
-                          onChange={(event) => setMappingDraftTextById((current) => ({
-                            ...current,
-                            [mapping.id]: event.target.value,
-                          }))}
-                        />
-                      </label>
+                      <div className="grid gap-2 rounded border border-slate-700 bg-slate-950/50 p-3 text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-semibold text-slate-100">Model-prepared student answer evidence</p>
+                          <span className="text-xs text-slate-400">{preparedStatus || "legacy OCR draft"}</span>
+                        </div>
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-200">
+                          {preparedText || "No prepared text is available."}
+                        </pre>
+                        {preparedChoices.length > 1 ? (
+                          <fieldset className="grid gap-2 rounded border border-amber-800/70 p-3">
+                            <legend className="px-1 text-xs font-semibold text-amber-100">
+                              Choose the reading that matches the handwriting
+                            </legend>
+                            {preparedChoices.map((choice) => (
+                              <label key={choice.sha256} className="flex cursor-pointer items-start gap-2 rounded border border-slate-700 p-2 text-xs text-slate-200">
+                                <input
+                                  type="radio"
+                                  name={`prepared-evidence-${mapping.id}`}
+                                  checked={choice.sha256 === selectedPreparedHash}
+                                  onChange={() => setSelectedPreparedEvidenceHashByMappingId((current) => ({
+                                    ...current,
+                                    [mapping.id]: choice.sha256,
+                                  }))}
+                                />
+                                <span>
+                                  {choice.label}{choice.primary ? " (default)" : ""}
+                                </span>
+                              </label>
+                            ))}
+                            <p className="text-xs text-amber-100">No typing is required. The selected full transcription is integrity-checked when approved.</p>
+                          </fieldset>
+                        ) : null}
+                        <p className="text-xs text-slate-400">Read-only. Approving copies this exact hashed evidence into the draft-grading packet.</p>
+                      </div>
                     ) : null}
                     {!mapping.teacher_confirmed && mapping.answer_region_id ? (
                       <button
                         className={buttonClass}
                         type="button"
-                        disabled={confirmingMappingId === mapping.id || !draftText.trim()}
+                        disabled={confirmingMappingId === mapping.id || !preparedText.trim()}
                         onClick={() => void handleConfirmMapping(mapping)}
                       >
-                        {confirmingMappingId === mapping.id ? "Confirming..." : "Confirm crop link and edited OCR text"}
+                        {confirmingMappingId === mapping.id ? "Approving..." : "Approve mapping and prepared evidence"}
                       </button>
                     ) : null}
                   </article>
@@ -1753,7 +1836,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       <form onSubmit={handleCreateRegion} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
         <div>
           <h2 className="text-xl font-semibold">Review prepared answer evidence</h2>
-          <p className="text-sm text-slate-400">Create or correct the answer evidence for each student × grading unit. Multi-page answers must be represented with ordered segments and confirmed before evidence can be ready.</p>
+          <p className="text-sm text-slate-400">Review the answer image and model-prepared evidence for each student × grading unit. Multi-page answers stay in reading order and require confirmation before grading.</p>
           <p className="text-sm text-amber-200">Teacher confirmation is required before local Qwen can create a draft score.</p>
           <p className="mt-1 text-sm text-slate-400">
             Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
@@ -1945,6 +2028,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const localPreparedMapping = flatMappings.find(
               (mapping) => mapping.answer_region_id === region.id && mapping.provider === "local_paddle_qwen",
             ) ?? null;
+            const preparedEvidenceApproved = !localPreparedMapping || localPreparedMapping.teacher_confirmed;
             const latestOcrRun = (ocrRunsByRegionId[region.id] ?? [])[0] ?? null;
             const ocrEditableText = latestOcrRun
               ? (ocrConfirmedTextByRunId[latestOcrRun.id] ?? latestOcrRun.confirmed_text ?? latestOcrRun.draft_text ?? "")
@@ -1960,8 +2044,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 <p className="text-xs text-slate-500">
                   {linkedQuestion ? formatQuestionOption(linkedQuestion) : `Question ${region.question_id}`} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
                 </p>
-                <p className="text-xs text-slate-500">x {region.x}, y {region.y}, w {region.width}, h {region.height}</p>
-                <a className="text-xs text-cyan-300 underline" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer">Open crop preview · Cropped image</a>
+                <a className="text-xs text-cyan-300 underline" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer">Open prepared answer image</a>
 
                 <section className={`${localPreparedMapping ? "hidden" : "grid"} gap-3 rounded border border-violet-800 bg-violet-950/20 p-3`} data-testid="local-ocr-draft-panel">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2049,8 +2132,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <p>segment count: {packetAnswer?.segment_count ?? region.segments.length ?? "Not available yet"}</p>
                     <p>packet pages covered: {packetAnswer?.pages_covered.join(", ") || (linkedPage?.page_no ? String(linkedPage.page_no) : "Not available yet")}</p>
                     <p>segment order: {segmentOrder || "Not available yet"}</p>
-                    <p>answer crop/context image: {packetAnswer?.crop_path ? packetAnswer.crop_path : "Not available yet"}</p>
-                    <p>Manual answer text required for V0: {manualAnswerMissing ? "missing" : "present"}</p>
+                    <p>prepared answer image: {packetAnswer?.crop_path ? "available" : "Not available yet"}</p>
+                    <p>Teacher-approved prepared answer evidence: {manualAnswerMissing ? "not approved" : "approved"}</p>
                     <p>evidence_status: {packetAnswer?.packet_status ?? "Not available yet"}</p>
                     <p>continuation_check_status: {packetAnswer?.continuation_check_status ?? "Not available yet"}</p>
                     <p>ready_for_grading: {readiness ? String(readiness.ready_for_grading) : "Not available yet"}</p>
@@ -2058,9 +2141,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <p>warnings: {readiness?.warnings.length ? readiness.warnings.join("; ") : "Not available yet"}</p>
                   </div>
                   <div className={`rounded border p-3 text-sm ${manualAnswerMissing ? "border-red-700 bg-red-950/40 text-red-100" : "border-emerald-800 bg-emerald-950/30 text-emerald-100"}`}>
-                    <p className="font-semibold">Manual answer text</p>
+                    <p className="font-semibold">Approved student answer evidence</p>
                     {manualAnswerMissing ? (
-                      <p>BLOCKER: manual answer text is missing. Teacher-confirmed manual answer text is required for Custom Controlled V0 real draft grading.</p>
+                      <p>Approve the model-prepared mapping and answer evidence above. You do not need to type or rewrite the student answer.</p>
                     ) : (
                       <p className="whitespace-pre-wrap">{manualAnswerText}</p>
                     )}
@@ -2076,14 +2159,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     </p>
                   ) : (
                     <p className="rounded border border-red-800 bg-red-950/30 p-2 text-xs font-semibold text-red-100">
-                      Not ready for real draft grading. Do not run real grading unless evidence packet is ready and manual answer text is present.
+                      Not ready for real draft grading. Approve the prepared answer evidence, then confirm that the displayed image contains the full answer.
                     </p>
                   )}
                   <div className="flex flex-wrap gap-2">
-                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm full answer</button>
-                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
-                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Mark partial / needs review</button>
-                    <button className={buttonClass} type="button" onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
+                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm displayed image is the full answer</button>
+                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
+                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Reject / needs correction</button>
+                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
                   </div>
                   <div className="rounded border border-cyan-800 bg-cyan-950/20 p-3">
                     <p className="font-semibold text-cyan-100">Local Qwen draft grading</p>
@@ -2114,6 +2197,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </form>
 
       {answerRegions.length > 0 ? <>
+      <details className="rounded border border-slate-800 bg-slate-900 p-5">
+        <summary className="cursor-pointer font-semibold text-slate-200">Advanced: batch readiness and queue diagnostics</summary>
+        <p className="mt-2 text-sm text-slate-400">These diagnostics are optional for single-answer supervised local Qwen grading.</p>
+        <div className="mt-4 grid gap-4">
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -2238,6 +2325,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <p className="mt-3 text-xs text-slate-500">Queue records are not grades. Stale queue items must be rebuilt before provider execution.</p>
         <p className="mt-3 text-xs text-slate-500">No provider run button, no batch grade button, and no FinalGrade action are available in this scaffold.</p>
       </section>
+        </div>
+      </details>
 
       <section className="grid gap-3 rounded-2xl border border-slate-800 bg-slate-900 p-5 md:grid-cols-[1fr_auto] md:items-center">
         <div>

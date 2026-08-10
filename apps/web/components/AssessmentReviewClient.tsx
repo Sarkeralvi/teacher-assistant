@@ -7,7 +7,6 @@ import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from ".
 import {
   approveGradeSuggestion,
   approveSelectedFinalGrades,
-  batchMockGradeAssessment,
   editGradeSuggestion,
   getAnswerRegionImageUrl,
   getAssessment,
@@ -15,12 +14,10 @@ import {
   getAssessmentReviewQueue,
   getAssessmentSummary,
   getCurrentUser,
-  gradeAnswerRegionWithCodexDev,
   rejectGradeSuggestion,
   type Assessment,
   type AssessmentSummary,
   type BatchApproveFinalGradesResponse,
-  type BatchMockGradeResponse,
   type FinalGrade,
   type ReviewQueueItem,
   type User,
@@ -41,11 +38,8 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [statusFilter, setStatusFilter] = useState<ReviewStatusFilter>("all");
   const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<number[]>([]);
-  const [batchResult, setBatchResult] = useState<BatchMockGradeResponse | null>(null);
   const [batchApproveResult, setBatchApproveResult] = useState<BatchApproveFinalGradesResponse | null>(null);
-  const [batchGrading, setBatchGrading] = useState(false);
   const [batchApproving, setBatchApproving] = useState(false);
-  const [realCodexRegionId, setRealCodexRegionId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,21 +91,6 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     }));
   }
 
-  async function handleBatchMockGrade() {
-    setBatchGrading(true);
-    setError(null);
-    setBatchResult(null);
-    try {
-      const result = await batchMockGradeAssessment(assessmentId);
-      setBatchResult(result);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to batch mock grade ungraded answers");
-    } finally {
-      setBatchGrading(false);
-    }
-  }
-
   function toggleSelectedSuggestion(suggestionId: number, checked: boolean) {
     setSelectedSuggestionIds((current) => {
       if (checked) {
@@ -127,23 +106,6 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
 
   function clearSelection() {
     setSelectedSuggestionIds([]);
-  }
-
-  async function handleRealCodexGrade(item: ReviewQueueItem) {
-    if (!currentUser) {
-      setError("Login to run the controlled real Codex smoke action.");
-      return;
-    }
-    setRealCodexRegionId(item.answer_region.id);
-    setError(null);
-    try {
-      await gradeAnswerRegionWithCodexDev(item.answer_region.id);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run real Codex smoke grading");
-    } finally {
-      setRealCodexRegionId(null);
-    }
   }
 
   async function handleApproveSelected() {
@@ -249,16 +211,13 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     <div className="space-y-6">
       {loading ? <LoadingState /> : null}
       {error && <ErrorState message={error} />}
-      <section className="rounded border border-slate-800 bg-slate-900 p-5">
+      <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <Link className="text-sm text-cyan-300 underline" href={`/assessments/${assessmentId}`}>
           Back to assessment setup
         </Link>
-        <h1 className="mt-3 text-3xl font-semibold">Teacher review and final grade approval</h1>
+        <h1 className="mt-3 text-3xl font-semibold">Review local Qwen draft grades</h1>
         <p className="mt-2 text-sm text-amber-200">
-          AI GradeSuggestions are suggestions only. Teacher review is required before any FinalGrade is used.
-        </p>
-        <p className="mt-2 text-sm text-slate-300">
-          Batch grading uses mock only. The per-answer Real Codex button calls the backend dev endpoint and only works when the backend is host/WSL Codex mode.
+          Every score here is a review-required draft. Approve, edit, or reject each one before it can appear in the final export.
         </p>
         {assessment ? (
           <p className="mt-2 text-slate-400">
@@ -267,16 +226,10 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         ) : null}
         <div className="mt-4 flex flex-wrap gap-3">
           <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
-            Export final grades (.xlsx)
+            Export approved grades (.xlsx)
           </a>
-          <button data-testid="batch-mock-grade-button" className={buttonClass} type="button" disabled={batchGrading} onClick={() => void handleBatchMockGrade()}>
-            {batchGrading ? "Batch mock grading..." : "Batch mock grade ungraded answers"}
-          </button>
         </div>
-        <p className="mt-3 text-sm text-amber-200">Batch mock grading only. No real Codex batch calls.</p>
-        <p className="mt-2 text-sm text-slate-400">
-          If this app is connected to the Docker backend, Codex is unavailable because that runtime is mock-only and does not include Codex CLI.
-        </p>
+        <p className="mt-3 text-xs text-slate-400">Pending suggestions and rejected drafts are excluded from the workbook.</p>
       </section>
 
       {currentUser ? (
@@ -291,13 +244,11 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
 
       {summary ? <SummaryPanel summary={summary} assessmentId={assessmentId} /> : null}
 
-      {batchResult ? <BatchResultPanel result={batchResult} /> : null}
-
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <label className="grid gap-2 text-sm md:max-w-xs">
             Review queue filter
-            <select className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as ReviewStatusFilter)}>
+            <select data-testid="review-queue-filter" className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as ReviewStatusFilter)}>
               <option value="all">All statuses ({statusCounts.all})</option>
               <option value="ungraded">ungraded ({statusCounts.ungraded})</option>
               <option value="suggested">suggested ({statusCounts.suggested})</option>
@@ -314,7 +265,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           ) : null}
         </div>
         <p className="mt-3 text-sm text-slate-400">
-          Next: upload submissions → create answer regions → batch mock grade → review → export
+          Review the answer image, criterion marks, evidence, and flags before taking an action.
         </p>
         <div className="mt-4 grid gap-3 rounded border border-slate-800 p-3 text-sm">
           <div className="flex flex-wrap items-center gap-3">
@@ -347,13 +298,10 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
             item={item}
             draft={drafts[item.answer_region.id] ?? defaultDraft(item)}
             saving={savingRegionId === item.answer_region.id}
-            realCodexRunning={realCodexRegionId === item.answer_region.id}
-            realCodexDisabled={!currentUser}
             onDraftChange={(patch) => updateDraft(item.answer_region.id, patch)}
             onApprove={() => void handleApprove(item)}
             onEdit={() => void handleEdit(item)}
             onReject={() => void handleReject(item)}
-            onRealCodexGrade={() => void handleRealCodexGrade(item)}
             selected={Boolean(item.latest_grade_suggestion && selectedSuggestionIds.includes(item.latest_grade_suggestion.id))}
             onSelectionChange={(checked) => {
               if (item.latest_grade_suggestion) {
@@ -369,25 +317,6 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
 
 function formatReviewQuestion(question: ReviewQueueItem["question"]): string {
   return `${question.question_no} · out of ${question.total_marks}`;
-}
-
-function BatchResultPanel({ result }: Readonly<{ result: BatchMockGradeResponse }>) {
-  return (
-    <section className="rounded border border-cyan-800 bg-cyan-950/20 p-5 text-sm text-cyan-100">
-      <h2 className="text-lg font-semibold">Batch mock grading result</h2>
-      <div className="mt-3 grid gap-3 md:grid-cols-4">
-        <SummaryMetric label="graded_count" value={result.graded_count} />
-        <SummaryMetric label="skipped_count" value={result.skipped_count} />
-        <SummaryMetric label="failed_count" value={result.failed_count} />
-        <SummaryMetric label="created suggestions" value={result.created_grade_suggestion_ids.length} />
-      </div>
-      {result.errors.length > 0 ? (
-        <ul className="mt-3 list-disc pl-5 text-red-200">
-          {result.errors.map((error) => <li key={error}>{error}</li>)}
-        </ul>
-      ) : null}
-    </section>
-  );
 }
 
 function BatchApproveResultPanel({ result }: Readonly<{ result: BatchApproveFinalGradesResponse }>) {
@@ -451,26 +380,20 @@ function ReviewCard({
   item,
   draft,
   saving,
-  realCodexRunning,
-  realCodexDisabled,
   onDraftChange,
   onApprove,
   onEdit,
   onReject,
-  onRealCodexGrade,
   selected,
   onSelectionChange,
 }: Readonly<{
   item: ReviewQueueItem;
   draft: ReviewDraft;
   saving: boolean;
-  realCodexRunning: boolean;
-  realCodexDisabled: boolean;
   onDraftChange: (patch: Partial<ReviewDraft>) => void;
   onApprove: () => void;
   onEdit: () => void;
   onReject: () => void;
-  onRealCodexGrade: () => void;
   selected: boolean;
   onSelectionChange: (checked: boolean) => void;
 }>) {
@@ -482,7 +405,7 @@ function ReviewCard({
   const finalScoreText = finalGrade ? String(finalGrade.final_score) : "—";
   const selectable = isSelectableForBatchApprove(item);
   return (
-    <article id={`review-item-${item.answer_region.id}`} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
+    <article data-testid="review-card" id={`review-item-${item.answer_region.id}`} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-wide text-slate-500">Review item overview</p>
@@ -513,35 +436,25 @@ function ReviewCard({
         <SummaryMetric label="grading unit" value={formatReviewQuestion(item.question)} />
         <SummaryMetric label="grading unit max marks" value={item.question.total_marks} />
         <SummaryMetric label="review status" value={status.label} />
-        <SummaryMetric label="AI/mock score" value={scoreText} />
+        <SummaryMetric label="Local Qwen draft" value={scoreText} />
         <SummaryMetric label="Final score if finalized" value={finalScoreText} />
       </div>
 
       <div className="flex flex-wrap gap-3 text-sm">
         <a className="text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
-          Open cropped answer image (answer region image)
+          Open prepared answer image
         </a>
         <span className="text-slate-400">Answer region #{item.answer_region.id}</span>
       </div>
-
-      <section className="grid gap-2 rounded border border-red-900 bg-red-950/20 p-3 text-sm text-red-100">
-        <p>
-          Runs one real Codex CLI call through POST /answer-regions/{item.answer_region.id}/grade-codex-dev on the backend. Use only for controlled testing. Teacher review required.
-        </p>
-        <p>Docker backend/mock-only mode cannot run this; use host-backend Codex dev mode.</p>
-        <button className={buttonClass} type="button" disabled={realCodexRunning || realCodexDisabled} onClick={onRealCodexGrade}>
-          {realCodexRunning ? "Running one real Codex call..." : "Real Codex grade this answer"}
-        </button>
-      </section>
 
       <img className="max-h-80 rounded border border-slate-700 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Answer region ${item.answer_region.id}`} />
       <p className="text-sm text-slate-300">Question text: {item.question.question_text}</p>
 
       {suggestion ? (
         <section className="grid gap-3 rounded border border-amber-800 bg-amber-950/20 p-3">
-          <h3 className="font-semibold text-amber-200">AI suggested score — not final</h3>
-          <p className="text-sm">Mock score: {suggestion.score} / {suggestion.max_score}</p>
-          <p className="text-sm">confidence: {suggestion.confidence} · needs_review: {String(suggestion.needs_review)} · Needs teacher review</p>
+          <h3 className="font-semibold text-amber-200">Local Qwen suggested score — not final</h3>
+          <p className="text-sm">Draft score: {suggestion.score} / {suggestion.max_score}</p>
+          <p className="text-sm">Confidence: {suggestion.confidence} · teacher review required</p>
           <p className="text-sm">Marking policy used: {suggestion.marking_policy}</p>
           <p className="text-sm">feedback: {suggestion.feedback}</p>
           <p className="text-sm">review_flags: {(suggestion.raw_response_json.review_flags ?? []).join(", ")}</p>

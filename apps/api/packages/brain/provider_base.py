@@ -64,6 +64,15 @@ class BrainProvider(ABC):
             f"Provider {self.provider_name} does not support submission answer mapping"
         )
 
+    def prepare_student_answers_from_ocr_candidates(
+        self,
+        *,
+        answers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support OCR answer preparation"
+        )
+
     def verify_available_model(self) -> None:
         """Optionally verify a configured provider without running inference."""
         return None

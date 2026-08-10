@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
@@ -381,6 +382,67 @@ def test_teacher_correction_and_confirmation_persist(
     confirmed = confirm_response.json()
     assert confirmed["mapping_status"] == "teacher_confirmed"
     assert confirmed["teacher_confirmed"] is True
+
+
+def test_teacher_can_select_hashed_model_prepared_transcription_without_typing(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher, token = register_teacher(client, "map-local-choice")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    create_question(client, int(assessment["id"]), "Q1(b)", token)
+    seed_confirmed_question_nodes(db_session, int(assessment["id"]))
+    pdf_path = tmp_path / "choice.pdf"
+    make_text_pdf(pdf_path, ["Q1(a) answer text here\nQ1(b) answer text here"])
+    submission = upload_submission_pdf(
+        client, int(assessment["id"]), pdf_path, token, "S-CHOICE"
+    )
+    run_response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"replace_existing": True},
+    )
+    mapping_id = int(run_response.json()["mappings"][0]["id"])
+    primary = "The final result is x/10."
+    alternative = "The final result is 7/10."
+    primary_hash = hashlib.sha256(primary.encode()).hexdigest()
+    alternative_hash = hashlib.sha256(alternative.encode()).hexdigest()
+    mapping = db_session.get(AnswerRegionMapping, mapping_id)
+    assert mapping is not None
+    mapping.provider = "local_paddle_qwen"
+    mapping.source_reference = {
+        "model_prepared_answer_text": primary,
+        "model_prepared_answer_text_sha256": primary_hash,
+        "model_prepared_answer_alternatives": [
+            {"text": alternative, "sha256": alternative_hash}
+        ],
+    }
+    db_session.commit()
+
+    stale = client.post(
+        f"/question-node-mappings/{mapping_id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "teacher_confirmed": True,
+            "accept_model_prepared_text": True,
+            "selected_prepared_text_sha256": "0" * 64,
+        },
+    )
+    assert stale.status_code == 409
+
+    confirmed = client.post(
+        f"/question-node-mappings/{mapping_id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "teacher_confirmed": True,
+            "accept_model_prepared_text": True,
+            "selected_prepared_text_sha256": alternative_hash,
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    body = confirmed.json()
+    assert body["teacher_confirmed"] is True
+    assert body["answer_region"]["manual_answer_text"] == alternative
 
 
 def test_workflow_state_blocks_unconfirmed_or_uncertain_mappings(

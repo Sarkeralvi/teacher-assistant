@@ -1423,11 +1423,15 @@ export function updateQuestionNodeMapping(mappingId: number, payload: AnswerRegi
 export function confirmQuestionNodeMapping(
   mappingId: number,
   teacher_confirmed = true,
-  confirmed_text?: string,
+  options: {
+    confirmed_text?: string;
+    accept_model_prepared_text?: boolean;
+    selected_prepared_text_sha256?: string;
+  } = {},
 ) {
   return apiRequest<AnswerRegionMapping>(`/question-node-mappings/${mappingId}/confirm`, {
     method: "POST",
-    body: { teacher_confirmed, confirmed_text },
+    body: { teacher_confirmed, ...options },
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });

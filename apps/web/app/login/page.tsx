@@ -38,7 +38,7 @@ export default function LoginPage() {
     <div className="mx-auto max-w-xl space-y-6">
       <div>
         <h1 className="text-3xl font-semibold">Login</h1>
-        <p className="mt-2 text-sm text-slate-400">Stores the token in localStorage for this dev-only demo foundation.</p>
+        <p className="mt-2 text-sm text-slate-400">Sign in to open your courses, assessments, and supervised grading workflow.</p>
       </div>
       {error ? <ErrorState message={error} /> : null}
       <form data-testid="login-form" onSubmit={handleSubmit} className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">

@@ -67,7 +67,7 @@ export function CoursesClient() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-semibold">Courses</h1>
-        <p className="mt-2 text-slate-400">Create courses as the logged-in teacher. No raw teacher_id is needed for logged-in teachers.</p>
+        <p className="mt-2 text-slate-400">Choose a course to continue, or create a new one.</p>
       </div>
 
       {!currentUser ? (
@@ -76,7 +76,7 @@ export function CoursesClient() {
         </p>
       ) : (
         <p className="rounded border border-emerald-800 bg-emerald-950/20 p-3 text-sm text-emerald-200">
-          Creating as currentUser: {currentUser.name} ({currentUser.email})
+          Signed in as {currentUser.name} ({currentUser.email})
         </p>
       )}
 
@@ -97,7 +97,6 @@ export function CoursesClient() {
         {courses.map((course) => (
           <Link key={course.id} href={`/courses/${course.id}`} className="rounded border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700">
             <h2 className="text-lg font-semibold">{course.code}: {course.title}</h2>
-            <p className="text-sm text-slate-400">teacher_id: {course.teacher_id}</p>
             <p className="text-sm text-slate-400">{course.department ?? "No department"} · {course.semester ?? "No semester"}</p>
           </Link>
         ))}

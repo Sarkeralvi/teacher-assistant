@@ -94,31 +94,25 @@ def test_assessment_workflow_has_stable_browser_target_markers() -> None:
 
 def test_review_queue_has_stable_browser_target_markers() -> None:
     source = _read(REPO_ROOT / "apps" / "web" / "components" / "AssessmentReviewClient.tsx")
-    assert 'data-testid="batch-mock-grade-button"' in source
+    assert 'data-testid="review-queue-filter"' in source
+    assert 'data-testid="review-card"' in source
     assert 'data-testid="select-all-visible-suggested-items-button"' in source
     assert 'data-testid="approve-selected-button"' in source
 
 
-def test_browser_codex_button_uses_dev_endpoint_not_mock_endpoint() -> None:
-    api_source = _read(WEB_API)
+def test_teacher_review_ui_excludes_obsolete_mock_and_codex_actions() -> None:
     review_source = _read(
         REPO_ROOT / "apps" / "web" / "components" / "AssessmentReviewClient.tsx"
     )
+    assessment_source = _read(
+        REPO_ROOT / "apps" / "web" / "components" / "AssessmentDetailClient.tsx"
+    )
 
-    codex_start = api_source.index("export function gradeAnswerRegionWithCodexDev")
-    codex_end = api_source.index("export function batchMockGradeAssessment")
-    codex_section = api_source[codex_start:codex_end]
-    mock_start = api_source.index("export function gradeAnswerRegion(answerRegionId")
-    mock_end = api_source.index("export function gradeAnswerRegionWithCodexDev")
-    mock_section = api_source[mock_start:mock_end]
-
-    assert "/grade-codex-dev" in codex_section
-    assert "token: getStoredAuthToken()" in codex_section
-    assert "/grade`" in mock_section
-    assert "gradeAnswerRegionWithCodexDev(item.answer_region.id)" in review_source
-    assert "batchMockGradeAssessment(assessmentId)" in review_source
-    assert "Docker backend/mock-only mode cannot run this" in review_source
-    assert "Codex is unavailable" in review_source
+    assert "batchMockGradeAssessment" not in review_source
+    assert "gradeAnswerRegionWithCodexDev" not in review_source
+    assert "Local Qwen suggested score" in review_source
+    assert "gradeAnswerRegionWithLocalQwen" in assessment_source
+    assert "Grade confirmed answer with local Qwen" in assessment_source
 
 
 def test_frontend_has_no_direct_codex_or_llm_calls() -> None:

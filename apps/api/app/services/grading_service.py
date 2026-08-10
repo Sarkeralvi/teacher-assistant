@@ -31,7 +31,7 @@ MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
 
 
-_API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
+_API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
 _DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+")
 
 
@@ -212,7 +212,7 @@ class GradingService:
         if not confirmed_segments:
             blockers.append("missing confirmed answer segment")
         if not (region.manual_answer_text or "").strip():
-            blockers.append("missing manual answer text")
+            blockers.append("missing teacher-approved answer evidence")
         ordered_indexes = [segment.order_index for segment in segments]
         if ordered_indexes != list(range(1, len(segments) + 1)):
             blockers.append("answer segment order must be contiguous starting at 1")
@@ -532,7 +532,10 @@ class GradingService:
         if not (region.manual_answer_text or "").strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Evidence packet not ready for grading: missing manual answer text",
+                detail=(
+                    "Evidence packet not ready for grading: missing teacher-approved "
+                    "answer evidence"
+                ),
             )
         return confirmed_segments
 

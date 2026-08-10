@@ -230,6 +230,55 @@ class QwenSubmissionAnswerMappingPayload(BaseModel):
         return self
 
 
+class QwenPreparedStudentAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: int = Field(gt=0)
+    question_no: str = Field(min_length=1, max_length=32)
+    status: Literal["prepared", "uncertain"]
+    # Keep the JSON schema unbounded above: llama.cpp's grammar compiler rejects
+    # a generated ``char{1,10000}`` repetition. The application validator below
+    # still enforces the same storage/safety ceiling after generation.
+    prepared_text: str = Field(min_length=1)
+    alternative_prepared_texts: list[str] = Field(min_length=0, max_length=3)
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    uncertainties: list[str] = Field(default_factory=list, max_length=12)
+    source_candidate_ids: list[str] = Field(min_length=1, max_length=40)
+    transcription_complete: Literal[True]
+    needs_review: Literal[True]
+
+    @model_validator(mode="after")
+    def candidate_ids_must_be_unique(self) -> QwenPreparedStudentAnswer:
+        if len(self.prepared_text) > 10000:
+            raise ValueError("prepared answer text exceeds the application limit")
+        if any(len(item) > 10000 for item in self.alternative_prepared_texts):
+            raise ValueError("alternative prepared answer text exceeds the application limit")
+        normalized_alternatives = [item.strip() for item in self.alternative_prepared_texts]
+        if any(not item for item in normalized_alternatives):
+            raise ValueError("alternative prepared answer text cannot be empty")
+        if len(normalized_alternatives) != len(set(normalized_alternatives)):
+            raise ValueError("alternative prepared answer texts must be unique")
+        if self.prepared_text.strip() in set(normalized_alternatives):
+            raise ValueError("alternative prepared answer text must differ from the primary")
+        if len(self.source_candidate_ids) != len(set(self.source_candidate_ids)):
+            raise ValueError("prepared answer candidate IDs must be unique")
+        return self
+
+
+class QwenPreparedStudentAnswerPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answers: list[QwenPreparedStudentAnswer] = Field(min_length=1, max_length=100)
+    warnings: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def question_ids_must_be_unique(self) -> QwenPreparedStudentAnswerPayload:
+        question_ids = [item.question_id for item in self.answers]
+        if len(question_ids) != len(set(question_ids)):
+            raise ValueError("prepared answer question IDs must be unique")
+        return self
+
+
 _API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
 _DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+", re.IGNORECASE)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -567,6 +616,129 @@ class LlamaCppQwenProvider(BrainProvider):
         actual = {(item.question_id, item.question_no.strip()) for item in payload.mappings}
         if actual != expected:
             raise ValueError("Local Qwen changed or omitted finalized question references")
+        result = payload.model_dump(mode="json")
+        result["usage"] = usage
+        return result
+
+    def prepare_student_answers_from_ocr_candidates(
+        self,
+        *,
+        answers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not answers:
+            raise ValueError("OCR answer candidates are required")
+        context = json.dumps(answers, ensure_ascii=False, separators=(",", ":"))
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Prepare a faithful, complete student-answer transcription from multiple "
+                    "local PaddleOCR readings. This is evidence preparation, not grading. Use only "
+                    "student content supported by at least one supplied OCR candidate. Never "
+                    "copy, derive, calculate, or correct an answer from the question. Preserve "
+                    "student mistakes and every coherent line of working. Do not summarize an "
+                    "answer down to its final value. Every cleaned_whole_segment candidate is "
+                    "the required body transcription for that segment: preserve its coherent "
+                    "content in segment order and cite every such candidate ID. Remove only page "
+                    "headings, answer-number/question labels, HTML image placeholders, and obvious "
+                    "marker annotations. Treat "
+                    "selected_full_page_layout_blocks as lower-fidelity navigation OCR; it "
+                    "must not override numerals, operators, or units visible in focused_final_ocr "
+                    "or focused_final_formula. Use the two focused candidates only to clarify a "
+                    "coherent final line; ignore them when they contain isolated gibberish, marker "
+                    "strokes, or unrelated reverse-page bleed. Prefer cleaned_whole_segment for "
+                    "all body text. A trailing coloured check, flourish, circled mark, or "
+                    "isolated letter after a numeric result is not student evidence. Do not "
+                    "include isolated "
+                    "gibberish that is absent from coherent segment-level readings. "
+                    "When readings conflict and the intended symbol is not supported clearly, "
+                    "retain an explicit [unclear: ...] marker and use status uncertain. Never "
+                    "hide uncertainty. Uncertainty notes must discuss transcription only: never "
+                    "critique correctness, solve the question, or say what the question asks. "
+                    "If an uncertain glyph has one or two plausible readings supported by the "
+                    "OCR or by the same written line, put the most likely complete transcription "
+                    "in prepared_text and each other complete transcription in "
+                    "alternative_prepared_texts. Alternatives may differ only at uncertain "
+                    "spans; they are teacher choices, not corrected answers. Set "
+                    "transcription_complete=true only after preserving the coherent body. "
+                    "Every result requires teacher review."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Return exactly one prepared answer for every supplied question_id. "
+                    "The question text is navigation context only and is not answer evidence. "
+                    "Preserve useful mathematical working in readable plain text or LaTeX. "
+                    "List every candidate ID used. Do not mention model answers or rubrics; "
+                    "none are supplied.\n\nOCR ANSWER CANDIDATES\n" + context
+                ),
+            },
+        ]
+        payload, usage = self._structured_completion(
+            messages=messages,
+            response_model=QwenPreparedStudentAnswerPayload,
+            schema_name="student_answer_ocr_preparation",
+            max_tokens=3000,
+        )
+        assert isinstance(payload, QwenPreparedStudentAnswerPayload)
+        expected = {
+            (int(answer["question_id"]), str(answer["question_no"]).strip())
+            for answer in answers
+        }
+        actual = {(item.question_id, item.question_no.strip()) for item in payload.answers}
+        if actual != expected:
+            raise ValueError("Local Qwen changed or omitted prepared answer references")
+        candidates_by_question = {
+            int(answer["question_id"]): {
+                str(candidate["id"])
+                for candidate in answer.get("ocr_candidates", [])
+                if isinstance(candidate, dict) and candidate.get("id")
+            }
+            for answer in answers
+        }
+        for item in payload.answers:
+            available = candidates_by_question.get(item.question_id, set())
+            if not set(item.source_candidate_ids).issubset(available):
+                raise ValueError("Local Qwen cited an unknown OCR candidate")
+            source = next(
+                answer for answer in answers if int(answer["question_id"]) == item.question_id
+            )
+            body_candidates = [
+                candidate
+                for candidate in source.get("ocr_candidates", [])
+                if isinstance(candidate, dict)
+                and candidate.get("kind") == "cleaned_whole_segment"
+                and str(candidate.get("text") or "").strip()
+            ]
+            required_body_ids = {str(candidate["id"]) for candidate in body_candidates}
+            if not required_body_ids.issubset(set(item.source_candidate_ids)):
+                raise ValueError(
+                    "Local Qwen omitted a required whole-segment transcription source"
+                )
+            body_character_count = sum(
+                len(_normalize_evidence_text(str(candidate.get("text") or "")))
+                for candidate in body_candidates
+            )
+            minimum_prepared_characters = min(
+                120,
+                max(12, body_character_count // 5),
+            )
+            if (
+                len(_normalize_evidence_text(item.prepared_text))
+                < minimum_prepared_characters
+            ):
+                raise ValueError(
+                    "Local Qwen omitted substantive student working from prepared evidence"
+                )
+            for alternative in item.alternative_prepared_texts:
+                if (
+                    len(_normalize_evidence_text(alternative))
+                    < minimum_prepared_characters
+                ):
+                    raise ValueError(
+                        "Local Qwen returned an incomplete alternative transcription"
+                    )
         result = payload.model_dump(mode="json")
         result["usage"] = usage
         return result

@@ -27,7 +27,7 @@ class BrainProviderConfigurationError(RuntimeError):
 REAL_PROVIDER_NAMES = {"openai", "codex_cli", "gemini", "llama_cpp_qwen"}
 
 
-_API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
+_API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
 _DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+")
 
 
@@ -263,6 +263,20 @@ class BrainAdapter:
             return self.provider.map_submission_answers_from_ocr_pages(
                 pages=pages,
                 questions=questions,
+            )
+        except (ValueError, NotImplementedError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(sanitize_provider_error(str(exc))) from exc
+
+    def prepare_student_answers_from_ocr_candidates(
+        self,
+        *,
+        answers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            return self.provider.prepare_student_answers_from_ocr_candidates(
+                answers=answers,
             )
         except (ValueError, NotImplementedError):
             raise

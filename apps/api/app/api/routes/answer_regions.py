@@ -1,3 +1,5 @@
+import hashlib
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -68,6 +70,7 @@ from app.services.local_script_preparation import (
     LocalScriptPreparationService,
 )
 from app.services.storage import LocalStorage
+from packages.brain.adapter import sanitize_provider_error
 from packages.brain.answer_region_suggestion_codex_provider import (
     CodexAnswerRegionSuggestionProvider,
     CodexAnswerRegionSuggestionProviderError,
@@ -77,6 +80,7 @@ DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["answer-regions"])
+logger = logging.getLogger(__name__)
 
 
 def get_submission_page_or_404(page_id: int, db: Session) -> SubmissionPage:
@@ -1038,6 +1042,10 @@ def run_submission_question_node_mappings(
                 detail=str(exc),
             ) from exc
         except Exception as exc:
+            logger.exception(
+                "Local script preparation failed safely: %s",
+                sanitize_provider_error(str(exc)),
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Local PaddleOCR/Qwen script preparation failed",
@@ -1315,12 +1323,80 @@ def confirm_question_node_mapping(
                 detail="Only a proposed region can be teacher-confirmed",
             )
         if mapping.provider == "local_paddle_qwen":
-            if request.confirmed_text is None:
+            source_reference = mapping.source_reference or {}
+            prepared_text = str(
+                source_reference.get("model_prepared_answer_text") or ""
+            ).strip()
+            confirmation_source = "teacher_edited"
+            if request.confirmed_text is not None:
+                confirmed_text = request.confirmed_text.strip()
+            elif request.accept_model_prepared_text:
+                primary_hash = str(
+                    source_reference.get("model_prepared_answer_text_sha256") or ""
+                )
+                approved_choices = {primary_hash: prepared_text} if primary_hash else {}
+                for choice in source_reference.get(
+                    "model_prepared_answer_alternatives", []
+                ):
+                    if not isinstance(choice, dict):
+                        continue
+                    choice_text = str(choice.get("text") or "").strip()
+                    choice_hash = str(choice.get("sha256") or "")
+                    if choice_text and choice_hash:
+                        approved_choices[choice_hash] = choice_text
+                expected_hash = request.selected_prepared_text_sha256 or primary_hash
+                confirmed_text = approved_choices.get(expected_hash, "")
+                confirmation_source = (
+                    "model_prepared_choice"
+                    if expected_hash != primary_hash
+                    else "model_prepared"
+                )
+                if not confirmed_text:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="The selected prepared evidence is no longer available",
+                    )
+                if not expected_hash or not hashlib.sha256(
+                    confirmed_text.encode("utf-8")
+                ).hexdigest() == expected_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Model-prepared answer evidence failed its integrity check",
+                    )
+            else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Teacher-confirmed OCR text is required for a local mapping",
+                    detail=(
+                        "Explicit approval of the model-prepared answer evidence is required "
+                        "for a local mapping"
+                    ),
                 )
-            mapping.answer_region.manual_answer_text = request.confirmed_text.strip() or None
+            if not confirmed_text:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Model-prepared answer evidence is empty and cannot be approved",
+                )
+            mapping.answer_region.manual_answer_text = confirmed_text
+            for segment in mapping.answer_region.segments:
+                segment.confirmed = True
+            db.add(
+                AuditLog(
+                    actor_type="teacher",
+                    actor_id=current_user.id,
+                    event_type="model_prepared_answer_evidence_approved",
+                    entity_type="answer_region_mapping",
+                    entity_id=mapping.id,
+                    payload_json={
+                        "answer_region_id": mapping.answer_region.id,
+                        "confirmation_source": confirmation_source,
+                        "confirmed_text_sha256": hashlib.sha256(
+                            confirmed_text.encode("utf-8")
+                        ).hexdigest(),
+                        "confirmed_character_count": len(confirmed_text),
+                        "segment_count": len(mapping.answer_region.segments),
+                    },
+                )
+            )
         mapping.teacher_confirmed = True
         mapping.mapping_status = "teacher_confirmed"
     else:

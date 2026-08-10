@@ -918,6 +918,10 @@ class AnswerRegionMappingUpdate(BaseModel):
 class AnswerRegionMappingConfirmRequest(BaseModel):
     teacher_confirmed: bool = True
     confirmed_text: str | None = Field(default=None, max_length=10000)
+    accept_model_prepared_text: bool = False
+    selected_prepared_text_sha256: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
 
 
 class AnswerRegionMappingRead(ORMBase):
