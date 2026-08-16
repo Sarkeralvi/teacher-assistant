@@ -19,6 +19,8 @@ from PIL import Image
 
 ALLOWED_CONTENT_TYPES = {"image/png": ".png", "image/jpeg": ".jpg"}
 ALLOWED_MODES = {"document", "answer_region"}
+ALLOWED_ENGINES = {"paddleocr_vl", "ppocr_v6"}
+ALLOWED_PREPROCESSING_PROFILES = {"default", "math_handwriting_rescue", "rescue_alternate"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -35,9 +37,7 @@ class OcrEngine(Protocol):
     version: str
     device: str
 
-    def predict(
-        self, image_path: Path, mode: str, prompt_label: str = "ocr"
-    ) -> list[Any]: ...
+    def predict(self, image_path: Path, mode: str, prompt_label: str = "ocr") -> list[Any]: ...
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,8 @@ class SidecarConfig:
     api_key: str
     vl_model_path: Path
     layout_model_path: Path
+    text_det_model_path: Path | None = None
+    text_rec_model_path: Path | None = None
     host: str = "127.0.0.1"
     port: int = 8090
     max_image_bytes: int = 20 * 1024 * 1024
@@ -55,6 +57,8 @@ class SidecarConfig:
         api_key = os.environ.get("LOCAL_OCR_API_KEY", "")
         vl_path = os.environ.get("LOCAL_OCR_VL_MODEL_PATH", "")
         layout_path = os.environ.get("LOCAL_OCR_LAYOUT_MODEL_PATH", "")
+        det_path = os.environ.get("LOCAL_OCR_TEXT_DET_MODEL_PATH", "")
+        rec_path = os.environ.get("LOCAL_OCR_TEXT_REC_MODEL_PATH", "")
         if not api_key:
             raise RuntimeError("LOCAL_OCR_API_KEY is required")
         if not vl_path or not layout_path:
@@ -67,15 +71,20 @@ class SidecarConfig:
         device = os.environ.get("LOCAL_OCR_DEVICE", "cpu").strip().lower()
         if device not in {"cpu", "gpu:0"}:
             raise RuntimeError("LOCAL_OCR_DEVICE must be cpu or gpu:0")
+        rescue_enabled = os.environ.get("LOCAL_OCR_RESCUE_ENABLED", "false").lower() == "true"
+        if rescue_enabled and (not det_path or not rec_path):
+            raise RuntimeError(
+                "LOCAL_OCR_TEXT_DET_MODEL_PATH and LOCAL_OCR_TEXT_REC_MODEL_PATH are required"
+            )
         return cls(
             api_key=api_key,
             vl_model_path=Path(vl_path),
             layout_model_path=Path(layout_path),
+            text_det_model_path=Path(det_path) if det_path else None,
+            text_rec_model_path=Path(rec_path) if rec_path else None,
             host=host,
             port=int(os.environ.get("LOCAL_OCR_PORT", "8090")),
-            max_image_bytes=int(
-                os.environ.get("LOCAL_OCR_MAX_IMAGE_BYTES", str(20 * 1024 * 1024))
-            ),
+            max_image_bytes=int(os.environ.get("LOCAL_OCR_MAX_IMAGE_BYTES", str(20 * 1024 * 1024))),
             device=device,
         )
 
@@ -84,6 +93,7 @@ class PaddleOcrVlEngine:
     model_name = "PaddleOCR-VL-1.6"
     layout_model_name = "PP-DocLayoutV3"
     version = "3.7.0"
+
     def __init__(
         self, *, vl_model_path: Path, layout_model_path: Path, device: str = "cpu"
     ) -> None:
@@ -104,6 +114,7 @@ class PaddleOcrVlEngine:
             raise RuntimeError(f"PaddleOCR failed to initialize on {device}")
 
         if device == "cpu":
+
             def cpu_compute_capability() -> None:
                 return None
 
@@ -150,9 +161,7 @@ class PaddleOcrVlEngine:
             paddle_module=paddle,
         )
 
-    def predict(
-        self, image_path: Path, mode: str, prompt_label: str = "ocr"
-    ) -> list[Any]:
+    def predict(self, image_path: Path, mode: str, prompt_label: str = "ocr") -> list[Any]:
         return self.pipeline.predict(
             str(image_path),
             use_doc_orientation_classify=False,
@@ -171,6 +180,40 @@ class PaddleOcrVlEngine:
             raise RuntimeError(f"Configured local OCR model is incomplete: {directory.name}")
 
 
+class PpOcrV6Engine:
+    model_name = "PP-OCRv6_medium_rec"
+    layout_model_name = "PP-OCRv6_medium_det"
+    version = "3.7.0"
+
+    def __init__(
+        self, *, text_det_model_path: Path, text_rec_model_path: Path, device: str
+    ) -> None:
+        for directory in (text_det_model_path, text_rec_model_path):
+            if not directory.is_dir() or not (directory / "inference.pdiparams").is_file():
+                raise RuntimeError(f"Configured local OCR model is incomplete: {directory.name}")
+        if device not in {"cpu", "gpu:0"}:
+            raise RuntimeError("OCR device must be cpu or gpu:0")
+        self.device = device
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        from paddleocr import PaddleOCR
+
+        self.pipeline = PaddleOCR(
+            text_detection_model_dir=str(text_det_model_path.resolve()),
+            text_recognition_model_dir=str(text_rec_model_path.resolve()),
+            device=device,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+        self.precision = "float32"
+
+    def predict(self, image_path: Path, mode: str, prompt_label: str = "ocr") -> list[Any]:
+        del mode
+        if prompt_label != "ocr":
+            raise ValueError("PP-OCRv6 supports only the ocr prompt")
+        return list(self.pipeline.predict(str(image_path)))
+
+
 def _tokenizer_valid_id_limit(tokenizer: Any) -> int:
     sp_model = getattr(tokenizer, "sp_model", None)
     get_piece_size = getattr(sp_model, "get_piece_size", None)
@@ -183,13 +226,9 @@ def _tokenizer_valid_id_limit(tokenizer: Any) -> int:
     if not isinstance(added_decoder, dict):
         raise RuntimeError("Local OCR tokenizer does not expose its added-token IDs")
     added_ids = sorted(
-        int(token_id)
-        for token_id in added_decoder
-        if int(token_id) >= sentencepiece_size
+        int(token_id) for token_id in added_decoder if int(token_id) >= sentencepiece_size
     )
-    expected_added_ids = list(
-        range(sentencepiece_size, sentencepiece_size + len(added_ids))
-    )
+    expected_added_ids = list(range(sentencepiece_size, sentencepiece_size + len(added_ids)))
     if added_ids != expected_added_ids:
         raise RuntimeError("Local OCR tokenizer has non-contiguous decodable token IDs")
     return sentencepiece_size + len(added_ids)
@@ -241,8 +280,17 @@ class OcrBusyError(RuntimeError):
 
 
 class OcrService:
-    def __init__(self, engine: OcrEngine, *, max_image_bytes: int) -> None:
-        self.engine = engine
+    def __init__(
+        self,
+        engine: OcrEngine | None = None,
+        *,
+        engines: dict[str, OcrEngine] | None = None,
+        max_image_bytes: int,
+    ) -> None:
+        resolved = engines or ({"paddleocr_vl": engine} if engine is not None else {})
+        if "paddleocr_vl" not in resolved:
+            raise RuntimeError("PaddleOCR-VL engine is required")
+        self.engines = resolved
         self.max_image_bytes = max_image_bytes
         self._slot = threading.BoundedSemaphore(value=1)
 
@@ -250,15 +298,22 @@ class OcrService:
         return {
             "status": "ready",
             "provider": "local_paddle_qwen",
-            "model": self.engine.model_name,
-            "layout_model": self.engine.layout_model_name,
-            "version": self.engine.version,
-            "device": self.engine.device,
-            "precision": str(getattr(self.engine, "precision", "unknown")),
+            "model": self.engines["paddleocr_vl"].model_name,
+            "layout_model": self.engines["paddleocr_vl"].layout_model_name,
+            "models": {
+                name: {
+                    "model": engine.model_name,
+                    "layout_model": engine.layout_model_name,
+                }
+                for name, engine in self.engines.items()
+            },
+            "version": self.engines["paddleocr_vl"].version,
+            "device": self.engines["paddleocr_vl"].device,
+            "precision": str(getattr(self.engines["paddleocr_vl"], "precision", "unknown")),
             "max_concurrency": 1,
             "offline": True,
             "blocked_padding_token_count": int(
-                getattr(self.engine, "blocked_padding_token_count", 0)
+                getattr(self.engines["paddleocr_vl"], "blocked_padding_token_count", 0)
             ),
         }
 
@@ -270,6 +325,8 @@ class OcrService:
         request_id: str,
         mode: str,
         prompt_label: str = "ocr",
+        engine_name: str = "paddleocr_vl",
+        preprocessing_profile: str = "default",
     ) -> dict[str, Any]:
         if content_type not in ALLOWED_CONTENT_TYPES:
             raise ValueError("Only PNG and JPEG image bytes are accepted")
@@ -277,6 +334,12 @@ class OcrService:
             raise ValueError("OCR mode must be document or answer_region")
         if prompt_label not in {"ocr", "formula"}:
             raise ValueError("OCR prompt label must be ocr or formula")
+        if engine_name not in ALLOWED_ENGINES or engine_name not in self.engines:
+            raise ValueError("Requested OCR engine is unavailable")
+        if preprocessing_profile not in ALLOWED_PREPROCESSING_PROFILES:
+            raise ValueError("Unsupported OCR preprocessing profile")
+        if engine_name == "ppocr_v6" and prompt_label != "ocr":
+            raise ValueError("PP-OCRv6 supports only the ocr prompt")
         if mode == "document" and prompt_label != "ocr":
             raise ValueError("Formula prompting is supported only for answer regions")
         if not request_id.strip() or len(request_id) > 128:
@@ -295,20 +358,27 @@ class OcrService:
                 temporary.write(image_bytes)
                 image_path = Path(temporary.name)
             try:
-                raw_results = self.engine.predict(image_path, mode, prompt_label)
+                selected_engine = self.engines[engine_name]
+                raw_results = selected_engine.predict(image_path, mode, prompt_label)
             finally:
                 image_path.unlink(missing_ok=True)
-            normalized = normalize_paddle_results(raw_results)
+            normalized = (
+                normalize_ppocr_results(raw_results)
+                if engine_name == "ppocr_v6"
+                else normalize_paddle_results(raw_results)
+            )
             return {
                 "request_id": request_id,
                 "mode": mode,
                 **normalized,
                 "warnings": normalized.get("warnings", []),
                 "provider": "local_paddle_qwen",
-                "model": self.engine.model_name,
-                "layout_model": self.engine.layout_model_name,
-                "version": self.engine.version,
-                "device": self.engine.device,
+                "model": selected_engine.model_name,
+                "layout_model": selected_engine.layout_model_name,
+                "version": selected_engine.version,
+                "device": selected_engine.device,
+                "engine": engine_name,
+                "preprocessing_profile": preprocessing_profile,
                 "latency_ms": int((time.perf_counter() - started) * 1000),
             }
         finally:
@@ -326,9 +396,7 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
         if markdown and not _is_decoration_only_text(markdown):
             markdown_pages.append(markdown.strip())
         elif markdown:
-            warnings.append(
-                f"page {page_index}: page-line decoration was treated as blank"
-            )
+            warnings.append(f"page {page_index}: page-line decoration was treated as blank")
         page_blocks = payload.get("parsing_res_list", []) if isinstance(payload, dict) else []
         if not isinstance(page_blocks, list):
             page_blocks = []
@@ -340,9 +408,7 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
             if not content:
                 continue
             if _is_decoration_only_text(content):
-                warnings.append(
-                    f"page {page_index}: page-line decoration was treated as blank"
-                )
+                warnings.append(f"page {page_index}: page-line decoration was treated as blank")
                 continue
             bbox = raw_block.get("block_bbox")
             if not (
@@ -358,6 +424,7 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
                     "label": str(raw_block.get("block_label") or "text"),
                     "text": content,
                     "bbox": list(bbox) if bbox is not None else None,
+                    "confidence": None,
                 }
             )
     blocks.sort(key=lambda item: (int(item["page"]), int(item["order"])))
@@ -376,17 +443,84 @@ def normalize_paddle_results(results: list[Any]) -> dict[str, Any]:
     }
 
 
+def normalize_ppocr_results(results: list[Any]) -> dict[str, Any]:
+    blocks: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    order = 0
+    for page_index, result in enumerate(results, start=1):
+        payload = _result_payload(result, "json")
+        texts = payload.get("rec_texts", []) if isinstance(payload, dict) else []
+        scores = payload.get("rec_scores", []) if isinstance(payload, dict) else []
+        boxes = payload.get("rec_boxes", []) if isinstance(payload, dict) else []
+        polygons = payload.get("dt_polys", []) if isinstance(payload, dict) else []
+        for index, raw_text in enumerate(texts if isinstance(texts, list) else []):
+            content = str(raw_text or "").strip()
+            if not content or _is_decoration_only_text(content):
+                continue
+            raw_box = boxes[index] if isinstance(boxes, list) and index < len(boxes) else None
+            if not (isinstance(raw_box, (list, tuple)) and len(raw_box) == 4):
+                polygon = (
+                    polygons[index]
+                    if isinstance(polygons, list) and index < len(polygons)
+                    else None
+                )
+                raw_box = _polygon_bbox(polygon)
+            bbox = (
+                [float(value) for value in raw_box]
+                if isinstance(raw_box, (list, tuple)) and len(raw_box) == 4
+                else None
+            )
+            score = scores[index] if isinstance(scores, list) and index < len(scores) else None
+            order += 1
+            blocks.append(
+                {
+                    "page": page_index,
+                    "order": order,
+                    "label": "text",
+                    "text": content,
+                    "bbox": bbox,
+                    "confidence": float(score) if isinstance(score, (int, float)) else None,
+                }
+            )
+    blocks.sort(
+        key=lambda item: (
+            int(item["page"]),
+            item["bbox"][1] if item["bbox"] else float("inf"),
+            item["bbox"][0] if item["bbox"] else int(item["order"]),
+        )
+    )
+    for index, block in enumerate(blocks, start=1):
+        block["order"] = index
+    text = "\n".join(str(block["text"]) for block in blocks).strip()
+    if not text:
+        warnings.append("OCR returned no recognized text")
+    return {
+        "text": text,
+        "normalized_text": text,
+        "markdown": text,
+        "blocks": blocks,
+        "warnings": warnings,
+    }
+
+
+def _polygon_bbox(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+    points = [point for point in value if isinstance(point, (list, tuple)) and len(point) >= 2]
+    if not points:
+        return None
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
 def _is_decoration_only_text(value: str) -> bool:
     normalized = str(value or "").strip()
     for mojibake_dash in ("â€”", "â€“", "âˆ’"):
         normalized = normalized.replace(mojibake_dash, "-")
-    normalized = normalized.translate(
-        str.maketrans({"—": "-", "–": "-", "−": "-", "‑": "-"})
-    )
+    normalized = normalized.translate(str.maketrans({"—": "-", "–": "-", "−": "-", "‑": "-"}))
     compact = "".join(normalized.split())
-    return bool(compact) and all(
-        character in "-_=~|/\\.·•" for character in compact
-    )
+    return bool(compact) and all(character in "-_=~|/\\.·•" for character in compact)
 
 
 def _result_payload(result: Any, attribute: str) -> dict[str, Any]:
@@ -460,6 +594,10 @@ def make_handler(service: OcrService, api_key: str) -> type[BaseHTTPRequestHandl
                     request_id=self.headers.get("X-Request-ID", ""),
                     mode=self.headers.get("X-OCR-Mode", ""),
                     prompt_label=self.headers.get("X-OCR-Prompt-Label", "ocr"),
+                    engine_name=self.headers.get("X-OCR-Engine", "paddleocr_vl"),
+                    preprocessing_profile=self.headers.get(
+                        "X-OCR-Preprocessing-Profile", "default"
+                    ),
                 )
             except OverflowError as exc:
                 self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"detail": str(exc)})
@@ -507,7 +645,14 @@ def build_server(config: SidecarConfig, engine: OcrEngine | None = None) -> Thre
         layout_model_path=config.layout_model_path,
         device=config.device,
     )
-    service = OcrService(resolved_engine, max_image_bytes=config.max_image_bytes)
+    engines: dict[str, OcrEngine] = {"paddleocr_vl": resolved_engine}
+    if engine is None and config.text_det_model_path and config.text_rec_model_path:
+        engines["ppocr_v6"] = PpOcrV6Engine(
+            text_det_model_path=config.text_det_model_path,
+            text_rec_model_path=config.text_rec_model_path,
+            device=config.device,
+        )
+    service = OcrService(engines=engines, max_image_bytes=config.max_image_bytes)
     server = ThreadingHTTPServer((config.host, config.port), make_handler(service, config.api_key))
     server.daemon_threads = True
     return server

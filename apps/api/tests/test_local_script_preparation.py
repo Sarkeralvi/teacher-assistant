@@ -36,7 +36,6 @@ from app.services.local_script_preparation import (
     PreparedSegment,
     _apply_adjacent_continuation_boundary_fallback,
     _cleaned_whole_image,
-    build_teacher_transcription_choices,
 )
 from app.services.storage import LocalStorage
 
@@ -186,60 +185,13 @@ def test_cleaned_whole_image_removes_red_marker_but_preserves_black_ink(
     source.save(source_path)
 
     with Image.open(io.BytesIO(_cleaned_whole_image(source_path))) as cleaned:
-        # The helper adds a 32-pixel border around the original image.
-        assert cleaned.getpixel((32 + 30, 32 + 10)) == 0
-        assert cleaned.getpixel((32 + 30, 32 + 28)) == 255
+        # The helper adds a border and scales the full image for thin-stroke OCR.
+        scale = cleaned.width / (source.width + 64)
+        black_point = (round((32 + 30) * scale), round((32 + 10) * scale))
+        red_point = (round((32 + 30) * scale), round((32 + 28) * scale))
+        assert cleaned.getpixel(black_point) < 64
+        assert cleaned.getpixel(red_point) > 245
 
-
-def test_teacher_choices_add_focused_and_arithmetic_context_readings() -> None:
-    prepared = (
-        "Working line\n"
-        r"$= \frac{7/12 \times 0.5}{5/12} = \frac{x}{10}$"
-    )
-    choices = build_teacher_transcription_choices(
-        prepared_text=prepared,
-        qwen_alternatives=[],
-        ocr_candidates=[
-            {
-                "kind": "focused_final_formula",
-                "text": r"$= \frac{7/12 \times 0.5}{5/12} = \frac{x}{10}$",
-            }
-        ],
-    )
-
-    assert any(r"\frac{7}{10}" in choice["text"] for choice in choices)
-    assert any(
-        choice["source"] == "arithmetic_consistency_suggestion"
-        for choice in choices
-    )
-    assert all(len(choice["sha256"]) == 64 for choice in choices)
-
-
-def test_teacher_choices_ignore_unrelated_focused_gibberish() -> None:
-    choices = build_teacher_transcription_choices(
-        prepared_text="Prob. of failure = 0.5.\nAlice conducts the 1st inspection.",
-        qwen_alternatives=[],
-        ocr_candidates=[
-            {
-                "kind": "focused_final_formula",
-                "text": r"$$ \textcircled{4}0\quad\textcircled{4}i $$",
-            }
-        ],
-    )
-
-    assert choices == []
-
-    numeric_gibberish = build_teacher_transcription_choices(
-        prepared_text=r"Working\n= \frac{28}{67}",
-        qwen_alternatives=[],
-        ocr_candidates=[
-            {
-                "kind": "focused_final_formula",
-                "text": r"=\frac{2\sqrt{8}}{67}\sqrt{400}",
-            }
-        ],
-    )
-    assert numeric_gibberish == []
 
 def test_adjacent_blank_after_multi_page_answer_gets_uncertain_shared_boundary() -> None:
     first = {
@@ -393,19 +345,10 @@ def test_full_page_ocr_then_qwen_creates_unconfirmed_draft_mapping(
         "map_qwen",
         "OcrGpu",
         "ocr",
-        "ocr",
-        "ocr",
-        "Qwen",
-        "verify_qwen",
-        "prepare_qwen",
     ]
-    assert len(ocr.calls) == 4
+    assert len(ocr.calls) == 2
     assert ocr.calls[0]["mode"] == "document"
     assert ocr.calls[1]["mode"] == "answer_region"
-    assert ocr.calls[2]["mode"] == "answer_region"
-    assert ocr.calls[2]["prompt_label"] == "ocr"
-    assert ocr.calls[3]["mode"] == "answer_region"
-    assert ocr.calls[3]["prompt_label"] == "formula"
     assert qwen.questions[0]["model_answer"] == "The force is 10 N."
     assert qwen.questions[0]["rubric"]["criteria"][0]["id"] == "answer"
     assert len(mappings) == 1
@@ -417,12 +360,12 @@ def test_full_page_ocr_then_qwen_creates_unconfirmed_draft_mapping(
     assert mapping.answer_region.full_answer_confirmed is False
     assert all(segment.confirmed is False for segment in mapping.answer_region.segments)
     assert mapping.source_reference["ocr_draft_text"] == "1(a) The force is 10 N."
-    assert mapping.source_reference["model_prepared_answer_text"] == "The force is 10 N."
-    assert qwen.preparation_inputs[0]["question_text"] == "Calculate the force."
-    assert "model_answer" not in qwen.preparation_inputs[0]
+    assert mapping.source_reference["paddle_baseline_text"] == "1(a) The force is 10 N."
+    assert mapping.source_reference["text_source"] == "paddle_ocr_direct_baseline"
+    assert qwen.preparation_inputs == []
     audit = db_session.scalars(
         select(AuditLog).where(AuditLog.event_type == "submission_script_draft_prepared")
     ).one()
     assert "ocr_draft_text" not in str(audit.payload_json)
-    assert audit.payload_json["ocr_call_count"] == 4
-    assert audit.payload_json["qwen_call_count"] == 2
+    assert audit.payload_json["ocr_call_count"] == 2
+    assert audit.payload_json["qwen_call_count"] == 1

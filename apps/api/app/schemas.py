@@ -17,6 +17,7 @@ class LocalAiServiceStatusRead(BaseModel):
     layout_model: str | None = None
     device: str
     detail: str | None = None
+    models: list[str] = Field(default_factory=list)
 
 
 class LocalAiStatusRead(BaseModel):
@@ -24,6 +25,7 @@ class LocalAiStatusRead(BaseModel):
     cohort_model_grading_enabled: bool
     local_script_preparation_enabled: bool = False
     local_single_answer_grading_enabled: bool = False
+    local_ocr_rescue_enabled: bool = False
     qwen: LocalAiServiceStatusRead
     ocr: LocalAiServiceStatusRead
 
@@ -855,6 +857,45 @@ class OcrBlockRead(BaseModel):
     label: str
     text: str
     bbox: list[float] | None = None
+    confidence: float | None = None
+
+
+OcrRejectionReason = Literal[
+    "all_candidates_wrong",
+    "critical_digit_wrong",
+    "math_symbol_wrong",
+    "missing_or_extra_line",
+    "wrong_region",
+    "image_quality",
+]
+
+
+class AnswerRegionOcrCandidateRead(ORMBase):
+    id: int
+    band_id: int
+    engine: Literal["ppocr_v6", "paddleocr_vl"]
+    model_name: str
+    prompt_label: str
+    preprocessing_profile: str
+    text: str
+    text_sha256: str
+    confidence: Decimal | None
+    warnings: list[str] = Field(default_factory=list)
+    latency_ms: int | None
+
+
+class AnswerRegionOcrBandRead(ORMBase):
+    id: int
+    ocr_run_id: int
+    source_segment_id: int | None
+    order_index: int
+    x: Decimal
+    y: Decimal
+    width: Decimal
+    height: Decimal
+    image_sha256: str
+    classification: Literal["text", "formula"]
+    candidates: list[AnswerRegionOcrCandidateRead] = Field(default_factory=list)
 
 
 class AnswerRegionOcrRunRead(ORMBase):
@@ -862,7 +903,18 @@ class AnswerRegionOcrRunRead(ORMBase):
     answer_region_id: int
     requested_by_teacher_id: int
     request_id: str
-    status: Literal["running", "succeeded", "failed", "confirmed"]
+    status: Literal[
+        "queued", "running", "succeeded", "failed", "confirmed", "rejected", "uncertain"
+    ]
+    profile: str
+    source_image_sha256: str | None
+    queued_at: datetime | None
+    started_at: datetime | None
+    heartbeat_at: datetime | None
+    completed_at: datetime | None
+    call_limit: int
+    calls_used: int
+    candidate_set_sha256: str | None
     provider: Literal["local_paddle_qwen"] | str
     model_name: str
     layout_model_name: str | None
@@ -874,12 +926,41 @@ class AnswerRegionOcrRunRead(ORMBase):
     confirmed_text: str | None
     confirmed_by_teacher_id: int | None
     confirmed_at: datetime | None
+    rejected_by_teacher_id: int | None
+    rejection_reason_codes: list[str] = Field(default_factory=list)
+    rejected_at: datetime | None
+    bands: list[AnswerRegionOcrBandRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
 
 class OcrConfirmationRequest(BaseModel):
     confirmed_text: str = Field(max_length=10000)
+
+
+class OcrRescueRunRequest(BaseModel):
+    profile: Literal["math_handwriting_rescue"]
+    expected_vl_model: Literal["PaddleOCR-VL-1.6"]
+    expected_layout_model: Literal["PP-DocLayoutV3"]
+    expected_text_detection_model: Literal["PP-OCRv6_medium_det"]
+    expected_text_recognition_model: Literal["PP-OCRv6_medium_rec"]
+    max_calls: int = Field(default=8, ge=1, le=8)
+    draft_only_confirmed: Literal[True]
+
+
+class OcrCandidateConfirmationRequest(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1, max_length=6)
+
+
+class OcrCandidateRejectionRequest(BaseModel):
+    reasons: list[OcrRejectionReason] = Field(min_length=1, max_length=6)
+
+
+class OcrRejectionRead(BaseModel):
+    run_id: int
+    mapping_id: int
+    diagnostic_reference: str
+    status: Literal["rejected"]
 
 
 class AnswerRegionMappingRunRequest(BaseModel):

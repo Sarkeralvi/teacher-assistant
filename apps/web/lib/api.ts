@@ -410,7 +410,16 @@ export type AnswerRegionOcrRun = {
   answer_region_id: number;
   requested_by_teacher_id: number;
   request_id: string;
-  status: "running" | "succeeded" | "failed" | "confirmed";
+  status: "queued" | "running" | "succeeded" | "failed" | "confirmed" | "rejected" | "uncertain";
+  profile: string;
+  source_image_sha256: string | null;
+  queued_at: string | null;
+  started_at: string | null;
+  heartbeat_at: string | null;
+  completed_at: string | null;
+  call_limit: number;
+  calls_used: number;
+  candidate_set_sha256: string | null;
   provider: "local_paddle_qwen" | string;
   model_name: string;
   layout_model_name: string | null;
@@ -422,8 +431,40 @@ export type AnswerRegionOcrRun = {
   confirmed_text: string | null;
   confirmed_by_teacher_id: number | null;
   confirmed_at: string | null;
+  rejected_by_teacher_id: number | null;
+  rejection_reason_codes: string[];
+  rejected_at: string | null;
+  bands: AnswerRegionOcrBand[];
   created_at: string;
   updated_at: string;
+};
+
+export type AnswerRegionOcrCandidate = {
+  id: number;
+  band_id: number;
+  engine: "ppocr_v6" | "paddleocr_vl";
+  model_name: string;
+  prompt_label: string;
+  preprocessing_profile: string;
+  text: string;
+  text_sha256: string;
+  confidence: string | number | null;
+  warnings: string[];
+  latency_ms: number | null;
+};
+
+export type AnswerRegionOcrBand = {
+  id: number;
+  ocr_run_id: number;
+  source_segment_id: number | null;
+  order_index: number;
+  x: string | number;
+  y: string | number;
+  width: string | number;
+  height: string | number;
+  image_sha256: string;
+  classification: "text" | "formula";
+  candidates: AnswerRegionOcrCandidate[];
 };
 
 export type OcrConfirmationRequest = {
@@ -790,6 +831,7 @@ export type LocalAiServiceStatus = {
   layout_model: string | null;
   device: string;
   detail: string | null;
+  models: string[];
 };
 
 export type LocalAiStatus = {
@@ -797,6 +839,7 @@ export type LocalAiStatus = {
   cohort_model_grading_enabled: boolean;
   local_script_preparation_enabled: boolean;
   local_single_answer_grading_enabled: boolean;
+  local_ocr_rescue_enabled: boolean;
   qwen: LocalAiServiceStatus;
   ocr: LocalAiServiceStatus;
 };
@@ -1509,6 +1552,47 @@ export function listAnswerRegionOcrRuns(answerRegionId: number) {
 
 export function getAnswerRegionOcrRun(runId: number) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-region-ocr-runs/${runId}`);
+}
+
+export function createAnswerRegionOcrRescueRun(answerRegionId: number) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-rescue-runs`, {
+    method: "POST",
+    body: {
+      profile: "math_handwriting_rescue",
+      expected_vl_model: "PaddleOCR-VL-1.6",
+      expected_layout_model: "PP-DocLayoutV3",
+      expected_text_detection_model: "PP-OCRv6_medium_det",
+      expected_text_recognition_model: "PP-OCRv6_medium_rec",
+      max_calls: 8,
+      draft_only_confirmed: true,
+    },
+  });
+}
+
+export function confirmAnswerRegionOcrCandidates(
+  answerRegionId: number,
+  runId: number,
+  candidateIds: number[],
+) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/confirm-candidates`,
+    { method: "POST", body: { candidate_ids: candidateIds } },
+  );
+}
+
+export function rejectAnswerRegionOcrCandidates(
+  answerRegionId: number,
+  runId: number,
+  reasons: string[],
+) {
+  return apiRequest<{ run_id: number; mapping_id: number; diagnostic_reference: string; status: "rejected" }>(
+    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/reject`,
+    { method: "POST", body: { reasons } },
+  );
+}
+
+export function getAnswerRegionOcrBandImageUrl(bandId: number) {
+  return `${resolveApiBaseUrl()}/answer-region-ocr-bands/${bandId}/image`;
 }
 
 export function confirmAnswerRegionOcrRun(

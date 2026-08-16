@@ -5,6 +5,7 @@ separate process from the request that enqueued them.
 from app.db.session import SessionLocal
 from app.services.grading_dispatch_service import GradingDispatchService
 from app.services.grading_service import GradingService
+from app.services.ocr_rescue_service import OcrRescueService
 from app.services.reference_extraction_service import ReferenceExtractionService
 
 
@@ -30,5 +31,13 @@ def run_reference_extraction_job(grading_run_id: int) -> None:
     db = SessionLocal()
     try:
         ReferenceExtractionService(db).run(grading_run_id)
+    finally:
+        db.close()
+
+
+def run_answer_region_ocr_rescue_job(ocr_run_id: int) -> None:
+    db = SessionLocal()
+    try:
+        OcrRescueService(db).run_queued(ocr_run_id)
     finally:
         db.close()

@@ -20,6 +20,7 @@ from packages.local_ocr_sidecar.server import (
     _tokenizer_valid_id_limit,
     build_server,
     normalize_paddle_results,
+    normalize_ppocr_results,
 )
 
 
@@ -76,6 +77,18 @@ class FakeEngine:
         assert mode in {"document", "answer_region"}
         assert prompt_label in {"ocr", "formula"}
         return [FakePaddleResult()]
+
+
+class FakePpOcrResult:
+    def __init__(self) -> None:
+        self.json = {
+            "res": {
+                "rec_texts": ["7/12", "0.5"],
+                "rec_scores": [0.91, 0.72],
+                "rec_boxes": [[10, 30, 70, 55], [90, 31, 130, 54]],
+                "dt_polys": [],
+            }
+        }
 
 
 class BlockingEngine(FakeEngine):
@@ -157,6 +170,7 @@ def test_sidecar_normalizes_text_markdown_blocks_and_boxes() -> None:
         "label": "text",
         "text": "First line",
         "bbox": [1, 2, 30, 40],
+        "confidence": None,
     }
 
 
@@ -213,6 +227,15 @@ def test_sidecar_service_is_image_only_size_limited_and_cpu() -> None:
             request_id="request-3",
             mode="document",
         )
+
+
+def test_sidecar_normalizes_ppocr_boxes_confidence_and_order() -> None:
+    result = normalize_ppocr_results([FakePpOcrResult()])
+
+    assert result["normalized_text"] == "7/12\n0.5"
+    assert result["blocks"][0]["bbox"] == [10.0, 30.0, 70.0, 55.0]
+    assert result["blocks"][0]["confidence"] == pytest.approx(0.91)
+    assert result["blocks"][1]["order"] == 2
 
 
 def test_sidecar_hides_cuda_before_paddle_initialization(

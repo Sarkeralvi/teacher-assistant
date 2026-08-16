@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     local_ocr_max_image_bytes: int = Field(
         default=20 * 1024 * 1024, alias="LOCAL_OCR_MAX_IMAGE_BYTES", gt=0
     )
+    local_ocr_rescue_enabled: bool = Field(
+        default=False, alias="LOCAL_OCR_RESCUE_ENABLED"
+    )
+    local_ocr_rescue_max_calls: int = Field(
+        default=8, alias="LOCAL_OCR_RESCUE_MAX_CALLS", ge=1, le=8
+    )
+    local_ocr_max_bands: int = Field(
+        default=6, alias="LOCAL_OCR_MAX_BANDS", ge=1, le=6
+    )
+    local_ocr_text_det_model_path: str = Field(
+        default="", alias="LOCAL_OCR_TEXT_DET_MODEL_PATH"
+    )
+    local_ocr_text_rec_model_path: str = Field(
+        default="", alias="LOCAL_OCR_TEXT_REC_MODEL_PATH"
+    )
     local_reference_extraction_enabled: bool = Field(
         default=False, alias="LOCAL_REFERENCE_EXTRACTION_ENABLED"
     )

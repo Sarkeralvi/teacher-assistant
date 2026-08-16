@@ -9,10 +9,12 @@ import {
   acceptQuestionImportDrafts,
   addAnswerRegionSegment,
   confirmAnswerRegionOcrRun,
+  confirmAnswerRegionOcrCandidates,
   confirmAnswerRegionFullAnswer,
   confirmQuestionNodeMapping,
   createAnswerRegion,
   createAnswerRegionOcrRun,
+  createAnswerRegionOcrRescueRun,
   createEvidencePrepRun,
   createGradingQueueRun,
   createQuestion,
@@ -20,6 +22,8 @@ import {
   deleteSubmission,
   editAnswerRegionSegment,
   getAnswerRegionImageUrl,
+  getAnswerRegionOcrBandImageUrl,
+  getAnswerRegionOcrRun,
   getAssessment,
   getAssessmentReviewQueue,
   getEvidencePrepSummary,
@@ -27,6 +31,7 @@ import {
   getGradingQueueSummary,
   getLocalAiStatus,
   getSubmissionPageImageUrl,
+  getStoredAuthToken,
   gradeAnswerRegionWithLocalQwen,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
@@ -39,6 +44,7 @@ import {
   listRubrics,
   listSubmissions,
   removeAnswerRegionSegment,
+  rejectAnswerRegionOcrCandidates,
   reorderAnswerRegionSegments,
   runAssessmentQuestionNodeMappings,
   suggestAnswerRegionMappings,
@@ -160,7 +166,7 @@ function buildSingleCriterionRubric(question: Question, draft: ManualSetupDraft)
 }
 
 function localMappingPreparedText(mapping: AnswerRegionMapping): string {
-  const value = mapping.source_reference?.model_prepared_answer_text;
+  const value = mapping.source_reference?.paddle_baseline_text ?? mapping.source_reference?.model_prepared_answer_text;
   if (typeof value === "string") {
     return value;
   }
@@ -175,6 +181,51 @@ type LocalPreparedEvidenceChoice = {
   label: string;
 };
 
+function AuthenticatedEvidenceImage({ url, alt }: Readonly<{ url: string; alt: string }>) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    const token = getStoredAuthToken();
+    void fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: "no-store",
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("OCR band image could not be loaded");
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        if (!cancelled) {
+          createdUrl = URL.createObjectURL(blob);
+          setObjectUrl(createdUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setObjectUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [url]);
+  return objectUrl ? (
+    // Local authenticated evidence is intentionally not sent through Next image optimization.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img className="max-h-56 w-full rounded bg-white object-contain" src={objectUrl} alt={alt} />
+  ) : (
+    <div className="grid min-h-32 place-items-center rounded bg-slate-950 text-xs text-slate-400">
+      Loading protected band image...
+    </div>
+  );
+}
+
 function localMappingPreparedChoices(
   mapping: AnswerRegionMapping,
 ): LocalPreparedEvidenceChoice[] {
@@ -183,17 +234,17 @@ function localMappingPreparedChoices(
     return [];
   }
   const primaryText = localMappingPreparedText(mapping).trim();
-  const primaryHash = source.model_prepared_answer_text_sha256;
+  const primaryHash = source.paddle_baseline_text_sha256 ?? source.model_prepared_answer_text_sha256;
   const choices: LocalPreparedEvidenceChoice[] = [];
   if (primaryText && typeof primaryHash === "string") {
     choices.push({
       text: primaryText,
       sha256: primaryHash,
       primary: true,
-      label: "Model-preferred reading",
+      label: source.paddle_baseline_text_sha256 ? "PaddleOCR baseline reading" : "Legacy prepared reading",
     });
   }
-  const alternatives = source.model_prepared_answer_alternatives;
+  const alternatives = source.paddle_baseline_text_sha256 ? null : source.model_prepared_answer_alternatives;
   if (Array.isArray(alternatives)) {
     for (const item of alternatives) {
       if (!item || typeof item !== "object") {
@@ -220,6 +271,10 @@ function localMappingWarnings(mapping: AnswerRegionMapping): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function isLegacyUnsafeEvidence(mapping: AnswerRegionMapping): boolean {
+  return mapping.source_reference?.text_source === "paddle_ocr_multi_pass_qwen_prepared";
 }
 
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
@@ -256,6 +311,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
   const [selectedPreparedEvidenceHashByMappingId, setSelectedPreparedEvidenceHashByMappingId] = useState<Record<number, string>>({});
+  const [runningRescueRegionId, setRunningRescueRegionId] = useState<number | null>(null);
+  const [selectedCandidateByBandId, setSelectedCandidateByBandId] = useState<Record<number, number>>({});
+  const [confirmingRescueRunId, setConfirmingRescueRunId] = useState<number | null>(null);
+  const [diagnosticReferenceByRunId, setDiagnosticReferenceByRunId] = useState<Record<number, string>>({});
   const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
@@ -916,6 +975,84 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Failed to confirm mapping");
     } finally {
       setConfirmingMappingId(null);
+    }
+  }
+
+  async function handleRunEnhancedOcr(mapping: AnswerRegionMapping) {
+    if (!mapping.answer_region_id) {
+      return;
+    }
+    const regionId = mapping.answer_region_id;
+    setRunningRescueRegionId(regionId);
+    setError(null);
+    try {
+      let run = await createAnswerRegionOcrRescueRun(regionId);
+      setOcrRunsByRegionId((current) => ({
+        ...current,
+        [regionId]: [run, ...(current[regionId] ?? []).filter((item) => item.id !== run.id)],
+      }));
+      for (let attempt = 0; attempt < 240 && ["queued", "running"].includes(run.status); attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        run = await getAnswerRegionOcrRun(run.id);
+        setOcrRunsByRegionId((current) => ({
+          ...current,
+          [regionId]: [run, ...(current[regionId] ?? []).filter((item) => item.id !== run.id)],
+        }));
+      }
+      if (["queued", "running"].includes(run.status)) {
+        setError("Enhanced OCR is still running. Reload this page to continue reviewing it.");
+      } else if (run.status === "failed" || run.status === "uncertain") {
+        setError(run.error ?? "Enhanced OCR did not complete safely.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Enhanced local OCR could not start");
+    } finally {
+      setRunningRescueRegionId(null);
+    }
+  }
+
+  async function handleConfirmRescue(mapping: AnswerRegionMapping, run: AnswerRegionOcrRun) {
+    if (!mapping.answer_region_id) {
+      return;
+    }
+    const candidateIds = run.bands.map((band) => selectedCandidateByBandId[band.id]).filter(Boolean);
+    if (candidateIds.length !== run.bands.length) {
+      setError("Select one faithful reading for every image band.");
+      return;
+    }
+    setConfirmingRescueRunId(run.id);
+    setError(null);
+    try {
+      await confirmAnswerRegionOcrCandidates(mapping.answer_region_id, run.id, candidateIds);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OCR candidate confirmation failed");
+    } finally {
+      setConfirmingRescueRunId(null);
+    }
+  }
+
+  async function handleRejectRescue(mapping: AnswerRegionMapping, run: AnswerRegionOcrRun) {
+    if (!mapping.answer_region_id) {
+      return;
+    }
+    setConfirmingRescueRunId(run.id);
+    setError(null);
+    try {
+      const result = await rejectAnswerRegionOcrCandidates(
+        mapping.answer_region_id,
+        run.id,
+        ["all_candidates_wrong"],
+      );
+      setDiagnosticReferenceByRunId((current) => ({
+        ...current,
+        [run.id]: result.diagnostic_reference,
+      }));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OCR rescue rejection failed");
+    } finally {
+      setConfirmingRescueRunId(null);
     }
   }
 
@@ -1668,6 +1805,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   )?.text ?? localMappingPreparedText(mapping);
                 const preparedStatus = localMappingPreparedStatus(mapping);
                 const warnings = localMappingWarnings(mapping);
+                const legacyUnsafeEvidence = isLegacyUnsafeEvidence(mapping);
+                const rescueRun = mapping.answer_region_id
+                  ? (ocrRunsByRegionId[mapping.answer_region_id] ?? []).find(
+                      (run) => run.profile === "math_handwriting_rescue",
+                    ) ?? null
+                  : null;
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
                 return (
                   <article key={mapping.id} className="grid gap-3 rounded border border-slate-700 p-4">
@@ -1703,16 +1846,24 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     {mapping.answer_region_id ? (
                       <div className="grid gap-2 rounded border border-slate-700 bg-slate-950/50 p-3 text-sm">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="font-semibold text-slate-100">Model-prepared student answer evidence</p>
-                          <span className="text-xs text-slate-400">{preparedStatus || "legacy OCR draft"}</span>
+                          <p className="font-semibold text-slate-100">PaddleOCR evidence review</p>
+                          <span className="text-xs text-slate-400">{preparedStatus || "OCR draft"}</span>
                         </div>
+                        <p className="text-xs text-amber-200">
+                          This is direct OCR evidence, not a corrected answer. Check it against the image before approving.
+                        </p>
                         <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-200">
                           {preparedText || "No prepared text is available."}
                         </pre>
-                        {preparedChoices.length > 1 ? (
+                        {legacyUnsafeEvidence ? (
+                          <p className="rounded border border-red-800 bg-red-950/30 p-3 text-xs text-red-100">
+                            This unconfirmed legacy reading used Qwen reconciliation and is non-approvable. Run enhanced local OCR.
+                          </p>
+                        ) : null}
+                        {preparedChoices.length > 0 && !legacyUnsafeEvidence ? (
                           <fieldset className="grid gap-2 rounded border border-amber-800/70 p-3">
                             <legend className="px-1 text-xs font-semibold text-amber-100">
-                              Choose the reading that matches the handwriting
+                              Confirm only if this reading faithfully matches the handwriting
                             </legend>
                             {preparedChoices.map((choice) => (
                               <label key={choice.sha256} className="flex cursor-pointer items-start gap-2 rounded border border-slate-700 p-2 text-xs text-slate-200">
@@ -1730,21 +1881,122 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                 </span>
                               </label>
                             ))}
-                            <p className="text-xs text-amber-100">No typing is required. The selected full transcription is integrity-checked when approved.</p>
+                            <p className="text-xs text-amber-100">The selected direct PaddleOCR reading is integrity-checked when approved.</p>
                           </fieldset>
                         ) : null}
-                        <p className="text-xs text-slate-400">Read-only. Approving copies this exact hashed evidence into the draft-grading packet.</p>
+                        <div className="flex flex-wrap gap-2">
+                          {!legacyUnsafeEvidence && preparedText.trim() ? (
+                            <button
+                              className={buttonClass}
+                              type="button"
+                              disabled={confirmingMappingId === mapping.id}
+                              onClick={() => void handleConfirmMapping(mapping)}
+                            >
+                              {confirmingMappingId === mapping.id ? "Approving..." : "Approve faithful baseline reading"}
+                            </button>
+                          ) : null}
+                          <button
+                            className="rounded border border-amber-600 px-3 py-2 text-xs font-semibold text-amber-100 hover:border-amber-400 disabled:opacity-50"
+                            type="button"
+                            disabled={runningRescueRegionId === mapping.answer_region_id || rescueRun?.status === "queued" || rescueRun?.status === "running"}
+                            onClick={() => void handleRunEnhancedOcr(mapping)}
+                          >
+                            {runningRescueRegionId === mapping.answer_region_id
+                              ? "Enhanced OCR is running..."
+                              : "None of these readings match — Enhanced local OCR"}
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-400">No cropping or retyping. Qwen is not used to rewrite OCR evidence.</p>
                       </div>
                     ) : null}
-                    {!mapping.teacher_confirmed && mapping.answer_region_id ? (
-                      <button
-                        className={buttonClass}
-                        type="button"
-                        disabled={confirmingMappingId === mapping.id || !preparedText.trim()}
-                        onClick={() => void handleConfirmMapping(mapping)}
-                      >
-                        {confirmingMappingId === mapping.id ? "Approving..." : "Approve mapping and prepared evidence"}
-                      </button>
+                    {rescueRun ? (
+                      <section className="grid gap-3 rounded border border-violet-700 bg-violet-950/20 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h4 className="font-semibold text-violet-100">Enhanced PaddleOCR review · run #{rescueRun.id}</h4>
+                          <span className="text-xs text-violet-200">
+                            {rescueRun.status} · {rescueRun.calls_used}/{rescueRun.call_limit} OCR calls
+                          </span>
+                        </div>
+                        {rescueRun.status === "queued" || rescueRun.status === "running" ? (
+                          <p className="text-sm text-violet-100">
+                            {rescueRun.calls_used <= 1 ? "Detecting ordered handwriting/formula bands..." : "Reading bands on the local GPU..."}
+                          </p>
+                        ) : null}
+                        {rescueRun.error ? <p className="text-sm text-red-200">{rescueRun.error}</p> : null}
+                        {rescueRun.status === "succeeded" ? (
+                          <>
+                            {rescueRun.bands.map((band) => {
+                              const comparisonTokens = band.candidates[0]?.text.split(/(\s+)/) ?? [];
+                              return (
+                                <fieldset key={band.id} className="grid gap-3 rounded border border-slate-700 p-3">
+                                  <legend className="px-1 text-sm font-semibold text-slate-100">
+                                    Band {band.order_index} · {band.classification}
+                                  </legend>
+                                  <AuthenticatedEvidenceImage
+                                    url={getAnswerRegionOcrBandImageUrl(band.id)}
+                                    alt={`Automatically detected answer band ${band.order_index}`}
+                                  />
+                                  <div className="grid gap-2 md:grid-cols-2">
+                                    {band.candidates.map((candidate) => (
+                                      <label key={candidate.id} className={`grid cursor-pointer gap-2 rounded border p-3 text-xs ${selectedCandidateByBandId[band.id] === candidate.id ? "border-emerald-500 bg-emerald-950/20" : "border-slate-700"}`}>
+                                        <span className="flex items-center gap-2 font-semibold">
+                                          <input
+                                            type="radio"
+                                            name={`ocr-band-${band.id}`}
+                                            checked={selectedCandidateByBandId[band.id] === candidate.id}
+                                            onChange={() => setSelectedCandidateByBandId((current) => ({ ...current, [band.id]: candidate.id }))}
+                                          />
+                                          {candidate.engine === "ppocr_v6" ? "PP-OCRv6 reading" : candidate.preprocessing_profile === "rescue_alternate" ? "PaddleOCR-VL alternate" : "PaddleOCR-VL reading"}
+                                        </span>
+                                        <span className="whitespace-pre-wrap text-slate-100">
+                                          {candidate.text.split(/(\s+)/).map((token, tokenIndex) => (
+                                            <span key={`${candidate.id}-${tokenIndex}`} className={comparisonTokens[tokenIndex] !== undefined && comparisonTokens[tokenIndex] !== token && token.trim() ? "bg-amber-900/60 text-amber-100" : ""}>{token}</span>
+                                          )) || "No text recognized"}
+                                        </span>
+                                        <span className="text-slate-400">
+                                          confidence: {candidate.confidence == null ? "not reported" : Number(candidate.confidence).toFixed(3)}
+                                        </span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </fieldset>
+                              );
+                            })}
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                className={buttonClass}
+                                type="button"
+                                disabled={confirmingRescueRunId === rescueRun.id || rescueRun.bands.some((band) => !selectedCandidateByBandId[band.id])}
+                                onClick={() => void handleConfirmRescue(mapping, rescueRun)}
+                              >
+                                {confirmingRescueRunId === rescueRun.id ? "Confirming..." : "Confirm selected reading for every band"}
+                              </button>
+                              <button
+                                className="rounded border border-red-700 px-3 py-2 text-xs font-semibold text-red-100 hover:border-red-500"
+                                type="button"
+                                disabled={confirmingRescueRunId === rescueRun.id}
+                                onClick={() => void handleRejectRescue(mapping, rescueRun)}
+                              >
+                                None of the enhanced readings are faithful
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
+                        {rescueRun.status === "rejected" ? (
+                          <div className="grid gap-2 rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-100">
+                            <p>Grading blocked—upload a clearer complete page or stop.</p>
+                            {diagnosticReferenceByRunId[rescueRun.id] ? (
+                              <button
+                                type="button"
+                                className="w-fit rounded border border-red-600 px-3 py-1 text-xs"
+                                onClick={() => void navigator.clipboard.writeText(diagnosticReferenceByRunId[rescueRun.id])}
+                              >
+                                Copy diagnostic reference
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </section>
                     ) : null}
                   </article>
                 );

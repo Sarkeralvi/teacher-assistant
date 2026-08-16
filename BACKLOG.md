@@ -1,3 +1,15 @@
+# TA-LOCAL-002 — Image-grounded OCR rescue and safe local grading
+
+- Recorded at: 2026-08-17
+- Canonical workflow: Custom Controlled, Windows-host local models.
+- Implemented: migration `0021`; PP-OCRv6 detection/recognition beside PaddleOCR-VL; direct PaddleOCR baseline evidence; deterministic automatic bands; immutable per-band candidates; eight-call rescue cap; rejection/uncertain states; authenticated band images; teacher candidate confirmation; and separate full-answer/Qwen grading gates.
+- Removed: arithmetic-derived readings, focused final-line overlays, shared alternative transcripts, and Qwen transcription/reconciliation. Existing unconfirmed `paddle_ocr_multi_pass_qwen_prepared` evidence is legacy and non-approvable.
+- Safety: no teacher cropping or retyping in rescue; no Qwen image input; no OCR retry/fallback; rejected identical source/model/profile runs cannot repeat; raw answer text is excluded from rescue audit payloads; Qwen receives only server-assembled teacher-confirmed text and can create only a review-required draft.
+- Verification required before a teacher pilot: live smoke on `1(a)(i) · submission #38`, critical-symbol review, separate PaddleOCR/Qwen host smokes, and a fresh locked 20-case curated evaluation. The previous quality claim is superseded because it evaluated the retired OCR evidence path.
+- Pilot status: **Blocked pending live OCR-rescue and fresh curated quality verification.**
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: In verification
+
 # TA-LOCAL-001 — Local-first AI integration and safe cohort grading
 
 - Recorded at: 2026-08-07
@@ -8,7 +20,7 @@
 - Safety: disabled by default; explicit teacher actions; text-only Qwen; OCR drafts require confirmation; manual mapping remains canonical; maximum 25 sequential calls; zero automatic retries; stop on first provider failure; no fallback; no automatic final grades; approved-only export unchanged.
 - Verification completed: 373 backend tests, Ruff, migration head `0020`, all PowerShell parsing, frontend type/static/production-build checks, four browser E2E flows, managed runtime restart synchronization, and safe loopback model lifecycle checks. The supplied three-PDF bundle completed exactly five GPU OCR calls followed by one Qwen call and produced all seven expected linked leaves. The engineering-only 20-case rehearsal recorded 20 OCR calls, two blank refusals, and 18/18 exact Qwen scores under `real-grading-v2`, with zero retry/fallback/final-grade calls. A separate live Qwen smoke used the supplied question, linked solution/rubric, and confirmed synthetic answer and returned the expected 6/6.
 - Verification remaining: prepare a fresh curated run under `real-grading-v2` and complete all three independent teacher sign-offs. The earlier prepared `lc_20260807_teacher01` manifest predates the tightened grading contract and cannot be used to unblock the pilot.
-- Pilot status: Engineering checks pass; real cohort grading remains blocked only by the fresh signed curated evaluation.
+- Pilot status: Superseded by TA-LOCAL-002 OCR-rescue verification; real cohort grading remains blocked.
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
 

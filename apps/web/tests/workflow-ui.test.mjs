@@ -136,10 +136,16 @@ for (const marker of [
   "Upload submission",
   "Upload script ZIP",
   "Draft text with local PaddleOCR",
+  "PaddleOCR evidence review",
+  "None of these readings match — Enhanced local OCR",
+  "Confirm selected reading for every band",
+  "None of the enhanced readings are faithful",
+  "Qwen is not used to rewrite OCR evidence.",
+  "Grading blocked—upload a clearer complete page or stop.",
   "Confirm edited text as manual answer",
   "Text confirmation does not mark the region complete or ready.",
   "Create answer region",
-  "Confirm full answer",
+  "Confirm displayed image is the full answer",
   "This prepares evidence only. It does not grade.",
   "This only prepares a queue from confirmed evidence. It does not grade.",
 ]) {
@@ -150,12 +156,12 @@ for (const marker of [
 
 const review = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
 for (const marker of [
-  "Teacher review and final grade approval",
-  "AI GradeSuggestions are suggestions only",
+  "Review local Qwen draft grades",
+  "Every score here is a review-required draft.",
   "Approve AI suggestion",
   "Edit score and save final grade",
   "Reject suggestion",
-  "Export final grades (.xlsx)",
+  "Export approved grades (.xlsx)",
 ]) {
   if (!review.includes(marker)) {
     throw new Error(`Teacher review UI missing marker: ${marker}`);

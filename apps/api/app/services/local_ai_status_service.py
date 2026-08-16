@@ -23,6 +23,7 @@ class LocalAiStatusService:
             "local_single_answer_grading_enabled": (
                 self.settings.local_single_answer_grading_enabled
             ),
+            "local_ocr_rescue_enabled": self.settings.local_ocr_rescue_enabled,
             "qwen": self._qwen_status(),
             "ocr": self._ocr_status(),
         }
@@ -36,6 +37,7 @@ class LocalAiStatusService:
             "layout_model": None,
             "device": "gpu_hybrid",
             "detail": None,
+            "models": [self.settings.local_qwen_model],
         }
         if not self.settings.local_qwen_enabled:
             base["detail"] = "disabled"
@@ -72,6 +74,7 @@ class LocalAiStatusService:
             "layout_model": "PP-DocLayoutV3",
             "device": self.settings.local_ocr_device,
             "detail": None,
+            "models": ["PaddleOCR-VL-1.6", "PP-DocLayoutV3"],
         }
         if not self.settings.local_ocr_enabled:
             base["detail"] = "disabled"
@@ -88,5 +91,25 @@ class LocalAiStatusService:
         base["model"] = str(health.get("model") or base["model"])
         base["layout_model"] = str(health.get("layout_model") or base["layout_model"])
         base["device"] = str(health.get("device") or base["device"])
-        base["detail"] = "ready" if base["available"] else "unavailable"
+        models = health.get("models")
+        if isinstance(models, dict):
+            reported = {
+                str(value)
+                for details in models.values()
+                if isinstance(details, dict)
+                for value in (details.get("model"), details.get("layout_model"))
+                if value
+            }
+            base["models"] = sorted(reported)
+        required = {
+            "PaddleOCR-VL-1.6",
+            "PP-DocLayoutV3",
+            "PP-OCRv6_medium_det",
+            "PP-OCRv6_medium_rec",
+        }
+        if self.settings.local_ocr_rescue_enabled and not required.issubset(set(base["models"])):
+            base["available"] = False
+            base["detail"] = "rescue_model_mismatch"
+        else:
+            base["detail"] = "ready" if base["available"] else "unavailable"
         return base

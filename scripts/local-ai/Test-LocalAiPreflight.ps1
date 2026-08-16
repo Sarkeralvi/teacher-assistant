@@ -13,6 +13,8 @@ $qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
 $ocrPython = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_PYTHON_PATH"
 $ocrVlModel = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_VL_MODEL_PATH"
 $ocrLayoutModel = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_LAYOUT_MODEL_PATH"
+$ocrTextDetModel = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_TEXT_DET_MODEL_PATH"
+$ocrTextRecModel = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_TEXT_REC_MODEL_PATH"
 $null = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
 $null = Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_API_KEY"
 
@@ -22,6 +24,8 @@ $requiredFiles = @(
     $ocrPython,
     (Join-Path $ocrVlModel "model.safetensors"),
     (Join-Path $ocrLayoutModel "inference.pdiparams")
+    (Join-Path $ocrTextDetModel "inference.pdiparams")
+    (Join-Path $ocrTextRecModel "inference.pdiparams")
 )
 foreach ($requiredFile in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {

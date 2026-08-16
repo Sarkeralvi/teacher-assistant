@@ -284,7 +284,7 @@ def test_drafts_are_not_saved_until_selected_drafts_are_accepted(
 
     with SessionLocal() as db:
         nodes = db.query(QuestionNode).filter(QuestionNode.assessment_id == assessment["id"]).all()
-        assert [node.question_number for node in nodes] == ["1A", "3"]
+        assert sorted(node.question_number for node in nodes) == ["1A", "3"]
         assert all(node.teacher_confirmed for node in nodes)
         assert {node.node_type for node in nodes} == {"question"}
 

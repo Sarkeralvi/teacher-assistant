@@ -4,6 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$OcrPythonPath,
     [Parameter(Mandatory = $true)][string]$OcrVlModelPath,
     [Parameter(Mandatory = $true)][string]$OcrLayoutModelPath,
+    [Parameter(Mandatory = $true)][string]$OcrTextDetModelPath,
+    [Parameter(Mandatory = $true)][string]$OcrTextRecModelPath,
     [string]$OutputPath
 )
 
@@ -45,10 +47,15 @@ $lines = @(
     "LOCAL_OCR_PYTHON_PATH=$OcrPythonPath"
     "LOCAL_OCR_VL_MODEL_PATH=$OcrVlModelPath"
     "LOCAL_OCR_LAYOUT_MODEL_PATH=$OcrLayoutModelPath"
+    "LOCAL_OCR_TEXT_DET_MODEL_PATH=$OcrTextDetModelPath"
+    "LOCAL_OCR_TEXT_REC_MODEL_PATH=$OcrTextRecModelPath"
     "LOCAL_OCR_HOST=127.0.0.1"
     "LOCAL_OCR_PORT=8090"
     "LOCAL_OCR_MAX_IMAGE_BYTES=20971520"
     "LOCAL_OCR_DEVICE=cpu"
+    "LOCAL_OCR_RESCUE_ENABLED=false"
+    "LOCAL_OCR_RESCUE_MAX_CALLS=8"
+    "LOCAL_OCR_MAX_BANDS=6"
     "LOCAL_REFERENCE_EXTRACTION_ENABLED=true"
     "LOCAL_AI_PHASE_SWITCH_ENABLED=true"
     "LOCAL_AI_PHASE_TIMEOUT_SECONDS=600"

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import io
-import re
 from dataclasses import dataclass
 from decimal import Decimal
-from fractions import Fraction
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -156,16 +154,9 @@ class LocalScriptPreparationService:
             for mapping in created
             if mapping.answer_region is not None
         )
-        mapped_region_count = sum(
-            1 for mapping in created if mapping.answer_region is not None
-        )
-        # Each segment gets one whole-answer reading. The final segment for each
-        # mapped question gets two explicit detail readings: general handwriting
-        # and formula-specialized. This remains within the teacher-authorized
-        # cap while avoiding duplicate detail calls on continuation segments.
-        required_ocr_calls = (
-            ocr_call_count + segment_count + (2 * mapped_region_count)
-        )
+        # Evidence is copied directly from PaddleOCR. Qwen maps OCR blocks to
+        # finalized questions, but it must never rewrite student evidence.
+        required_ocr_calls = ocr_call_count + segment_count
         if required_ocr_calls > maximum_ocr_calls:
             raise LocalScriptPreparationError(
                 "Prepared answer evidence exceeds the explicitly authorized OCR call limit"
@@ -175,18 +166,11 @@ class LocalScriptPreparationService:
         qwen_call_count = 1
         if segment_count:
             self.phase_manager.switch("OcrGpu")
-            preparation_inputs, crop_ocr_warnings = self._prepare_crop_ocr_candidates(
+            crop_ocr_warnings = self._prepare_baseline_ocr_candidates(
                 created,
                 question_by_id,
             )
             ocr_call_count = required_ocr_calls
-            self.phase_manager.switch("Qwen")
-            adapter.verify_available_model()
-            prepared_answers = adapter.prepare_student_answers_from_ocr_candidates(
-                answers=preparation_inputs,
-            )
-            self._apply_model_prepared_answers(created, prepared_answers)
-            qwen_call_count = 2
 
         for mapping in existing:
             region = mapping.answer_region
@@ -218,7 +202,7 @@ class LocalScriptPreparationService:
                         "\n".join(
                             str(
                                 (mapping.source_reference or {}).get(
-                                    "model_prepared_answer_text"
+                                    "paddle_baseline_text"
                                 )
                                 or ""
                             )
@@ -342,14 +326,13 @@ class LocalScriptPreparationService:
                 geometry[int(page.page_no)] = (int(page.id), image.width, image.height)
         return geometry
 
-    def _prepare_crop_ocr_candidates(
+    def _prepare_baseline_ocr_candidates(
         self,
         mappings: list[AnswerRegionMapping],
         questions: dict[int, Question],
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> list[str]:
         client = self._ocr_client or LocalOcrClient.from_settings(self.settings)
-        request_prefix = f"prepared-answer-{uuid4().hex}"
-        preparation_inputs: list[dict[str, Any]] = []
+        request_prefix = f"baseline-answer-{uuid4().hex}"
         all_warnings: list[str] = []
         for mapping in mappings:
             region = mapping.answer_region
@@ -358,17 +341,6 @@ class LocalScriptPreparationService:
             question = questions[mapping.question_id]
             source_reference = dict(mapping.source_reference or {})
             candidates: list[dict[str, Any]] = []
-            selected_text = str(source_reference.get("ocr_draft_text") or "").strip()
-            if selected_text:
-                candidates.append(
-                    {
-                        "id": f"q{question.id}-selected-layout",
-                        "kind": "selected_full_page_layout_blocks",
-                        "text": selected_text,
-                        "warnings": [],
-                        "latency_ms": 0,
-                    }
-                )
             ordered_segments = sorted(
                 region.segments, key=lambda item: item.order_index
             )
@@ -389,138 +361,32 @@ class LocalScriptPreparationService:
                     kind="cleaned_whole_segment",
                     result=whole_result,
                 )
-            if ordered_segments:
-                final_order = len(ordered_segments)
-                final_path = self.storage.resolve_relative(
-                    ordered_segments[-1].image_path
-                )
-                for kind, prompt_label, focus_bytes in (
-                    (
-                        "focused_final_ocr",
-                        "ocr",
-                        _bottom_right_focus_image(final_path),
-                    ),
-                    (
-                        "focused_final_formula",
-                        "formula",
-                        _bottom_band_focus_image(final_path),
-                    ),
-                ):
-                    focus_result = client.ocr_image(
-                        image_bytes=focus_bytes,
-                        content_type="image/png",
-                        request_id=(
-                            f"{request_prefix}-q{question.id}-s{final_order}-{kind}"
-                        ),
-                        mode="answer_region",
-                        prompt_label=prompt_label,
-                    )
-                    self._validate_local_ocr_result(focus_result)
-                    _append_ocr_candidate(
-                        candidates=candidates,
-                        all_warnings=all_warnings,
-                        question=question,
-                        segment_order=final_order,
-                        kind=kind,
-                        result=focus_result,
-                    )
             if not candidates:
                 raise LocalScriptPreparationError(
                     f"Local OCR returned no answer evidence for {question.question_no}"
                 )
+            baseline_text = "\n\n".join(
+                str(item["text"]).strip() for item in candidates if str(item["text"]).strip()
+            ).strip()
+            if not baseline_text:
+                raise LocalScriptPreparationError(
+                    f"Local OCR returned an empty baseline for {question.question_no}"
+                )
             source_reference["ocr_candidates"] = candidates
-            source_reference["text_source"] = "paddle_ocr_multi_pass_pending_qwen"
-            mapping.source_reference = source_reference
-            preparation_inputs.append(
-                {
-                    "question_id": question.id,
-                    "question_no": question.question_no,
-                    "question_text": question.question_text,
-                    "ocr_candidates": [
-                        {"id": item["id"], "kind": item["kind"], "text": item["text"]}
-                        for item in candidates
-                    ],
-                }
-            )
-        if not preparation_inputs:
-            raise LocalScriptPreparationError(
-                "No mapped answers were available for OCR preparation"
-            )
-        return preparation_inputs, list(dict.fromkeys(all_warnings))
-
-    def _apply_model_prepared_answers(
-        self,
-        mappings: list[AnswerRegionMapping],
-        payload: dict[str, Any],
-    ) -> None:
-        answers = payload.get("answers")
-        if not isinstance(answers, list):
-            raise LocalScriptPreparationError("Local Qwen returned no prepared answer evidence")
-        by_question_id = {
-            int(item.get("question_id") or 0): item
-            for item in answers
-            if isinstance(item, dict)
-        }
-        expected = {
-            int(mapping.question_id)
-            for mapping in mappings
-            if mapping.answer_region is not None and mapping.question_id is not None
-        }
-        if set(by_question_id) != expected:
-            raise LocalScriptPreparationError(
-                "Local Qwen did not prepare exactly one answer for every mapped region"
-            )
-        global_warnings = [
-            str(item) for item in payload.get("warnings", []) if isinstance(item, str)
-        ]
-        for mapping in mappings:
-            if mapping.answer_region is None or mapping.question_id is None:
-                continue
-            answer = by_question_id[int(mapping.question_id)]
-            prepared_text = str(answer.get("prepared_text") or "").strip()
-            if not prepared_text:
-                raise LocalScriptPreparationError("Local Qwen prepared an empty mapped answer")
-            uncertainties = [
-                str(item) for item in answer.get("uncertainties", []) if isinstance(item, str)
-            ]
-            alternatives = [
-                str(item).strip()
-                for item in answer.get("alternative_prepared_texts", [])
-                if isinstance(item, str) and str(item).strip()
-            ]
-            source_reference = dict(mapping.source_reference or {})
-            choice_records = build_teacher_transcription_choices(
-                prepared_text=prepared_text,
-                qwen_alternatives=alternatives,
-                ocr_candidates=list(source_reference.get("ocr_candidates") or []),
-            )
             source_reference.update(
                 {
-                    "model_prepared_answer_text": prepared_text,
-                    "model_prepared_answer_text_sha256": hashlib.sha256(
-                        prepared_text.encode("utf-8")
+                    "paddle_baseline_text": baseline_text,
+                    "paddle_baseline_text_sha256": hashlib.sha256(
+                        baseline_text.encode("utf-8")
                     ).hexdigest(),
-                    "prepared_answer_status": str(answer.get("status") or "uncertain"),
-                    "prepared_answer_confidence": str(answer.get("confidence") or "0"),
-                    "prepared_answer_uncertainties": uncertainties,
-                    "model_prepared_answer_alternatives": choice_records,
-                    "prepared_answer_source_candidate_ids": list(
-                        answer.get("source_candidate_ids") or []
-                    ),
+                    "prepared_answer_status": "uncertain",
                     "teacher_review_required": True,
-                    "text_source": "paddle_ocr_multi_pass_qwen_prepared",
-                    "warnings": list(
-                        dict.fromkeys(
-                            [
-                                *list(source_reference.get("warnings") or []),
-                                *global_warnings,
-                                *uncertainties,
-                            ]
-                        )
-                    ),
+                    "ocr_evidence_version": "paddle_baseline_v2",
+                    "text_source": "paddle_ocr_direct_baseline",
                 }
             )
             mapping.source_reference = source_reference
+        return list(dict.fromkeys(all_warnings))
 
     def _validate_local_ocr_result(self, result: Any) -> None:
         if (
@@ -881,51 +747,17 @@ def _cleaned_whole_image(path: Path) -> bytes:
         # red-dominant pixels before converting to monochrome; black/grey
         # handwriting and faint pencil work remain available to OCR.
         grayscale = _remove_red_annotations(source.convert("RGB")).convert("L")
-        cleaned = grayscale.point(lambda value: 0 if value < 175 else 255)
-        cleaned = cleaned.filter(ImageFilter.MedianFilter(3))
+        # Preserve one-pixel complement bars, fraction strokes, and faint
+        # pencil marks. The previous hard threshold plus median filter erased
+        # precisely the mathematical evidence that needs teacher review.
+        cleaned = ImageOps.autocontrast(grayscale, cutoff=1)
+        cleaned = cleaned.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
         cleaned = ImageOps.expand(cleaned, border=32, fill=255)
+        target_width = min(2000, max(cleaned.width, 1400))
+        if target_width != cleaned.width:
+            target_height = max(1, round(cleaned.height * target_width / cleaned.width))
+            cleaned = cleaned.resize((target_width, target_height), Image.Resampling.LANCZOS)
         return _png_bytes(cleaned)
-
-
-def _bottom_right_focus_image(path: Path) -> bytes:
-    with Image.open(path) as source:
-        image = _remove_red_annotations(source.convert("RGB"))
-        width, height = image.size
-        left = max(0, int(width * 0.42))
-        top = max(0, int(height * 0.68))
-        focus = image.crop((left, top, width, height))
-        focus = focus.convert("L").point(lambda value: 0 if value < 180 else 255)
-        focus = focus.filter(ImageFilter.MedianFilter(3)).convert("RGB")
-        focus = ImageOps.expand(focus, border=64, fill="white")
-        target_width = min(1600, max(900, focus.width * 2))
-        if target_width != focus.width:
-            target_height = max(1, round(focus.height * target_width / focus.width))
-            focus = focus.resize((target_width, target_height), Image.Resampling.LANCZOS)
-        return _png_bytes(focus)
-
-
-def _bottom_band_focus_image(path: Path) -> bytes:
-    """Keep the complete final writing band for formula-specialized OCR.
-
-    A right-only crop is useful for final values but can omit a left-aligned
-    fraction or the arithmetic immediately preceding an ambiguous glyph. The
-    second detail pass therefore sees the full lower band and can use that
-    local context without receiving the whole answer page again.
-    """
-
-    with Image.open(path) as source:
-        image = _remove_red_annotations(source.convert("RGB"))
-        width, height = image.size
-        top = max(0, int(height * 0.66))
-        focus = image.crop((0, top, width, height))
-        focus = focus.convert("L").point(lambda value: 0 if value < 180 else 255)
-        focus = focus.filter(ImageFilter.MedianFilter(3)).convert("RGB")
-        focus = ImageOps.expand(focus, border=64, fill="white")
-        target_width = min(1800, max(1000, focus.width * 2))
-        if target_width != focus.width:
-            target_height = max(1, round(focus.height * target_width / focus.width))
-            focus = focus.resize((target_width, target_height), Image.Resampling.LANCZOS)
-        return _png_bytes(focus)
 
 
 def _remove_red_annotations(image: Image.Image) -> Image.Image:
@@ -951,154 +783,3 @@ def _png_bytes(image: Image.Image) -> bytes:
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
-
-
-def build_teacher_transcription_choices(
-    *,
-    prepared_text: str,
-    qwen_alternatives: list[str],
-    ocr_candidates: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    """Build complete, hashed, no-typing choices for uncertain final readings.
-
-    The primary Qwen transcript is never changed here. Focused OCR can add a
-    complete alternative only when it overlaps the existing final line. A
-    simple arithmetic consistency suggestion may also be offered when an OCR
-    glyph is letter-like but the immediately preceding written fraction has a
-    uniquely calculable numeric value. Every added choice still requires the
-    teacher to compare it with the image and select it explicitly.
-    """
-
-    records: list[dict[str, str]] = []
-    seen = {prepared_text.strip()}
-
-    def add(text: str, *, source: str, label: str) -> None:
-        normalized = text.strip()
-        if not normalized or normalized in seen:
-            return
-        seen.add(normalized)
-        records.append(
-            {
-                "text": normalized,
-                "sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
-                "source": source,
-                "label": label,
-            }
-        )
-
-    for index, alternative in enumerate(qwen_alternatives, start=1):
-        add(
-            alternative,
-            source="qwen_ocr_reconciliation",
-            label=f"Qwen alternate reading {index}",
-        )
-
-    final_line = _last_nonempty_line(prepared_text)
-    focused = [
-        candidate
-        for candidate in ocr_candidates
-        if isinstance(candidate, dict)
-        and candidate.get("kind") in {"focused_final_formula", "focused_final_ocr"}
-        and str(candidate.get("text") or "").strip()
-    ]
-    focused.sort(
-        key=lambda candidate: candidate.get("kind") != "focused_final_formula"
-    )
-    for candidate in focused:
-        focused_text = str(candidate.get("text") or "").strip()
-        if not _focused_reading_matches_final_line(final_line, focused_text):
-            continue
-        overlaid = _replace_last_nonempty_line(prepared_text, focused_text)
-        kind = str(candidate.get("kind"))
-        add(
-            overlaid,
-            source=kind,
-            label=(
-                "Focused formula reading"
-                if kind == "focused_final_formula"
-                else "Focused handwriting reading"
-            ),
-        )
-        resolved = _arithmetic_consistency_transcription(overlaid, focused_text)
-        if resolved:
-            add(
-                resolved,
-                source="arithmetic_consistency_suggestion",
-                label="Arithmetic-context reading — verify the glyph",
-            )
-    return records
-
-
-def _last_nonempty_line(text: str) -> str:
-    return next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "")
-
-
-def _replace_last_nonempty_line(text: str, replacement: str) -> str:
-    lines = text.splitlines()
-    for index in range(len(lines) - 1, -1, -1):
-        if lines[index].strip():
-            lines[index] = replacement.strip()
-            return "\n".join(lines).strip()
-    return replacement.strip()
-
-
-def _focused_reading_matches_final_line(final_line: str, focused_text: str) -> bool:
-    if "<img" in focused_text.lower() or "textcircled" in focused_text.lower():
-        return False
-    structural_tokens = {"array", "begin", "end", "frac", "quad", "sqrt", "text"}
-    final_tokens = set(re.findall(r"[A-Za-z]+|\d+", final_line.lower())) - structural_tokens
-    focused_tokens = (
-        set(re.findall(r"[A-Za-z]+|\d+", focused_text.lower()))
-        - structural_tokens
-    )
-    if not final_tokens or not focused_tokens:
-        return False
-    shared_token_count = len(final_tokens & focused_tokens)
-    overlap = shared_token_count / min(
-        len(final_tokens), len(focused_tokens)
-    )
-    return (
-        shared_token_count >= 2
-        and overlap >= 0.5
-        and bool(re.search(r"\d", focused_text))
-    )
-
-
-_WRITTEN_FRACTION_EXPRESSION = re.compile(
-    r"\\frac\s*\{\s*(\d+)\s*/\s*(\d+)\s*\\times\s*(\d+(?:\.\d+)?)\s*\}"
-    r"\s*\{\s*(\d+)\s*/\s*(\d+)\s*\}",
-    re.IGNORECASE,
-)
-_LETTER_FRACTION = re.compile(
-    r"\\frac\s*\{\s*(?:x|\\bar\s*\{\s*x\s*\}|\\overline\s*\{\s*x\s*\})"
-    r"\s*\}\s*\{\s*(?P<denominator>\d(?:\s*\d)*)\s*\}",
-    re.IGNORECASE,
-)
-
-
-def _arithmetic_consistency_transcription(
-    complete_text: str, focused_text: str
-) -> str | None:
-    expression = _WRITTEN_FRACTION_EXPRESSION.search(focused_text)
-    glyphs = list(_LETTER_FRACTION.finditer(complete_text))
-    if expression is None or not glyphs:
-        return None
-    numerator, numerator_denominator, multiplier, divisor, divisor_denominator = (
-        expression.groups()
-    )
-    try:
-        result = (
-            Fraction(int(numerator), int(numerator_denominator))
-            * Fraction(multiplier)
-            / Fraction(int(divisor), int(divisor_denominator))
-        )
-        glyph = glyphs[-1]
-        written_denominator = int(
-            re.sub(r"\s+", "", glyph.group("denominator"))
-        )
-    except (ValueError, ZeroDivisionError):
-        return None
-    if result.denominator != written_denominator:
-        return None
-    replacement = rf"\frac{{{result.numerator}}}{{{result.denominator}}}"
-    return complete_text[: glyph.start()] + replacement + complete_text[glyph.end() :]

@@ -1324,15 +1324,27 @@ def confirm_question_node_mapping(
             )
         if mapping.provider == "local_paddle_qwen":
             source_reference = mapping.source_reference or {}
+            if source_reference.get("text_source") == "paddle_ocr_multi_pass_qwen_prepared":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Legacy Qwen-reconciled OCR evidence cannot be approved; "
+                        "run enhanced local OCR"
+                    ),
+                )
             prepared_text = str(
-                source_reference.get("model_prepared_answer_text") or ""
+                source_reference.get("paddle_baseline_text")
+                or source_reference.get("model_prepared_answer_text")
+                or ""
             ).strip()
             confirmation_source = "teacher_edited"
             if request.confirmed_text is not None:
                 confirmed_text = request.confirmed_text.strip()
             elif request.accept_model_prepared_text:
                 primary_hash = str(
-                    source_reference.get("model_prepared_answer_text_sha256") or ""
+                    source_reference.get("paddle_baseline_text_sha256")
+                    or source_reference.get("model_prepared_answer_text_sha256")
+                    or ""
                 )
                 approved_choices = {primary_hash: prepared_text} if primary_hash else {}
                 for choice in source_reference.get(

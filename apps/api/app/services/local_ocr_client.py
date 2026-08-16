@@ -27,6 +27,7 @@ class OcrBlock(BaseModel):
     label: str
     text: str
     bbox: list[float] | None = None
+    confidence: float | None = None
 
 
 class LocalOcrResult(BaseModel):
@@ -45,6 +46,8 @@ class LocalOcrResult(BaseModel):
     version: str
     device: Literal["cpu", "gpu:0"]
     latency_ms: int = Field(ge=0)
+    engine: Literal["paddleocr_vl", "ppocr_v6"] = "paddleocr_vl"
+    preprocessing_profile: str = "default"
 
 
 class LocalOcrClient:
@@ -105,6 +108,8 @@ class LocalOcrClient:
         request_id: str,
         mode: Literal["document", "answer_region"],
         prompt_label: Literal["ocr", "formula"] = "ocr",
+        engine: Literal["paddleocr_vl", "ppocr_v6"] = "paddleocr_vl",
+        preprocessing_profile: str = "default",
     ) -> LocalOcrResult:
         if not image_bytes:
             raise ValueError("OCR image is empty")
@@ -119,6 +124,8 @@ class LocalOcrClient:
                     "X-Request-ID": request_id,
                     "X-OCR-Mode": mode,
                     "X-OCR-Prompt-Label": prompt_label,
+                    "X-OCR-Engine": engine,
+                    "X-OCR-Preprocessing-Profile": preprocessing_profile,
                 },
                 content=image_bytes,
             )

@@ -572,7 +572,8 @@ class AnswerRegionOcrRun(TimestampMixin, Base):
     __tablename__ = "answer_region_ocr_runs"
     __table_args__ = (
         CheckConstraint(
-            "status in ('running', 'succeeded', 'failed', 'confirmed')",
+            "status in ('queued', 'running', 'succeeded', 'failed', 'confirmed', "
+            "'rejected', 'uncertain')",
             name="ck_answer_region_ocr_runs_status",
         ),
         Index("ix_answer_region_ocr_runs_answer_region_id", "answer_region_id"),
@@ -589,6 +590,15 @@ class AnswerRegionOcrRun(TimestampMixin, Base):
     )
     request_id: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    profile: Mapped[str] = mapped_column(String(64), nullable=False, default="baseline")
+    source_image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    call_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidate_set_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model_name: Mapped[str] = mapped_column(String(255), nullable=False)
     layout_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -606,8 +616,80 @@ class AnswerRegionOcrRun(TimestampMixin, Base):
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    rejection_reason_codes: Mapped[list[str]] = mapped_column(
+        "rejection_reason_codes_json", JSONB, nullable=False, default=list
+    )
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     answer_region: Mapped[AnswerRegion] = relationship(back_populates="ocr_runs")
+    bands: Mapped[list[AnswerRegionOcrBand]] = relationship(
+        back_populates="ocr_run",
+        cascade="all, delete-orphan",
+        order_by="AnswerRegionOcrBand.order_index",
+    )
+
+
+class AnswerRegionOcrBand(TimestampMixin, Base):
+    __tablename__ = "answer_region_ocr_bands"
+    __table_args__ = (
+        UniqueConstraint("ocr_run_id", "order_index", name="uq_ocr_band_run_order"),
+        CheckConstraint("classification in ('text', 'formula')", name="ck_ocr_band_class"),
+        Index("ix_answer_region_ocr_bands_run_id", "ocr_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ocr_run_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_region_ocr_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    source_segment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_region_segments.id", ondelete="SET NULL"), nullable=True
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    x: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    y: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    width: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    height: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    ocr_run: Mapped[AnswerRegionOcrRun] = relationship(back_populates="bands")
+    candidates: Mapped[list[AnswerRegionOcrCandidate]] = relationship(
+        back_populates="band",
+        cascade="all, delete-orphan",
+        order_by="AnswerRegionOcrCandidate.id",
+    )
+
+
+class AnswerRegionOcrCandidate(TimestampMixin, Base):
+    __tablename__ = "answer_region_ocr_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            "engine in ('ppocr_v6', 'paddleocr_vl')", name="ck_ocr_candidate_engine"
+        ),
+        Index("ix_answer_region_ocr_candidates_band_id", "band_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    band_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_region_ocr_bands.id", ondelete="CASCADE"), nullable=False
+    )
+    engine: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_label: Mapped[str] = mapped_column(String(32), nullable=False)
+    preprocessing_profile: Mapped[str] = mapped_column(String(64), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(7, 6), nullable=True)
+    warnings: Mapped[list[str]] = mapped_column(
+        "warnings_json", JSONB, nullable=False, default=list
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    band: Mapped[AnswerRegionOcrBand] = relationship(back_populates="candidates")
 
 
 class AnswerRegionSegment(TimestampMixin, Base):

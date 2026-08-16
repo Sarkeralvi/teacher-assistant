@@ -5,7 +5,7 @@ This runbook operates the local Qwen and PaddleOCR integration for the Custom Co
 ## Safety contract
 
 - Qwen receives teacher-confirmed text only. Answer-image bytes and local image paths are not sent to Qwen.
-- PaddleOCR output is draft evidence until a teacher edits and confirms it.
+- PaddleOCR output is draft evidence until a teacher confirms an immutable baseline or one candidate per automatically detected band.
 - OCR confirmation updates `manual_answer_text`; it does not confirm a complete answer or make evidence grading-ready.
 - Question-to-answer mapping remains manual or teacher-confirmed.
 - Cohort grading is sequential, draft-only, stop-on-first-provider-failure, capped at 25 calls, and has zero automatic retries.
@@ -23,7 +23,9 @@ Do not put machine paths or keys in committed files. Create the ignored `.env.lo
   -QwenModelPath '<qwen-gguf>' `
   -OcrPythonPath '<python.exe-with-paddleocr-3.7.0>' `
   -OcrVlModelPath '<PaddleOCR-VL-1.6-directory>' `
-  -OcrLayoutModelPath '<PP-DocLayoutV3-directory>'
+  -OcrLayoutModelPath '<PP-DocLayoutV3-directory>' `
+  -OcrTextDetModelPath '<PP-OCRv6_medium_det-directory>' `
+  -OcrTextRecModelPath '<PP-OCRv6_medium_rec-directory>'
 ```
 
 The initializer creates separate random API keys. It enables the two local services but intentionally leaves `COHORT_MODEL_GRADING_ENABLED=false`. It refuses to overwrite an existing file.
@@ -46,7 +48,7 @@ Start both loopback services explicitly:
 .\scripts\local-ai\Start-LocalAi.ps1
 ```
 
-The Qwen process uses the pinned model alias, offline mode, disabled reasoning, the reasoning parser required by Qwen 3.6 strict JSON grammars, one parallel slot, 32K context, GPU/hybrid offload, and an API key inherited through its environment. PaddleOCR loads its two local models once on CPU and accepts one image request at a time. The sidecar hides CUDA before importing the GPU-enabled Paddle wheel and disables PaddleX's optional GPU capability probe, preventing it from opening a competing CUDA context. Startup fails closed and stops newly launched processes if either health check fails.
+The Qwen process uses the pinned model alias, offline mode, disabled reasoning, one parallel slot, 32K context, GPU/hybrid offload, and API-key protection. The PaddleOCR sidecar loads PaddleOCR-VL, PP-DocLayoutV3, PP-OCRv6 medium detection, and PP-OCRv6 medium recognition once and accepts one image request at a time. Enhanced rescue runs use the explicit `OcrGpu` phase; starting Qwen stops OCR first, so both phases cannot compete for VRAM. Startup fails closed on a model/device mismatch.
 
 To stop only the recorded and executable-verified processes:
 
@@ -73,16 +75,15 @@ Authenticated `GET /local-ai/status` reports enabled/available state and model n
 ## Teacher workflow
 
 1. Upload and teacher-confirm reference materials, canonical questions, model answers, and exactly one active rubric per question.
-2. Upload scripts and create/confirm answer-region mappings manually.
-3. On an answer region, choose **Draft text with local PaddleOCR**.
-4. Inspect warnings, edit the OCR draft, and explicitly confirm the edited text.
-5. Separately confirm full-answer evidence/continuation and rebuild evidence preparation and the grading queue.
-6. On the Custom Controlled grading-run page, verify all four local-Qwen safety indicators.
-7. Select one question and a call cap from 1 to 25, confirm draft-only authorization, and run preflight.
-8. Review fresh/refused/existing/stale/active counts and authorize only the selected calls.
-9. Monitor persistent dispatch progress. Stop prevents the next call but does not interrupt the current one. Resume runs only never-started items.
-10. Inspect failed or uncertain items manually. Never retry an uncertain item automatically.
-11. Use the existing review queue to edit/approve/reject suggestions. Export includes approved final grades only.
+2. Upload complete scripts. PaddleOCR maps answer regions and Qwen links those regions to finalized questions; the teacher confirms the mapping.
+3. Compare the direct PaddleOCR baseline reading with the prepared answer image. Approve it only when faithful.
+4. If it is not faithful, choose **None of these readings match — Enhanced local OCR**. The GPU phase detects at most six ordered bands and spends at most eight OCR calls total.
+5. Select exactly one faithful PP-OCRv6 or PaddleOCR-VL reading for every band. Do not select the closest reading when none is correct; reject the run and upload a clearer complete page.
+6. Separately choose **Confirm displayed image is the full answer**. Candidate confirmation alone deliberately leaves grading blocked.
+7. Choose **Grade confirmed answer with local Qwen**. Phase switching stops OCR before Qwen starts; Qwen receives the finalized question, solution, active rubric, and server-assembled confirmed text only.
+8. Review the pending draft suggestion. Only explicit teacher approval may create a final grade.
+
+Cohort grading remains disabled until the curated gate passes. When later enabled, verify the preflight counts and model alias, keep the call cap at 25 or lower, and inspect failed/uncertain items without automatic retry.
 
 ## Bounded synthetic acceptance smoke
 
