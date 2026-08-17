@@ -442,7 +442,7 @@ export type AnswerRegionOcrRun = {
 export type AnswerRegionOcrCandidate = {
   id: number;
   band_id: number;
-  engine: "ppocr_v6" | "paddleocr_vl";
+  engine: "ppocr_v6" | "paddleocr_vl" | "paddle_ensemble";
   model_name: string;
   prompt_label: string;
   preprocessing_profile: string;
@@ -1558,7 +1558,7 @@ export function createAnswerRegionOcrRescueRun(answerRegionId: number) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-rescue-runs`, {
     method: "POST",
     body: {
-      profile: "math_handwriting_rescue",
+      profile: "math_handwriting_rescue_v2",
       expected_vl_model: "PaddleOCR-VL-1.6",
       expected_layout_model: "PP-DocLayoutV3",
       expected_text_detection_model: "PP-OCRv6_medium_det",

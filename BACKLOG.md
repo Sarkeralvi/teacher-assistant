@@ -2,11 +2,12 @@
 
 - Recorded at: 2026-08-17
 - Canonical workflow: Custom Controlled, Windows-host local models.
-- Implemented: migration `0021`; PP-OCRv6 detection/recognition beside PaddleOCR-VL; direct PaddleOCR baseline evidence; deterministic automatic bands; immutable per-band candidates; eight-call rescue cap; rejection/uncertain states; authenticated band images; teacher candidate confirmation; and separate full-answer/Qwen grading gates.
+- Implemented: migrations `0021`/`0022`; PP-OCRv6 detection/recognition beside PaddleOCR-VL; direct PaddleOCR baseline evidence; versioned `math_handwriting_rescue_v2`; context-preserving automatic bands; whole-answer formula context; explicitly labeled cross-engine symbol/fraction alternatives; immutable per-band candidates; eight-call rescue cap; rejection/uncertain states; authenticated band images; teacher candidate confirmation; and separate full-answer/Qwen grading gates.
 - Removed: arithmetic-derived readings, focused final-line overlays, shared alternative transcripts, and Qwen transcription/reconciliation. Existing unconfirmed `paddle_ocr_multi_pass_qwen_prepared` evidence is legacy and non-approvable.
 - Safety: no teacher cropping or retyping in rescue; no Qwen image input; no OCR retry/fallback; rejected identical source/model/profile runs cannot repeat; raw answer text is excluded from rescue audit payloads; Qwen receives only server-assembled teacher-confirmed text and can create only a review-required draft.
-- Verification required before a teacher pilot: live smoke on `1(a)(i) · submission #38`, critical-symbol review, separate PaddleOCR/Qwen host smokes, and a fresh locked 20-case curated evaluation. The previous quality claim is superseded because it evaluated the retired OCR evidence path.
-- Pilot status: **Blocked pending live OCR-rescue and fresh curated quality verification.**
+- Verification completed for the supplied failure: live v2 runs `#17` and `#19` on submission `#39` produced teacher-selectable image-grounded candidates for `7/12`, `5/12` with complement, `9/20`, `11/20` with complement, `P(Y|bar X)`, `P(X intersection Y)`, the written conditional method, final `7/10`, the full `1(a)(ii)` derivation, and `31/120`. No candidate was confirmed and Qwen was not called. Engineering checks: 397 backend tests passed, 2 skipped, and Ruff passed at migration head `0022`.
+- Verification still required before a teacher pilot: teacher visual confirmation of the v2 candidates, separate local Qwen grading rehearsal using the confirmed transcript, and a fresh locked 20-case curated evaluation. The previous quality claim is superseded because it evaluated the retired OCR evidence path.
+- Pilot status: **Supervised rehearsal ready; pilot authorization remains blocked pending teacher sign-off and fresh curated quality verification.**
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
 

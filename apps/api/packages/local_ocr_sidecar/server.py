@@ -20,7 +20,12 @@ from PIL import Image
 ALLOWED_CONTENT_TYPES = {"image/png": ".png", "image/jpeg": ".jpg"}
 ALLOWED_MODES = {"document", "answer_region"}
 ALLOWED_ENGINES = {"paddleocr_vl", "ppocr_v6"}
-ALLOWED_PREPROCESSING_PROFILES = {"default", "math_handwriting_rescue", "rescue_alternate"}
+ALLOWED_PREPROCESSING_PROFILES = {
+    "default",
+    "math_handwriting_rescue",
+    "math_handwriting_rescue_v2",
+    "rescue_alternate",
+}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 

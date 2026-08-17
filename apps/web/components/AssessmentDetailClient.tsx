@@ -1808,7 +1808,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 const legacyUnsafeEvidence = isLegacyUnsafeEvidence(mapping);
                 const rescueRun = mapping.answer_region_id
                   ? (ocrRunsByRegionId[mapping.answer_region_id] ?? []).find(
-                      (run) => run.profile === "math_handwriting_rescue",
+                      (run) => run.profile.startsWith("math_handwriting_rescue"),
                     ) ?? null
                   : null;
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
@@ -1946,7 +1946,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                             checked={selectedCandidateByBandId[band.id] === candidate.id}
                                             onChange={() => setSelectedCandidateByBandId((current) => ({ ...current, [band.id]: candidate.id }))}
                                           />
-                                          {candidate.engine === "ppocr_v6" ? "PP-OCRv6 reading" : candidate.preprocessing_profile === "rescue_alternate" ? "PaddleOCR-VL alternate" : "PaddleOCR-VL reading"}
+                                          {candidate.engine === "ppocr_v6"
+                                            ? "PP-OCRv6 reading"
+                                            : candidate.engine === "paddle_ensemble"
+                                              ? candidate.preprocessing_profile === "cross_engine_fraction_components"
+                                                ? "Cross-engine fraction components — verify visually"
+                                                : "Probability symbol alternative — verify visually"
+                                              : candidate.preprocessing_profile === "rescue_alternate"
+                                                ? "PaddleOCR-VL alternate"
+                                                : "PaddleOCR-VL reading"}
                                         </span>
                                         <span className="whitespace-pre-wrap text-slate-100">
                                           {candidate.text.split(/(\s+)/).map((token, tokenIndex) => (

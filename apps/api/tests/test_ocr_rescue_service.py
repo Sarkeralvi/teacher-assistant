@@ -9,7 +9,12 @@ from app.services.ocr_rescue_service import (
     OcrRescueService,
     _looks_like_answer_header,
     _pp_geometry_candidate,
+    align_formula_context_rows,
+    detect_uncovered_ink_bands,
+    fraction_component_ensemble_candidates,
     group_ocr_blocks_into_bands,
+    merge_contextual_probability_bands,
+    probability_symbol_ensemble_candidates,
 )
 
 
@@ -76,3 +81,84 @@ def test_ppocr_stacked_glyphs_become_image_geometry_fraction() -> None:
     ]
 
     assert _pp_geometry_candidate(blocks) == r"$\frac{X}{10}$"
+
+
+def test_fraction_component_ensemble_never_uses_arithmetic() -> None:
+    candidates = fraction_component_ensemble_candidates(
+        r"$\frac{X}{10}$", r"$$ \frac{7}{6} $$"
+    )
+
+    assert r"$\frac{7}{10}$" in candidates
+    assert r"$\frac{X}{6}$" in candidates
+    assert len(candidates) == 3
+
+
+def test_probability_symbol_ensemble_surfaces_bounded_teacher_choices() -> None:
+    candidates = probability_symbol_ensemble_candidates(
+        "Odds in favour of Y = 9:11",
+        r"$$ P(y)=\frac{y}{20};P(y)=\frac{11}{20} $$",
+    )
+
+    assert any(r"P(y)=\frac{9}{20}" in candidate for candidate in candidates)
+    assert any(r"P(\overline{y})=\frac{11}{20}" in candidate for candidate in candidates)
+
+
+def test_whole_formula_rows_align_one_extra_row_to_first_band() -> None:
+    rows = align_formula_context_rows(
+        r"$$ \begin{align*}a\\&b\\&c\\&d\\&e\end{align*} $$",
+        band_count=4,
+    )
+
+    assert rows == ["$$ a \\\\ b $$", "$$ c $$", "$$ d $$", "$$ e $$"]
+
+
+def test_de_morgan_visual_alternative_is_never_auto_selected() -> None:
+    candidates = probability_symbol_ensemble_candidates(
+        "(ii) P(xny)=P(xuy)",
+        r"$$ (i) P(\bar{x}\cap\bar{y})=P(\bar{x}\cup\bar{y}) $$",
+    )
+
+    assert any(
+        r"(ii) P(\bar{x}\cap\bar{y})=P(\overline{x\cupy})" in candidate
+        for candidate in candidates
+    )
+
+
+def test_ink_projection_adds_a_line_ppocr_missed() -> None:
+    image = Image.new("L", (300, 180), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 24, 260, 38), fill=0)
+    draw.rectangle((20, 117, 260, 133), fill=0)
+
+    boxes = detect_uncovered_ink_bands(
+        image,
+        covered_boxes=[[10, 20, 270, 45]],
+    )
+
+    assert len(boxes) == 1
+    assert boxes[0][1] < 125 < boxes[0][3]
+
+
+def test_odds_context_merges_with_probability_line() -> None:
+    blocks = [
+        OcrBlock(
+            page=1,
+            order=1,
+            label="text",
+            text="odds in favour of X = 7:5",
+            bbox=[20, 20, 250, 50],
+        ),
+        OcrBlock(
+            page=1,
+            order=2,
+            label="text",
+            text="P(X)=7/12 and P(X)=5/12",
+            bbox=[20, 70, 280, 100],
+        ),
+    ]
+
+    merged = merge_contextual_probability_bands(
+        [[10, 10, 290, 60], [10, 60, 290, 110]], blocks
+    )
+
+    assert merged == [[10, 10, 290, 110]]

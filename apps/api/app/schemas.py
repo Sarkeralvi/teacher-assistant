@@ -873,7 +873,7 @@ OcrRejectionReason = Literal[
 class AnswerRegionOcrCandidateRead(ORMBase):
     id: int
     band_id: int
-    engine: Literal["ppocr_v6", "paddleocr_vl"]
+    engine: Literal["ppocr_v6", "paddleocr_vl", "paddle_ensemble"]
     model_name: str
     prompt_label: str
     preprocessing_profile: str
@@ -939,7 +939,7 @@ class OcrConfirmationRequest(BaseModel):
 
 
 class OcrRescueRunRequest(BaseModel):
-    profile: Literal["math_handwriting_rescue"]
+    profile: Literal["math_handwriting_rescue_v2"]
     expected_vl_model: Literal["PaddleOCR-VL-1.6"]
     expected_layout_model: Literal["PP-DocLayoutV3"]
     expected_text_detection_model: Literal["PP-OCRv6_medium_det"]

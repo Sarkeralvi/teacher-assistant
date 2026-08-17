@@ -668,7 +668,8 @@ class AnswerRegionOcrCandidate(TimestampMixin, Base):
     __tablename__ = "answer_region_ocr_candidates"
     __table_args__ = (
         CheckConstraint(
-            "engine in ('ppocr_v6', 'paddleocr_vl')", name="ck_ocr_candidate_engine"
+            "engine in ('ppocr_v6', 'paddleocr_vl', 'paddle_ensemble')",
+            name="ck_ocr_candidate_engine",
         ),
         Index("ix_answer_region_ocr_candidates_band_id", "band_id"),
     )

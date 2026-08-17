@@ -303,7 +303,7 @@ def test_rescue_candidate_confirmation_is_id_only_and_keeps_full_answer_blocked(
         f"/answer-regions/{region.id}/ocr-rescue-runs",
         headers=region_data["_auth_headers"],
         json={
-            "profile": "math_handwriting_rescue",
+            "profile": "math_handwriting_rescue_v2",
             "expected_vl_model": "PaddleOCR-VL-1.6",
             "expected_layout_model": "PP-DocLayoutV3",
             "expected_text_detection_model": "PP-OCRv6_medium_det",

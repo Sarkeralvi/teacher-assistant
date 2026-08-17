@@ -134,7 +134,12 @@ def upgrade() -> None:
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("text_sha256", sa.String(64), nullable=False),
         sa.Column("confidence", sa.Numeric(7, 6)),
-        sa.Column("warnings_json", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+        sa.Column(
+            "warnings_json",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
         sa.Column("latency_ms", sa.Integer()),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()

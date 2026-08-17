@@ -183,7 +183,7 @@ def confirm_answer_region_ocr_run(
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
     service = AnswerRegionOcrService(db)
     run = service.get_run(run_id)
-    if run.profile == "math_handwriting_rescue":
+    if run.profile.startswith("math_handwriting_rescue"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Enhanced OCR must be confirmed with immutable candidate IDs",
