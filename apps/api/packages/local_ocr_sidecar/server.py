@@ -24,6 +24,7 @@ ALLOWED_PREPROCESSING_PROFILES = {
     "default",
     "math_handwriting_rescue",
     "math_handwriting_rescue_v2",
+    "math_handwriting_rescue_v3",
     "rescue_alternate",
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}

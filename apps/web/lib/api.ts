@@ -1558,7 +1558,7 @@ export function createAnswerRegionOcrRescueRun(answerRegionId: number) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-rescue-runs`, {
     method: "POST",
     body: {
-      profile: "math_handwriting_rescue_v2",
+      profile: "math_handwriting_rescue_v3",
       expected_vl_model: "PaddleOCR-VL-1.6",
       expected_layout_model: "PP-DocLayoutV3",
       expected_text_detection_model: "PP-OCRv6_medium_det",

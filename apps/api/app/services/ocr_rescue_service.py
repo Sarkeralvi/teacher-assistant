@@ -28,7 +28,7 @@ from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_ocr_client import LocalOcrClient, LocalOcrResult
 from app.services.storage import LocalStorage
 
-PROFILE = "math_handwriting_rescue_v2"
+PROFILE = "math_handwriting_rescue_v3"
 VL_MODEL = "PaddleOCR-VL-1.6"
 LAYOUT_MODEL = "PP-DocLayoutV3"
 DET_MODEL = "PP-OCRv6_medium_det"
@@ -181,15 +181,26 @@ class OcrRescueService:
             suffix="whole-formula-context",
             profile=PROFILE,
         )
+        detected_bottom = max(
+            (block.bbox[3] for block in pp_result.blocks if block.bbox),
+            default=0.0,
+        )
+        header_cutoff = detected_bottom * 0.12
         header_blocks = [
             block
             for block in pp_result.blocks
-            if block.bbox and _looks_like_answer_header(block.text)
+            if block.bbox
+            and (
+                _looks_like_answer_header(block.text)
+                or _looks_like_top_compact_header(
+                    block.text, top=block.bbox[1], cutoff=header_cutoff
+                )
+            )
         ]
         answer_blocks = [
             block
             for block in pp_result.blocks
-            if block.bbox and not _looks_like_answer_header(block.text)
+            if block.bbox and block not in header_blocks
         ]
         with Image.open(io.BytesIO(source)) as source_image:
             projection_boxes = detect_uncovered_ink_bands(
@@ -203,13 +214,15 @@ class OcrRescueService:
             )
         band_boxes = group_ocr_blocks_into_bands(
             [block.model_dump() for block in answer_blocks],
-            max_bands=min(self.settings.local_ocr_max_bands, max(1, run.call_limit - 1)),
+            # Reserve two calls for detection/whole-context and the final call
+            # for an alternate treatment of the weakest mathematical band.
+            max_bands=min(self.settings.local_ocr_max_bands, max(1, run.call_limit - 3)),
         )
         band_boxes = merge_contextual_probability_bands(band_boxes, answer_blocks)
         band_boxes = add_missing_projection_bands(
             band_boxes,
             projection_boxes,
-            max_bands=min(self.settings.local_ocr_max_bands, max(1, run.call_limit - 1)),
+            max_bands=min(self.settings.local_ocr_max_bands, max(1, run.call_limit - 3)),
         )
         if not band_boxes:
             raise RuntimeError("PP-OCRv6 found no reviewable answer bands")
@@ -400,7 +413,7 @@ class OcrRescueService:
                 self.db.commit()
 
         for _priority, _score, band, original_crop, pp_text, compact_glyph in sorted(
-            math_bands, key=lambda item: (item[0], item[1], item[2].order_index)
+            math_bands, key=lambda item: (item[1], item[0], item[2].order_index)
         ):
             if run.calls_used >= run.call_limit:
                 break
@@ -850,16 +863,19 @@ def group_ocr_blocks_into_bands(
             contains_thin_bar = any(
                 (item[3] - item[1]) <= max(5.0, (item[2] - item[0]) * 0.12) for item in group
             ) or height <= max(5.0, box_width * 0.12)
-            compact_components = group_width / group_height <= 4.0 and box_width / height <= 4.0
             centers_aligned = (
                 abs((group_left + group_right) / 2 - (box[0] + box[2]) / 2)
                 <= max(group_width, box_width) * 0.35
             )
+            # Do not merge ordinary vertically aligned equations merely because
+            # both boxes are compact.  That collapsed lists such as P(D), P(W),
+            # P(B), ... into one enormous "fraction" band.  A fraction merge
+            # requires an independently detected thin horizontal bar.
             fraction_like = (
                 aligned_overlap >= 0.5
                 and centers_aligned
                 and vertical_gap <= max(group_height, height) * 0.55
-                and (contains_thin_bar or compact_components)
+                and contains_thin_bar
             )
             same_line = overlap >= min(group_height, height) * 0.25
             if same_line or fraction_like:
@@ -999,7 +1015,20 @@ def add_missing_projection_bands(
 ) -> list[list[float]]:
     combined = [list(box) for box in bands]
     for projection in projection_boxes:
+        # Printed page rules and scan borders are not student evidence.  They
+        # otherwise consume a complete OCR call and can force real handwriting
+        # into an oversized neighbouring band.
         projection_height = max(1.0, projection[3] - projection[1])
+        inferred_width = max(
+            [projection[2], *(box[2] for box in combined)],
+            default=projection[2],
+        )
+        if (
+            projection[0] <= inferred_width * 0.03
+            and projection[2] >= inferred_width * 0.95
+            and projection_height <= 32.0
+        ):
+            continue
         overlap = sum(
             max(0.0, min(projection[3], band[3]) - max(projection[1], band[1]))
             for band in combined
@@ -1007,6 +1036,31 @@ def add_missing_projection_bands(
         if overlap < projection_height * 0.6:
             combined.append(list(projection))
     combined.sort(key=lambda box: (box[1], box[0]))
+    # A thin projection touching a substantial detected band is usually the
+    # clipped denominator/numerator of the same handwritten fraction. Preserve
+    # it by joining the image geometry instead of asking OCR to read a sliver.
+    index = 0
+    while index + 1 < len(combined):
+        first, second = combined[index], combined[index + 1]
+        first_height = max(1.0, first[3] - first[1])
+        second_height = max(1.0, second[3] - second[1])
+        gap = max(0.0, second[1] - first[3])
+        horizontal_overlap = max(0.0, min(first[2], second[2]) - max(first[0], second[0]))
+        minimum_width = max(1.0, min(first[2] - first[0], second[2] - second[0]))
+        if (
+            min(first_height, second_height) <= 32.0
+            and gap <= 12.0
+            and horizontal_overlap / minimum_width >= 0.45
+        ):
+            combined[index] = [
+                min(first[0], second[0]),
+                min(first[1], second[1]),
+                max(first[2], second[2]),
+                max(first[3], second[3]),
+            ]
+            combined.pop(index + 1)
+            continue
+        index += 1
     while len(combined) > max_bands:
         gaps = [
             max(0.0, combined[index + 1][1] - combined[index][3])
@@ -1245,6 +1299,17 @@ def _looks_like_answer_header(value: str) -> bool:
     if re.fullmatch(r"0?\d{1,2}[\[(]?[a-z@][\])]?[.:_-]*", compact):
         return True
     return len(compact) <= 8 and bool(re.fullmatch(r"0?\d{1,2}[\[(][^=+/]{1,3}[\])]", compact))
+
+
+def _looks_like_top_compact_header(value: str, *, top: float, cutoff: float) -> bool:
+    """Recognize labels such as ``01(b)`` when PP-OCR returns ``010``.
+
+    Digit-only matching is deliberately restricted to the top header zone;
+    the same glyph sequence in student working remains evidence.
+    """
+
+    compact = re.sub(r"\s+", "", value or "")
+    return top <= cutoff and bool(re.fullmatch(r"0\d{1,3}", compact))
 
 
 def _pp_geometry_candidate(blocks: list[Any]) -> str:

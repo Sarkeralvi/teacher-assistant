@@ -8,7 +8,9 @@ from app.services.local_ocr_client import OcrBlock
 from app.services.ocr_rescue_service import (
     OcrRescueService,
     _looks_like_answer_header,
+    _looks_like_top_compact_header,
     _pp_geometry_candidate,
+    add_missing_projection_bands,
     align_formula_context_rows,
     detect_uncovered_ink_bands,
     fraction_component_ensemble_candidates,
@@ -47,6 +49,33 @@ def test_band_order_and_six_band_ceiling_are_deterministic() -> None:
     assert [box[1] for box in first] == sorted(box[1] for box in first)
 
 
+def test_aligned_probability_rows_do_not_collapse_into_one_fraction() -> None:
+    blocks = [
+        {"bbox": [100, y, 280, y + 30], "text": text}
+        for y, text in zip(
+            (20, 70, 120, 170),
+            ("P(D)=0.3", "P(W)=0.3", "P(B)=0.4", "P(L|D)=0.03"),
+            strict=True,
+        )
+    ]
+
+    bands = group_ocr_blocks_into_bands(blocks, max_bands=6)
+
+    assert len(bands) == 4
+
+
+def test_page_rule_projection_is_discarded_and_formula_sliver_is_merged() -> None:
+    bands = [[80, 100, 900, 500], [200, 700, 700, 820]]
+    projections = [
+        [40, 500, 760, 522],  # touching denominator/fraction fragment
+        [0, 650, 1000, 676],  # printed full-width page rule
+    ]
+
+    result = add_missing_projection_bands(bands, projections, max_bands=6)
+
+    assert result == [[40, 100, 900, 522], [200, 700, 700, 820]]
+
+
 def test_rescue_preprocessing_removes_red_and_preserves_thin_black_bar() -> None:
     source = Image.new("RGB", (200, 100), "white")
     draw = ImageDraw.Draw(source)
@@ -72,6 +101,9 @@ def test_answer_headers_are_excluded_without_removing_student_math() -> None:
     assert _looks_like_answer_header("01(a)") is True
     assert _looks_like_answer_header("01(@)") is True
     assert _looks_like_answer_header("P(x)=7/12") is False
+    assert _looks_like_top_compact_header("010", top=20, cutoff=100) is True
+    assert _looks_like_top_compact_header("010", top=120, cutoff=100) is False
+    assert _looks_like_top_compact_header("0.10", top=20, cutoff=100) is False
 
 
 def test_ppocr_stacked_glyphs_become_image_geometry_fraction() -> None:

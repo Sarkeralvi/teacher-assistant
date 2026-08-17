@@ -939,7 +939,7 @@ class OcrConfirmationRequest(BaseModel):
 
 
 class OcrRescueRunRequest(BaseModel):
-    profile: Literal["math_handwriting_rescue_v2"]
+    profile: Literal["math_handwriting_rescue_v3"]
     expected_vl_model: Literal["PaddleOCR-VL-1.6"]
     expected_layout_model: Literal["PP-DocLayoutV3"]
     expected_text_detection_model: Literal["PP-OCRv6_medium_det"]
