@@ -1,4 +1,4 @@
-from functools import lru_cache
+﻿from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,33 +30,7 @@ class Settings(BaseSettings):
     local_qwen_timeout_seconds: float = Field(
         default=600.0, alias="LOCAL_QWEN_TIMEOUT_SECONDS", gt=0
     )
-    local_ocr_enabled: bool = Field(default=False, alias="LOCAL_OCR_ENABLED")
-    local_ocr_base_url: str = Field(
-        default="http://127.0.0.1:8090", alias="LOCAL_OCR_BASE_URL"
-    )
-    local_ocr_api_key: str = Field(default="", alias="LOCAL_OCR_API_KEY")
-    local_ocr_timeout_seconds: float = Field(
-        default=300.0, alias="LOCAL_OCR_TIMEOUT_SECONDS", gt=0
-    )
-    local_ocr_device: str = Field(default="cpu", alias="LOCAL_OCR_DEVICE")
-    local_ocr_max_image_bytes: int = Field(
-        default=20 * 1024 * 1024, alias="LOCAL_OCR_MAX_IMAGE_BYTES", gt=0
-    )
-    local_ocr_rescue_enabled: bool = Field(
-        default=False, alias="LOCAL_OCR_RESCUE_ENABLED"
-    )
-    local_ocr_rescue_max_calls: int = Field(
-        default=8, alias="LOCAL_OCR_RESCUE_MAX_CALLS", ge=1, le=8
-    )
-    local_ocr_max_bands: int = Field(
-        default=6, alias="LOCAL_OCR_MAX_BANDS", ge=1, le=6
-    )
-    local_ocr_text_det_model_path: str = Field(
-        default="", alias="LOCAL_OCR_TEXT_DET_MODEL_PATH"
-    )
-    local_ocr_text_rec_model_path: str = Field(
-        default="", alias="LOCAL_OCR_TEXT_REC_MODEL_PATH"
-    )
+
     local_reference_extraction_enabled: bool = Field(
         default=False, alias="LOCAL_REFERENCE_EXTRACTION_ENABLED"
     )
@@ -72,9 +46,7 @@ class Settings(BaseSettings):
     local_ai_phase_timeout_seconds: int = Field(
         default=600, alias="LOCAL_AI_PHASE_TIMEOUT_SECONDS", ge=30, le=1800
     )
-    local_reference_max_ocr_calls: int = Field(
-        default=20, alias="LOCAL_REFERENCE_MAX_OCR_CALLS", ge=1, le=100
-    )
+
     local_reference_job_timeout_seconds: int = Field(
         default=1800, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
     )
@@ -163,6 +135,18 @@ class Settings(BaseSettings):
     fully_automated_mode_enabled: bool = Field(
         default=False, alias="FULLY_AUTOMATED_MODE_ENABLED"
     )
+    # Qwen3.8-27B vision provider (disabled by default; protected by brain_allow_real_providers)
+    local_qwen38_enabled: bool = Field(default=False, alias="LOCAL_QWEN38_ENABLED")
+    local_qwen38_base_url: str = Field(
+        default="http://127.0.0.1:8085/v1", alias="LOCAL_QWEN38_BASE_URL"
+    )
+    local_qwen38_model: str = Field(
+        default="qwen3.8-27b-q4km", alias="LOCAL_QWEN38_MODEL"
+    )
+    local_qwen38_api_key: str = Field(default="", alias="LOCAL_QWEN38_API_KEY")
+    local_qwen38_timeout_seconds: float = Field(
+        default=600.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -171,10 +155,8 @@ class Settings(BaseSettings):
     def cors_allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
-
 class InsecureConfigurationError(RuntimeError):
     """Raised when a non-development environment is configured with dev-only defaults."""
-
 
 @lru_cache
 def get_settings() -> Settings:

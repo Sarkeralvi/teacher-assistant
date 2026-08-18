@@ -31,7 +31,7 @@ def test_phase_manager_uses_only_fixed_repository_script_and_phase(tmp_path: Pat
         settings=settings, runner=runner, repository_root=tmp_path
     )
 
-    manager.switch("OcrGpu")
+    manager.switch("Qwen")
 
     command, kwargs = calls[0]
     assert command[:4] == [
@@ -40,7 +40,7 @@ def test_phase_manager_uses_only_fixed_repository_script_and_phase(tmp_path: Pat
         "-ExecutionPolicy",
         "Bypass",
     ]
-    assert command[-4:] == ["-Phase", "OcrGpu", "-HealthTimeoutSeconds", "120"]
+    assert command[-4:] == ["-Phase", "Qwen", "-HealthTimeoutSeconds", "120"]
     assert kwargs["cwd"] == tmp_path
     assert kwargs["stdout"] == subprocess.DEVNULL
     assert kwargs["stderr"] == subprocess.DEVNULL

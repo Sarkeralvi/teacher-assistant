@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+﻿from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.answer_regions import router as answer_regions_router
@@ -13,7 +13,6 @@ from app.api.routes.grading_queue import router as grading_queue_router
 from app.api.routes.grading_runs import router as grading_runs_router
 from app.api.routes.health import router as health_router
 from app.api.routes.local_ai import router as local_ai_router
-from app.api.routes.ocr import router as ocr_router
 from app.api.routes.question_imports import router as question_imports_router
 from app.api.routes.questions import router as questions_router
 from app.api.routes.rubrics import router as rubrics_router
@@ -38,7 +37,6 @@ if settings.cors_allowed_origins_list:
 
 app.include_router(health_router)
 app.include_router(local_ai_router)
-app.include_router(ocr_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(courses_router)

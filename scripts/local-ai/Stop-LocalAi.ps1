@@ -1,4 +1,8 @@
-param([string]$ConfigPath)
+﻿param(
+    [string]$ConfigPath,
+    [ValidateSet("Qwen", "Qwen38")]
+    [string]$Mode = "Qwen"
+)
 
 . (Join-Path $PSScriptRoot "Common.ps1")
 
@@ -9,20 +13,23 @@ if (-not $ConfigPath) {
 Import-LocalAiEnvironment -Path $ConfigPath
 
 $runtimeDirectory = Join-Path $repositoryRoot ".local-ai"
-$services = @(
-    @{
+$services = @()
+
+if ($Mode -eq "Qwen") {
+    $services += @{
         Name = "Qwen"
         PidPath = Join-Path $runtimeDirectory "qwen.pid"
         ExpectedExecutable = (Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH")
         Port = 8080
-    },
-    @{
-        Name = "PaddleOCR"
-        PidPath = Join-Path $runtimeDirectory "ocr.pid"
-        ExpectedExecutable = (Assert-RequiredEnvironmentValue -Name "LOCAL_OCR_PYTHON_PATH")
-        Port = 8090
     }
-)
+} elseif ($Mode -eq "Qwen38") {
+    $services += @{
+        Name = "Qwen38"
+        PidPath = Join-Path $runtimeDirectory "qwen38.pid"
+        ExpectedExecutable = (Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_BINARY_PATH")
+        Port = 8085
+    }
+}
 
 foreach ($service in $services) {
     $stoppedProcessIds = [Collections.Generic.HashSet[int]]::new()
@@ -41,10 +48,6 @@ foreach ($service in $services) {
             }
             Stop-Process -Id $processId -Force
             $null = $stoppedProcessIds.Add($processId)
-            # Wait before the missing-PID recovery scan. Windows can retain a
-            # listener row briefly after the process path has disappeared;
-            # treating that transient row as a foreign executable would turn
-            # a successful managed stop into a false safety failure.
             Wait-Process -Id $processId -Timeout 15 -ErrorAction SilentlyContinue
             $portReleaseDeadline = [DateTime]::UtcNow.AddSeconds(5)
             while (
@@ -57,11 +60,9 @@ foreach ($service in $services) {
                 Start-Sleep -Milliseconds 100
             }
         }
-        Remove-Item -LiteralPath $service.PidPath -Force
+        Remove-Item -LiteralPath $service.PidPath -Force -ErrorAction SilentlyContinue
     }
 
-    # Recover safely from a missing/stale PID record, but only for the exact
-    # configured executable listening on this service's dedicated port.
     foreach ($listener in @(Get-LocalAiListenerInfo -Port $service.Port)) {
         if (-not (Test-LocalAiExecutablePath `
             -ActualPath $listener.ExecutablePath `

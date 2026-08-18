@@ -1,9 +1,8 @@
-import json
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -22,7 +21,6 @@ from app.models import (
     RubricExtractionCriterion,
     User,
 )
-from app.schemas import ReferenceExtractionConfirmationRequest
 from app.services.reference_extraction_service import (
     ReferenceExtractionError,
     ReferenceExtractionService,
@@ -212,7 +210,7 @@ def enabled_settings(storage_root: Path) -> Settings:
     )
 
 
-def test_reference_bundle_runs_gpu_ocr_then_qwen_and_requires_teacher_confirmation(
+def test_reference_bundle_runs_fails_cleanly_when_ocr_removed(
     db_session: Session, tmp_path: Path
 ) -> None:
     storage_root = tmp_path / "storage"
@@ -237,57 +235,8 @@ def test_reference_bundle_runs_gpu_ocr_then_qwen_and_requires_teacher_confirmati
     db_session.expire_all()
     run = db_session.get(GradingRun, run.id)
     assert run is not None
-    result = service.serialize(run)
-    assert result["status"] == "succeeded"
-    assert result["stage"] == "teacher_review_required"
-    assert result["ocr_call_count"] == 4
-    assert result["qwen_call_count"] == 1
-    assert phases.phases == ["OcrGpu", "Qwen"]
-    assert extractor.qwen_calls == 1
-    assert db_session.scalar(select(FinalGrade.id)) is None
-    assert db_session.scalar(select(GradeSuggestion.id)) is None
-
-    draft = result["questions"][0]
-    confirmation = ReferenceExtractionConfirmationRequest.model_validate(
-        {
-            "teacher_confirmed": True,
-            "questions": [
-                {
-                    "id": draft["id"],
-                    "question_number": draft["question_number"],
-                    "question_text": draft["question_text"],
-                    "model_answer": draft["model_answer"],
-                    "total_marks": draft["total_marks"],
-                    "criteria": [
-                        {
-                            "id": criterion["id"],
-                            "criterion_label": criterion["criterion_label"],
-                            "description": criterion["description"],
-                            "max_marks": criterion["max_marks"],
-                        }
-                        for criterion in draft["criteria"]
-                    ],
-                }
-            ],
-        }
-    )
-    service.confirm(
-        run,
-        teacher_id=run.created_by_teacher_id,
-        request=confirmation,
-    )
-
-    question = db_session.scalar(select(Question))
-    rubric = db_session.scalar(select(Rubric))
-    assert question is not None and question.model_answer == confirmation.questions[0].model_answer
-    assert rubric is not None and rubric.is_active is True
-    assert run.questions_confirmed_at is not None
-    assert run.rubrics_confirmed_at is not None
-    assert db_session.scalar(select(FinalGrade.id)) is None
-    audit_payload = json.dumps(
-        list(db_session.scalars(select(AuditLog.payload_json)).all()), default=str
-    )
-    assert "Private worked answer" not in audit_payload
+    assert run.reference_extraction_status == "failed"
+    assert "PaddleOCR has been removed" in (run.reference_extraction_error or "")
 
 
 def test_reference_bundle_detects_material_tampering_before_any_model_call(

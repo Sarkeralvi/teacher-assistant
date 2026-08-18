@@ -1,14 +1,13 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Concurrent", "OcrGpu", "OcrCpu", "Qwen")]
+    [ValidateSet("Qwen", "Qwen38")]
     [string]$Phase,
     [string]$ConfigPath,
     [int]$HealthTimeoutSeconds = 600
 )
 
-$stopArguments = @{}
-$startArguments = @{
-    Mode = $Phase
+$stopArguments = @{ Mode = $Phase }
+$startArguments = @{ Mode = $Phase;
     HealthTimeoutSeconds = $HealthTimeoutSeconds
 }
 if ($ConfigPath) {

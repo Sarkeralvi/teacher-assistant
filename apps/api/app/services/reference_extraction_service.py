@@ -34,7 +34,6 @@ from app.services.local_reference_extraction import (
     LocalReferenceExtractor,
 )
 
-EXPECTED_OCR_MODEL = "PaddleOCR-VL-1.6"
 EXPECTED_LAYOUT_MODEL = "PP-DocLayoutV3"
 _ACTIVE_REFERENCE_STATUSES = {"queued", "running"}
 _API_KEY_PATTERN = re.compile(r"(?i)(?:sk|key)-[A-Za-z0-9_-]+")
@@ -170,84 +169,16 @@ class ReferenceExtractionService:
             self._assert_enabled(self.settings.local_qwen_model)
             paths = self._material_paths(grading_run)
             self._assert_material_hashes(grading_run, paths)
-            extractor = self.extractor_factory()
-
-            self._set_stage(grading_run, "starting_gpu_ocr")
-            self.phase_manager.switch("OcrGpu")
-            health = extractor.ocr_client.health()
-            if (
-                health.get("device") != "gpu:0"
-                or health.get("model") != EXPECTED_OCR_MODEL
-                or health.get("layout_model") != EXPECTED_LAYOUT_MODEL
-                or health.get("offline") is not True
-            ):
-                raise ReferenceExtractionError(
-                    "GPU OCR service identity or offline mode did not match the "
-                    "required configuration"
-                )
-
-            documents: dict[str, list[dict[str, Any]]] = {}
-            all_warnings: list[str] = []
-            for document_type, stage in (
-                ("question_paper", "ocr_question_paper"),
-                ("solution", "ocr_solution"),
-                ("rubric", "ocr_rubric"),
-            ):
-                self._set_stage(grading_run, stage)
-                pages, warnings = extractor.ocr_pages(
-                    paths[document_type],
-                    "application/pdf",
-                    on_call_started=lambda _page: self._record_ocr_call(grading_run),
-                    supplemental_rubric_focus=document_type == "rubric",
-                )
-                for page in pages:
-                    if page.get("device") not in {None, "gpu:0"}:
-                        raise ReferenceExtractionError(
-                            "Reference OCR returned an unexpected device"
-                        )
-                documents[document_type] = pages
-                all_warnings.extend(
-                    f"{document_type}: {warning}" for warning in warnings
-                )
-
-            self._assert_material_hashes(grading_run, paths)
-            self._set_stage(grading_run, "releasing_ocr_gpu")
-            self.phase_manager.switch("Qwen")
-            self._set_stage(grading_run, "linking_reference_drafts")
-            grading_run.reference_qwen_call_count += 1
-            self.db.commit()
-            provider_result = extractor.extract_reference_bundle(documents)
-            if grading_run.reference_qwen_call_count != 1:
-                raise ReferenceExtractionError(
-                    "Reference extraction exceeded its one-call Qwen authorization"
-                )
-
-            self._assert_material_hashes(grading_run, paths)
-            all_warnings.extend(str(item) for item in provider_result.get("warnings", []))
-            self._apply_provider_result(grading_run, provider_result)
-            grading_run.reference_extraction_status = "succeeded"
-            grading_run.reference_extraction_stage = "teacher_review_required"
-            grading_run.reference_extraction_error = None
-            grading_run.reference_extraction_warnings = list(dict.fromkeys(all_warnings))
-            grading_run.reference_extraction_completed_at = datetime.now(UTC)
-            self._audit(
-                grading_run,
-                "reference_extraction_completed",
-                actor_type="worker",
-                payload={
-                    "ocr_calls": grading_run.reference_ocr_call_count,
-                    "qwen_calls": grading_run.reference_qwen_call_count,
-                    "warning_count": len(grading_run.reference_extraction_warnings),
-                },
+            raise ReferenceExtractionError(
+                "PaddleOCR has been removed. "
+                "Visual reference extraction will be provided by Qwen3.8."
             )
-            self.db.commit()
         except Exception as exc:
             self.db.rollback()
             grading_run = self.db.get(GradingRun, grading_run_id)
-            if grading_run is None:
-                return
-            self._mark_failed(grading_run, _sanitize_error(exc))
-            self.db.commit()
+            if grading_run is not None:
+                self._mark_failed(grading_run, str(exc))
+                self.db.commit()
 
     def confirm(
         self,
@@ -563,8 +494,8 @@ class ReferenceExtractionService:
             raise ReferenceExtractionError("Local reference extraction is disabled")
         if not self.settings.local_ai_phase_switch_enabled:
             raise ReferenceExtractionError("Local AI phase switching is disabled")
-        if not self.settings.local_ocr_enabled or not self.settings.local_qwen_enabled:
-            raise ReferenceExtractionError("Local OCR and Qwen must both be enabled")
+        if not self.settings.local_qwen_enabled:
+            raise ReferenceExtractionError("Local Qwen must be enabled")
         if expected_model != self.settings.local_qwen_model:
             raise ReferenceExtractionError("Expected Qwen model alias does not match configuration")
 

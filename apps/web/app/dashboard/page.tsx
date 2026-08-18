@@ -12,7 +12,7 @@ export default function DashboardPage() {
             Prepare answer scripts and create draft grades on this computer.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300">
-            PaddleOCR reads the uploaded papers, Qwen connects each answer to the finalized question, solution, and rubric, and you approve every piece of evidence before grading.
+            Visual evidence transcription reads the uploaded papers, Qwen connects each answer to the finalized question, solution, and rubric, and you approve every piece of evidence before grading.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
             <Link href="/courses" className="rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 hover:bg-cyan-300">
@@ -32,7 +32,7 @@ export default function DashboardPage() {
           <div className="grid gap-4 md:grid-cols-3">
             {[
               ["01", "Finalize references", "Upload the question, solution, and rubric once. Review the local extraction and lock the grading reference."],
-              ["02", "Prepare student evidence", "Upload the complete script. PaddleOCR and Qwen identify ordered answer regions without manual coordinates or retyping."],
+              ["02", "Prepare student evidence", "Upload the complete script. Visual evidence transcription and Qwen identify ordered answer regions without manual coordinates or retyping."],
               ["03", "Review draft grades", "Qwen grades only approved evidence. Suggestions remain pending until the teacher reviews and approves them."],
             ].map(([number, title, description]) => (
               <article key={number} className="rounded-2xl border border-slate-800 bg-slate-900 p-5">

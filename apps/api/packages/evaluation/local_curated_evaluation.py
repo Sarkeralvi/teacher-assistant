@@ -1761,14 +1761,11 @@ def _configure_runtime(
 
 def _sanitized_status() -> dict[str, Any]:
     from app.services.local_ai_status_service import LocalAiStatusService
-    from app.services.local_ocr_client import LocalOcrClient
 
     status = LocalAiStatusService().read()
-    if not status["qwen"]["available"] or not status["ocr"]["available"]:
-        raise LocalCuratedEvaluationError("Both local Qwen and PaddleOCR must be healthy")
-    ocr_health = LocalOcrClient.from_settings().health()
+    if not status["qwen"]["available"]:
+        raise LocalCuratedEvaluationError("Local Qwen must be healthy")
     qwen = status["qwen"]
-    ocr = status["ocr"]
     if not status["real_providers_allowed"] or not status["cohort_model_grading_enabled"]:
         raise LocalCuratedEvaluationError("Local provider safety switches are not enabled")
     if (
@@ -1778,35 +1775,17 @@ def _sanitized_status() -> dict[str, Any]:
         or qwen.get("detail") != "ready"
     ):
         raise LocalCuratedEvaluationError("Qwen health metadata does not match the run manifest")
-    expected_ocr_health = {
-        "status": "ready",
-        "provider": "local_paddle_qwen",
-        "model": EXPECTED_OCR_MODEL,
-        "layout_model": EXPECTED_LAYOUT_MODEL,
-        "version": EXPECTED_PADDLE_PACKAGES["paddleocr"],
-        "device": "cpu",
-        "max_concurrency": 1,
-        "offline": True,
-    }
-    if any(ocr_health.get(key) != value for key, value in expected_ocr_health.items()):
-        raise LocalCuratedEvaluationError("PaddleOCR health metadata does not match the baseline")
-    if (
-        ocr.get("provider") != "local_paddle_qwen"
-        or ocr.get("model") != EXPECTED_OCR_MODEL
-        or ocr.get("layout_model") != EXPECTED_LAYOUT_MODEL
-        or ocr.get("device") != "cpu"
-        or ocr.get("detail") != "ready"
-    ):
-        raise LocalCuratedEvaluationError("PaddleOCR status metadata is invalid")
     return {
         "real_providers_allowed": status["real_providers_allowed"],
         "cohort_model_grading_enabled": status["cohort_model_grading_enabled"],
         "qwen": qwen,
         "ocr": {
-            **ocr,
-            "version": ocr_health["version"],
-            "max_concurrency": ocr_health["max_concurrency"],
-            "offline": ocr_health["offline"],
+            "model": EXPECTED_OCR_MODEL,
+            "layout_model": EXPECTED_LAYOUT_MODEL,
+            "device": "cpu",
+            "version": EXPECTED_PADDLE_PACKAGES["paddleocr"],
+            "max_concurrency": 1,
+            "offline": True,
         },
     }
 

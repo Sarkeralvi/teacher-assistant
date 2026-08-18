@@ -17,11 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models import ExtractionRun, QuestionNode, RubricExtractionCriterion
-from app.services.local_reference_extraction import (
-    LOCAL_PADDLE_QWEN_PROVIDER,
-    LocalReferenceExtractionError,
-    LocalReferenceExtractor,
-)
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
 QUESTION_PAPER_EXTRACTION_TYPE = "question_paper"
@@ -34,8 +29,7 @@ _NODE_TYPES = {"question", "subquestion", "instruction"}
 _ALLOWED_PROVIDERS = {
     MOCK_EXTRACTION_PROVIDER,
     DISABLED_EXTRACTION_PROVIDER,
-    LOCAL_PADDLE_QWEN_PROVIDER,
-}
+    }
 _ALLOWED_CONTENT_TYPES = {
     "application/pdf": ".pdf",
     "image/png": ".png",
@@ -185,69 +179,6 @@ class ProviderDocumentExtractor(DocumentExtractor):
         )
 
 
-class LocalPaddleQwenDocumentExtractor(DocumentExtractor):
-    provider = LOCAL_PADDLE_QWEN_PROVIDER
-
-    def __init__(self, extractor: LocalReferenceExtractor | None = None) -> None:
-        self.extractor = extractor or LocalReferenceExtractor()
-
-    def extract(
-        self, file_path: Path, extraction_type: str, content_type: str
-    ) -> ExtractionProviderResult:
-        try:
-            if extraction_type == QUESTION_PAPER_EXTRACTION_TYPE:
-                provider_result = self.extractor.extract_questions(file_path, content_type)
-                normalized = {
-                    "question_nodes": [
-                        {
-                            "question_number": item["question_number"],
-                            "parent_question_number": item.get("parent_question_number"),
-                            "label": item["label"],
-                            "text": item["question_text"],
-                            "marks": item.get("marks"),
-                            "node_type": item["node_type"],
-                            "source_page": item["source_page"],
-                            "source_reference": {
-                                "source_text_excerpt": item["source_text_excerpt"],
-                                "model_answer_draft": item.get("model_answer"),
-                                "provider": LOCAL_PADDLE_QWEN_PROVIDER,
-                            },
-                            "confidence": item["confidence"],
-                            "teacher_confirmed": False,
-                        }
-                        for item in provider_result["questions"]
-                    ],
-                    "blockers": [],
-                }
-            elif extraction_type == RUBRIC_EXTRACTION_TYPE:
-                provider_result = self.extractor.extract_rubric(file_path, content_type)
-                normalized = {
-                    "criteria": [
-                        {
-                            "question_number": item.get("question_number"),
-                            "criterion_label": item["criterion_label"],
-                            "description": item["description"],
-                            "max_marks": item.get("max_marks"),
-                            "confidence": item["confidence"],
-                            "blocker": item.get("blocker"),
-                            "teacher_confirmed": False,
-                        }
-                        for item in provider_result["criteria"]
-                    ],
-                    "blockers": [],
-                }
-            else:
-                raise DocumentExtractionError(
-                    f"Unsupported extraction type: {extraction_type}"
-                )
-        except LocalReferenceExtractionError as exc:
-            raise DocumentExtractionError(str(exc)) from exc
-        return ExtractionProviderResult(
-            raw_output=json.dumps(provider_result, ensure_ascii=False),
-            normalized_output=normalized,
-            blockers=[],
-        )
-
 
 class HostBridgeCodexDocumentExtractor(DocumentExtractor):
     provider = "host_bridge_codex"
@@ -323,11 +254,11 @@ def build_document_extractor(
         )
     if provider == "gemini":
         return ProviderDocumentExtractor()
-    if provider == LOCAL_PADDLE_QWEN_PROVIDER:
-        try:
-            return LocalPaddleQwenDocumentExtractor()
-        except LocalReferenceExtractionError as exc:
-            raise DocumentExtractionError(str(exc)) from exc
+    if provider == "local_paddle_qwen":
+        raise DocumentExtractionError(
+            "local_paddle_qwen provider has been removed. "
+            "Visual document extraction will be provided by Qwen3.8."
+        )
     raise DocumentExtractionError(f"Unsupported extraction provider: {provider}")
 
 

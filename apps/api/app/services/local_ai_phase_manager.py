@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import subprocess
@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from app.core.config import Settings, get_settings
 
-LocalAiPhase = Literal["OcrGpu", "OcrCpu", "Qwen", "Concurrent"]
+LocalAiPhase = Literal["Qwen", "Qwen38"]
 
 
 class LocalAiPhaseError(RuntimeError):

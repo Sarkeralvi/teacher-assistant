@@ -4,16 +4,14 @@ import io
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 import pytest
 from alembic.config import Config
 from PIL import Image, ImageDraw
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from alembic import command
-from app.core.config import Settings
 from app.db.session import SessionLocal
 from app.models import (
     AnswerRegion,
@@ -30,14 +28,11 @@ from app.models import (
     SubmissionPage,
     User,
 )
-from app.services.local_ocr_client import LocalOcrResult
 from app.services.local_script_preparation import (
-    LocalScriptPreparationService,
     PreparedSegment,
     _apply_adjacent_continuation_boundary_fallback,
     _cleaned_whole_image,
 )
-from app.services.storage import LocalStorage
 
 
 @pytest.fixture()
@@ -80,98 +75,6 @@ class RecordingPhaseManager:
     def switch(self, phase: str) -> None:
         self.events.append(phase)
 
-
-class FakeOcrClient:
-    def __init__(self, events: list[str]) -> None:
-        self.events = events
-        self.calls: list[dict[str, Any]] = []
-
-    def ocr_image(self, **kwargs: Any) -> LocalOcrResult:
-        self.events.append("ocr")
-        self.calls.append(kwargs)
-        return LocalOcrResult.model_validate(
-            {
-                "request_id": kwargs["request_id"],
-                "mode": kwargs["mode"],
-                "text": "1(a) The force is 10 N.",
-                "normalized_text": "1(a) The force is 10 N.",
-                "markdown": "1(a) The force is 10 N.",
-                "blocks": [
-                    {
-                        "page": 1,
-                        "order": 1,
-                        "label": "text",
-                        "text": "1(a) The force is 10 N.",
-                        "bbox": [20, 30, 240, 90],
-                    }
-                ],
-                "warnings": [],
-                "provider": "local_paddle_qwen",
-                "model": "PaddleOCR-VL-1.6",
-                "layout_model": "PP-DocLayoutV3",
-                "version": "3.7.0",
-                "device": "gpu:0",
-                "latency_ms": 5,
-            }
-        )
-
-
-class FakeQwenAdapter:
-    def __init__(self, events: list[str], question_id: int) -> None:
-        self.events = events
-        self.question_id = question_id
-        self.pages: list[dict[str, Any]] = []
-        self.questions: list[dict[str, Any]] = []
-        self.preparation_inputs: list[dict[str, Any]] = []
-
-    def verify_available_model(self) -> None:
-        self.events.append("verify_qwen")
-
-    def map_submission_answers_from_ocr_pages(
-        self, *, pages: list[dict[str, Any]], questions: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        self.events.append("map_qwen")
-        self.pages = pages
-        self.questions = questions
-        return {
-            "mappings": [
-                {
-                    "question_id": self.question_id,
-                    "question_no": "1(a)",
-                    "status": "mapped",
-                    "block_references": [{"page_no": 1, "block_orders": [1]}],
-                    "confidence": "0.91",
-                    "warnings": [],
-                    "needs_review": True,
-                }
-            ],
-            "warnings": [],
-            "usage": {"total_tokens": 50},
-        }
-
-    def prepare_student_answers_from_ocr_candidates(
-        self, *, answers: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        self.events.append("prepare_qwen")
-        self.preparation_inputs = answers
-        return {
-            "answers": [
-                {
-                    "question_id": self.question_id,
-                    "question_no": "1(a)",
-                    "status": "prepared",
-                    "prepared_text": "The force is 10 N.",
-                    "confidence": "0.90",
-                    "uncertainties": [],
-                    "source_candidate_ids": [
-                        answers[0]["ocr_candidates"][0]["id"]
-                    ],
-                    "needs_review": True,
-                }
-            ],
-            "warnings": [],
-            "usage": {"total_tokens": 40},
-        }
 
 
 def test_cleaned_whole_image_removes_red_marker_but_preserves_black_ink(
@@ -234,138 +137,3 @@ def test_adjacent_blank_after_multi_page_answer_gets_uncertain_shared_boundary()
         prepared[1][0]["warnings"]
     )
 
-
-def test_full_page_ocr_then_qwen_creates_unconfirmed_draft_mapping(
-    db_session: Session,
-) -> None:
-    teacher = User(
-        name="Teacher",
-        email="script-preparation@example.com",
-        password_hash="unused",
-        role="teacher",
-    )
-    course = Course(teacher=teacher, code="PHY", title="Physics")
-    assessment = Assessment(
-        course=course,
-        title="Pilot",
-        assessment_type="exam",
-        total_marks=Decimal("5"),
-    )
-    extraction = ExtractionRun(
-        assessment=assessment,
-        artifact_file_path="reference.pdf",
-        original_filename="reference.pdf",
-        content_type="application/pdf",
-        extraction_type="question_paper",
-        provider="local_paddle_qwen",
-        status="succeeded",
-        blockers=[],
-    )
-    question = Question(
-        assessment=assessment,
-        question_no="1(a)",
-        question_text="Calculate the force.",
-        model_answer="The force is 10 N.",
-        total_marks=Decimal("5"),
-    )
-    rubric = Rubric(
-        question=question,
-        version=1,
-        is_active=True,
-        rubric_json={
-            "total_marks": "5",
-            "criteria": [{"id": "answer", "name": "Answer", "max_marks": "5"}],
-        },
-    )
-    node = QuestionNode(
-        assessment=assessment,
-        extraction_run=extraction,
-        question_number="1(a)",
-        label="1(a)",
-        text="Calculate the force.",
-        marks=Decimal("5"),
-        node_type="subquestion",
-        source_page=1,
-        confidence=Decimal("0.9"),
-        teacher_confirmed=True,
-    )
-    submission = Submission(
-        assessment=assessment,
-        student_identifier="student-1",
-        status="ready",
-    )
-    db_session.add_all(
-        [teacher, course, assessment, extraction, question, rubric, node, submission]
-    )
-    db_session.flush()
-
-    storage = LocalStorage()
-    stored_page = storage.page_image_path(submission.id, 1)
-    Image.new("RGB", (400, 300), "white").save(stored_page.absolute_path)
-    page = SubmissionPage(
-        submission=submission,
-        page_no=1,
-        image_path=stored_page.relative_path,
-    )
-    db_session.add(page)
-    db_session.commit()
-    db_session.refresh(submission)
-
-    events: list[str] = []
-    ocr = FakeOcrClient(events)
-    qwen = FakeQwenAdapter(events, question.id)
-    settings = Settings(
-        BRAIN_ALLOW_REAL_PROVIDERS=True,
-        LOCAL_SCRIPT_PREPARATION_ENABLED=True,
-        LOCAL_OCR_ENABLED=True,
-        LOCAL_QWEN_ENABLED=True,
-        LOCAL_QWEN_API_KEY="local-test-key",
-        LOCAL_QWEN_MODEL="qwen3.6-35b-a3b-q4km",
-    )
-    mappings = LocalScriptPreparationService(
-        db_session,
-        settings=settings,
-        storage=storage,
-        ocr_client=ocr,
-        qwen_adapter=qwen,  # type: ignore[arg-type]
-        phase_manager=RecordingPhaseManager(events),  # type: ignore[arg-type]
-    ).prepare(
-        submission=submission,
-        teacher=teacher,
-        expected_model="qwen3.6-35b-a3b-q4km",
-        replace_existing=True,
-        maximum_ocr_calls=4,
-    )
-
-    assert events == [
-        "OcrGpu",
-        "ocr",
-        "Qwen",
-        "verify_qwen",
-        "map_qwen",
-        "OcrGpu",
-        "ocr",
-    ]
-    assert len(ocr.calls) == 2
-    assert ocr.calls[0]["mode"] == "document"
-    assert ocr.calls[1]["mode"] == "answer_region"
-    assert qwen.questions[0]["model_answer"] == "The force is 10 N."
-    assert qwen.questions[0]["rubric"]["criteria"][0]["id"] == "answer"
-    assert len(mappings) == 1
-    mapping = mappings[0]
-    assert mapping.mapping_status == "mapped"
-    assert mapping.teacher_confirmed is False
-    assert mapping.answer_region is not None
-    assert mapping.answer_region.manual_answer_text is None
-    assert mapping.answer_region.full_answer_confirmed is False
-    assert all(segment.confirmed is False for segment in mapping.answer_region.segments)
-    assert mapping.source_reference["ocr_draft_text"] == "1(a) The force is 10 N."
-    assert mapping.source_reference["paddle_baseline_text"] == "1(a) The force is 10 N."
-    assert mapping.source_reference["text_source"] == "paddle_ocr_direct_baseline"
-    assert qwen.preparation_inputs == []
-    audit = db_session.scalars(
-        select(AuditLog).where(AuditLog.event_type == "submission_script_draft_prepared")
-    ).one()
-    assert "ocr_draft_text" not in str(audit.payload_json)
-    assert audit.payload_json["ocr_call_count"] == 2
-    assert audit.payload_json["qwen_call_count"] == 1

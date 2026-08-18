@@ -25,9 +25,7 @@ class LocalAiStatusRead(BaseModel):
     cohort_model_grading_enabled: bool
     local_script_preparation_enabled: bool = False
     local_single_answer_grading_enabled: bool = False
-    local_ocr_rescue_enabled: bool = False
     qwen: LocalAiServiceStatusRead
-    ocr: LocalAiServiceStatusRead
 
 
 class UserCreate(BaseModel):
@@ -860,16 +858,6 @@ class OcrBlockRead(BaseModel):
     confidence: float | None = None
 
 
-OcrRejectionReason = Literal[
-    "all_candidates_wrong",
-    "critical_digit_wrong",
-    "math_symbol_wrong",
-    "missing_or_extra_line",
-    "wrong_region",
-    "image_quality",
-]
-
-
 class AnswerRegionOcrCandidateRead(ORMBase):
     id: int
     band_id: int
@@ -934,53 +922,11 @@ class AnswerRegionOcrRunRead(ORMBase):
     updated_at: datetime
 
 
-class OcrConfirmationRequest(BaseModel):
-    confirmed_text: str = Field(max_length=10000)
-
-
-class OcrRescueRunRequest(BaseModel):
-    profile: Literal["math_handwriting_rescue_v3"]
-    expected_vl_model: Literal["PaddleOCR-VL-1.6"]
-    expected_layout_model: Literal["PP-DocLayoutV3"]
-    expected_text_detection_model: Literal["PP-OCRv6_medium_det"]
-    expected_text_recognition_model: Literal["PP-OCRv6_medium_rec"]
-    max_calls: int = Field(default=8, ge=1, le=8)
-    draft_only_confirmed: Literal[True]
-
-
-class OcrCandidateConfirmationRequest(BaseModel):
-    candidate_ids: list[int] = Field(min_length=1, max_length=6)
-
-
-class OcrCandidateRejectionRequest(BaseModel):
-    reasons: list[OcrRejectionReason] = Field(min_length=1, max_length=6)
-
-
-class OcrRejectionRead(BaseModel):
-    run_id: int
-    mapping_id: int
-    diagnostic_reference: str
-    status: Literal["rejected"]
-
-
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
-    provider: Literal["deterministic_layout", "local_paddle_qwen"] = "deterministic_layout"
+    provider: Literal["deterministic_layout"] = "deterministic_layout"
     expected_model: str | None = Field(default=None, max_length=255)
     draft_only_confirmed: bool = False
-    maximum_ocr_calls: int = Field(default=20, ge=1, le=100)
-
-    @model_validator(mode="after")
-    def local_provider_requires_explicit_authorization(
-        self,
-    ) -> "AnswerRegionMappingRunRequest":
-        if self.provider == "local_paddle_qwen":
-            if not self.draft_only_confirmed:
-                raise ValueError("Local script preparation requires draft-only confirmation")
-            if not (self.expected_model or "").strip():
-                raise ValueError("Local script preparation requires the expected Qwen model")
-        return self
-
 
 class AnswerRegionMappingUpdate(BaseModel):
     question_node_id: int | None = None

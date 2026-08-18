@@ -5,7 +5,6 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings, get_settings
-from app.services.local_ocr_client import LocalOcrClient
 from packages.brain.adapter import BrainAdapter
 
 
@@ -23,9 +22,7 @@ class LocalAiStatusService:
             "local_single_answer_grading_enabled": (
                 self.settings.local_single_answer_grading_enabled
             ),
-            "local_ocr_rescue_enabled": self.settings.local_ocr_rescue_enabled,
             "qwen": self._qwen_status(),
-            "ocr": self._ocr_status(),
         }
 
     def _qwen_status(self) -> dict[str, Any]:
@@ -63,53 +60,4 @@ class LocalAiStatusService:
             return base
         base["available"] = True
         base["detail"] = "ready"
-        return base
-
-    def _ocr_status(self) -> dict[str, Any]:
-        base = {
-            "enabled": self.settings.local_ocr_enabled,
-            "available": False,
-            "provider": "local_paddle_qwen",
-            "model": "PaddleOCR-VL-1.6",
-            "layout_model": "PP-DocLayoutV3",
-            "device": self.settings.local_ocr_device,
-            "detail": None,
-            "models": ["PaddleOCR-VL-1.6", "PP-DocLayoutV3"],
-        }
-        if not self.settings.local_ocr_enabled:
-            base["detail"] = "disabled"
-            return base
-        if not self.settings.brain_allow_real_providers:
-            base["detail"] = "blocked_by_provider_kill_switch"
-            return base
-        try:
-            health = LocalOcrClient.from_settings(self.settings).health()
-        except Exception:
-            base["detail"] = "unavailable"
-            return base
-        base["available"] = health.get("status") == "ready"
-        base["model"] = str(health.get("model") or base["model"])
-        base["layout_model"] = str(health.get("layout_model") or base["layout_model"])
-        base["device"] = str(health.get("device") or base["device"])
-        models = health.get("models")
-        if isinstance(models, dict):
-            reported = {
-                str(value)
-                for details in models.values()
-                if isinstance(details, dict)
-                for value in (details.get("model"), details.get("layout_model"))
-                if value
-            }
-            base["models"] = sorted(reported)
-        required = {
-            "PaddleOCR-VL-1.6",
-            "PP-DocLayoutV3",
-            "PP-OCRv6_medium_det",
-            "PP-OCRv6_medium_rec",
-        }
-        if self.settings.local_ocr_rescue_enabled and not required.issubset(set(base["models"])):
-            base["available"] = False
-            base["detail"] = "rescue_model_mismatch"
-        else:
-            base["detail"] = "ready" if base["available"] else "unavailable"
         return base

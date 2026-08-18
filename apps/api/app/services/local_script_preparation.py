@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 from sqlalchemy import select
@@ -26,7 +25,6 @@ from app.models import (
 )
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
-from app.services.local_ocr_client import LocalOcrClient
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
 
@@ -55,14 +53,12 @@ class LocalScriptPreparationService:
         *,
         settings: Settings | None = None,
         storage: LocalStorage | None = None,
-        ocr_client: LocalOcrClient | None = None,
         qwen_adapter: BrainAdapter | None = None,
         phase_manager: LocalAiPhaseManager | None = None,
     ) -> None:
         self.db = db
         self.settings = settings or get_settings()
         self.storage = storage or LocalStorage()
-        self._ocr_client = ocr_client
         self._qwen_adapter = qwen_adapter
         self.phase_manager = phase_manager or LocalAiPhaseManager(settings=self.settings)
 
@@ -223,8 +219,8 @@ class LocalScriptPreparationService:
             raise LocalScriptPreparationError("Real local providers are disabled")
         if not self.settings.local_script_preparation_enabled:
             raise LocalScriptPreparationError("Local script preparation is disabled")
-        if not self.settings.local_ocr_enabled or not self.settings.local_qwen_enabled:
-            raise LocalScriptPreparationError("Local OCR and Qwen must both be enabled")
+        if not self.settings.local_qwen_enabled:
+            raise LocalScriptPreparationError("Local Qwen must be enabled")
         if expected_model != self.settings.local_qwen_model:
             raise LocalScriptPreparationError("Expected local Qwen model alias does not match")
 
@@ -284,40 +280,10 @@ class LocalScriptPreparationService:
         return questions, node_by_question, references
 
     def _ocr_pages(self, pages: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
-        client = self._ocr_client or LocalOcrClient.from_settings(self.settings)
-        request_prefix = f"script-{uuid4().hex}"
-        output: list[dict[str, Any]] = []
-        warnings: list[str] = []
-        for page in pages:
-            path = self.storage.resolve_relative(page.image_path)
-            image_bytes = path.read_bytes()
-            content_type = _image_content_type(path)
-            result = client.ocr_image(
-                image_bytes=image_bytes,
-                content_type=content_type,
-                request_id=f"{request_prefix}-page-{page.page_no}",
-                mode="document",
-            )
-            self._validate_local_ocr_result(result)
-            page_blocks = []
-            for block in result.blocks:
-                payload = block.model_dump(mode="json")
-                payload["page"] = page.page_no
-                page_blocks.append(payload)
-            output.append(
-                {
-                    "page": page.page_no,
-                    "text": result.normalized_text,
-                    "markdown": result.markdown,
-                    "blocks": page_blocks,
-                    "model": result.model,
-                    "layout_model": result.layout_model,
-                    "device": result.device,
-                    "latency_ms": result.latency_ms,
-                }
-            )
-            warnings.extend(f"page {page.page_no}: {item}" for item in result.warnings)
-        return output, list(dict.fromkeys(warnings))
+        del pages
+        raise LocalScriptPreparationError(
+            "PaddleOCR has been removed. Visual script preparation will be provided by Qwen3.8."
+        )
 
     def _page_geometry(self, pages: list[Any]) -> dict[int, tuple[int, int, int]]:
         geometry: dict[int, tuple[int, int, int]] = {}
@@ -328,65 +294,15 @@ class LocalScriptPreparationService:
 
     def _prepare_baseline_ocr_candidates(
         self,
-        mappings: list[AnswerRegionMapping],
+        submission: Submission,
+        segments: list[PreparedSegment],
+        expected_model: str,
         questions: dict[int, Question],
     ) -> list[str]:
-        client = self._ocr_client or LocalOcrClient.from_settings(self.settings)
-        request_prefix = f"baseline-answer-{uuid4().hex}"
-        all_warnings: list[str] = []
-        for mapping in mappings:
-            region = mapping.answer_region
-            if region is None or mapping.question_id is None:
-                continue
-            question = questions[mapping.question_id]
-            source_reference = dict(mapping.source_reference or {})
-            candidates: list[dict[str, Any]] = []
-            ordered_segments = sorted(
-                region.segments, key=lambda item: item.order_index
-            )
-            for order, segment in enumerate(ordered_segments, start=1):
-                path = self.storage.resolve_relative(segment.image_path)
-                whole_result = client.ocr_image(
-                    image_bytes=_cleaned_whole_image(path),
-                    content_type="image/png",
-                    request_id=f"{request_prefix}-q{question.id}-s{order}-whole",
-                    mode="answer_region",
-                )
-                self._validate_local_ocr_result(whole_result)
-                _append_ocr_candidate(
-                    candidates=candidates,
-                    all_warnings=all_warnings,
-                    question=question,
-                    segment_order=order,
-                    kind="cleaned_whole_segment",
-                    result=whole_result,
-                )
-            if not candidates:
-                raise LocalScriptPreparationError(
-                    f"Local OCR returned no answer evidence for {question.question_no}"
-                )
-            baseline_text = "\n\n".join(
-                str(item["text"]).strip() for item in candidates if str(item["text"]).strip()
-            ).strip()
-            if not baseline_text:
-                raise LocalScriptPreparationError(
-                    f"Local OCR returned an empty baseline for {question.question_no}"
-                )
-            source_reference["ocr_candidates"] = candidates
-            source_reference.update(
-                {
-                    "paddle_baseline_text": baseline_text,
-                    "paddle_baseline_text_sha256": hashlib.sha256(
-                        baseline_text.encode("utf-8")
-                    ).hexdigest(),
-                    "prepared_answer_status": "uncertain",
-                    "teacher_review_required": True,
-                    "ocr_evidence_version": "paddle_baseline_v2",
-                    "text_source": "paddle_ocr_direct_baseline",
-                }
-            )
-            mapping.source_reference = source_reference
-        return list(dict.fromkeys(all_warnings))
+        del submission, segments, expected_model, questions
+        raise LocalScriptPreparationError(
+            "PaddleOCR has been removed. Visual script preparation will be provided by Qwen3.8."
+        )
 
     def _validate_local_ocr_result(self, result: Any) -> None:
         if (
