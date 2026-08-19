@@ -1,3 +1,36 @@
+# TA-LOCAL-003 — Qwen3.8 visual transcription replaces local OCR
+
+- Recorded at: 2026-08-19
+- Canonical workflow: Custom Controlled, Windows-host local models.
+- Implemented: `LlamaCppQwen38VisionProvider` (packages/brain), `Qwen38VisualTranscriptionService`
+  with one durable no-retry call per confirmed answer mapping, migration `0023` persisting visual
+  evidence provenance, RQ job wiring, and BrainAdapter registration behind
+  `BRAIN_PROVIDER=llama_cpp_qwen38` / `LOCAL_QWEN38_ENABLED`. Retired PaddleOCR recognition and
+  transcription stack removed in a prior commit. Operator rollout gates I0-I4 added:
+  architecture-compatibility probe, hash-verified model download, isolated server smoke, and a
+  manual-review-required vision-transcription smoke, plus `Enable-Qwen38TeacherRehearsal.ps1`.
+- Safety: disabled by default; loopback-only; image input stays disabled on the text-only grading
+  call, matching the existing Qwen3.6 provider; zero retries; exact model-alias verification;
+  sanitized errors strip API keys and image data; `needs_review` always true; no `FinalGrade`
+  created by any model action.
+- Verification completed: 365 backend tests pass (3 skipped), Ruff clean, migration head `0023`.
+  Gate I0 (preflight) and I1 (architecture compatibility) passed on this machine (RTX 5070,
+  12227 MiB VRAM, llama.cpp build 10249). Gate I2 (download) verified GGUF magic, byte size, and
+  SHA256. Gate I3 (isolated server smoke) confirmed the server loads and serves the exact alias
+  `qwen3.8-27b-q4km`; a live re-check confirmed real text completions. Gate I4 (vision
+  transcription smoke) ran once against a real answer-region crop from submission `#39`
+  (`1(a)` probability/Bayes' theorem); teacher visually compared the raw transcription against the
+  source image and confirmed it faithful (verbatim digits, no solving/correcting/inferring); this
+  is the recorded Gate I4 teacher sign-off referenced by `Test-Qwen38VisionSmoke.ps1`.
+- Verification remaining: only one image has been teacher-reviewed under Gate I4; broader
+  transcription-quality confidence should come from more samples before any batch/cohort use. No
+  founder-supervised rehearsal grading call (per `docs/FOUNDER_PILOT_REHEARSAL.md`) has been run
+  yet on this path — infra readiness only, not a completed rehearsal.
+- Pilot status: **Infra ready for a founder-supervised one-packet rehearsal; real grading call
+  still requires the explicit founder approval and preflight in `docs/FOUNDER_PILOT_REHEARSAL.md`.**
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: In verification
+
 # TA-LOCAL-002 — Image-grounded OCR rescue and safe local grading
 
 - Recorded at: 2026-08-17
