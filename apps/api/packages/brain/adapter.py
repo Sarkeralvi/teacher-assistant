@@ -8,6 +8,7 @@ from app.core.config import Settings
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.image_input import build_image_data_url
+from packages.brain.llama_cpp_qwen38_vision_provider import LlamaCppQwen38VisionProvider
 from packages.brain.llama_cpp_qwen_provider import LlamaCppQwenProvider
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.openai_provider import OpenAICompatibleProvider
@@ -24,7 +25,7 @@ class BrainProviderConfigurationError(RuntimeError):
     """Raised when provider configuration is incomplete or unsupported."""
 
 
-REAL_PROVIDER_NAMES = {"openai", "codex_cli", "gemini", "llama_cpp_qwen"}
+REAL_PROVIDER_NAMES = {"openai", "codex_cli", "gemini", "llama_cpp_qwen", "llama_cpp_qwen38"}
 
 
 _API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
@@ -135,6 +136,30 @@ class BrainAdapter:
                 image_input_enabled=False,
                 storage_root=settings.local_storage_root,
             )
+        if provider_name == "llama_cpp_qwen38":
+            if not settings.local_qwen38_enabled:
+                raise BrainProviderConfigurationError(
+                    "LOCAL_QWEN38_ENABLED must be true for BRAIN_PROVIDER=llama_cpp_qwen38"
+                )
+            if not settings.local_qwen38_api_key:
+                raise BrainProviderConfigurationError(
+                    "LOCAL_QWEN38_API_KEY is required for BRAIN_PROVIDER=llama_cpp_qwen38"
+                )
+            try:
+                provider = LlamaCppQwen38VisionProvider(
+                    api_key=settings.local_qwen38_api_key,
+                    model_name=settings.local_qwen38_model,
+                    base_url=settings.local_qwen38_base_url,
+                    timeout_seconds=settings.local_qwen38_timeout_seconds,
+                    grading_reasoning_mode=settings.local_qwen38_grading_reasoning_mode,
+                )
+            except ValueError as exc:
+                raise BrainProviderConfigurationError(str(exc)) from exc
+            return cls(
+                provider,
+                image_input_enabled=False,
+                storage_root=settings.local_storage_root,
+            )
         raise BrainProviderConfigurationError(f"Unsupported BRAIN_PROVIDER: {provider_name}")
 
     def grade_answer_region(
@@ -161,7 +186,7 @@ class BrainAdapter:
         )
         prompt_answer_image_path = (
             "[image input disabled]"
-            if self.provider.provider_name == "llama_cpp_qwen"
+            if self.provider.provider_name in {"llama_cpp_qwen", "llama_cpp_qwen38"}
             else answer_image_path
         )
         prompt_version = get_prompt_version(resolved_policy)

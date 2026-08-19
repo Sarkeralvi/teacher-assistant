@@ -21,18 +21,14 @@ import {
   type ReferenceQuestionConfirmation,
 } from "../lib/api";
 
-const EXPECTED_MODEL = "qwen3.6-35b-a3b-q4km";
+const EXPECTED_MODEL = "qwen3.8-27b-q4km";
 
 const stageLabels: Record<string, string> = {
   not_started: "Not started",
   queued: "Waiting for the local worker",
   validating_materials: "Checking the three uploaded files",
-  starting_gpu_ocr: "Releasing Qwen and loading PaddleOCR on the GPU",
-  ocr_question_paper: "Reading the question paper",
-  ocr_solution: "Reading the solution / model answer",
-  ocr_rubric: "Reading the rubric",
-  releasing_ocr_gpu: "Releasing PaddleOCR from the GPU",
-  linking_reference_drafts: "Linking questions, solutions, and criteria with Qwen",
+  rendering_reference_pages: "Rendering the three uploaded reference files",
+  qwen38_visual_reference_extraction: "Qwen3.8 is reading questions, solutions, and rubric",
   teacher_review_required: "Drafts ready for teacher review",
   teacher_confirmed: "Teacher confirmed",
   failed: "Extraction stopped",
@@ -62,7 +58,7 @@ export function CustomControlledGradingRunClient({
   const extractionActive = extraction?.status === "queued" || extraction?.status === "running";
   const referencesConfirmed = Boolean(run?.questions_confirmed_at && run.rubrics_confirmed_at);
   const localProviderConfigured = Boolean(
-    localAi?.real_providers_allowed && localAi.qwen.enabled && localAi.ocr.enabled,
+    localAi?.real_providers_allowed && localAi.qwen38.enabled,
   );
 
   async function load() {
@@ -139,6 +135,7 @@ export function CustomControlledGradingRunClient({
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     const creatingWorkspace = run === null;
     if (creatingWorkspace && (!questionPdf || !solutionPdf || !rubricPdf)) {
       setError("Choose the question, solution/model answer, and rubric PDFs.");
@@ -172,7 +169,7 @@ export function CustomControlledGradingRunClient({
       setDraftsConfirmed(false);
       setDrafts([]);
       setDraftSource(null);
-      event.currentTarget.reset();
+      form.reset();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not upload the reference PDFs");
     } finally {
@@ -392,7 +389,7 @@ export function CustomControlledGradingRunClient({
                   onChange={(event) => setMaterialsConfirmed(event.target.checked)}
                 />
                 <span>
-                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize local draft extraction with PaddleOCR and {EXPECTED_MODEL}.
+                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize draft-only visual extraction with local Qwen3.8 ({EXPECTED_MODEL}).
                 </span>
               </label>
               <div className="flex flex-wrap items-center gap-3">
@@ -656,8 +653,8 @@ function ExtractionStatus({ extraction }: Readonly<{ extraction: ReferenceExtrac
         {!failed && !complete ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" aria-label="Working" /> : null}
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400">
-        <span>OCR calls: {extraction.ocr_call_count}</span>
-        <span>Qwen calls: {extraction.qwen_call_count} / 1</span>
+        <span>Rendered visual pages: {extraction.ocr_call_count}</span>
+        <span>Qwen3.8 calls: {extraction.qwen_call_count} / 1</span>
         <span>Provider: local only</span>
       </div>
     </div>
@@ -673,12 +670,12 @@ function friendlyExtractionError(error: string | null): string {
 }
 
 function RuntimeBadge({ status }: Readonly<{ status: LocalAiStatus | null }>) {
-  const phase = status?.ocr.available
-    ? `OCR active · ${status.ocr.device}`
-    : status?.qwen.available
+  const phase = status?.qwen38.available
+    ? `Qwen3.8 active · ${status.qwen38.device}`
+    : status?.qwen38.available
       ? "Qwen active"
       : "Local models on demand";
-  const configured = Boolean(status?.real_providers_allowed && status.qwen.enabled && status.ocr.enabled);
+  const configured = Boolean(status?.real_providers_allowed && status.qwen38.enabled);
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${configured ? "border-emerald-800 bg-emerald-950/30 text-emerald-200" : "border-amber-800 bg-amber-950/30 text-amber-200"}`}>
       <p className="font-semibold">{configured ? "Local AI configured" : "Local AI unavailable"}</p>

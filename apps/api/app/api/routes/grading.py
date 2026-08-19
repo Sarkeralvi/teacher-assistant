@@ -135,11 +135,17 @@ def grade_answer_region_with_local_qwen(
     settings = get_settings()
     if not settings.brain_allow_real_providers:
         raise HTTPException(status_code=409, detail="Real local providers are disabled")
-    if not settings.local_single_answer_grading_enabled:
+    if not (settings.local_single_answer_grading_enabled or settings.local_qwen38_grading_enabled):
         raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
-    if not settings.local_qwen_enabled:
-        raise HTTPException(status_code=409, detail="Local Qwen is disabled")
-    if payload.expected_model != settings.local_qwen_model:
+    if payload.provider == "llama_cpp_qwen38":
+        enabled = settings.local_qwen38_enabled and settings.local_qwen38_grading_enabled
+        expected_model = settings.local_qwen38_model
+    else:
+        enabled = settings.local_qwen_enabled
+        expected_model = settings.local_qwen_model
+    if not enabled:
+        raise HTTPException(status_code=409, detail="Requested local Qwen provider is disabled")
+    if payload.expected_model != expected_model:
         raise HTTPException(
             status_code=409, detail="Expected local Qwen model alias does not match"
         )
@@ -180,8 +186,10 @@ def grade_answer_region_with_local_qwen(
     )
     db.commit()
     try:
-        LocalAiPhaseManager(settings=settings).switch("Qwen")
-        adapter = BrainAdapter.for_provider(settings, "llama_cpp_qwen")
+        if settings.local_ai_phase_switch_enabled:
+            phase = "Qwen38" if payload.provider == "llama_cpp_qwen38" else "Qwen"
+            LocalAiPhaseManager(settings=settings).switch(phase)
+        adapter = BrainAdapter.for_provider(settings, payload.provider)
         adapter.verify_available_model()
     except (LocalAiPhaseError, BrainProviderConfigurationError, RuntimeError) as exc:
         raise HTTPException(

@@ -351,7 +351,7 @@ class ExtractionRun(TimestampMixin, Base):
         ),
         CheckConstraint(
             "provider in ('host_bridge_codex', 'mock', 'disabled', 'gemini', "
-            "'local_paddle_qwen')",
+            "'local_paddle_qwen', 'llama_cpp_qwen38')",
             name="ck_extraction_runs_provider",
         ),
         CheckConstraint(
@@ -591,7 +591,17 @@ class AnswerRegionOcrRun(TimestampMixin, Base):
     request_id: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
     profile: Mapped[str] = mapped_column(String(64), nullable=False, default="baseline")
+    task_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy_ocr")
+    reasoning_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_image_hashes: Mapped[list[str]] = mapped_column(
+        "source_image_hashes_json", JSONB, nullable=False, default=list
+    )
+    input_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_asset_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mmproj_asset_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

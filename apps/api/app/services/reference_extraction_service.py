@@ -34,7 +34,6 @@ from app.services.local_reference_extraction import (
     LocalReferenceExtractor,
 )
 
-EXPECTED_LAYOUT_MODEL = "PP-DocLayoutV3"
 _ACTIVE_REFERENCE_STATUSES = {"queued", "running"}
 _API_KEY_PATTERN = re.compile(r"(?i)(?:sk|key)-[A-Za-z0-9_-]+")
 
@@ -166,13 +165,44 @@ class ReferenceExtractionService:
         self.db.commit()
 
         try:
-            self._assert_enabled(self.settings.local_qwen_model)
+            self._assert_enabled(self.settings.local_qwen38_model)
             paths = self._material_paths(grading_run)
             self._assert_material_hashes(grading_run, paths)
-            raise ReferenceExtractionError(
-                "PaddleOCR has been removed. "
-                "Visual reference extraction will be provided by Qwen3.8."
+            self._set_stage(grading_run, "rendering_reference_pages")
+            extractor = self.extractor_factory()
+            documents: dict[str, list[tuple[bytes, str, int]]] = {}
+            name_map = {"question_paper": "QUESTION", "solution": "SOLUTION", "rubric": "RUBRIC"}
+            total_pages = 0
+            for source_name, document_name in name_map.items():
+                rendered = extractor.render_pages(paths[source_name], "application/pdf")
+                total_pages += len(rendered)
+                if total_pages > self.settings.local_qwen38_max_visual_calls:
+                    raise ReferenceExtractionError(
+                        "Reference pages exceed the authorized visual call limit"
+                    )
+                documents[document_name] = [
+                    (image_bytes, mime_type, page_no)
+                    for page_no, image_bytes, mime_type in rendered
+                ]
+            grading_run.reference_ocr_call_count = total_pages
+            self._set_stage(grading_run, "qwen38_visual_reference_extraction")
+            if self.settings.local_ai_phase_switch_enabled:
+                self.phase_manager.switch("Qwen38")
+            provider_result = extractor.extract_reference_bundle(documents)
+            grading_run.reference_qwen_call_count = 1
+            self._assert_material_hashes(grading_run, paths)
+            self._apply_provider_result(grading_run, provider_result)
+            grading_run.reference_extraction_status = "succeeded"
+            grading_run.reference_extraction_stage = "teacher_review_required"
+            grading_run.reference_extraction_warnings = list(provider_result.get("warnings") or [])
+            grading_run.reference_extraction_completed_at = datetime.now(UTC)
+            self._audit(
+                grading_run,
+                "reference_extraction_succeeded",
+                actor_type="worker",
+                payload={"visual_page_count": total_pages, "qwen_call_count": 1},
             )
+            self.db.commit()
         except Exception as exc:
             self.db.rollback()
             grading_run = self.db.get(GradingRun, grading_run_id)
@@ -218,16 +248,12 @@ class ReferenceExtractionService:
             ).all()
         )
         if {node.id for node in nodes} != {item.id for item in request.questions}:
-            raise ReferenceExtractionError(
-                "Confirm every extracted question draft exactly once"
-            )
+            raise ReferenceExtractionError("Confirm every extracted question draft exactly once")
         requested_criterion_ids = {
             criterion.id for item in request.questions for criterion in item.criteria
         }
         if {criterion.id for criterion in criteria} != requested_criterion_ids:
-            raise ReferenceExtractionError(
-                "Confirm every extracted rubric criterion exactly once"
-            )
+            raise ReferenceExtractionError("Confirm every extracted rubric criterion exactly once")
 
         nodes_by_id = {node.id: node for node in nodes}
         criteria_by_id = {criterion.id: criterion for criterion in criteria}
@@ -266,9 +292,7 @@ class ReferenceExtractionService:
                 question.total_marks = draft.total_marks
 
             existing_rubrics = list(
-                self.db.scalars(
-                    select(Rubric).where(Rubric.question_id == question.id)
-                ).all()
+                self.db.scalars(select(Rubric).where(Rubric.question_id == question.id)).all()
             )
             for existing in existing_rubrics:
                 existing.is_active = False
@@ -333,10 +357,7 @@ class ReferenceExtractionService:
             nodes = list(
                 self.db.scalars(
                     select(QuestionNode)
-                    .where(
-                        QuestionNode.extraction_run_id
-                        == grading_run.reference_question_run_id
-                    )
+                    .where(QuestionNode.extraction_run_id == grading_run.reference_question_run_id)
                     .where(QuestionNode.node_type.in_(["question", "subquestion"]))
                     .order_by(QuestionNode.id)
                 ).all()
@@ -387,8 +408,8 @@ class ReferenceExtractionService:
             "status": grading_run.reference_extraction_status,
             "stage": grading_run.reference_extraction_stage,
             "provider": LOCAL_PADDLE_QWEN_PROVIDER,
-            "model": self.settings.local_qwen_model,
-            "ocr_device": "gpu:0",
+            "model": self.settings.local_qwen38_model,
+            "ocr_device": "qwen38_gpu_single_slot",
             "question_run_id": grading_run.reference_question_run_id,
             "rubric_run_id": grading_run.reference_rubric_run_id,
             "ocr_call_count": grading_run.reference_ocr_call_count,
@@ -490,13 +511,14 @@ class ReferenceExtractionService:
     def _assert_enabled(self, expected_model: str) -> None:
         if not self.settings.brain_allow_real_providers:
             raise ReferenceExtractionError("Real local providers are safety-disabled")
-        if not self.settings.local_reference_extraction_enabled:
-            raise ReferenceExtractionError("Local reference extraction is disabled")
-        if not self.settings.local_ai_phase_switch_enabled:
-            raise ReferenceExtractionError("Local AI phase switching is disabled")
-        if not self.settings.local_qwen_enabled:
-            raise ReferenceExtractionError("Local Qwen must be enabled")
-        if expected_model != self.settings.local_qwen_model:
+        if not (
+            self.settings.local_reference_extraction_enabled
+            and self.settings.local_qwen38_visual_preparation_enabled
+        ):
+            raise ReferenceExtractionError("Qwen3.8 reference extraction is disabled")
+        if not self.settings.local_qwen38_enabled:
+            raise ReferenceExtractionError("Qwen3.8 must be enabled")
+        if expected_model != self.settings.local_qwen38_model:
             raise ReferenceExtractionError("Expected Qwen model alias does not match configuration")
 
     def _material_paths(self, grading_run: GradingRun) -> dict[str, Path]:
@@ -521,9 +543,7 @@ class ReferenceExtractionService:
             paths[name] = path
         return paths
 
-    def _assert_material_hashes(
-        self, grading_run: GradingRun, paths: dict[str, Path]
-    ) -> None:
+    def _assert_material_hashes(self, grading_run: GradingRun, paths: dict[str, Path]) -> None:
         current = {name: _sha256(path) for name, path in paths.items()}
         if current != grading_run.reference_material_hashes:
             raise ReferenceExtractionError(
@@ -575,7 +595,7 @@ class ReferenceExtractionService:
         safe_payload: dict[str, Any] = {
             "assessment_id": grading_run.assessment_id,
             "provider": LOCAL_PADDLE_QWEN_PROVIDER,
-            "model": self.settings.local_qwen_model,
+            "model": self.settings.local_qwen38_model,
         }
         if payload:
             safe_payload.update(payload)

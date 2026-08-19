@@ -24,6 +24,7 @@ from app.db.session import get_db
 from app.models import (
     AnswerRegion,
     AnswerRegionMapping,
+    AnswerRegionOcrRun,
     AnswerRegionSegment,
     Assessment,
     AuditLog,
@@ -47,6 +48,7 @@ from app.schemas import (
     AnswerRegionMappingRunResponse,
     AnswerRegionMappingSuggestionRequest,
     AnswerRegionMappingUpdate,
+    AnswerRegionOcrRunRead,
     AnswerRegionRead,
     AnswerRegionSegmentCreate,
     AnswerRegionSegmentRead,
@@ -58,6 +60,9 @@ from app.schemas import (
     DraftAnswerRegionSuggestionGroup,
     DraftAnswerRegionSuggestionSegment,
     QuestionNodeMappingGroupRead,
+    VisualTranscriptionConfirmationRequest,
+    VisualTranscriptionRejectionRequest,
+    VisualTranscriptionRunRequest,
 )
 from app.services.answer_region_mapping_service import (
     build_submission_mapping_candidates,
@@ -69,7 +74,13 @@ from app.services.local_script_preparation import (
     LocalScriptPreparationError,
     LocalScriptPreparationService,
 )
+from app.services.qwen38_visual_transcription_service import (
+    Qwen38VisualTranscriptionService,
+    VisualTranscriptionError,
+)
 from app.services.storage import LocalStorage
+from app.worker.jobs import run_qwen38_visual_transcription_job
+from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import sanitize_provider_error
 from packages.brain.answer_region_suggestion_codex_provider import (
     CodexAnswerRegionSuggestionProvider,
@@ -1027,14 +1038,14 @@ def run_submission_question_node_mappings(
     submission = get_submission_or_404(submission_id, db)
     get_owned_assessment_or_404(submission.assessment_id, db, current_user)
     request = payload or AnswerRegionMappingRunRequest()
-    if request.provider == "local_paddle_qwen":
+    if request.provider == "llama_cpp_qwen38":
         try:
             mappings = LocalScriptPreparationService(db).prepare(
                 submission=submission,
                 teacher=current_user,
                 expected_model=request.expected_model or "",
                 replace_existing=request.replace_existing,
-                maximum_ocr_calls=request.maximum_ocr_calls,
+                maximum_ocr_calls=request.maximum_visual_calls,
             )
         except LocalScriptPreparationError as exc:
             raise HTTPException(
@@ -1048,18 +1059,16 @@ def run_submission_question_node_mappings(
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Local PaddleOCR/Qwen script preparation failed",
+                detail="Local Qwen3.8 visual script preparation failed",
             ) from exc
         return AnswerRegionMappingRunResponse(
             message=(
-                "PaddleOCR and Qwen prepared draft answer mappings. "
-                "Teacher confirmation is required before grading."
+                "Qwen3.8 prepared draft answer mappings. Confirm the regions, then "
+                "confirm visual evidence before grading."
             ),
             created_count=len(mappings),
             mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),
-            uncertain_count=sum(
-                1 for item in mappings if item.mapping_status == "uncertain"
-            ),
+            uncertain_count=sum(1 for item in mappings if item.mapping_status == "uncertain"),
             blocked_count=sum(1 for item in mappings if item.mapping_status == "blocked"),
             mappings=mappings,
         )
@@ -1245,8 +1254,7 @@ def update_question_node_mapping(
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
-                        "Mapping needs a resolved grading question before "
-                        "creating an answer region"
+                        "Mapping needs a resolved grading question before creating an answer region"
                     ),
                 )
             region = AnswerRegion(
@@ -1347,9 +1355,7 @@ def confirm_question_node_mapping(
                     or ""
                 )
                 approved_choices = {primary_hash: prepared_text} if primary_hash else {}
-                for choice in source_reference.get(
-                    "model_prepared_answer_alternatives", []
-                ):
+                for choice in source_reference.get("model_prepared_answer_alternatives", []):
                     if not isinstance(choice, dict):
                         continue
                     choice_text = str(choice.get("text") or "").strip()
@@ -1359,18 +1365,18 @@ def confirm_question_node_mapping(
                 expected_hash = request.selected_prepared_text_sha256 or primary_hash
                 confirmed_text = approved_choices.get(expected_hash, "")
                 confirmation_source = (
-                    "model_prepared_choice"
-                    if expected_hash != primary_hash
-                    else "model_prepared"
+                    "model_prepared_choice" if expected_hash != primary_hash else "model_prepared"
                 )
                 if not confirmed_text:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="The selected prepared evidence is no longer available",
                     )
-                if not expected_hash or not hashlib.sha256(
-                    confirmed_text.encode("utf-8")
-                ).hexdigest() == expected_hash:
+                if (
+                    not expected_hash
+                    or not hashlib.sha256(confirmed_text.encode("utf-8")).hexdigest()
+                    == expected_hash
+                ):
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="Model-prepared answer evidence failed its integrity check",
@@ -1391,24 +1397,33 @@ def confirm_question_node_mapping(
             mapping.answer_region.manual_answer_text = confirmed_text
             for segment in mapping.answer_region.segments:
                 segment.confirmed = True
-            db.add(
-                AuditLog(
-                    actor_type="teacher",
-                    actor_id=current_user.id,
-                    event_type="model_prepared_answer_evidence_approved",
-                    entity_type="answer_region_mapping",
-                    entity_id=mapping.id,
-                    payload_json={
-                        "answer_region_id": mapping.answer_region.id,
-                        "confirmation_source": confirmation_source,
-                        "confirmed_text_sha256": hashlib.sha256(
-                            confirmed_text.encode("utf-8")
-                        ).hexdigest(),
-                        "confirmed_character_count": len(confirmed_text),
-                        "segment_count": len(mapping.answer_region.segments),
-                    },
+                db.add(
+                    AuditLog(
+                        actor_type="teacher",
+                        actor_id=current_user.id,
+                        event_type="model_prepared_answer_evidence_approved",
+                        entity_type="answer_region_mapping",
+                        entity_id=mapping.id,
+                        payload_json={
+                            "answer_region_id": mapping.answer_region.id,
+                            "confirmation_source": confirmation_source,
+                            "confirmed_text_sha256": hashlib.sha256(
+                                confirmed_text.encode("utf-8")
+                            ).hexdigest(),
+                            "confirmed_character_count": len(confirmed_text),
+                            "segment_count": len(mapping.answer_region.segments),
+                        },
+                    )
                 )
-            )
+        elif mapping.provider == "llama_cpp_qwen38":
+            # Mapping and visual evidence are intentionally separate gates.
+            # The transcript can only be copied by the dedicated hash-checked
+            # visual-transcription confirmation endpoint.
+            if (mapping.answer_region.manual_answer_text or "").strip():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Visual evidence must be confirmed through its transcription run",
+                )
         mapping.teacher_confirmed = True
         mapping.mapping_status = "teacher_confirmed"
     else:
@@ -1579,6 +1594,103 @@ def add_answer_region_segment(
     db.commit()
     db.refresh(segment)
     return segment
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/visual-transcription-runs",
+    response_model=AnswerRegionOcrRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_visual_transcription_run(
+    answer_region_id: int,
+    payload: VisualTranscriptionRunRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionOcrRun:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    service = Qwen38VisualTranscriptionService(db)
+    try:
+        run = service.create(region, teacher=current_user, expected_model=payload.expected_model)
+        get_default_queue().enqueue(run_qwen38_visual_transcription_job, run.id, retry=None)
+        return run
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Qwen3.8 visual transcription could not be queued")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Qwen3.8 visual transcription could not be queued",
+        ) from exc
+
+
+@router.get(
+    "/answer-region-visual-transcription-runs/{run_id}",
+    response_model=AnswerRegionOcrRunRead,
+)
+def get_visual_transcription_run(
+    run_id: int, db: DbSession, current_user: CurrentUser
+) -> AnswerRegionOcrRun:
+    run = db.get(AnswerRegionOcrRun, run_id)
+    if run is None or run.profile != "qwen38_verbatim_visual":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Visual transcription run not found"
+        )
+    get_owned_answer_region_or_404(run.answer_region_id, db, current_user)
+    return run
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/visual-transcription-runs/{run_id}/confirm",
+    response_model=AnswerRegionOcrRunRead,
+)
+def confirm_visual_transcription_run(
+    answer_region_id: int,
+    run_id: int,
+    payload: VisualTranscriptionConfirmationRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionOcrRun:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    run = db.get(AnswerRegionOcrRun, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Visual transcription run not found"
+        )
+    try:
+        Qwen38VisualTranscriptionService(db).confirm(
+            region, run, teacher=current_user, draft_hash=payload.draft_text_sha256
+        )
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    db.refresh(run)
+    return run
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/visual-transcription-runs/{run_id}/reject",
+    response_model=AnswerRegionOcrRunRead,
+)
+def reject_visual_transcription_run(
+    answer_region_id: int,
+    run_id: int,
+    payload: VisualTranscriptionRejectionRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionOcrRun:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    run = db.get(AnswerRegionOcrRun, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Visual transcription run not found"
+        )
+    try:
+        Qwen38VisualTranscriptionService(db).reject(
+            region, run, teacher=current_user, reason=payload.reason
+        )
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    db.refresh(run)
+    return run
 
 
 @router.patch(

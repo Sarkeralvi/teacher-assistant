@@ -1,4 +1,8 @@
-param([string]$ConfigPath)
+param(
+    [string]$ConfigPath,
+    [ValidateSet("Qwen", "Qwen38")]
+    [string]$Mode = "Qwen"
+)
 
 . (Join-Path $PSScriptRoot "Common.ps1")
 
@@ -8,9 +12,19 @@ if (-not $ConfigPath) {
 }
 Import-LocalAiEnvironment -Path $ConfigPath
 
-$qwenBinary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
-$qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
-$null = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
+if ($Mode -eq "Qwen38") {
+    $qwenBinary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_BINARY_PATH"
+    $qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_MODEL_PATH"
+    $null = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_API_KEY"
+    $port = 8085
+    $alias = "qwen3.8-27b-q4km"
+} else {
+    $qwenBinary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
+    $qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
+    $null = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
+    $port = 8080
+    $alias = "qwen3.6-35b-a3b-q4km"
+}
 
 $requiredFiles = @(
     $qwenBinary,
@@ -31,7 +45,7 @@ if ($versionExitCode -ne 0) {
     throw "llama-server version check failed."
 }
 
-foreach ($port in @(8080)) {
+foreach ($port in @($port)) {
     $listeners = @(Get-LocalAiListenerInfo -Port $port)
     if ($listeners.Count -gt 0) {
         $binding = if (@($listeners | Where-Object { -not $_.IsLoopback }).Count -gt 0) {
@@ -45,4 +59,4 @@ foreach ($port in @(8080)) {
 
 Write-Host "Local AI preflight passed."
 Write-Host "llama.cpp: $($versionOutput | Select-Object -First 1)"
-Write-Host "Qwen model alias: $env:LOCAL_QWEN_MODEL"
+Write-Host "Qwen model alias: $alias"

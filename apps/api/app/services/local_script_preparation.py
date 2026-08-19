@@ -71,15 +71,20 @@ class LocalScriptPreparationService:
         replace_existing: bool,
         maximum_ocr_calls: int,
     ) -> list[AnswerRegionMapping]:
+        """Create review-only Qwen3.8 visual mappings from complete script pages.
+
+        This deliberately performs no transcription and no grading.  Mapping and
+        verbatim evidence are independent teacher gates.
+        """
         self._validate_authorization(expected_model)
         pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
         if not pages:
             raise LocalScriptPreparationError("The uploaded script has no rendered pages")
         if len(pages) > maximum_ocr_calls:
             raise LocalScriptPreparationError(
-                "Script page count exceeds the explicitly authorized OCR call limit"
+                "Script page count exceeds the explicitly authorized visual call limit"
             )
-        questions, nodes, references = self._load_finalized_references(submission)
+        questions, nodes, _references = self._load_finalized_references(submission)
         existing = self._load_existing(submission.id)
         if existing and not replace_existing:
             raise LocalScriptPreparationError(
@@ -87,51 +92,86 @@ class LocalScriptPreparationService:
             )
         self._assert_replace_is_safe(existing)
 
-        self.phase_manager.switch("OcrGpu")
-        ocr_pages, ocr_warnings = self._ocr_pages(pages)
-        ocr_call_count = len(pages)
-        self.phase_manager.switch("Qwen")
-        adapter = self._qwen_adapter or BrainAdapter.for_provider(self.settings, "llama_cpp_qwen")
+        if self.settings.local_ai_phase_switch_enabled:
+            self.phase_manager.switch("Qwen38")
+
+        adapter = self._qwen_adapter or BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
         adapter.verify_available_model()
-        result = adapter.map_submission_answers_from_ocr_pages(
-            pages=ocr_pages,
-            questions=references,
-        )
-        drafts = result.get("mappings")
-        if not isinstance(drafts, list):
-            raise LocalScriptPreparationError("Local Qwen returned no mapping drafts")
-        self._validate_draft_set(drafts, questions)
-        question_order = {question.id: index for index, question in enumerate(questions)}
-        drafts.sort(key=lambda item: question_order[int(item["question_id"])])
-
-        block_index = self._block_index(ocr_pages)
-        prepared: list[tuple[dict[str, Any], list[PreparedSegment], str]] = []
-        used_blocks: set[tuple[int, int]] = set()
-        for draft in drafts:
-            segments, draft_text = self._resolve_draft(
-                draft=draft,
-                pages=pages,
-                block_index=block_index,
-                used_blocks=used_blocks,
-            )
-            prepared.append((draft, segments, draft_text))
-        _apply_adjacent_continuation_boundary_fallback(
-            prepared,
-            block_index,
-            self._page_geometry(pages),
-        )
-        visible_ocr_characters = sum(len(str(page.get("text") or "").strip()) for page in ocr_pages)
-        if visible_ocr_characters >= 100 and not any(
-            segments for _draft, segments, _text in prepared
-        ):
+        provider = adapter.provider
+        if not hasattr(provider, "map_page_answer_regions"):
             raise LocalScriptPreparationError(
-                "Qwen mapped no answer regions despite substantial visible OCR text"
+                "Configured local provider cannot map visual script pages"
             )
+        labels = [question.question_no for question in questions]
+        question_by_label = {question.question_no.casefold(): question for question in questions}
+        segments_by_question: dict[int, list[PreparedSegment]] = {
+            question.id: [] for question in questions
+        }
+        warning_by_question: dict[int, list[str]] = {question.id: [] for question in questions}
+        confidence_by_question: dict[int, list[Decimal]] = {
+            question.id: [] for question in questions
+        }
+        open_continuations: list[str] = []
+        calls_used = 0
+        for page in pages:
+            image_path = self.storage.resolve_relative(page.image_path)
+            image_bytes = image_path.read_bytes()
+            try:
+                result = provider.map_page_answer_regions(
+                    image_bytes=image_bytes,
+                    mime_type=_image_content_type(image_path),
+                    question_labels=labels,
+                    open_continuations=open_continuations,
+                )
+            except Exception as exc:
+                raise LocalScriptPreparationError(
+                    f"Qwen3.8 visual mapping failed safely: {exc}"
+                ) from exc
+            calls_used += 1
+            seen: set[str] = set()
+            next_continuations: list[str] = []
+            for region in result.regions:
+                label = region.question_label.casefold()
+                if label in seen:
+                    raise LocalScriptPreparationError(
+                        "Qwen3.8 split one answer into multiple page regions"
+                    )
+                seen.add(label)
+                question = question_by_label.get(label)
+                if question is None:
+                    raise LocalScriptPreparationError(
+                        "Qwen3.8 returned an unknown finalized question"
+                    )
+                x1, y1, x2, y2 = region.bbox
+                with Image.open(image_path) as image:
+                    x, y, width, height = _normalized_box_to_page_box(
+                        x1, y1, x2, y2, image.width, image.height
+                    )
+                segments_by_question[question.id].append(
+                    PreparedSegment(
+                        page_id=page.id,
+                        page_no=page.page_no,
+                        x=x,
+                        y=y,
+                        width=width,
+                        height=height,
+                        block_orders=[],
+                    )
+                )
+                confidence_by_question[question.id].append(region.confidence)
+                warning_by_question[question.id].extend(region.warnings)
+                if region.continues_to_next:
+                    next_continuations.append(question.question_no)
+            open_continuations = next_continuations
 
-        question_by_id = {question.id: question for question in questions}
         created: list[AnswerRegionMapping] = []
-        for draft, segments, draft_text in prepared:
-            question = question_by_id[int(draft["question_id"])]
+        for question in questions:
+            segments = segments_by_question[question.id]
+            draft = {
+                "status": "mapped" if segments else "not_found",
+                "confidence": str(min(confidence_by_question[question.id], default=Decimal("0"))),
+                "warnings": list(dict.fromkeys(warning_by_question[question.id])),
+            }
             node = nodes[question.id]
             mapping = self._create_mapping(
                 submission=submission,
@@ -139,34 +179,11 @@ class LocalScriptPreparationService:
                 node=node,
                 draft=draft,
                 segments=segments,
-                draft_text=draft_text,
-                ocr_warnings=ocr_warnings,
-                qwen_warnings=list(result.get("warnings") or []),
+                draft_text="",
+                ocr_warnings=[],
+                qwen_warnings=[],
             )
             created.append(mapping)
-
-        segment_count = sum(
-            len(mapping.answer_region.segments)
-            for mapping in created
-            if mapping.answer_region is not None
-        )
-        # Evidence is copied directly from PaddleOCR. Qwen maps OCR blocks to
-        # finalized questions, but it must never rewrite student evidence.
-        required_ocr_calls = ocr_call_count + segment_count
-        if required_ocr_calls > maximum_ocr_calls:
-            raise LocalScriptPreparationError(
-                "Prepared answer evidence exceeds the explicitly authorized OCR call limit"
-            )
-
-        crop_ocr_warnings: list[str] = []
-        qwen_call_count = 1
-        if segment_count:
-            self.phase_manager.switch("OcrGpu")
-            crop_ocr_warnings = self._prepare_baseline_ocr_candidates(
-                created,
-                question_by_id,
-            )
-            ocr_call_count = required_ocr_calls
 
         for mapping in existing:
             region = mapping.answer_region
@@ -185,28 +202,13 @@ class LocalScriptPreparationService:
                 entity_id=submission.id,
                 payload_json={
                     "assessment_id": submission.assessment_id,
-                    "provider": "local_paddle_qwen",
+                    "provider": "llama_cpp_qwen38",
                     "expected_qwen_model": expected_model,
-                    "ocr_call_count": ocr_call_count,
-                    "qwen_call_count": qwen_call_count,
+                    "visual_mapping_call_count": calls_used,
                     "mapping_count": len(created),
-                    "mapped_count": sum(1 for draft, segments, _text in prepared if segments),
-                    "draft_text_sha256": hashlib.sha256(
-                        "\n".join(text for _draft, _segments, text in prepared).encode("utf-8")
-                    ).hexdigest(),
-                    "prepared_text_sha256": hashlib.sha256(
-                        "\n".join(
-                            str(
-                                (mapping.source_reference or {}).get(
-                                    "paddle_baseline_text"
-                                )
-                                or ""
-                            )
-                            for mapping in created
-                        ).encode("utf-8")
-                    ).hexdigest(),
-                    "warning_count": len(
-                        list(dict.fromkeys([*ocr_warnings, *crop_ocr_warnings]))
+                    "mapped_count": sum(1 for item in created if item.answer_region is not None),
+                    "warning_count": sum(
+                        len(item.source_reference.get("warnings", [])) for item in created
                     ),
                 },
             )
@@ -217,11 +219,11 @@ class LocalScriptPreparationService:
     def _validate_authorization(self, expected_model: str) -> None:
         if not self.settings.brain_allow_real_providers:
             raise LocalScriptPreparationError("Real local providers are disabled")
-        if not self.settings.local_script_preparation_enabled:
-            raise LocalScriptPreparationError("Local script preparation is disabled")
-        if not self.settings.local_qwen_enabled:
-            raise LocalScriptPreparationError("Local Qwen must be enabled")
-        if expected_model != self.settings.local_qwen_model:
+        if not self.settings.local_qwen38_visual_preparation_enabled:
+            raise LocalScriptPreparationError("Qwen3.8 visual preparation is disabled")
+        if not self.settings.local_qwen38_enabled:
+            raise LocalScriptPreparationError("Qwen3.8 must be enabled")
+        if expected_model != self.settings.local_qwen38_model:
             raise LocalScriptPreparationError("Expected local Qwen model alias does not match")
 
     def _load_finalized_references(
@@ -429,7 +431,7 @@ class LocalScriptPreparationService:
                 ],
                 "warnings": warnings,
                 "teacher_review_required": True,
-                "text_source": "selected_paddle_ocr_blocks",
+                "text_source": "qwen38_visual_mapping_pending_transcription",
             },
             confidence=Decimal(str(draft["confidence"])),
             mapping_status=status,
@@ -438,7 +440,7 @@ class LocalScriptPreparationService:
                 if not segments
                 else ("Qwen marked this mapping uncertain" if status == "uncertain" else None)
             ),
-            provider="local_paddle_qwen",
+            provider="llama_cpp_qwen38",
             teacher_confirmed=False,
         )
         if not segments:
@@ -541,6 +543,21 @@ def _image_content_type(path: Path) -> str:
     raise LocalScriptPreparationError("Stored script page is not PNG or JPEG")
 
 
+def _normalized_box_to_page_box(
+    x1: int, y1: int, x2: int, y2: int, page_width: int, page_height: int
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Convert a Qwen normalized union box to a conservatively padded crop."""
+    pad_x = max(8, round(page_width * 0.015))
+    pad_y = max(8, round(page_height * 0.015))
+    left = max(0, round(page_width * x1 / 1000) - pad_x)
+    top = max(0, round(page_height * y1 / 1000) - pad_y)
+    right = min(page_width, round(page_width * x2 / 1000) + pad_x)
+    bottom = min(page_height, round(page_height * y2 / 1000) + pad_y)
+    if right <= left or bottom <= top:
+        raise LocalScriptPreparationError("Qwen3.8 returned an invalid visual mapping box")
+    return Decimal(left), Decimal(top), Decimal(right - left), Decimal(bottom - top)
+
+
 def _apply_adjacent_continuation_boundary_fallback(
     prepared: list[tuple[dict[str, Any], list[PreparedSegment], str]],
     block_index: dict[tuple[int, int], dict[str, Any]],
@@ -620,8 +637,7 @@ def _append_ocr_candidate(
     text = result.normalized_text.strip()
     warnings = list(result.warnings)
     all_warnings.extend(
-        f"{question.question_no} segment {segment_order}: {warning}"
-        for warning in warnings
+        f"{question.question_no} segment {segment_order}: {warning}" for warning in warnings
     )
     if text:
         candidates.append(
@@ -678,12 +694,8 @@ def _cleaned_whole_image(path: Path) -> bytes:
 
 def _remove_red_annotations(image: Image.Image) -> Image.Image:
     red, green, blue = image.split()
-    red_over_green = ImageChops.subtract(red, green).point(
-        lambda value: 255 if value >= 18 else 0
-    )
-    red_over_blue = ImageChops.subtract(red, blue).point(
-        lambda value: 255 if value >= 18 else 0
-    )
+    red_over_green = ImageChops.subtract(red, green).point(lambda value: 255 if value >= 18 else 0)
+    red_over_blue = ImageChops.subtract(red, blue).point(lambda value: 255 if value >= 18 else 0)
     annotation_mask = ImageChops.multiply(red_over_green, red_over_blue)
     # Include anti-aliased edges around a coloured pen stroke without
     # expanding far enough to erase neighbouring black handwriting.

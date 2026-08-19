@@ -1,4 +1,4 @@
-﻿from functools import lru_cache
+from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,9 +23,7 @@ class Settings(BaseSettings):
     local_qwen_base_url: str = Field(
         default="http://127.0.0.1:8080/v1", alias="LOCAL_QWEN_BASE_URL"
     )
-    local_qwen_model: str = Field(
-        default="qwen3.6-35b-a3b-q4km", alias="LOCAL_QWEN_MODEL"
-    )
+    local_qwen_model: str = Field(default="qwen3.6-35b-a3b-q4km", alias="LOCAL_QWEN_MODEL")
     local_qwen_api_key: str = Field(default="", alias="LOCAL_QWEN_API_KEY")
     local_qwen_timeout_seconds: float = Field(
         default=600.0, alias="LOCAL_QWEN_TIMEOUT_SECONDS", gt=0
@@ -50,9 +48,7 @@ class Settings(BaseSettings):
     local_reference_job_timeout_seconds: int = Field(
         default=1800, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
     )
-    cohort_model_grading_enabled: bool = Field(
-        default=False, alias="COHORT_MODEL_GRADING_ENABLED"
-    )
+    cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(
         default=25, alias="COHORT_MAX_PROVIDER_CALLS", ge=1, le=25
     )
@@ -70,15 +66,11 @@ class Settings(BaseSettings):
     )
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
-    gemini_image_input_enabled: bool = Field(
-        default=False, alias="GEMINI_IMAGE_INPUT_ENABLED"
-    )
+    gemini_image_input_enabled: bool = Field(default=False, alias="GEMINI_IMAGE_INPUT_ENABLED")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="", alias="OPENAI_MODEL")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
-    openai_image_input_enabled: bool = Field(
-        default=False, alias="OPENAI_IMAGE_INPUT_ENABLED"
-    )
+    openai_image_input_enabled: bool = Field(default=False, alias="OPENAI_IMAGE_INPUT_ENABLED")
     openai_timeout_seconds: float = Field(default=30.0, alias="OPENAI_TIMEOUT_SECONDS")
     jwt_secret_key: str = Field(default="dev-only-change-me", alias="JWT_SECRET_KEY")
     jwt_expire_minutes: int = Field(default=480, alias="JWT_EXPIRE_MINUTES")
@@ -88,17 +80,11 @@ class Settings(BaseSettings):
     )
     codex_cli_command: str = Field(default="codex", alias="CODEX_CLI_COMMAND")
     codex_cli_model: str = Field(default="gpt-5.5", alias="CODEX_CLI_MODEL")
-    codex_cli_timeout_seconds: float = Field(
-        default=300.0, alias="CODEX_CLI_TIMEOUT_SECONDS"
-    )
+    codex_cli_timeout_seconds: float = Field(default=300.0, alias="CODEX_CLI_TIMEOUT_SECONDS")
     codex_cli_sandbox: str = Field(default="read-only", alias="CODEX_CLI_SANDBOX")
-    codex_cli_approval_policy: str = Field(
-        default="never", alias="CODEX_CLI_APPROVAL_POLICY"
-    )
+    codex_cli_approval_policy: str = Field(default="never", alias="CODEX_CLI_APPROVAL_POLICY")
     codex_cli_use_json: bool = Field(default=True, alias="CODEX_CLI_USE_JSON")
-    codex_cli_output_last_message: bool = Field(
-        default=True, alias="CODEX_CLI_OUTPUT_LAST_MESSAGE"
-    )
+    codex_cli_output_last_message: bool = Field(default=True, alias="CODEX_CLI_OUTPUT_LAST_MESSAGE")
     codex_cli_image_input_enabled: bool = Field(
         default=False, alias="CODEX_CLI_IMAGE_INPUT_ENABLED"
     )
@@ -113,9 +99,7 @@ class Settings(BaseSettings):
         default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"
     )
     codex_extraction_enabled: bool = Field(default=False, alias="CODEX_EXTRACTION_ENABLED")
-    codex_extraction_provider: str = Field(
-        default="disabled", alias="CODEX_EXTRACTION_PROVIDER"
-    )
+    codex_extraction_provider: str = Field(default="disabled", alias="CODEX_EXTRACTION_PROVIDER")
     codex_extraction_bridge_command: str = Field(
         default="", alias="CODEX_EXTRACTION_BRIDGE_COMMAND"
     )
@@ -129,23 +113,29 @@ class Settings(BaseSettings):
     answer_region_grading_crop_padding_ratio: float = Field(
         default=0.10, alias="ANSWER_REGION_GRADING_CROP_PADDING_RATIO"
     )
-    semi_automated_mode_enabled: bool = Field(
-        default=False, alias="SEMI_AUTOMATED_MODE_ENABLED"
-    )
-    fully_automated_mode_enabled: bool = Field(
-        default=False, alias="FULLY_AUTOMATED_MODE_ENABLED"
-    )
+    semi_automated_mode_enabled: bool = Field(default=False, alias="SEMI_AUTOMATED_MODE_ENABLED")
+    fully_automated_mode_enabled: bool = Field(default=False, alias="FULLY_AUTOMATED_MODE_ENABLED")
     # Qwen3.8-27B vision provider (disabled by default; protected by brain_allow_real_providers)
     local_qwen38_enabled: bool = Field(default=False, alias="LOCAL_QWEN38_ENABLED")
     local_qwen38_base_url: str = Field(
         default="http://127.0.0.1:8085/v1", alias="LOCAL_QWEN38_BASE_URL"
     )
-    local_qwen38_model: str = Field(
-        default="qwen3.8-27b-q4km", alias="LOCAL_QWEN38_MODEL"
-    )
+    local_qwen38_model: str = Field(default="qwen3.8-27b-q4km", alias="LOCAL_QWEN38_MODEL")
     local_qwen38_api_key: str = Field(default="", alias="LOCAL_QWEN38_API_KEY")
     local_qwen38_timeout_seconds: float = Field(
         default=600.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
+    )
+    local_qwen38_visual_preparation_enabled: bool = Field(
+        default=False, alias="LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED"
+    )
+    local_qwen38_grading_enabled: bool = Field(default=False, alias="LOCAL_QWEN38_GRADING_ENABLED")
+    local_qwen38_grading_reasoning_mode: str = Field(
+        default="off", alias="LOCAL_QWEN38_GRADING_REASONING_MODE"
+    )
+    local_qwen38_model_sha256: str = Field(default="", alias="LOCAL_QWEN38_MODEL_SHA256")
+    local_qwen38_mmproj_sha256: str = Field(default="", alias="LOCAL_QWEN38_MMPROJ_SHA256")
+    local_qwen38_max_visual_calls: int = Field(
+        default=25, alias="LOCAL_QWEN38_MAX_VISUAL_CALLS", ge=1, le=100
     )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
@@ -155,8 +145,10 @@ class Settings(BaseSettings):
     def cors_allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
+
 class InsecureConfigurationError(RuntimeError):
     """Raised when a non-development environment is configured with dev-only defaults."""
+
 
 @lru_cache
 def get_settings() -> Settings:

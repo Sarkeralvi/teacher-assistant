@@ -58,6 +58,8 @@ if ($null -ne $redisProcess) {
     Write-Host "Redis-compatible service is already stopped."
 }
 
+$postgresExe = Join-Path $paths.PostgresBin "postgres.exe"
+Stop-PilotProcess -Paths $paths -Name "postgres" -ExpectedExecutable $postgresExe
 $pgCtl = Join-Path $paths.PostgresBin "pg_ctl.exe"
 & $pgCtl status -D $paths.PostgresData *> $null
 if ($LASTEXITCODE -eq 0) {

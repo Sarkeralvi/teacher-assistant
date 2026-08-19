@@ -35,50 +35,16 @@ class FakePhaseManager:
         self.phases.append(phase)
 
 
-class FakeOcrClient:
-    def health(self) -> dict[str, object]:
-        return {
-            "status": "ready",
-            "provider": "local_paddle_qwen",
-            "model": "PaddleOCR-VL-1.6",
-            "layout_model": "PP-DocLayoutV3",
-            "device": "gpu:0",
-            "offline": True,
-        }
-
-
 class FakeExtractor:
     def __init__(self) -> None:
-        self.ocr_client = FakeOcrClient()
         self.qwen_calls = 0
 
-    def ocr_pages(
-        self,
-        file_path: Path,
-        _content_type: str,
-        *,
-        on_call_started,
-        supplemental_rubric_focus: bool = False,
-    ):
-        on_call_started(1)
-        if supplemental_rubric_focus:
-            on_call_started(1)
-        return (
-            [
-                {
-                    "page": 1,
-                    "text": f"OCR for {file_path.stem}",
-                    "markdown": f"OCR for {file_path.stem}",
-                    "blocks": [],
-                    "device": "gpu:0",
-                }
-            ],
-            [],
-        )
+    def render_pages(self, file_path: Path, _content_type: str):
+        return [(1, f"rendered {file_path.stem}".encode(), "image/png")]
 
     def extract_reference_bundle(self, documents):
         self.qwen_calls += 1
-        assert set(documents) == {"question_paper", "solution", "rubric"}
+        assert set(documents) == {"QUESTION", "SOLUTION", "RUBRIC"}
         return {
             "questions": [
                 {
@@ -198,19 +164,17 @@ def seed_run(db: Session, storage_root: Path) -> GradingRun:
 def enabled_settings(storage_root: Path) -> Settings:
     return Settings(
         BRAIN_ALLOW_REAL_PROVIDERS=True,
-        LOCAL_QWEN_ENABLED=True,
-        LOCAL_QWEN_API_KEY="key-local-test",
-        LOCAL_OCR_ENABLED=True,
-        LOCAL_OCR_API_KEY="key-local-ocr-test",
+        LOCAL_QWEN38_ENABLED=True,
+        LOCAL_QWEN38_API_KEY="key-local-test",
+        LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=True,
         LOCAL_REFERENCE_EXTRACTION_ENABLED=True,
-        LOCAL_AI_PHASE_SWITCH_ENABLED=True,
         LOCAL_STORAGE_ROOT=str(storage_root),
         UPLOADS_DIR=str(storage_root / "uploads"),
         ARTIFACTS_DIR=str(storage_root / "artifacts"),
     )
 
 
-def test_reference_bundle_runs_fails_cleanly_when_ocr_removed(
+def test_reference_bundle_runs_with_qwen38_visual_extraction(
     db_session: Session, tmp_path: Path
 ) -> None:
     storage_root = tmp_path / "storage"
@@ -227,7 +191,7 @@ def test_reference_bundle_runs_fails_cleanly_when_ocr_removed(
     queued = service.create(
         run,
         teacher_id=run.created_by_teacher_id,
-        expected_model="qwen3.6-35b-a3b-q4km",
+        expected_model="qwen3.8-27b-q4km",
     )
     assert queued["status"] == "queued"
     service.run(run.id)
@@ -235,8 +199,10 @@ def test_reference_bundle_runs_fails_cleanly_when_ocr_removed(
     db_session.expire_all()
     run = db_session.get(GradingRun, run.id)
     assert run is not None
-    assert run.reference_extraction_status == "failed"
-    assert "PaddleOCR has been removed" in (run.reference_extraction_error or "")
+    assert run.reference_extraction_status == "succeeded"
+    assert run.reference_ocr_call_count == 3
+    assert run.reference_qwen_call_count == 1
+    assert extractor.qwen_calls == 1
 
 
 def test_reference_bundle_detects_material_tampering_before_any_model_call(
@@ -255,7 +221,7 @@ def test_reference_bundle_detects_material_tampering_before_any_model_call(
     service.create(
         run,
         teacher_id=run.created_by_teacher_id,
-        expected_model="qwen3.6-35b-a3b-q4km",
+        expected_model="qwen3.8-27b-q4km",
     )
     (storage_root / run.question_pdf_path).write_bytes(b"changed")
 
@@ -290,7 +256,7 @@ def test_reference_bundle_kill_switch_and_model_alias_are_enforced(
         service.create(
             run,
             teacher_id=run.created_by_teacher_id,
-            expected_model="qwen3.6-35b-a3b-q4km",
+            expected_model="qwen3.8-27b-q4km",
         )
 
     settings.local_reference_extraction_enabled = True

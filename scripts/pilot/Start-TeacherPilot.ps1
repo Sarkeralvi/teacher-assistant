@@ -5,8 +5,8 @@ param(
     # as omitting -StartLocalAi.
     [switch]$SkipLocalAi,
     [switch]$RebuildFrontend,
-    [ValidateSet("Concurrent", "OcrGpu", "OcrCpu", "Qwen")]
-    [string]$LocalAiMode = "Qwen",
+    [ValidateSet("Qwen38")]
+    [string]$LocalAiMode = "Qwen38",
     [int]$HealthTimeoutSeconds = 600
 )
 
@@ -49,19 +49,36 @@ if ($StartLocalAi -and $SkipLocalAi) {
     throw "Use either -StartLocalAi or -SkipLocalAi, not both."
 }
 
-$pgCtl = Join-Path $paths.PostgresBin "pg_ctl.exe"
-$pgStatusOutput = & $pgCtl status -D $paths.PostgresData 2>&1
-if ($LASTEXITCODE -ne 0) {
+$psql = Join-Path $paths.PostgresBin "psql.exe"
+$postgresExe = Join-Path $paths.PostgresBin "postgres.exe"
+$pgReady = $false
+try {
+    $pgReady = (& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1"
+} catch {
+    $pgReady = $false
+}
+if (-not $pgReady) {
     if (Test-PilotPort -Port 5432) {
         throw "Port 5432 is already occupied by an unrecognized PostgreSQL instance."
     }
-    & $pgCtl start -D $paths.PostgresData `
-        -l (Join-Path $paths.LogRoot "postgres.log") -w
-    if ($LASTEXITCODE -ne 0) {
+    $pgProcess = Start-PilotProcess -Paths $paths -Name "postgres" `
+        -Executable $postgresExe -Arguments @("-D", $paths.PostgresData) `
+        -WorkingDirectory $paths.RepositoryRoot
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ([DateTime]::UtcNow -lt $deadline -and -not $pgReady) {
+        try {
+            $pgReady = (& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1"
+        } catch {
+            $pgReady = $false
+        }
+        if ($pgReady) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $pgReady) {
         throw "PostgreSQL failed to start."
     }
 } else {
-    Write-Host ($pgStatusOutput | Select-Object -First 1)
+    Write-Host "PostgreSQL is already running."
 }
 
 $psql = Join-Path $paths.PostgresBin "psql.exe"
@@ -107,39 +124,23 @@ try {
     Pop-Location
 }
 
-# Qwen and PaddleOCR compete for the host GPU.  Keep both off during ordinary
-# pilot startup; a teacher's explicit extraction action phase-switches the
-# required service, or an operator can opt in with -StartLocalAi.
+# Qwen3.8 is the only local model. Keep it off during ordinary pilot startup;
+# an operator may explicitly opt in with -StartLocalAi.
 if ($StartLocalAi) {
     $qwenReady = $false
-    $ocrReady = $false
     try {
-        $null = Invoke-RestMethod -Uri "http://127.0.0.1:8080/props" `
-            -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN_API_KEY" } -TimeoutSec 3
-        $models = Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/models" `
-            -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN_API_KEY" } -TimeoutSec 3
-        $qwenReady = @($models.data.id) -contains $env:LOCAL_QWEN_MODEL
+        $models = Invoke-RestMethod -Uri "http://127.0.0.1:8085/v1/models" `
+            -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN38_API_KEY" } -TimeoutSec 3
+        $qwenReady = @($models.data.id) -contains $env:LOCAL_QWEN38_MODEL
     } catch {
         $qwenReady = $false
     }
-    try {
-        $ocrHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8090/health" `
-            -Headers @{ Authorization = "Bearer $env:LOCAL_OCR_API_KEY" } -TimeoutSec 3
-        $ocrReady = $ocrHealth.status -eq "ready"
-    } catch {
-        $ocrReady = $false
-    }
-    $desiredReady = switch ($LocalAiMode) {
-        "Concurrent" { $qwenReady -and $ocrReady }
-        "Qwen" { $qwenReady -and -not $ocrReady }
-        { $_ -in @("OcrGpu", "OcrCpu") } { $ocrReady -and -not $qwenReady }
-    }
-    if (-not $desiredReady) {
-        & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Stop-LocalAi.ps1")
+    if (-not $qwenReady) {
+        & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Stop-LocalAi.ps1") -Mode Qwen38
         & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Start-LocalAi.ps1") `
-            -HealthTimeoutSeconds $HealthTimeoutSeconds -Mode $LocalAiMode
+            -HealthTimeoutSeconds $HealthTimeoutSeconds -Mode Qwen38
     } else {
-        Write-Host "Local AI phase '$LocalAiMode' is already healthy."
+        Write-Host "Local Qwen3.8 is already healthy."
     }
 } else {
     Write-Host "Local AI is on demand and was not started by this pilot command."

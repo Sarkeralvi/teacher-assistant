@@ -139,14 +139,40 @@ function Start-PilotProcess {
         Write-Host "$Name is already running (PID $($existing.Id))."
         return $existing
     }
-    $process = Start-Process -FilePath $Executable -ArgumentList $Arguments `
-        -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $Paths.LogRoot ($Name + ".stdout.log")) `
-        -RedirectStandardError (Join-Path $Paths.LogRoot ($Name + ".stderr.log"))
-    [IO.File]::WriteAllText(
-        (Get-PilotPidPath -Paths $Paths -Name $Name),
-        [string]$process.Id
-    )
+    $pidPath = Get-PilotPidPath -Paths $Paths -Name $Name
+    $stdout = Join-Path $Paths.LogRoot ($Name + ".stdout.log")
+    $stderr = Join-Path $Paths.LogRoot ($Name + ".stderr.log")
+
+    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+
+    $argListFormatted = ($Arguments | ForEach-Object {
+        "'" + ($_ -replace "'", "''") + "'"
+    }) -join ", "
+
+    $commonScriptPath = Join-Path $PSScriptRoot "Common.ps1"
+    $launcherScript = @"
+. '$commonScriptPath'
+`$pPaths = Get-PilotPaths
+Import-PilotEnvironment -Paths `$pPaths
+`$p = Start-Process -FilePath '$Executable' -ArgumentList @($argListFormatted) -WorkingDirectory '$WorkingDirectory' -WindowStyle Hidden -PassThru -RedirectStandardOutput '$stdout' -RedirectStandardError '$stderr'
+[IO.File]::WriteAllText('$pidPath', [string]`$p.Id)
+"@
+
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($launcherScript))
+    $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+        CurrentDirectory = $WorkingDirectory
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
+        Start-Sleep -Milliseconds 100
+    }
+
+    $process = Get-PilotOwnedProcess -Paths $Paths -Name $Name -ExpectedExecutable $Executable
+    if ($null -eq $process) {
+        throw "Failed to start $Name or read its PID."
+    }
     return $process
 }
 

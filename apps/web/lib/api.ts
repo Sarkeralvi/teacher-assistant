@@ -91,7 +91,7 @@ export type DraftQuestion = {
   needs_review: boolean;
 };
 
-export type QuestionImportProvider = "mock" | "codex_cli_question_extractor" | "local_paddle_qwen";
+export type QuestionImportProvider = "mock" | "codex_cli_question_extractor" | "llama_cpp_qwen38";
 
 export type QuestionImportJob = {
   id: number;
@@ -366,7 +366,7 @@ export type ReferenceExtraction = {
   grading_run_id: number;
   status: "not_started" | "queued" | "running" | "succeeded" | "failed";
   stage: string;
-  provider: "local_paddle_qwen";
+  provider: "llama_cpp_qwen38";
   model: string;
   ocr_device: string;
   question_run_id: number | null;
@@ -420,7 +420,7 @@ export type AnswerRegionOcrRun = {
   call_limit: number;
   calls_used: number;
   candidate_set_sha256: string | null;
-  provider: "local_paddle_qwen" | string;
+  provider: "llama_cpp_qwen38" | string;
   model_name: string;
   layout_model_name: string | null;
   draft_text: string | null;
@@ -841,10 +841,10 @@ export type LocalAiStatus = {
   local_single_answer_grading_enabled: boolean;
   local_ocr_rescue_enabled: boolean;
   qwen: LocalAiServiceStatus;
-  ocr: LocalAiServiceStatus;
+  qwen38: LocalAiServiceStatus;
 };
 
-export type CohortDispatchProvider = "mock" | "llama_cpp_qwen";
+export type CohortDispatchProvider = "mock" | "llama_cpp_qwen" | "llama_cpp_qwen38";
 
 export type CohortDispatchRequest = {
   queue_run_id: number;
@@ -1415,10 +1415,10 @@ export function runSubmissionQuestionNodeMappings(
   submissionId: number,
   payload: {
     replace_existing?: boolean;
-    provider?: "deterministic_layout" | "local_paddle_qwen";
+    provider?: "deterministic_layout" | "llama_cpp_qwen38";
     expected_model?: string;
     draft_only_confirmed?: boolean;
-    maximum_ocr_calls?: number;
+    maximum_visual_calls?: number;
   } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse>(`/submissions/${submissionId}/question-node-mappings/run`, {
@@ -1433,10 +1433,10 @@ export function runAssessmentQuestionNodeMappings(
   assessmentId: number,
   payload: {
     replace_existing?: boolean;
-    provider?: "deterministic_layout" | "local_paddle_qwen";
+    provider?: "deterministic_layout" | "llama_cpp_qwen38";
     expected_model?: string;
     draft_only_confirmed?: boolean;
-    maximum_ocr_calls?: number;
+    maximum_visual_calls?: number;
   } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse[]>(`/assessments/${assessmentId}/question-node-mappings/run`, {
@@ -1511,8 +1511,8 @@ export function startReferenceExtraction(gradingRunId: number) {
   return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
     method: "POST",
     body: {
-      provider: "local_paddle_qwen",
-      expected_model: "qwen3.6-35b-a3b-q4km",
+      provider: "llama_cpp_qwen38",
+      expected_model: "qwen3.8-27b-q4km",
       materials_confirmed: true,
       draft_only_confirmed: true,
     },
@@ -1544,6 +1544,31 @@ export function createAnswerRegionOcrRun(answerRegionId: number) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs`, {
     method: "POST",
   });
+}
+
+export function createVisualTranscriptionRun(answerRegionId: number, expectedModel: string) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/visual-transcription-runs`, {
+    method: "POST",
+    body: { expected_model: expectedModel, draft_only_confirmed: true },
+  });
+}
+
+export function getVisualTranscriptionRun(runId: number) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-region-visual-transcription-runs/${runId}`);
+}
+
+export function confirmVisualTranscriptionRun(answerRegionId: number, runId: number, draftTextSha256: string) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/visual-transcription-runs/${runId}/confirm`,
+    { method: "POST", body: { teacher_confirmed: true, draft_text_sha256: draftTextSha256 } },
+  );
+}
+
+export function rejectVisualTranscriptionRun(answerRegionId: number, runId: number, reason: string) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/visual-transcription-runs/${runId}/reject`,
+    { method: "POST", body: { reason } },
+  );
 }
 
 export function listAnswerRegionOcrRuns(answerRegionId: number) {
@@ -1737,7 +1762,7 @@ export function gradeAnswerRegionWithLocalQwen(
   answerRegionId: number,
   payload: {
     grading_run_id: number;
-    provider: "llama_cpp_qwen";
+    provider: "llama_cpp_qwen" | "llama_cpp_qwen38";
     expected_model: string;
     draft_only_confirmed: true;
   },

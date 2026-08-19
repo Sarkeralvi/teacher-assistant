@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$ConfigPath,
     [int]$HealthTimeoutSeconds = 240,
     [ValidateSet("Qwen", "Qwen38")]
@@ -11,7 +11,7 @@ $repositoryRoot = Get-RepositoryRoot
 if (-not $ConfigPath) {
     $ConfigPath = Join-Path $repositoryRoot ".env.local-ai"
 }
-& (Join-Path $PSScriptRoot "Test-LocalAiPreflight.ps1") -ConfigPath $ConfigPath
+& (Join-Path $PSScriptRoot "Test-LocalAiPreflight.ps1") -ConfigPath $ConfigPath -Mode $Mode
 Import-LocalAiEnvironment -Path $ConfigPath
 
 $runtimeDirectory = Join-Path $repositoryRoot ".local-ai"
@@ -37,7 +37,6 @@ if ($Mode -eq "Qwen") {
         "--n-cpu-moe", "20",
         "-c", "32768",
         "--parallel", "1",
-        "--no-mmap",
         "--flash-attn", "on",
         "--cache-type-k", "q8_0",
         "--cache-type-v", "q8_0",
@@ -49,35 +48,73 @@ if ($Mode -eq "Qwen") {
     $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_BINARY_PATH"
     $model = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_MODEL_PATH"
     $key = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_API_KEY"
+    $expectedModelHash = $env:LOCAL_QWEN38_MODEL_SHA256
+    $expectedMmprojHash = $env:LOCAL_QWEN38_MMPROJ_SHA256
+    $mmproj = Join-Path ($model | Split-Path) "mmproj-Qwen3.8-27B-Q8_0.gguf"
+    if (-not (Test-Path -LiteralPath $mmproj)) { throw "Qwen3.8 mmproj file is missing." }
+    if ($expectedModelHash) {
+        if ((Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedModelHash.ToLowerInvariant()) { throw "Qwen3.8 model SHA256 does not match LOCAL_QWEN38_MODEL_SHA256." }
+    }
+    if ($expectedMmprojHash) {
+        if ((Get-FileHash -LiteralPath $mmproj -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedMmprojHash.ToLowerInvariant()) { throw "Qwen3.8 mmproj SHA256 does not match LOCAL_QWEN38_MMPROJ_SHA256." }
+    }
     $port = 8085
     $alias = "qwen3.8-27b-q4km"
     $args = @(
         "-m", ('"' + $model + '"'),
         "--alias", $alias,
+        "--mmproj", $mmproj,
         "--host", "127.0.0.1",
         "--port", "$port",
         "--offline",
+        "--reasoning", "auto",
         "-ngl", "40",
         "-c", "8192",
         "--parallel", "1",
         "--flash-attn", "on",
         "--batch-size", "256",
         "--ubatch-size", "256",
-        "--threads", "12",
-        "--no-mmap"
+        "--threads", "12"
     )
     $pidFile = "qwen38.pid"
 }
 
 $env:LLAMA_API_KEY = $key
 $proc = $null
-try {
-    $proc = Start-Process -FilePath $binary -ArgumentList $args `
-        -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $logDirectory "$($Mode.ToLower()).stdout.log") `
-        -RedirectStandardError (Join-Path $logDirectory "$($Mode.ToLower()).stderr.log")
-    [IO.File]::WriteAllText((Join-Path $runtimeDirectory $pidFile), [string]$proc.Id)
+$pidFullPath = Join-Path $runtimeDirectory $pidFile
+Remove-Item -LiteralPath $pidFullPath -Force -ErrorAction SilentlyContinue
 
+$stdout = Join-Path $logDirectory "$($Mode.ToLower()).stdout.log"
+$stderr = Join-Path $logDirectory "$($Mode.ToLower()).stderr.log"
+
+$argListFormatted = ($args | ForEach-Object {
+    "'" + ($_ -replace "'", "''") + "'"
+}) -join ", "
+
+$launcherScript = @"
+`$p = Start-Process -FilePath '$binary' -ArgumentList @($argListFormatted) -WorkingDirectory '$runtimeDirectory' -WindowStyle Hidden -PassThru -RedirectStandardOutput '$stdout' -RedirectStandardError '$stderr'
+[IO.File]::WriteAllText('$pidFullPath', [string]`$p.Id)
+"@
+
+$encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($launcherScript))
+$null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+    CurrentDirectory = $runtimeDirectory
+}
+
+$deadline = [DateTime]::UtcNow.AddSeconds(10)
+while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $pidFullPath -PathType Leaf)) {
+    Start-Sleep -Milliseconds 100
+}
+
+if (-not (Test-Path -LiteralPath $pidFullPath -PathType Leaf)) {
+    throw "Failed to start $Mode launcher or write PID file."
+}
+
+$procId = [int](Get-Content -LiteralPath $pidFullPath -Raw).Trim()
+$proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+
+try {
     $deadline = [DateTime]::UtcNow.AddSeconds($HealthTimeoutSeconds)
     $ready = $false
     while ([DateTime]::UtcNow -lt $deadline -and -not $ready) {
@@ -85,10 +122,8 @@ try {
             throw "$Mode service exited during startup. Inspect .local-ai/logs."
         }
         try {
-            $null = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" `
-                -TimeoutSec 3
-            $models = Invoke-RestMethod -Uri "http://127.0.0.1:$port/v1/models" `
-                -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 3
+            $null = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 3
+            $models = Invoke-RestMethod -Uri "http://127.0.0.1:$port/v1/models" -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 3
             $ready = @($models.data.id) -contains $alias
         } catch {
             $ready = $false
@@ -101,8 +136,7 @@ try {
     if (-not $ready) {
         throw "$Mode did not become healthy. Inspect .local-ai/logs."
     }
-    Assert-LocalAiListenerOwnership -Port $port `
-        -ExpectedExecutable $binary -ExpectedProcessId $proc.Id
+    Assert-LocalAiListenerOwnership -Port $port -ExpectedExecutable $binary -ExpectedProcessId $proc.Id
     Write-Host "$Mode is healthy on loopback (Port $port)."
     Write-Host "$Mode PID: $($proc.Id)"
 } catch {

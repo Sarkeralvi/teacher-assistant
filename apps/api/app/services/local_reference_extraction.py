@@ -10,7 +10,7 @@ from PIL import Image, ImageOps
 from app.core.config import Settings, get_settings
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
-LOCAL_PADDLE_QWEN_PROVIDER = "local_paddle_qwen"
+LOCAL_PADDLE_QWEN_PROVIDER = "llama_cpp_qwen38"
 _IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg"}
 
 
@@ -35,36 +35,31 @@ class LocalReferenceExtractor:
     def qwen_adapter(self) -> BrainAdapter:
         if self._qwen_adapter is None:
             try:
-                self._qwen_adapter = BrainAdapter.for_provider(
-                    self.settings, "llama_cpp_qwen"
-                )
+                self._qwen_adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
             except (BrainProviderConfigurationError, RuntimeError, ValueError) as exc:
                 raise LocalReferenceExtractionError(str(exc)) from exc
-        if self._qwen_adapter.provider.provider_name != "llama_cpp_qwen":
-            raise LocalReferenceExtractionError("Local Qwen provider is unavailable")
+        if self._qwen_adapter.provider.provider_name != "llama_cpp_qwen38":
+            raise LocalReferenceExtractionError("Local Qwen3.8 provider is unavailable")
         return self._qwen_adapter
 
     def extract_questions(self, file_path: Path, content_type: str) -> dict[str, Any]:
         pages, ocr_warnings = self.ocr_pages(file_path, content_type)
         result = self.qwen_adapter.extract_questions_from_ocr_pages(pages)
-        result["warnings"] = list(
-            dict.fromkeys([*ocr_warnings, *list(result.get("warnings", []))])
-        )
+        result["warnings"] = list(dict.fromkeys([*ocr_warnings, *list(result.get("warnings", []))]))
         return result
 
     def extract_rubric(self, file_path: Path, content_type: str) -> dict[str, Any]:
         pages, ocr_warnings = self.ocr_pages(file_path, content_type)
         result = self.qwen_adapter.extract_rubric_from_ocr_pages(pages)
-        result["warnings"] = list(
-            dict.fromkeys([*ocr_warnings, *list(result.get("warnings", []))])
-        )
+        result["warnings"] = list(dict.fromkeys([*ocr_warnings, *list(result.get("warnings", []))]))
         return result
 
     def extract_reference_bundle(
-        self, documents: dict[str, list[dict[str, Any]]]
+        self, documents: dict[str, list[tuple[bytes, str, int]]]
     ) -> dict[str, Any]:
         try:
-            return self.qwen_adapter.extract_reference_bundle_from_ocr_documents(documents)
+            provider = self.qwen_adapter.provider
+            return provider.extract_reference_bundle_from_images(documents=documents)
         except (RuntimeError, ValueError, NotImplementedError) as exc:
             raise LocalReferenceExtractionError(str(exc)) from exc
 
@@ -73,18 +68,14 @@ class LocalReferenceExtractor:
             "PaddleOCR has been removed. Visual transcription will be provided by Qwen3.8."
         )
 
-    def render_pages(
-        self, file_path: Path, content_type: str
-    ) -> list[tuple[int, bytes, str]]:
+    def render_pages(self, file_path: Path, content_type: str) -> list[tuple[int, bytes, str]]:
         if content_type == "application/pdf":
             try:
                 with fitz.open(file_path) as document:
                     return [
                         (
                             page_index,
-                            page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).tobytes(
-                                "png"
-                            ),
+                            page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).tobytes("png"),
                             "image/png",
                         )
                         for page_index, page in enumerate(document, start=1)
@@ -101,7 +92,7 @@ class LocalReferenceExtractor:
                     "Reference image could not be read locally"
                 ) from exc
         raise LocalReferenceExtractionError(
-            "local_paddle_qwen supports PDF, PNG, and JPEG reference files"
+            "local Qwen3.8 supports PDF, PNG, and JPEG reference files"
         )
 
 
@@ -119,9 +110,7 @@ def _prepare_rubric_focus_png(image_bytes: bytes) -> bytes:
     # writing that otherwise collapses rows into a single OCR line.
     image = image.crop((0, 0, max(1, int(image.width * 0.62)), image.height))
     contrasted = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=1)
-    thresholded = contrasted.point(lambda value: 0 if value < 185 else 255).convert(
-        "RGB"
-    )
+    thresholded = contrasted.point(lambda value: 0 if value < 185 else 255).convert("RGB")
     output = io.BytesIO()
     thresholded.save(output, format="PNG")
     return output.getvalue()

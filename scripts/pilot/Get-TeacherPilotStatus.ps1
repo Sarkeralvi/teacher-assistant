@@ -6,6 +6,10 @@ param([switch]$RequireAll)
 $paths = Get-PilotPaths
 Assert-PilotRuntime -Paths $paths
 Import-PilotEnvironment -Paths $paths
+$localAiEnv = Join-Path $paths.RepositoryRoot ".env.local-ai"
+if (Test-Path -LiteralPath $localAiEnv) {
+    Import-LocalAiEnvironment -Path $localAiEnv
+}
 
 function Test-HttpEndpoint {
     param([string]$Uri, [hashtable]$Headers = @{})
@@ -70,9 +74,13 @@ function Get-LocalAiRuntimeState {
     }
 }
 
-$pgCtl = Join-Path $paths.PostgresBin "pg_ctl.exe"
-& $pgCtl status -D $paths.PostgresData *> $null
-$postgresReady = $LASTEXITCODE -eq 0
+$psql = Join-Path $paths.PostgresBin "psql.exe"
+$postgresReady = $false
+try {
+    $postgresReady = (& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1"
+} catch {
+    $postgresReady = $false
+}
 $redisReady = $false
 try {
     $redisReady = (& $paths.RedisCli -h 127.0.0.1 -p 6379 PING 2>$null) -eq "PONG"
@@ -80,37 +88,18 @@ try {
     $redisReady = $false
 }
 $localAiRuntimeDirectory = Join-Path $paths.RepositoryRoot ".local-ai"
-$qwenRuntime = Get-LocalAiRuntimeState -Port 8080 `
-    -ExpectedExecutable $env:LOCAL_QWEN_BINARY_PATH `
-    -PidPath (Join-Path $localAiRuntimeDirectory "qwen.pid")
-$ocrRuntime = Get-LocalAiRuntimeState -Port 8090 `
-    -ExpectedExecutable $env:LOCAL_OCR_PYTHON_PATH `
-    -PidPath (Join-Path $localAiRuntimeDirectory "ocr.pid")
+$qwen38Runtime = Get-LocalAiRuntimeState -Port 8085 `
+    -ExpectedExecutable $env:LOCAL_QWEN38_BINARY_PATH `
+    -PidPath (Join-Path $localAiRuntimeDirectory "qwen38.pid")
 
-$qwenReady = $false
+$qwen38Ready = $false
 try {
-    $null = Invoke-RestMethod -Uri "http://127.0.0.1:8080/props" `
-        -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN_API_KEY" } -TimeoutSec 5
-    $models = Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/models" `
-        -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN_API_KEY" } -TimeoutSec 5
-    $qwenReady = $qwenRuntime.Safe `
-        -and (@($models.data.id) -contains $env:LOCAL_QWEN_MODEL)
+    $models = Invoke-RestMethod -Uri "http://127.0.0.1:8085/v1/models" `
+        -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN38_API_KEY" } -TimeoutSec 5
+    $qwen38Ready = $qwen38Runtime.Safe `
+        -and (@($models.data.id) -contains $env:LOCAL_QWEN38_MODEL)
 } catch {
-    $qwenReady = $false
-}
-$ocrReady = $false
-$ocrDevice = "not running"
-try {
-    $ocrHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8090/health" `
-        -Headers @{ Authorization = "Bearer $env:LOCAL_OCR_API_KEY" } -TimeoutSec 5
-    $ocrReady = $ocrRuntime.Safe `
-        -and $ocrHealth.status -eq "ready" `
-        -and $ocrHealth.device -in @("cpu", "gpu:0")
-    if ($ocrReady) {
-        $ocrDevice = [string]$ocrHealth.device
-    }
-} catch {
-    $ocrReady = $false
+    $qwen38Ready = $false
 }
 $workerReady = $null -ne (Get-PilotOwnedProcess -Paths $paths -Name "worker" -ExpectedExecutable $paths.ApiPython)
 
@@ -120,16 +109,15 @@ $status = @(
     [pscustomobject]@{ Service = "Backend"; Ready = (Test-HttpEndpoint "http://127.0.0.1:8000/health"); State = "managed"; Endpoint = "http://localhost:8000" },
     [pscustomobject]@{ Service = "RQ worker"; Ready = $workerReady; State = "managed"; Endpoint = "teacher-assistant-default" },
     [pscustomobject]@{ Service = "Frontend"; Ready = (Test-HttpEndpoint "http://127.0.0.1:3000"); State = "managed"; Endpoint = "http://localhost:3000" },
-    [pscustomobject]@{ Service = "Local Qwen"; Ready = $qwenReady; State = $qwenRuntime.Label; Endpoint = "127.0.0.1:8080" },
-    [pscustomobject]@{ Service = "PaddleOCR ($ocrDevice)"; Ready = $ocrReady; State = $ocrRuntime.Label; Endpoint = "127.0.0.1:8090" }
+    [pscustomobject]@{ Service = "Local Qwen3.8"; Ready = $qwen38Ready; State = $qwen38Runtime.Label; Endpoint = "127.0.0.1:8085" }
 )
 $status | Format-Table -AutoSize
 Write-Host "Cohort model grading enabled: $env:COHORT_MODEL_GRADING_ENABLED"
 $coreReady = $postgresReady -and $redisReady -and $workerReady `
     -and (Test-HttpEndpoint "http://127.0.0.1:8000/health") `
     -and (Test-HttpEndpoint "http://127.0.0.1:3000")
-$localPhaseReady = $qwenReady -or $ocrReady
-$unsafeLocalAi = -not $qwenRuntime.Safe -or -not $ocrRuntime.Safe
+$localPhaseReady = $qwen38Ready
+$unsafeLocalAi = -not $qwen38Runtime.Safe
 if ($unsafeLocalAi) {
     Write-Warning "An unsafe or unmanaged local AI listener was detected."
     exit 1

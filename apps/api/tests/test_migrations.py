@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-EXPECTED_REVISION_ID = "0022_ocr_rescue_v2"
+EXPECTED_REVISION_ID = "0023_qwen38_visual_preparation"
 
 
 def test_initial_alembic_migration_exists_and_is_importable() -> None:

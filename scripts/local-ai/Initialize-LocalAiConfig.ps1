@@ -1,69 +1,51 @@
 param(
-    [Parameter(Mandatory = $true)][string]$QwenBinaryPath,
-    [Parameter(Mandatory = $true)][string]$QwenModelPath,
-    [Parameter(Mandatory = $true)][string]$OcrPythonPath,
-    [Parameter(Mandatory = $true)][string]$OcrVlModelPath,
-    [Parameter(Mandatory = $true)][string]$OcrLayoutModelPath,
-    [Parameter(Mandatory = $true)][string]$OcrTextDetModelPath,
-    [Parameter(Mandatory = $true)][string]$OcrTextRecModelPath,
+    [Parameter(Mandatory = $true)][string]$Qwen38BinaryPath,
+    [Parameter(Mandatory = $true)][string]$Qwen38ModelPath,
     [string]$OutputPath
 )
 
 . (Join-Path $PSScriptRoot "Common.ps1")
 
 $repositoryRoot = Get-RepositoryRoot
-if (-not $OutputPath) {
-    $OutputPath = Join-Path $repositoryRoot ".env.local-ai"
-}
+if (-not $OutputPath) { $OutputPath = Join-Path $repositoryRoot ".env.local-ai" }
 if (Test-Path -LiteralPath $OutputPath) {
     throw "Refusing to overwrite existing local AI configuration: $OutputPath"
 }
+if (-not (Test-Path -LiteralPath $Qwen38BinaryPath)) { throw "Qwen3.8 llama-server binary was not found." }
+if (-not (Test-Path -LiteralPath $Qwen38ModelPath)) { throw "Qwen3.8 GGUF model was not found." }
 
-function New-LocalApiKey {
-    $randomBytes = [byte[]]::new(32)
-    $randomNumberGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $randomNumberGenerator.GetBytes($randomBytes)
-    } finally {
-        $randomNumberGenerator.Dispose()
-    }
-    return ([BitConverter]::ToString($randomBytes)).Replace("-", "").ToLowerInvariant()
-}
+$mmprojPath = Join-Path (Split-Path $Qwen38ModelPath) "mmproj-Qwen3.8-27B-Q8_0.gguf"
+if (-not (Test-Path -LiteralPath $mmprojPath)) { throw "Qwen3.8 mmproj file was not found beside the model." }
 
-$qwenApiKey = New-LocalApiKey
-$ocrApiKey = New-LocalApiKey
+$randomBytes = [byte[]]::new(32)
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try { $rng.GetBytes($randomBytes) } finally { $rng.Dispose() }
+$apiKey = ([BitConverter]::ToString($randomBytes)).Replace("-", "").ToLowerInvariant()
 
+$modelHash = (Get-FileHash -LiteralPath $Qwen38ModelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$mmprojHash = (Get-FileHash -LiteralPath $mmprojPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $lines = @(
     "BRAIN_ALLOW_REAL_PROVIDERS=true"
-    "LOCAL_QWEN_ENABLED=true"
-    "LOCAL_QWEN_BASE_URL=http://127.0.0.1:8080/v1"
-    "LOCAL_QWEN_MODEL=qwen3.6-35b-a3b-q4km"
-    "LOCAL_QWEN_API_KEY=$qwenApiKey"
-    "LOCAL_QWEN_BINARY_PATH=$QwenBinaryPath"
-    "LOCAL_QWEN_MODEL_PATH=$QwenModelPath"
-    "LOCAL_OCR_ENABLED=true"
-    "LOCAL_OCR_BASE_URL=http://127.0.0.1:8090"
-    "LOCAL_OCR_API_KEY=$ocrApiKey"
-    "LOCAL_OCR_PYTHON_PATH=$OcrPythonPath"
-    "LOCAL_OCR_VL_MODEL_PATH=$OcrVlModelPath"
-    "LOCAL_OCR_LAYOUT_MODEL_PATH=$OcrLayoutModelPath"
-    "LOCAL_OCR_TEXT_DET_MODEL_PATH=$OcrTextDetModelPath"
-    "LOCAL_OCR_TEXT_REC_MODEL_PATH=$OcrTextRecModelPath"
-    "LOCAL_OCR_HOST=127.0.0.1"
-    "LOCAL_OCR_PORT=8090"
-    "LOCAL_OCR_MAX_IMAGE_BYTES=20971520"
-    "LOCAL_OCR_DEVICE=cpu"
-    "LOCAL_OCR_RESCUE_ENABLED=false"
-    "LOCAL_OCR_RESCUE_MAX_CALLS=8"
-    "LOCAL_OCR_MAX_BANDS=6"
-    "LOCAL_REFERENCE_EXTRACTION_ENABLED=true"
-    "LOCAL_AI_PHASE_SWITCH_ENABLED=true"
-    "LOCAL_AI_PHASE_TIMEOUT_SECONDS=600"
-    "LOCAL_REFERENCE_MAX_OCR_CALLS=20"
+    "LOCAL_QWEN_ENABLED=false"
+    "LOCAL_QWEN38_ENABLED=true"
+    "LOCAL_QWEN38_BASE_URL=http://127.0.0.1:8085/v1"
+    "LOCAL_QWEN38_MODEL=qwen3.8-27b-q4km"
+    "LOCAL_QWEN38_API_KEY=$apiKey"
+    "LOCAL_QWEN38_TIMEOUT_SECONDS=600"
+    "LOCAL_QWEN38_BINARY_PATH=$Qwen38BinaryPath"
+    "LOCAL_QWEN38_MODEL_PATH=$Qwen38ModelPath"
+    "LOCAL_QWEN38_MODEL_SHA256=$modelHash"
+    "LOCAL_QWEN38_MMPROJ_SHA256=$mmprojHash"
+    "LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=false"
+    "LOCAL_QWEN38_GRADING_ENABLED=false"
+    "LOCAL_QWEN38_GRADING_REASONING_MODE=off"
+    "LOCAL_QWEN38_MAX_VISUAL_CALLS=25"
+    "LOCAL_REFERENCE_EXTRACTION_ENABLED=false"
+    "LOCAL_SCRIPT_PREPARATION_ENABLED=false"
+    "LOCAL_SINGLE_ANSWER_GRADING_ENABLED=false"
     "COHORT_MODEL_GRADING_ENABLED=false"
-    "COHORT_MAX_PROVIDER_CALLS=25"
     "COHORT_PROVIDER_RETRY_COUNT=0"
 )
 [IO.File]::WriteAllLines($OutputPath, $lines, [Text.UTF8Encoding]::new($false))
-Write-Host "Created ignored local AI configuration at $OutputPath"
-Write-Host "Cohort model grading remains disabled until you explicitly enable it."
+Write-Host "Created ignored Qwen3.8 local configuration at $OutputPath"
+Write-Host "Visual preparation and grading remain disabled until an operator explicitly enables them."

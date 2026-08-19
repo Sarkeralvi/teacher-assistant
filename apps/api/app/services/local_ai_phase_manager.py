@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import subprocess
@@ -29,8 +29,13 @@ class LocalAiPhaseManager:
         self.repository_root = repository_root or Path(__file__).resolve().parents[4]
 
     def switch(self, phase: LocalAiPhase) -> None:
-        if not self.settings.local_reference_extraction_enabled:
-            raise LocalAiPhaseError("Local reference extraction is disabled")
+        if not (
+            self.settings.local_reference_extraction_enabled
+            or self.settings.local_script_preparation_enabled
+            or self.settings.local_qwen38_visual_preparation_enabled
+            or self.settings.local_qwen38_grading_enabled
+        ):
+            raise LocalAiPhaseError("Local AI features are disabled")
         if not self.settings.local_ai_phase_switch_enabled:
             raise LocalAiPhaseError("Automatic local AI phase switching is disabled")
         if os.name != "nt":

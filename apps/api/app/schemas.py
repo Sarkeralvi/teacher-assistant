@@ -26,6 +26,7 @@ class LocalAiStatusRead(BaseModel):
     local_script_preparation_enabled: bool = False
     local_single_answer_grading_enabled: bool = False
     qwen: LocalAiServiceStatusRead
+    qwen38: LocalAiServiceStatusRead
 
 
 class UserCreate(BaseModel):
@@ -758,7 +759,7 @@ class AnswerRegionRead(ORMBase):
 
 
 class ReferenceExtractionStartRequest(BaseModel):
-    provider: Literal["local_paddle_qwen"]
+    provider: Literal["llama_cpp_qwen38"]
     expected_model: str = Field(min_length=1, max_length=255)
     materials_confirmed: Literal[True]
     draft_only_confirmed: Literal[True]
@@ -789,7 +790,7 @@ class ReferenceExtractionRead(BaseModel):
     grading_run_id: int
     status: str
     stage: str
-    provider: Literal["local_paddle_qwen"]
+    provider: Literal["llama_cpp_qwen38"]
     model: str
     ocr_device: str
     question_run_id: int | None
@@ -895,7 +896,15 @@ class AnswerRegionOcrRunRead(ORMBase):
         "queued", "running", "succeeded", "failed", "confirmed", "rejected", "uncertain"
     ]
     profile: str
+    task_kind: str = "legacy_ocr"
+    reasoning_mode: str | None = None
+    prompt_version: str | None = None
     source_image_sha256: str | None
+    source_image_hashes: list[str] = Field(default_factory=list)
+    input_manifest_sha256: str | None = None
+    output_sha256: str | None = None
+    model_asset_sha256: str | None = None
+    mmproj_asset_sha256: str | None = None
     queued_at: datetime | None
     started_at: datetime | None
     heartbeat_at: datetime | None
@@ -922,11 +931,34 @@ class AnswerRegionOcrRunRead(ORMBase):
     updated_at: datetime
 
 
+class VisualTranscriptionRunRequest(BaseModel):
+    expected_model: str = Field(min_length=1, max_length=255)
+    draft_only_confirmed: Literal[True]
+
+
+class VisualTranscriptionConfirmationRequest(BaseModel):
+    teacher_confirmed: Literal[True]
+    draft_text_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
+class VisualTranscriptionRejectionRequest(BaseModel):
+    reason: Literal[
+        "all_candidates_wrong",
+        "critical_digit_wrong",
+        "math_symbol_wrong",
+        "missing_or_extra_line",
+        "wrong_region",
+        "image_quality",
+    ]
+
+
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
-    provider: Literal["deterministic_layout"] = "deterministic_layout"
+    provider: Literal["deterministic_layout", "llama_cpp_qwen38"] = "deterministic_layout"
     expected_model: str | None = Field(default=None, max_length=255)
     draft_only_confirmed: bool = False
+    maximum_visual_calls: int = Field(default=25, ge=1, le=100)
+
 
 class AnswerRegionMappingUpdate(BaseModel):
     question_node_id: int | None = None
@@ -1217,7 +1249,7 @@ class GradeAnswerRegionResponse(BaseModel):
 
 class LocalQwenGradeRequest(BaseModel):
     grading_run_id: int = Field(gt=0)
-    provider: Literal["llama_cpp_qwen"]
+    provider: Literal["llama_cpp_qwen", "llama_cpp_qwen38"]
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
 
@@ -1250,7 +1282,7 @@ class CohortGradeDispatchResponse(BaseModel):
 class CohortDispatchRequest(BaseModel):
     queue_run_id: int = Field(gt=0)
     grading_run_id: int = Field(gt=0)
-    provider: Literal["mock", "llama_cpp_qwen"]
+    provider: Literal["mock", "llama_cpp_qwen", "llama_cpp_qwen38"]
     expected_model: str = Field(min_length=1, max_length=255)
     call_limit: int = Field(ge=1, le=25)
     draft_only_confirmed: Literal[True]
