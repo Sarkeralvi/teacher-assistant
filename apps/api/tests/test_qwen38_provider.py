@@ -120,7 +120,7 @@ def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:
     )
 
     request = client.requests[0]
-    assert request["max_tokens"] == 1800
+    assert request["max_tokens"] == 5500
     assert request["chat_template_kwargs"] == {
         "enable_thinking": False,
         "preserve_thinking": False,

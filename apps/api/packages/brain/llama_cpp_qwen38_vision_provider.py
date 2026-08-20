@@ -57,7 +57,16 @@ EXPECTED_ALIAS = "qwen3.8-27b-q4km"
 
 _TRANSCRIBE_MAX_TOKENS = 2048
 _GRADE_MAX_TOKENS = 1500
-_REFERENCE_BUNDLE_MAX_TOKENS = 1800
+# A real multi-question, multi-criterion reference bundle needs more than a
+# short grading reply to describe in schema-constrained JSON: the truncation
+# seen in practice (an unterminated JSON string at the token ceiling) came
+# from a genuine multi-page bundle, not padding. Schema-constrained decoding
+# stops at the JSON's natural end regardless of this ceiling, so raising it
+# costs nothing on smaller bundles and only matters as a truncation guard on
+# larger ones. Sized to fit LOCAL_QWEN38_CONTEXT_TOKENS=12288 alongside the
+# worst case of 4 rendered pages at LOCAL_QWEN38 image-max-tokens=1280 each
+# (~5.1K prompt tokens), with headroom to spare.
+_REFERENCE_BUNDLE_MAX_TOKENS = 5500
 
 # Patterns used for error sanitization
 _API_KEY_PATTERN = re.compile(r"Bearer\s+\S+", re.IGNORECASE)
