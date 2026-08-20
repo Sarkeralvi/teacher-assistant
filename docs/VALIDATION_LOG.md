@@ -1518,3 +1518,70 @@ No local Qwen or PaddleOCR service was started for harness validation. No real m
 ## Remaining gate
 
 Prepare the ignored run from the clean harness commit, have a qualified teacher independently complete and sign `ground_truth_review.xlsx`, and only then authorize exactly 20 local OCR calls. Qwen remains blocked until the second teacher confirmation gate. Only a final `PASS` report can unblock a supervised pilot.
+
+# TA-LOCAL-004 - Platform throughput measurements (2026-08-20)
+
+Measured on this host so the tiered-pipeline plan rests on numbers rather than
+assumptions. No student data, no grading, no writes; bounded generations only.
+
+## Local model decode throughput
+
+| Model | Config | Sustained decode | Load time |
+|---|---|---|---|
+| Qwen3.8-27B-Q4_K_M | `-ngl 40`, `-c 12288`, port 8085 | **4.35 tok/s** | ~17 s |
+| Qwen3.6-35B-A3B-UD-Q4_K_M | `-ngl 99 --n-cpu-moe 20`, `-c 32768`, q8_0 KV, port 8086 | **20.2 tok/s** | ~17 s |
+
+Qwen3.6 is **4.6x** faster than Qwen3.8 for text generation, not the ~15x the
+plan assumed. The ~66 tok/s figure used in planning came from a different
+server configuration and does not reproduce under the configuration the
+application uses. Consequences:
+
+- A 5,500-token reference bundle costs ~4.5 min on Qwen3.6 versus ~21 min on
+  Qwen3.8. Moving stage 2 is still the single largest win available, but it is
+  worth ~16 min, not ~19.5 min.
+- Every latency estimate in the plan that used 66 tok/s is optimistic by ~3x on
+  the correlation step and must be restated against 20.2 tok/s.
+
+Unresolved: why this configuration is ~3x slower than the reference one. The
+likeliest cause is VRAM pressure - `--n-cpu-moe 20` keeps more experts on the
+GPU than the faster reference config's 26, and with a 32K q8_0 KV cache the
+server settles at 11,811 / 12,227 MiB, leaving 416 MiB free. Packing more onto
+a nearly full card can cost more than it saves. Untested.
+
+## Tier-1 OCR first probe (RapidOCR 3.9.2, PP-OCRv6 det/rec, CPU, ONNX)
+
+Preliminary, on three real reference pages at 300 DPI, **without ground truth** -
+these are observations, not error rates.
+
+| Page | Lines | Latency | Mean confidence | Min |
+|---|---|---|---|---|
+| Question (printed) | 29 | 1.46 s | 0.986 | 0.79 |
+| Rubric (handwritten) | 28 | 0.73 s | 0.763 | 0.50 |
+| Solution (typeset math) | 71 | 1.14 s | 0.968 | 0.55 |
+
+Speed is not in question: ~1 s/page on CPU against minutes for the vision model,
+and it needs no VRAM, so it can run while a model is loaded.
+
+Two observations that matter more than the speed, both to be confirmed against
+labelled fixtures:
+
+1. **Confidence looks poorly calibrated on handwriting.** The rubric produced
+   confidently wrong lines - "Ssuution Rubric;" at 0.92, "MAIH-22+CHE" at 0.90,
+   "Anry three should be answe" at 0.95 (also truncated at the page edge). If
+   this holds, a confidence-only gate would accept bad readings, and the
+   structural trigger is not a refinement but a requirement.
+2. **Typeset math is confidently shredded.** The solution page yielded isolated
+   single digits - "7", "7", "5" - each at ~0.99999, with the fraction
+   structure destroyed. This is the out-of-vocabulary failure the plan
+   predicted: high confidence, structurally useless output. Confidence cannot
+   detect it; only a geometric/structural trigger can.
+
+Mean confidence does separate document types (0.986 printed vs 0.763
+handwritten), so a page-level signal may work even where per-line confidence
+does not.
+
+## Remaining gate
+
+The calibration verdict needs the teacher-labelled fixtures. Until then no
+threshold may be chosen, and the kill criterion - error flat across confidence
+bins - has not been evaluated.

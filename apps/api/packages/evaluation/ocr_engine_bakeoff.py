@@ -107,7 +107,19 @@ EngineAdapter = Callable[[bytes, str], EngineReading]
 # ── Engine adapters (lazily imported) ─────────────────────────────────────
 
 
-def _rapidocr_adapter(model_variant: str) -> EngineAdapter:
+def _sequence_or_empty(value: Any) -> list[Any]:
+    """Coerce an optional result field to a list.
+
+    Not ``value or []``: RapidOCR returns numpy arrays, and their truthiness
+    raises "the truth value of an array with more than one element is
+    ambiguous" rather than being falsy when empty.
+    """
+    if value is None:
+        return []
+    return list(value)
+
+
+def _rapidocr_adapter() -> EngineAdapter:
     def run(image_bytes: bytes, _mime: str) -> EngineReading:
         try:
             from rapidocr import RapidOCR  # noqa: PLC0415
@@ -115,24 +127,19 @@ def _rapidocr_adapter(model_variant: str) -> EngineAdapter:
             raise OcrBakeoffError(
                 "rapidocr is not installed; install it to run this arm"
             ) from exc
-        import io  # noqa: PLC0415
-
-        from PIL import Image  # noqa: PLC0415
-
         load_start = time.perf_counter()
         engine = RapidOCR()
         model_load_ms = int((time.perf_counter() - load_start) * 1000)
 
-        with Image.open(io.BytesIO(image_bytes)) as source:
-            image = source.convert("RGB")
+        # RapidOCR takes raw bytes; handing it a PIL Image raises.
         start = time.perf_counter()
-        result = engine(image)
+        result = engine(image_bytes)
         latency_ms = int((time.perf_counter() - start) * 1000)
 
         lines: list[OcrLine] = []
-        texts = getattr(result, "txts", None) or []
-        scores = getattr(result, "scores", None) or []
-        boxes = getattr(result, "boxes", None) or []
+        texts = _sequence_or_empty(getattr(result, "txts", None))
+        scores = _sequence_or_empty(getattr(result, "scores", None))
+        boxes = _sequence_or_empty(getattr(result, "boxes", None))
         for index, text in enumerate(texts):
             score = scores[index] if index < len(scores) else None
             box = boxes[index] if index < len(boxes) else None
@@ -144,7 +151,7 @@ def _rapidocr_adapter(model_variant: str) -> EngineAdapter:
                 )
             )
         return EngineReading(
-            engine=f"rapidocr_{model_variant}",
+            engine="rapidocr",
             text="\n".join(line.text for line in lines),
             lines=lines,
             latency_ms=latency_ms,
@@ -269,9 +276,11 @@ class ProviderCallBudget:
 
 
 def build_engine_adapters(budget: ProviderCallBudget) -> dict[str, EngineAdapter]:
+    # One rapidocr arm, not two: rapidocr 3.9.2 ships PP-OCRv6 det/rec/cls as
+    # its defaults, so naming separate v5 and v6 arms would have labelled the
+    # same models twice. Model files are reported by the engine at load time.
     return {
-        "rapidocr_ppocrv5": _rapidocr_adapter("ppocrv5"),
-        "rapidocr_ppocrv6": _rapidocr_adapter("ppocrv6"),
+        "rapidocr": _rapidocr_adapter(),
         "tesseract": _tesseract_adapter(),
         "qwen38_vision": _qwen38_vision_adapter(budget=budget),
     }
