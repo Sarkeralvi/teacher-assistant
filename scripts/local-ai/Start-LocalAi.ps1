@@ -53,7 +53,7 @@ if ($Mode -eq "Qwen") {
     $contextTokens = if ($env:LOCAL_QWEN38_CONTEXT_TOKENS) {
         [int]$env:LOCAL_QWEN38_CONTEXT_TOKENS
     } else {
-        16384
+        12288
     }
     if ($contextTokens -lt 12288 -or $contextTokens -gt 32768) {
         throw "LOCAL_QWEN38_CONTEXT_TOKENS must be between 12288 and 32768."
@@ -75,9 +75,11 @@ if ($Mode -eq "Qwen") {
         "--host", "127.0.0.1",
         "--port", "$port",
         "--offline",
-        "--reasoning", "auto",
+        "--reasoning", "off",
         "-ngl", "40",
         "-c", "$contextTokens",
+        "--image-min-tokens", "1024",
+        "--image-max-tokens", "1280",
         "--parallel", "1",
         "--flash-attn", "on",
         "--batch-size", "256",

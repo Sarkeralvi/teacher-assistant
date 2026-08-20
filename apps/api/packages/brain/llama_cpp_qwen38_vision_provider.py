@@ -57,6 +57,7 @@ EXPECTED_ALIAS = "qwen3.8-27b-q4km"
 
 _TRANSCRIBE_MAX_TOKENS = 2048
 _GRADE_MAX_TOKENS = 1500
+_REFERENCE_BUNDLE_MAX_TOKENS = 1800
 
 # Patterns used for error sanitization
 _API_KEY_PATTERN = re.compile(r"Bearer\s+\S+", re.IGNORECASE)
@@ -531,7 +532,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             messages=[{"role": "user", "content": content}],
             response_model=QwenReferenceBundlePayload,
             schema_name="qwen38_visual_reference_bundle",
-            max_tokens=3500,
+            max_tokens=_REFERENCE_BUNDLE_MAX_TOKENS,
             temperature=0.0,
             enable_thinking=False,
         )

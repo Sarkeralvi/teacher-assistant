@@ -67,6 +67,66 @@ def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None
         provider.transcribe_image(image_bytes=b"not-an-image", mime_type="image/png")
 
 
+def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "question_number": "1",
+                                    "parent_question_number": None,
+                                    "node_type": "question",
+                                    "question_text": "Find x.",
+                                    "model_answer": "x = 4",
+                                    "marks": 2,
+                                    "source_question_pages": [1],
+                                    "source_solution_pages": [1],
+                                    "source_text_excerpt": "Find x.",
+                                    "confidence": 0.9,
+                                    "criteria": [
+                                        {
+                                            "criterion_label": "Answer",
+                                            "description": "States x = 4.",
+                                            "max_marks": 2,
+                                            "confidence": 0.9,
+                                            "source_rubric_pages": [1],
+                                            "blocker": None,
+                                        }
+                                    ],
+                                    "blockers": [],
+                                    "needs_review": True,
+                                }
+                            ],
+                            "warnings": [],
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider, client = provider_with(completion)
+    image = b"\x89PNG\r\n\x1a\nimage"
+
+    provider.extract_reference_bundle_from_images(
+        documents={
+            "QUESTION": [(image, "image/png", 1)],
+            "SOLUTION": [(image, "image/png", 1)],
+            "RUBRIC": [(image, "image/png", 1)],
+        }
+    )
+
+    request = client.requests[0]
+    assert request["max_tokens"] == 1800
+    assert request["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
+
+
 def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
     completion = {
         "choices": [
