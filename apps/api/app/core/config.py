@@ -123,7 +123,13 @@ class Settings(BaseSettings):
     local_qwen38_model: str = Field(default="qwen3.8-27b-q4km", alias="LOCAL_QWEN38_MODEL")
     local_qwen38_api_key: str = Field(default="", alias="LOCAL_QWEN38_API_KEY")
     local_qwen38_timeout_seconds: float = Field(
-        default=600.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
+        default=900.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
+    )
+    # Must match the running llama-server's -c value (see Start-LocalAi.ps1); used
+    # to keep reference-bundle completion budgets from exceeding the server's
+    # actual context window instead of guessing at a fixed safe ceiling.
+    local_qwen38_context_tokens: int = Field(
+        default=12288, alias="LOCAL_QWEN38_CONTEXT_TOKENS", ge=12288, le=32768
     )
     local_qwen38_visual_preparation_enabled: bool = Field(
         default=False, alias="LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED"

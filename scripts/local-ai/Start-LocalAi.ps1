@@ -149,6 +149,24 @@ try {
     Assert-LocalAiListenerOwnership -Port $port -ExpectedExecutable $binary -ExpectedProcessId $proc.Id
     Write-Host "$Mode is healthy on loopback (Port $port)."
     Write-Host "$Mode PID: $($proc.Id)"
+
+    # Informational only: this machine has a documented GPU-instability history,
+    # so low VRAM headroom is worth surfacing at every startup rather than only
+    # discovering it during a crash. Never blocks startup.
+    try {
+        $vramFields = (nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits) -split ','
+        $vramUsedMib = [int]$vramFields[0].Trim()
+        $vramTotalMib = [int]$vramFields[1].Trim()
+        $vramFreeMib = $vramTotalMib - $vramUsedMib
+        Write-Host "$Mode VRAM: $vramUsedMib / $vramTotalMib MiB used ($vramFreeMib MiB free)."
+        if ($vramFreeMib -lt 1000) {
+            Write-Warning ("$Mode is leaving only $vramFreeMib MiB of VRAM headroom. " +
+                "This machine has a documented GPU-instability history; low headroom raises " +
+                "OOM/crash risk under load. Consider a lower -ngl value if this recurs.")
+        }
+    } catch {
+        Write-Host "VRAM check skipped (nvidia-smi unavailable)." -ForegroundColor DarkGray
+    }
 } catch {
     if ($null -ne $proc -and -not $proc.HasExited) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue

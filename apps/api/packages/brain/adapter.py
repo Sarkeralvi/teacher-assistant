@@ -152,6 +152,7 @@ class BrainAdapter:
                     base_url=settings.local_qwen38_base_url,
                     timeout_seconds=settings.local_qwen38_timeout_seconds,
                     grading_reasoning_mode=settings.local_qwen38_grading_reasoning_mode,
+                    context_tokens=settings.local_qwen38_context_tokens,
                 )
             except ValueError as exc:
                 raise BrainProviderConfigurationError(str(exc)) from exc

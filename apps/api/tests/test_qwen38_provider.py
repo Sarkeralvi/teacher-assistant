@@ -120,11 +120,52 @@ def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:
     )
 
     request = client.requests[0]
-    assert request["max_tokens"] == 5500
+    # 3 total pages (1 QUESTION + 1 SOLUTION + 1 RUBRIC): base 1500 + 1000/page.
+    assert request["max_tokens"] == 4500
     assert request["chat_template_kwargs"] == {
         "enable_thinking": False,
         "preserve_thinking": False,
     }
+
+
+def test_reference_bundle_token_budget_scales_with_page_count() -> None:
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key")
+    # Small bundle: content-need-bound, well under the context ceiling.
+    assert provider._reference_bundle_token_budget(1) == 2500
+    assert provider._reference_bundle_token_budget(3) == 4500
+    # Large bundle: context-room-bound, clamped below the raw content-need formula.
+    budget_at_7_pages = provider._reference_bundle_token_budget(7)
+    assert budget_at_7_pages < 1500 + 1000 * 7
+    assert budget_at_7_pages >= 1500
+
+
+def test_reference_bundle_refuses_when_context_cannot_hold_a_useful_reply() -> None:
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key")
+    with pytest.raises(ValueError, match="too little room"):
+        provider._reference_bundle_token_budget(9)
+
+
+def test_reference_bundle_truncation_reports_a_clear_actionable_error() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": '{"questions": [{"question_number": "1"'},
+            }
+        ],
+        "usage": {"prompt_tokens": 4000, "completion_tokens": 1500},
+    }
+    provider, _client = provider_with(completion)
+    image = b"\x89PNG\r\n\x1a\nimage"
+
+    with pytest.raises(ValueError, match="needs a larger token budget"):
+        provider.extract_reference_bundle_from_images(
+            documents={
+                "QUESTION": [(image, "image/png", 1)],
+                "SOLUTION": [(image, "image/png", 1)],
+                "RUBRIC": [(image, "image/png", 1)],
+            }
+        )
 
 
 def test_qwen38_grading_rejects_changed_rubric_contract() -> None:

@@ -57,16 +57,24 @@ EXPECTED_ALIAS = "qwen3.8-27b-q4km"
 
 _TRANSCRIBE_MAX_TOKENS = 2048
 _GRADE_MAX_TOKENS = 1500
-# A real multi-question, multi-criterion reference bundle needs more than a
-# short grading reply to describe in schema-constrained JSON: the truncation
-# seen in practice (an unterminated JSON string at the token ceiling) came
-# from a genuine multi-page bundle, not padding. Schema-constrained decoding
-# stops at the JSON's natural end regardless of this ceiling, so raising it
-# costs nothing on smaller bundles and only matters as a truncation guard on
-# larger ones. Sized to fit LOCAL_QWEN38_CONTEXT_TOKENS=12288 alongside the
-# worst case of 4 rendered pages at LOCAL_QWEN38 image-max-tokens=1280 each
-# (~5.1K prompt tokens), with headroom to spare.
-_REFERENCE_BUNDLE_MAX_TOKENS = 5500
+
+# Reference-bundle completion budget is sized per request, not a flat
+# constant: a real multi-question, multi-criterion bundle needs more room to
+# describe in schema-constrained JSON as page count grows, but the prompt
+# also grows with page count (each rendered page costs up to
+# _IMAGE_MAX_TOKENS_PER_PAGE tokens), so the two must be balanced against the
+# server's actual context window rather than guessed independently. Schema-
+# constrained decoding stops at the JSON's natural end regardless of the
+# requested ceiling, so a generous budget costs nothing on small bundles and
+# only matters as a truncation guard on larger ones.
+_REFERENCE_BUNDLE_BASE_TOKENS = 1500
+_REFERENCE_BUNDLE_TOKENS_PER_PAGE = 1000
+_REFERENCE_BUNDLE_MIN_TOKENS = 1500
+_REFERENCE_BUNDLE_MAX_TOKENS_CEILING = 6500
+# Must match --image-max-tokens on the running llama-server (Start-LocalAi.ps1).
+_IMAGE_MAX_TOKENS_PER_PAGE = 1280
+_REFERENCE_BUNDLE_PROMPT_OVERHEAD_TOKENS = 300
+_CONTEXT_SAFETY_MARGIN_TOKENS = 500
 
 # Patterns used for error sanitization
 _API_KEY_PATTERN = re.compile(r"Bearer\s+\S+", re.IGNORECASE)
@@ -191,7 +199,11 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
     base_url:
         Base URL of the llama.cpp server, e.g. ``http://127.0.0.1:8085/v1``.
     timeout_seconds:
-        Request timeout in seconds.  Default 600.
+        Request timeout in seconds.  Default 900.
+    context_tokens:
+        The running llama-server's context window (its ``-c`` value). Used to
+        keep reference-bundle completion budgets from exceeding what the
+        server can actually hold. Default 12288.
     """
 
     provider_name = PROVIDER_NAME
@@ -205,8 +217,9 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         api_key: str,
         model_name: str = EXPECTED_ALIAS,
         base_url: str = "http://127.0.0.1:8085/v1",
-        timeout_seconds: float = 600.0,
+        timeout_seconds: float = 900.0,
         grading_reasoning_mode: str = "off",
+        context_tokens: int = 12288,
     ) -> None:
         from urllib.parse import urlparse
 
@@ -218,9 +231,12 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             raise ValueError("LOCAL_QWEN38_API_KEY must be set")
         if model_name != EXPECTED_ALIAS:
             raise ValueError(f"LOCAL_QWEN38_MODEL must be '{EXPECTED_ALIAS}'; got '{model_name}'")
+        if context_tokens < 12288:
+            raise ValueError("LOCAL_QWEN38_CONTEXT_TOKENS must be at least 12288")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout_seconds
+        self.context_tokens = context_tokens
         normalized_reasoning = grading_reasoning_mode.strip().lower()
         if normalized_reasoning not in {"off", "low"}:
             raise ValueError("LOCAL_QWEN38_GRADING_REASONING_MODE must be 'off' or 'low'")
@@ -319,30 +335,46 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 f"llama_cpp_qwen38_vision: completion request failed — {self._sanitize(str(exc))}"
             ) from exc
 
+        usage = data.get("usage") or {}
         choices = data.get("choices") or []
         if not choices:
-            raise ValueError("llama_cpp_qwen38_vision: empty choices in response")
+            raise ValueError(f"llama_cpp_qwen38_vision: empty choices in response ({usage})")
+        finish_reason = choices[0].get("finish_reason")
         content = (choices[0].get("message") or {}).get("content") or ""
+        # Included on every failure below so a truncated/malformed response is
+        # diagnosable from the stored error message alone, without needing to
+        # re-run the call or inspect server logs for token counts.
+        diagnostics = (
+            f"finish_reason={finish_reason} prompt_tokens={usage.get('prompt_tokens')} "
+            f"completion_tokens={usage.get('completion_tokens')} "
+            f"requested_max_tokens={max_tokens}"
+        )
         if not content.strip():
-            raise ValueError("llama_cpp_qwen38_vision: empty content in response")
+            raise ValueError(f"llama_cpp_qwen38_vision: empty content in response ({diagnostics})")
 
         try:
             import json as _json
 
             parsed = _json.loads(content)
         except Exception as exc:
+            if finish_reason == "length":
+                raise ValueError(
+                    "llama_cpp_qwen38_vision: response was cut off before finishing — the "
+                    f"model needs a larger token budget for this input ({diagnostics})"
+                ) from exc
             raise ValueError(
-                f"llama_cpp_qwen38_vision: response is not valid JSON — {self._sanitize(str(exc))}"
+                "llama_cpp_qwen38_vision: response is not valid JSON — "
+                f"{self._sanitize(str(exc))} ({diagnostics})"
             ) from exc
 
         try:
             validated = response_model.model_validate(parsed)
         except ValidationError as exc:
             raise ValueError(
-                f"llama_cpp_qwen38_vision: response schema mismatch — {self._sanitize(str(exc))}"
+                "llama_cpp_qwen38_vision: response schema mismatch — "
+                f"{self._sanitize(str(exc))} ({diagnostics})"
             ) from exc
 
-        usage = data.get("usage") or {}
         return validated, usage
 
     @staticmethod
@@ -513,12 +545,39 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             raise ValueError("Visual mapping returned an unknown finalized question label")
         return payload
 
+    def _reference_bundle_token_budget(self, total_pages: int) -> int:
+        """Size the completion budget to the input, bounded by real context room.
+
+        More pages need more room to describe in JSON, but also leave less
+        context room for that JSON (each page costs prompt tokens too). Both
+        sides of that trade-off are computed here instead of guessing one
+        fixed ceiling that is wrong for both small and large bundles.
+        """
+        content_need = (
+            _REFERENCE_BUNDLE_BASE_TOKENS + _REFERENCE_BUNDLE_TOKENS_PER_PAGE * total_pages
+        )
+        prompt_estimate = (
+            total_pages * _IMAGE_MAX_TOKENS_PER_PAGE + _REFERENCE_BUNDLE_PROMPT_OVERHEAD_TOKENS
+        )
+        context_room = self.context_tokens - prompt_estimate - _CONTEXT_SAFETY_MARGIN_TOKENS
+        budget = min(content_need, context_room, _REFERENCE_BUNDLE_MAX_TOKENS_CEILING)
+        if budget < _REFERENCE_BUNDLE_MIN_TOKENS:
+            raise ValueError(
+                f"llama_cpp_qwen38_vision: {total_pages} reference pages leave only "
+                f"~{max(context_room, 0)} completion tokens in a {self.context_tokens}-token "
+                "context — too little room to extract safely in one call. Upload fewer pages, "
+                "or raise LOCAL_QWEN38_CONTEXT_TOKENS if VRAM allows it."
+            )
+        return budget
+
     def extract_reference_bundle_from_images(
         self, *, documents: dict[str, list[tuple[bytes, str, int]]]
     ) -> dict[str, Any]:
         """Extract draft references directly from rendered local document pages."""
         if set(documents) != {"QUESTION", "SOLUTION", "RUBRIC"}:
             raise ValueError("Question, solution, and rubric page images are all required")
+        total_pages = sum(len(pages) for pages in documents.values())
+        max_tokens = self._reference_bundle_token_budget(total_pages)
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
@@ -541,7 +600,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             messages=[{"role": "user", "content": content}],
             response_model=QwenReferenceBundlePayload,
             schema_name="qwen38_visual_reference_bundle",
-            max_tokens=_REFERENCE_BUNDLE_MAX_TOKENS,
+            max_tokens=max_tokens,
             temperature=0.0,
             enable_thinking=False,
         )
