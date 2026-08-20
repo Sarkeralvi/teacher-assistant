@@ -1660,3 +1660,56 @@ left visible. If instability recurs under load, `LOCAL_QWEN_CPU_MOE_LAYERS=28`
 buys ~2 GB back for ~12% throughput without a code change.
 
 A 5,500-token reference bundle now costs **~81 seconds** on Qwen3.6.
+
+## Tesseract control arm and fixture-set correction (2026-08-20)
+
+### The harness discriminates
+
+The control arm exists to check the harness separates a good engine from a bad
+one rather than flattering whatever it measures.
+
+| Material | RapidOCR mean conf | Tesseract mean conf | Engine-vs-engine CER |
+|---|---|---|---|
+| Printed question page | 0.986 | 0.940 | ~0 (both correct) |
+| Handwritten rubric | 0.763 | 0.353 | **0.70** |
+| Handwritten answer | 0.761 | 0.387 | **0.78** |
+
+On printed text both engines are correct, so that page cannot discriminate and
+should not be read as evidence either way. On handwriting they diverge sharply
+and RapidOCR is plainly better: on the rubric it produced "MAIH-22+CHE ...
+Ssuution Rubric" (wrong but recognisable) against Tesseract's "IM FCC 22s tte
+) \Shold briangwe Sutin Perrin" (unusable). Tesseract also reports much lower
+confidence on the material it fails, so confidence tracks quality across
+engines as well as within one - an encouraging sign for calibration.
+
+### RapidOCR loses decimal points on handwriting
+
+On the Bayes answer crop, whose values are legible by eye as P(D)=0.3, P(W)=0.3,
+P(B)=0.4, P(L|D)=0.03, P(L|W)=0.10, RapidOCR returned:
+
+    P(D)=03  p(W) = 0.3  PO= 0.y  P(LID) =0.03  P(4W)=010
+
+Roughly half the values survive, and the failures include **dropped decimal
+points** - "03" for 0.3, "010" for 0.10. In a probability question that is a
+10x error in a value the mark depends on. Provisional, from one crop, but it
+suggests the escalation rate on student handwriting will be high and that the
+tiered pipeline's speed benefit is concentrated on the reference phase rather
+than on script checking.
+
+### The fixture set was wrong and is now corrected
+
+The first fixture build selected one crop per submission, which picked
+69-byte synthetic placeholders and excluded the only two submissions holding
+real handwriting. Labelling those would have been wasted effort.
+
+The real inventory is much thinner than the file count suggests: of 36 stored
+answer-region PNGs, 18 are real and those are only **6 distinct images**, each
+stored three times across submissions 37 and 39. The fixture set is now 4
+reference pages plus those 6 unique crops.
+
+Consequence for the plan: a held-out validation set **cannot** be drawn from
+existing data. Six handwriting samples from one or two scripts is enough to
+smoke-test whether confidence carries any signal; it is not enough to fix a
+threshold with confidence, and it cannot support the dev/holdout split the plan
+assumes. More handwriting samples are required before any threshold is treated
+as validated.
