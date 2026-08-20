@@ -64,22 +64,6 @@ def _operator_assets() -> OperatorAssetMetadata:
                 "model_size_bytes": 1024,
                 "device": "gpu_hybrid",
             },
-            "paddle": {
-                "packages": {
-                    "paddleocr": "3.7.0",
-                    "paddlex": "3.7.2",
-                    "paddlepaddle-gpu": "3.2.1",
-                },
-                "model": "PaddleOCR-VL-1.6",
-                "model_sha256": "2" * 64,
-                "model_size_bytes": 1024,
-                "model_file_count": 1,
-                "layout_model": "PP-DocLayoutV3",
-                "layout_model_sha256": "3" * 64,
-                "layout_model_size_bytes": 1024,
-                "layout_model_file_count": 1,
-                "device": "cpu",
-            },
         }
     )
 
@@ -402,9 +386,17 @@ def test_invalid_state_is_irreversible(tmp_path: Path) -> None:
         append_state(run_dir, "ground_truth_locked", locked_artifacts={})
 
 
-def test_real_stage_integrity_failure_marks_run_invalid_before_any_call(
-    tmp_path: Path,
-) -> None:
+def test_ocr_stage_refuses_because_no_tier1_engine_is_wired(tmp_path: Path) -> None:
+    """The OCR stage must fail closed while it has no engine behind it.
+
+    This replaces a test that drove a tampered artifact through run_ocr_stage to
+    prove integrity failures mark a run invalid before any provider call. That
+    path cannot be exercised now: run_ocr_stage refuses up front, and the
+    grading stage - which carries the same verify/mark-invalid guard - requires
+    the ocr_confirmed state that only the OCR stage can produce. The
+    integrity-to-invalid behaviour of a real stage is therefore UNTESTED until
+    the OCR stage is rewired, and must be re-covered then.
+    """
     run_dir = _prepare(tmp_path)
     _complete_ground_truth_workbook(run_dir)
     lock_ground_truth(
@@ -415,7 +407,7 @@ def test_real_stage_integrity_failure_marks_run_invalid_before_any_call(
     image_path = run_dir / "images" / "A1.png"
     image_path.write_bytes(image_path.read_bytes() + b"tampered")
 
-    with pytest.raises(LocalCuratedEvaluationError, match="Locked evaluation artifact"):
+    with pytest.raises(LocalCuratedEvaluationError, match="not wired"):
         run_ocr_stage(
             run_dir,
             allow_local_ocr=True,
@@ -423,14 +415,16 @@ def test_real_stage_integrity_failure_marks_run_invalid_before_any_call(
             database_url="",
         )
 
-    assert current_state(run_dir) == "invalid"
-    assert (run_dir / "invalid_run.json").is_file()
+    # Refusing must not poison an otherwise valid prepared run.
+    assert current_state(run_dir) == "ground_truth_locked"
 
 
 def test_asset_versions_and_result_hashes_are_schema_locked(tmp_path: Path) -> None:
+    # The OCR engine's asset block is gone with the PaddleOCR stack, so the
+    # locked-version check now covers the grading model alias instead.
     assets = _operator_assets().model_dump(mode="json")
-    assets["paddle"]["packages"]["paddleocr"] = "9.9.9"
-    with pytest.raises(ValidationError, match="package versions"):
+    assets["llama_cpp"]["model_alias"] = "not-a-supported-model"
+    with pytest.raises(ValidationError):
         OperatorAssetMetadata.model_validate(assets)
 
     run_dir = _prepare(tmp_path)
@@ -458,43 +452,22 @@ def test_operator_asset_metadata_hashes_local_files_without_recording_paths(
 ) -> None:
     model = tmp_path / "model.gguf"
     binary = tmp_path / "llama-server.exe"
-    python = tmp_path / "python.exe"
-    ocr_model = tmp_path / "ocr-model"
-    layout_model = tmp_path / "layout-model"
     model.write_bytes(b"qwen-model")
     binary.write_bytes(b"llama-binary")
-    python.write_bytes(b"python-binary")
-    ocr_model.mkdir()
-    layout_model.mkdir()
-    (ocr_model / "weights.bin").write_bytes(b"ocr")
-    (layout_model / "weights.bin").write_bytes(b"layout")
     monkeypatch.setenv("LOCAL_QWEN_MODEL_PATH", str(model))
     monkeypatch.setenv("LOCAL_QWEN_BINARY_PATH", str(binary))
-    monkeypatch.setenv("LOCAL_OCR_PYTHON_PATH", str(python))
-    monkeypatch.setenv("LOCAL_OCR_VL_MODEL_PATH", str(ocr_model))
-    monkeypatch.setenv("LOCAL_OCR_LAYOUT_MODEL_PATH", str(layout_model))
 
     def fake_run(command: list[str], **_kwargs: object) -> object:
-        if command[-1] == "--version":
-            return type("Result", (), {"stdout": "llama.cpp build 10249", "stderr": ""})()
-        return type(
-            "Result",
-            (),
-            {
-                "stdout": (
-                    '{"paddleocr":"3.7.0","paddlex":"3.7.2",'
-                    '"paddlepaddle-gpu":"3.2.1"}'
-                ),
-                "stderr": "",
-            },
-        )()
+        assert command[-1] == "--version"
+        return type("Result", (), {"stdout": "llama.cpp build 10249", "stderr": ""})()
 
     monkeypatch.setattr(evaluation_module.subprocess, "run", fake_run)
-    metadata = evaluation_module._operator_asset_metadata()
+    metadata = evaluation_module._operator_asset_metadata("qwen3.6-35b-a3b-q4km")
     payload = metadata.model_dump(mode="json")
 
     assert metadata.llama_cpp.model_sha256 == sha256_file(model)
-    assert metadata.paddle.model_file_count == 1
+    assert metadata.llama_cpp.model_alias == "qwen3.6-35b-a3b-q4km"
+    # Local filesystem paths must never leak into the recorded manifest.
     assert str(tmp_path) not in str(payload)
 
     with pytest.raises(ValidationError, match="hidden provider metadata"):
@@ -528,18 +501,14 @@ def test_real_stage_kill_switches_caps_and_model_alias_refuse_before_calls(
 ) -> None:
     run_dir = _prepare(tmp_path)
 
-    with pytest.raises(LocalCuratedEvaluationError, match="allow-local-ocr"):
+    # The OCR stage's own --allow-local-ocr and call-cap guards are not asserted
+    # here any more: it refuses before reaching them while no engine is wired.
+    # Those guards must be re-covered when the stage is rewired.
+    with pytest.raises(LocalCuratedEvaluationError, match="not wired"):
         run_ocr_stage(
             run_dir,
             allow_local_ocr=False,
             max_ocr_calls=20,
-            database_url="",
-        )
-    with pytest.raises(LocalCuratedEvaluationError, match="exactly 20"):
-        run_ocr_stage(
-            run_dir,
-            allow_local_ocr=True,
-            max_ocr_calls=19,
             database_url="",
         )
     with pytest.raises(LocalCuratedEvaluationError, match="allow-local-qwen"):
@@ -558,7 +527,7 @@ def test_real_stage_kill_switches_caps_and_model_alias_refuse_before_calls(
             expected_model="qwen3.6-35b-a3b-q4km",
             database_url="",
         )
-    with pytest.raises(LocalCuratedEvaluationError, match="alias is incorrect"):
+    with pytest.raises(LocalCuratedEvaluationError, match="supported grading models"):
         run_grading_stage(
             run_dir,
             allow_local_qwen=True,
@@ -566,6 +535,17 @@ def test_real_stage_kill_switches_caps_and_model_alias_refuse_before_calls(
             expected_model="wrong-model",
             database_url="",
         )
+    # Both candidate aliases are accepted while the grading-model bake-off runs;
+    # they fail later on run state, not on the alias check.
+    for candidate in ("qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"):
+        with pytest.raises(LocalCuratedEvaluationError, match="confirmed OCR evidence"):
+            run_grading_stage(
+                run_dir,
+                allow_local_qwen=True,
+                max_qwen_calls=18,
+                expected_model=candidate,
+                database_url="",
+            )
 
 
 def test_ocr_metrics_normalize_symbols_and_measure_formula_tokens(tmp_path: Path) -> None:

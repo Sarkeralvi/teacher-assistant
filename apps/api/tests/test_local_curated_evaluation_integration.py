@@ -240,7 +240,12 @@ def _status() -> dict[str, Any]:
 
 
 @pytest.mark.skip(
-    reason="PaddleOCR evaluation harness retired; awaiting Qwen3.8 evaluation harness"
+    reason=(
+        "The curated-evaluation OCR stage is not wired: the PaddleOCR stack was "
+        "removed and no replacement tier-1 engine has been selected, so the "
+        "20-case gate cannot run end to end. Until this is unskipped, NO result "
+        "from this gate may be cited as pilot-authorization evidence."
+    )
 )
 def test_full_harness_rehearsal_uses_only_fake_providers(
     tmp_path: Path,

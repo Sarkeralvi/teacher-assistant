@@ -27,16 +27,12 @@ from sqlalchemy.engine import make_url
 
 PROTOCOL_VERSION = "local-curated-v1"
 SCHEMA_VERSION = 1
-EXPECTED_QWEN_MODEL = "qwen3.6-35b-a3b-q4km"
-EXPECTED_OCR_MODEL = "PaddleOCR-VL-1.6"
-EXPECTED_LAYOUT_MODEL = "PP-DocLayoutV3"
+# The grading model is not settled: Qwen3.6 and Qwen3.8 are being compared on
+# measured mark accuracy before one is pinned. Until that decision lands, a run
+# must name which alias it used rather than the harness assuming one.
+SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km")
 EXPECTED_LLAMA_CPP_BUILD = "10249"
 EXPECTED_PROMPT_VERSION = "real-grading-v2"
-EXPECTED_PADDLE_PACKAGES = {
-    "paddleocr": "3.7.0",
-    "paddlex": "3.7.2",
-    "paddlepaddle-gpu": "3.2.1",
-}
 OCR_CALL_LIMIT = 20
 QWEN_CALL_LIMIT = 18
 DEFAULT_SEED = 360_020
@@ -184,39 +180,20 @@ class LlamaCppAssetMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     build: Literal["10249"]
-    model_alias: Literal["qwen3.6-35b-a3b-q4km"]
+    # Either candidate grading model may be pinned until the bake-off decides.
+    model_alias: Literal["qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"]
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     model_size_bytes: int = Field(gt=0)
     device: Literal["gpu_hybrid"] = "gpu_hybrid"
 
 
-class PaddleAssetMetadata(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    packages: dict[str, str]
-    model: Literal["PaddleOCR-VL-1.6"]
-    model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    model_size_bytes: int = Field(gt=0)
-    model_file_count: int = Field(gt=0)
-    layout_model: Literal["PP-DocLayoutV3"]
-    layout_model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    layout_model_size_bytes: int = Field(gt=0)
-    layout_model_file_count: int = Field(gt=0)
-    device: Literal["cpu"] = "cpu"
-
-    @field_validator("packages")
-    @classmethod
-    def validate_packages(cls, value: dict[str, str]) -> dict[str, str]:
-        if value != EXPECTED_PADDLE_PACKAGES:
-            raise ValueError("Paddle package versions do not match the locked baseline")
-        return value
-
-
 class OperatorAssetMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # The OCR engine's asset metadata is intentionally absent: the PaddleOCR
+    # stack it pinned has been removed, and the replacement tier-1 engine has
+    # not been chosen yet. It returns when the OCR stage is wired.
     llama_cpp: LlamaCppAssetMetadata
-    paddle: PaddleAssetMetadata
 
 
 class LocalCuratedEvaluationManifest(BaseModel):
@@ -229,9 +206,9 @@ class LocalCuratedEvaluationManifest(BaseModel):
     created_at: datetime
     integration_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     harness_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
-    expected_qwen_model: str = EXPECTED_QWEN_MODEL
-    expected_ocr_model: str = EXPECTED_OCR_MODEL
-    expected_layout_model: str = EXPECTED_LAYOUT_MODEL
+    # No default: the run must state which grading model it used, because the
+    # choice between Qwen3.6 and Qwen3.8 is still being decided on measurements.
+    expected_qwen_model: str
     prompt_version: Literal["real-grading-v2"] = EXPECTED_PROMPT_VERSION
     operator_assets: OperatorAssetMetadata
     transport: Literal["direct_host_eval"] = "direct_host_eval"
@@ -342,13 +319,13 @@ class OcrRunResult(BaseModel):
             raise ValueError("OCR results require 20 unique answer regions")
         if len({case.ocr_run_id for case in self.cases}) != OCR_CALL_LIMIT:
             raise ValueError("OCR results require 20 unique OCR runs")
-        if any(
-            case.model != EXPECTED_OCR_MODEL
-            or case.layout_model != EXPECTED_LAYOUT_MODEL
-            or case.device != "cpu"
-            for case in self.cases
-        ):
-            raise ValueError("OCR result metadata does not match the locked runtime")
+        # The engine, layout model and device are recorded per case but no longer
+        # asserted against fixed values: the PaddleOCR constants they pinned are
+        # gone and the replacement engine is unchosen. Re-pin these against the
+        # selected engine when the OCR stage is wired, so a run cannot silently
+        # use a different reader than the one it claims.
+        if any(not case.model.strip() or not case.device.strip() for case in self.cases):
+            raise ValueError("OCR result metadata must record its engine and device")
         if set(self.question_ids) != set("ABCDE") or set(self.rubric_ids) != set("ABCDE"):
             raise ValueError("OCR run must pin all five questions and rubrics")
         return self
@@ -451,7 +428,7 @@ class GradingCaseResult(BaseModel):
             }
             if (
                 self.model_provider != "llama_cpp_qwen"
-                or self.model_name != EXPECTED_QWEN_MODEL
+                or self.model_name not in SUPPORTED_GRADING_MODELS
                 or self.prompt_version != EXPECTED_PROMPT_VERSION
                 or self.marking_policy != "general"
                 or self.needs_review is not True
@@ -1629,6 +1606,9 @@ def prepare_evaluation(
         created_at=datetime.now(UTC),
         integration_commit=integration_commit,
         harness_commit=harness_commit,
+        # The grading model is whichever alias the operator's pinned assets name,
+        # so a run records the model it actually used rather than a fixed default.
+        expected_qwen_model=operator_assets.llama_cpp.model_alias,
         operator_assets=operator_assets,
         cases=rendered_cases,
     )
@@ -1734,8 +1714,9 @@ def _configure_runtime(
     settings = get_settings()
     if not settings.brain_allow_real_providers:
         raise LocalCuratedEvaluationError("BRAIN_ALLOW_REAL_PROVIDERS must be true")
-    if not settings.local_ocr_enabled:
-        raise LocalCuratedEvaluationError("LOCAL_OCR_ENABLED must be true")
+    # LOCAL_OCR_ENABLED was removed from Settings with the PaddleOCR stack; the
+    # check that read it would have raised AttributeError. The replacement
+    # tier-1 OCR switch is added when the OCR stage is wired.
     if not settings.local_qwen_enabled:
         raise LocalCuratedEvaluationError("LOCAL_QWEN_ENABLED must be true")
     if not settings.cohort_model_grading_enabled:
@@ -1759,7 +1740,7 @@ def _configure_runtime(
     return settings, SessionLocal, storage_root
 
 
-def _sanitized_status() -> dict[str, Any]:
+def _sanitized_status(expected_qwen_model: str) -> dict[str, Any]:
     from app.services.local_ai_status_service import LocalAiStatusService
 
     status = LocalAiStatusService().read()
@@ -1770,23 +1751,19 @@ def _sanitized_status() -> dict[str, Any]:
         raise LocalCuratedEvaluationError("Local provider safety switches are not enabled")
     if (
         qwen.get("provider") != "llama_cpp_qwen"
-        or qwen.get("model") != EXPECTED_QWEN_MODEL
+        or qwen.get("model") != expected_qwen_model
         or qwen.get("device") != "gpu_hybrid"
         or qwen.get("detail") != "ready"
     ):
         raise LocalCuratedEvaluationError("Qwen health metadata does not match the run manifest")
+    # No "ocr" block: the retired PaddleOCR stack used to report its own model,
+    # layout model and package versions here. The replacement tier-1 engine is
+    # not chosen yet, so recording nothing is honest where recording a retired
+    # engine's constants would not be.
     return {
         "real_providers_allowed": status["real_providers_allowed"],
         "cohort_model_grading_enabled": status["cohort_model_grading_enabled"],
         "qwen": qwen,
-        "ocr": {
-            "model": EXPECTED_OCR_MODEL,
-            "layout_model": EXPECTED_LAYOUT_MODEL,
-            "device": "cpu",
-            "version": EXPECTED_PADDLE_PACKAGES["paddleocr"],
-            "max_concurrency": 1,
-            "offline": True,
-        },
     }
 
 
@@ -1846,13 +1823,13 @@ def _gpu_safety_snapshot() -> dict[str, Any]:
     return snapshot
 
 
-def _operator_asset_metadata() -> OperatorAssetMetadata:
+def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
+    # The three Paddle entries that used to be required here pointed at
+    # LOCAL_OCR_VL_MODEL_PATH / LOCAL_OCR_LAYOUT_MODEL_PATH / LOCAL_OCR_PYTHON_PATH,
+    # none of which exist any more, so this function could only ever fail.
     raw_paths = {
         "Qwen model": ("LOCAL_QWEN_MODEL_PATH", "file"),
         "llama.cpp binary": ("LOCAL_QWEN_BINARY_PATH", "file"),
-        "Paddle OCR model": ("LOCAL_OCR_VL_MODEL_PATH", "directory"),
-        "Paddle layout model": ("LOCAL_OCR_LAYOUT_MODEL_PATH", "directory"),
-        "Paddle Python": ("LOCAL_OCR_PYTHON_PATH", "file"),
     }
     paths: dict[str, Path] = {}
     missing: list[str] = []
@@ -1873,12 +1850,7 @@ def _operator_asset_metadata() -> OperatorAssetMetadata:
         )
     qwen_model_path = paths["Qwen model"]
     qwen_binary_path = paths["llama.cpp binary"]
-    ocr_model_path = paths["Paddle OCR model"]
-    layout_model_path = paths["Paddle layout model"]
-    ocr_python_path = paths["Paddle Python"]
     qwen_hash = sha256_file(qwen_model_path)
-    ocr_hash, ocr_size, ocr_files = _directory_digest(ocr_model_path)
-    layout_hash, layout_size, layout_files = _directory_digest(layout_model_path)
     try:
         version_result = subprocess.run(
             [str(qwen_binary_path), "--version"],
@@ -1892,43 +1864,15 @@ def _operator_asset_metadata() -> OperatorAssetMetadata:
         raise LocalCuratedEvaluationError("Could not record the llama.cpp build") from exc
     if not re.search(rf"\b{EXPECTED_LLAMA_CPP_BUILD}\b", llama_version_text):
         raise LocalCuratedEvaluationError("llama.cpp build does not match 10249")
-    package_script = (
-        "import importlib.metadata as m,json;"
-        "print(json.dumps({n:m.version(n) for n in "
-        "['paddleocr','paddlex','paddlepaddle-gpu']}))"
-    )
-    try:
-        package_result = subprocess.run(
-            [str(ocr_python_path), "-c", package_script],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        paddle_packages = json.loads(package_result.stdout)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
-        raise LocalCuratedEvaluationError("Could not record Paddle package versions") from exc
     try:
         return OperatorAssetMetadata.model_validate(
             {
                 "llama_cpp": {
                     "build": EXPECTED_LLAMA_CPP_BUILD,
-                    "model_alias": EXPECTED_QWEN_MODEL,
+                    "model_alias": expected_qwen_model,
                     "model_sha256": qwen_hash,
                     "model_size_bytes": qwen_model_path.stat().st_size,
                     "device": "gpu_hybrid",
-                },
-                "paddle": {
-                    "packages": paddle_packages,
-                    "model": EXPECTED_OCR_MODEL,
-                    "model_sha256": ocr_hash,
-                    "model_size_bytes": ocr_size,
-                    "model_file_count": ocr_files,
-                    "layout_model": EXPECTED_LAYOUT_MODEL,
-                    "layout_model_sha256": layout_hash,
-                    "layout_model_size_bytes": layout_size,
-                    "layout_model_file_count": layout_files,
-                    "device": "cpu",
                 },
             }
         )
@@ -2285,179 +2229,20 @@ def run_ocr_stage(
     database_url: str,
     local_ai_env: Path | None = None,
 ) -> OcrRunResult:
-    if not allow_local_ocr:
-        raise LocalCuratedEvaluationError("Real OCR requires --allow-local-ocr")
-    if max_ocr_calls != OCR_CALL_LIMIT:
-        raise LocalCuratedEvaluationError("The OCR call cap must be exactly 20")
-    if current_state(run_dir) != "ground_truth_locked":
-        raise LocalCuratedEvaluationError("OCR requires locked teacher ground truth")
-    try:
-        verify_locked_artifacts(run_dir)
-        require_clean_git_worktree()
-        manifest = load_manifest(run_dir)
-        ground_truth = GroundTruthLock.model_validate(
-            read_json(run_dir / "ground_truth_lock.json")
-        )
-        if current_git_commit() != manifest.harness_commit:
-            raise LocalCuratedEvaluationError(
-                "Current Git commit does not match the harness commit"
-            )
-        settings, session_factory, _storage_root = _configure_runtime(
-            run_dir,
-            database_url=database_url,
-            local_ai_env=local_ai_env,
-        )
-        del settings
-        status_before = _sanitized_status()
-        gpu_before = _gpu_safety_snapshot()
-        current_assets = _operator_asset_metadata()
-        if current_assets != manifest.operator_assets:
-            raise LocalCuratedEvaluationError(
-                "Operator model assets changed after the evaluation was prepared"
-            )
-        environment = {
-            **current_assets.model_dump(mode="json"),
-            "service_status_before": status_before,
-            "gpu_safety_before": gpu_before,
-            "recorded_at": datetime.now(UTC),
-        }
-        _database_is_migrated_and_empty(session_factory)
-        seeded = _seed_production_evaluation(manifest, run_dir, session_factory)
-        owner_headers, intruder_headers = _auth_headers(
-            session_factory,
-            seeded["owner_teacher_id"],
-            seeded["intruder_teacher_id"],
-        )
-        from fastapi.testclient import TestClient
+    """Not wired: the tier-1 OCR engine has not been selected yet.
 
-        from app.main import app
-
-        first_call_at = datetime.now(UTC)
-        if first_call_at <= ground_truth.signed_at:
-            raise LocalCuratedEvaluationError("OCR call time does not follow teacher sign-off")
-        results: list[OcrCaseResult] = []
-        with TestClient(app) as client:
-            for case in manifest.cases:
-                region_id = int(seeded["region_ids"][case.case_id])
-                response = client.post(
-                    f"/answer-regions/{region_id}/ocr-runs",
-                    headers=owner_headers,
-                )
-                if response.status_code != 201:
-                    raise LocalCuratedEvaluationError(
-                        f"OCR failed on {case.case_id}; no automatic retry is allowed"
-                    )
-                payload = response.json()
-                if payload.get("status") != "succeeded":
-                    raise LocalCuratedEvaluationError(
-                        f"OCR did not succeed on {case.case_id}"
-                    )
-                normalized_result = payload.get("normalized_result") or {}
-                segments = normalized_result.get("segments") or []
-                blocks = [
-                    block
-                    for segment in segments
-                    for block in (segment.get("blocks") or [])
-                ]
-                draft_text = str(payload.get("draft_text") or "")
-                results.append(
-                    OcrCaseResult(
-                        case_id=case.case_id,
-                        answer_region_id=region_id,
-                        ocr_run_id=int(payload["id"]),
-                        status="succeeded",
-                        draft_text=draft_text,
-                        markdown=str(normalized_result.get("markdown") or ""),
-                        blocks=blocks,
-                        warnings=list(payload.get("warnings") or []),
-                        latency_ms=int(payload.get("latency_ms") or 0),
-                        provider="local_paddle_qwen",
-                        model=str(payload.get("model_name") or EXPECTED_OCR_MODEL),
-                        layout_model=str(
-                            payload.get("layout_model_name") or EXPECTED_LAYOUT_MODEL
-                        ),
-                        device="cpu",
-                        draft_text_sha256=sha256_text(draft_text),
-                    )
-                )
-            for completed_run in results:
-                intrusion = client.get(
-                    f"/answer-region-ocr-runs/{completed_run.ocr_run_id}",
-                    headers=intruder_headers,
-                )
-                if intrusion.status_code != 404:
-                    raise LocalCuratedEvaluationError(
-                        "Cross-teacher OCR access was not refused"
-                    )
-                owner_read = client.get(
-                    f"/answer-region-ocr-runs/{completed_run.ocr_run_id}",
-                    headers=owner_headers,
-                )
-                if owner_read.status_code != 200:
-                    raise LocalCuratedEvaluationError("Owner could not read an OCR run")
-        status_after = _sanitized_status()
-        gpu_after = _gpu_safety_snapshot()
-        environment["service_status_after"] = status_after
-        environment["gpu_safety_after"] = gpu_after
-        if not all(
-            (
-                gpu_before["qwen_present_in_gpu_compute_clients"],
-                gpu_before["ocr_absent_from_gpu_compute_clients"],
-                gpu_after["qwen_present_in_gpu_compute_clients"],
-                gpu_after["ocr_absent_from_gpu_compute_clients"],
-            )
-        ):
-            raise LocalCuratedEvaluationError(
-                "Qwen GPU and PaddleOCR CPU isolation did not remain valid"
-            )
-        if len(results) != OCR_CALL_LIMIT or len({item.ocr_run_id for item in results}) != 20:
-            raise LocalCuratedEvaluationError("OCR call accounting is not exactly 20")
-        database_name = validate_database_url(database_url, manifest.run_id)
-        result = OcrRunResult(
-            run_id=manifest.run_id,
-            first_call_at=first_call_at,
-            completed_at=datetime.now(UTC),
-            call_count=20,
-            service_status_before=status_before,
-            service_status_after=status_after,
-            database_name=database_name,
-            assessment_id=seeded["assessment_id"],
-            grading_run_id=seeded["grading_run_id"],
-            owner_teacher_id=seeded["owner_teacher_id"],
-            intruder_teacher_id=seeded["intruder_teacher_id"],
-            question_ids=seeded["question_ids"],
-            rubric_ids=seeded["rubric_ids"],
-            cases=results,
-        )
-        result_path = run_dir / "ocr_results.json"
-        environment_path = run_dir / "environment.json"
-        write_json(result_path, result)
-        write_json(environment_path, environment)
-        create_ocr_review_workbook(manifest, ground_truth, result, run_dir)
-        append_state(
-            run_dir,
-            "ocr_completed",
-            locked_artifacts={
-                "ocr_results.json": sha256_file(result_path),
-                "environment.json": sha256_file(environment_path),
-            },
-            metadata={
-                "ocr_call_count": 20,
-                "retry_count": 0,
-                "cross_teacher_access_refused": True,
-                "qwen_and_cpu_ocr_healthy_concurrently": True,
-            },
-        )
-        return result
-    except Exception as exc:
-        _mark_invalid(
-            run_dir,
-            stage="run_ocr",
-            detail="OCR stage failed; inspect ignored local logs. No retry is authorized.",
-        )
-        if isinstance(exc, LocalCuratedEvaluationError):
-            raise
-        raise LocalCuratedEvaluationError("OCR stage failed safely") from exc
+    The previous implementation drove the PaddleOCR recognition stack through
+    ``/answer-regions/{id}/ocr-runs``. Both that stack and those routes were
+    removed, so this stage cannot run. It now fails immediately and loudly
+    rather than issuing requests that would 404, and rather than appearing to
+    pass. Restore it against the replacement pipeline; the retired
+    implementation remains in Git history.
+    """
+    raise LocalCuratedEvaluationError(
+        "The curated evaluation OCR stage is not wired: the PaddleOCR stack was "
+        "removed and no replacement tier-1 engine has been selected. This gate "
+        "cannot be run, and no result from it may be cited as evidence."
+    )
 
 
 def read_ocr_review_workbook(
@@ -3054,8 +2839,10 @@ def run_grading_stage(
         raise LocalCuratedEvaluationError("Real Qwen grading requires --allow-local-qwen")
     if max_qwen_calls != QWEN_CALL_LIMIT:
         raise LocalCuratedEvaluationError("The Qwen call cap must be exactly 18")
-    if expected_model != EXPECTED_QWEN_MODEL:
-        raise LocalCuratedEvaluationError("Expected Qwen model alias is incorrect")
+    if expected_model not in SUPPORTED_GRADING_MODELS:
+        raise LocalCuratedEvaluationError(
+            "Expected Qwen model alias is not one of the supported grading models"
+        )
     if current_state(run_dir) != "ocr_confirmed":
         raise LocalCuratedEvaluationError("Qwen grading requires confirmed OCR evidence")
     try:
@@ -3079,7 +2866,7 @@ def run_grading_stage(
             raise LocalCuratedEvaluationError(
                 "Grading calls must follow OCR confirmation sign-off"
             )
-        status_before = _sanitized_status()
+        status_before = _sanitized_status(manifest.expected_qwen_model)
         gpu_before = _gpu_safety_snapshot()
         result, runtime_details = _safe_dispatch_results(
             manifest,
@@ -3172,7 +2959,7 @@ def run_grading_stage(
                 "approved_only_export_has_zero_data_rows": True,
             }
         )
-        status_after = _sanitized_status()
+        status_after = _sanitized_status(manifest.expected_qwen_model)
         gpu_after = _gpu_safety_snapshot()
         if not status_before["qwen"]["available"] or not status_after["qwen"]["available"]:
             raise LocalCuratedEvaluationError("Qwen was not healthy throughout grading")
@@ -3482,15 +3269,12 @@ def generate_report(run_dir: Path) -> dict[str, Any]:
                 Counter(case.primary_category.value for case in manifest.cases)
             ),
         },
+        # OCR engine identity is absent until the tier-1 engine is selected and
+        # the OCR stage is wired; see run_ocr_stage.
         "models": {
             "qwen_alias": manifest.expected_qwen_model,
             "qwen_model_sha256": environment["llama_cpp"]["model_sha256"],
             "llama_cpp_build": environment["llama_cpp"]["build"],
-            "ocr_model": manifest.expected_ocr_model,
-            "ocr_model_sha256": environment["paddle"]["model_sha256"],
-            "layout_model": manifest.expected_layout_model,
-            "layout_model_sha256": environment["paddle"]["layout_model_sha256"],
-            "paddle_packages": environment["paddle"]["packages"],
         },
         "process_checks": process_checks,
         "ocr_metrics": ocr_metrics,
@@ -3887,6 +3671,12 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     prepare_parser.add_argument("--integration-commit", required=True)
     prepare_parser.add_argument("--harness-commit", default=None)
+    prepare_parser.add_argument(
+        "--grading-model",
+        required=True,
+        choices=SUPPORTED_GRADING_MODELS,
+        help="Grading model alias this run pins; recorded in the manifest.",
+    )
 
     lock_parser = subparsers.add_parser("lock-ground-truth")
     lock_parser.add_argument("--run-id", required=True)
@@ -3913,7 +3703,7 @@ def _build_parser() -> argparse.ArgumentParser:
     grading_parser.add_argument("--run-id", required=True)
     grading_parser.add_argument("--allow-local-qwen", action="store_true")
     grading_parser.add_argument("--max-qwen-calls", type=int, default=QWEN_CALL_LIMIT)
-    grading_parser.add_argument("--expected-model", default=EXPECTED_QWEN_MODEL)
+    grading_parser.add_argument("--expected-model", required=True)
     grading_parser.add_argument(
         "--database-url", default=os.environ.get("DATABASE_URL", "")
     )
@@ -3944,7 +3734,7 @@ def main() -> None:
                 harness_commit=harness_commit,
             )
             _load_local_ai_environment(None)
-            operator_assets = _operator_asset_metadata()
+            operator_assets = _operator_asset_metadata(args.grading_model)
             run_dir = prepare_evaluation(
                 run_id=args.run_id,
                 output_root=args.root,
