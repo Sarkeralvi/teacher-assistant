@@ -467,10 +467,6 @@ export type AnswerRegionOcrBand = {
   candidates: AnswerRegionOcrCandidate[];
 };
 
-export type OcrConfirmationRequest = {
-  confirmed_text: string;
-};
-
 export type AnswerRegionMappingStatus = "mapped" | "uncertain" | "blocked" | "teacher_confirmed";
 
 export type AnswerRegionMapping = {
@@ -839,7 +835,6 @@ export type LocalAiStatus = {
   cohort_model_grading_enabled: boolean;
   local_script_preparation_enabled: boolean;
   local_single_answer_grading_enabled: boolean;
-  local_ocr_rescue_enabled: boolean;
   qwen: LocalAiServiceStatus;
   qwen38: LocalAiServiceStatus;
 };
@@ -1540,12 +1535,6 @@ export function confirmReferenceExtraction(
   });
 }
 
-export function createAnswerRegionOcrRun(answerRegionId: number) {
-  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs`, {
-    method: "POST",
-  });
-}
-
 export function createVisualTranscriptionRun(answerRegionId: number, expectedModel: string) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/visual-transcription-runs`, {
     method: "POST",
@@ -1569,66 +1558,6 @@ export function rejectVisualTranscriptionRun(answerRegionId: number, runId: numb
     `/answer-regions/${answerRegionId}/visual-transcription-runs/${runId}/reject`,
     { method: "POST", body: { reason } },
   );
-}
-
-export function listAnswerRegionOcrRuns(answerRegionId: number) {
-  return apiRequest<AnswerRegionOcrRun[]>(`/answer-regions/${answerRegionId}/ocr-runs`);
-}
-
-export function getAnswerRegionOcrRun(runId: number) {
-  return apiRequest<AnswerRegionOcrRun>(`/answer-region-ocr-runs/${runId}`);
-}
-
-export function createAnswerRegionOcrRescueRun(answerRegionId: number) {
-  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-rescue-runs`, {
-    method: "POST",
-    body: {
-      profile: "math_handwriting_rescue_v3",
-      expected_vl_model: "PaddleOCR-VL-1.6",
-      expected_layout_model: "PP-DocLayoutV3",
-      expected_text_detection_model: "PP-OCRv6_medium_det",
-      expected_text_recognition_model: "PP-OCRv6_medium_rec",
-      max_calls: 8,
-      draft_only_confirmed: true,
-    },
-  });
-}
-
-export function confirmAnswerRegionOcrCandidates(
-  answerRegionId: number,
-  runId: number,
-  candidateIds: number[],
-) {
-  return apiRequest<AnswerRegionOcrRun>(
-    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/confirm-candidates`,
-    { method: "POST", body: { candidate_ids: candidateIds } },
-  );
-}
-
-export function rejectAnswerRegionOcrCandidates(
-  answerRegionId: number,
-  runId: number,
-  reasons: string[],
-) {
-  return apiRequest<{ run_id: number; mapping_id: number; diagnostic_reference: string; status: "rejected" }>(
-    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/reject`,
-    { method: "POST", body: { reasons } },
-  );
-}
-
-export function getAnswerRegionOcrBandImageUrl(bandId: number) {
-  return `${resolveApiBaseUrl()}/answer-region-ocr-bands/${bandId}/image`;
-}
-
-export function confirmAnswerRegionOcrRun(
-  answerRegionId: number,
-  runId: number,
-  payload: OcrConfirmationRequest,
-) {
-  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs/${runId}/confirm`, {
-    method: "POST",
-    body: payload,
-  });
 }
 
 export function getAnswerRegionImageUrl(answerRegionId: number) {

@@ -371,7 +371,7 @@ export function CustomControlledGradingRunClient({
           <SectionHeading
             number="2"
             title="Confirm files and extract drafts"
-            description="The worker will use GPU OCR first, unload it, then load Qwen. No cloud provider or retry is allowed."
+            description="The worker renders each page and reads it with local Qwen3.8 vision in one pass. No cloud provider or retry is allowed."
             complete={extraction?.status === "succeeded"}
           />
 

@@ -52,8 +52,8 @@ for (const symbol of [
   "uploadSubmission",
   "uploadSubmissionZip",
   "createAnswerRegion",
-  "createAnswerRegionOcrRun",
-  "confirmAnswerRegionOcrRun",
+  "createVisualTranscriptionRun",
+  "confirmVisualTranscriptionRun",
   "confirmAnswerRegionFullAnswer",
   "createEvidencePrepRun",
   "createGradingQueueRun",
@@ -96,9 +96,8 @@ for (const marker of [
   "Rubric",
   "You do not need to upload the question paper anywhere else.",
   "Confirm files and extract drafts",
-  "GPU OCR first",
-  "Releasing PaddleOCR from the GPU",
-  "Linking questions, solutions, and criteria with Qwen",
+  "local Qwen3.8 vision",
+  "Qwen3.8 is reading questions, solutions, and rubric",
   "Confirm and extract drafts",
   "Review questions, model answers, and rubric",
   "Confirm grading references",
@@ -135,15 +134,9 @@ for (const marker of [
   "Manual reference editing (advanced)",
   "Upload submission",
   "Upload script ZIP",
-  "Draft text with local PaddleOCR",
-  "PaddleOCR evidence review",
-  "None of these readings match — Enhanced local OCR",
-  "Confirm selected reading for every band",
-  "None of the enhanced readings are faithful",
-  "Qwen is not used to rewrite OCR evidence.",
-  "Grading blocked—upload a clearer complete page or stop.",
-  "Confirm edited text as manual answer",
-  "Text confirmation does not mark the region complete or ready.",
+  "Qwen3.8 visual evidence",
+  "Create verbatim visual transcription",
+  "Confirm faithful transcription",
   "Create answer region",
   "Confirm displayed image is the full answer",
   "This prepares evidence only. It does not grade.",
@@ -151,6 +144,26 @@ for (const marker of [
 ]) {
   if (!assessment.includes(marker)) {
     throw new Error(`Assessment evidence UI missing marker: ${marker}`);
+  }
+}
+
+// The PaddleOCR recognition stack and its endpoints were removed. Keep its UI from
+// returning: these controls would call routes that no longer exist and 404 for a teacher.
+for (const retired of [
+  "Draft text with local PaddleOCR",
+  "PaddleOCR evidence review",
+  "Enhanced local OCR",
+  "Confirm selected reading for every band",
+  "createAnswerRegionOcrRun",
+  "createAnswerRegionOcrRescueRun",
+  "confirmAnswerRegionOcrCandidates",
+  "getAnswerRegionOcrBandImageUrl",
+]) {
+  if (assessment.includes(retired)) {
+    throw new Error(`Assessment evidence UI still exposes retired PaddleOCR surface: ${retired}`);
+  }
+  if (api.includes(retired)) {
+    throw new Error(`API client still exposes retired PaddleOCR surface: ${retired}`);
   }
 }
 
