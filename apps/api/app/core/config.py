@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     )
 
     local_reference_job_timeout_seconds: int = Field(
-        default=1800, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
+        default=2400, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
     )
     cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(
@@ -122,8 +122,13 @@ class Settings(BaseSettings):
     )
     local_qwen38_model: str = Field(default="qwen3.8-27b-q4km", alias="LOCAL_QWEN38_MODEL")
     local_qwen38_api_key: str = Field(default="", alias="LOCAL_QWEN38_API_KEY")
+    # 900s was sized from an untested throughput assumption (~8 tok/s); a real
+    # run on this hardware measured ~4.35 tok/s sustained decode (CPU/GPU
+    # hybrid offload), so 900s undershot a full-ceiling reference-bundle
+    # completion by roughly 2x. 1800s covers the 6500-token ceiling with
+    # margin at the measured rate.
     local_qwen38_timeout_seconds: float = Field(
-        default=900.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
+        default=1800.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
     )
     # Must match the running llama-server's -c value (see Start-LocalAi.ps1); used
     # to keep reference-bundle completion budgets from exceeding the server's

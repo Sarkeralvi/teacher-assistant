@@ -300,7 +300,7 @@ def test_reference_extraction_route_uses_confirmed_bundle_and_enqueues_once(
     assert started.json()["questions"] == []
     assert len(queue.calls) == 1
     assert queue.calls[0][1] == (run["id"],)
-    assert queue.calls[0][2] == {"job_timeout": 1800}
+    assert queue.calls[0][2] == {"job_timeout": 2400}
 
     _, intruder_token = register_teacher(client, "reference-intruder")
     hidden = client.get(
