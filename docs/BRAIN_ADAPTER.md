@@ -1,6 +1,6 @@
 # Brain Adapter provider configuration
 
-TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default and requires no keys. OpenAI-compatible chat completions and `codex_cli` remain available when explicitly configured. The local-first milestone adds loopback-only `llama_cpp_qwen`; it is text-only and pairs with the separately authenticated PaddleOCR sidecar.
+TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default and requires no keys. OpenAI-compatible chat completions and `codex_cli` remain available when explicitly configured. The local-first milestone adds loopback-only `llama_cpp_qwen` (text-only, for correlating reference text) and `llama_cpp_qwen38` (vision, for reading pages that CPU OCR could not read confidently). Tier-1 OCR runs in-process on the CPU and is not a provider.
 
 ## Environment variables
 
@@ -11,7 +11,7 @@ BRAIN_PROVIDER=mock
 BRAIN_ALLOW_REAL_PROVIDERS=false
 
 LOCAL_QWEN_ENABLED=false
-LOCAL_QWEN_BASE_URL=http://127.0.0.1:8080/v1
+LOCAL_QWEN_BASE_URL=http://127.0.0.1:8086/v1
 LOCAL_QWEN_MODEL=qwen3.6-35b-a3b-q4km
 LOCAL_QWEN_API_KEY=
 
@@ -94,5 +94,5 @@ Image input is optional and disabled by default.
 - Image base64 is never stored in the database and should never be logged.
 - Real provider output is still only a `GradeSuggestion`; teacher review and `FinalGrade` remain required.
 - Local Qwen cohort dispatch has no provider fallback or automatic retry and is capped at 25 sequential calls.
-- OCR is handled by the separate loopback PaddleOCR sidecar; its output remains draft evidence until teacher confirmation.
+- Tier-1 OCR runs in-process on the CPU (RapidOCR/PP-OCRv6 ONNX), not through a provider or a sidecar. Its output remains draft evidence until teacher confirmation, and pages it could not read confidently are escalated to `llama_cpp_qwen38`.
 - No provider implements automatic answer mapping or autonomous final grading.

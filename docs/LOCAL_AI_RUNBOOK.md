@@ -1,13 +1,25 @@
-# Windows Local AI Runbook
+﻿# Windows Local AI Runbook
 
-This runbook operates the local Qwen and PaddleOCR integration for the Custom Controlled workflow. Both services are disabled by default, bind only to loopback, and must be started explicitly. Normal API startup and page loads never start a model.
+This runbook operates the local model integration for the Custom Controlled workflow. Every model is disabled by default, binds only to loopback, and must be started explicitly. Normal API startup and page loads never load a model.
+
+## Which models exist
+
+| Phase | Model | Port | Role |
+|---|---|---|---|
+| `Qwen38` | Qwen3.8-27B (vision) | 8085 | Reads pages OCR could not read confidently; transcribes handwriting; grades |
+| `Qwen` | Qwen3.6-35B-A3B (text) | 8086 | Correlates question, solution and rubric text into draft references |
+
+Only one fits in this card's VRAM, so selecting a phase unloads the other. Qwen3.6 deliberately does **not** use port 8080: a separate coding-assistant bridge commonly runs there with the same `llama-server.exe`, and sharing the port makes the two contend for one single-slot server.
+
+Tier-1 OCR (RapidOCR, PP-OCRv6 ONNX) runs on the **CPU** in the worker process. It needs no VRAM, so it costs no phase switch and can read while a model is resident.
 
 ## Safety contract
 
-- Qwen receives teacher-confirmed text only. Answer-image bytes and local image paths are not sent to Qwen.
-- PaddleOCR output is draft evidence until a teacher confirms an immutable baseline or one candidate per automatically detected band.
+- Qwen3.6 receives text only. Answer-image bytes and local image paths are never sent to it.
+- OCR output is draft evidence until a teacher confirms it.
 - OCR confirmation updates `manual_answer_text`; it does not confirm a complete answer or make evidence grading-ready.
 - Question-to-answer mapping remains manual or teacher-confirmed.
+- Escalation to the vision model is a **pre-authorized budget**, not a hidden fallback. Exceeding `LOCAL_REFERENCE_MAX_ESCALATIONS` stops the run rather than silently reading fewer pages.
 - Cohort grading is sequential, draft-only, stop-on-first-provider-failure, capped at 25 calls, and has zero automatic retries.
 - There is no cloud, Codex, mock, or alternate-provider fallback.
 - No model action creates a `FinalGrade`; review and approval remain mandatory.
@@ -15,103 +27,80 @@ This runbook operates the local Qwen and PaddleOCR integration for the Custom Co
 
 ## One-time local configuration
 
-Do not put machine paths or keys in committed files. Create the ignored `.env.local-ai` file with placeholders replaced by paths on the current machine:
+Do not put machine paths or keys in committed files. Create the ignored `.env.local-ai` with paths for the current machine:
 
 ```powershell
 .\scripts\local-ai\Initialize-LocalAiConfig.ps1 `
   -QwenBinaryPath '<llama-server.exe>' `
-  -QwenModelPath '<qwen-gguf>' `
-  -OcrPythonPath '<python.exe-with-paddleocr-3.7.0>' `
-  -OcrVlModelPath '<PaddleOCR-VL-1.6-directory>' `
-  -OcrLayoutModelPath '<PP-DocLayoutV3-directory>' `
-  -OcrTextDetModelPath '<PP-OCRv6_medium_det-directory>' `
-  -OcrTextRecModelPath '<PP-OCRv6_medium_rec-directory>'
+  -QwenModelPath '<qwen3.6-gguf>'
 ```
 
-The initializer creates separate random API keys. It enables the two local services but intentionally leaves `COHORT_MODEL_GRADING_ENABLED=false`. It refuses to overwrite an existing file.
+The initializer creates separate random API keys and leaves `COHORT_MODEL_GRADING_ENABLED=false`. It refuses to overwrite an existing file.
 
-If Windows blocks repository scripts under the machine execution policy, invoke them with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script> ...`. This override applies only to that child process and does not change the machine policy.
+If Windows blocks repository scripts under the machine execution policy, invoke them with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script> ...`. That applies only to the child process.
 
 ## Preflight and startup
 
-Run preflight before every startup:
-
 ```powershell
-.\scripts\local-ai\Test-LocalAiPreflight.ps1
+.\scripts\local-ai\Test-LocalAiPreflight.ps1 -Mode Qwen38
+.\scripts\local-ai\Start-LocalAi.ps1 -Mode Qwen38
 ```
 
-Preflight verifies the binary, GGUF, local OCR model files, Paddle imports/versions, and that ports 8080 and 8090 are free. It does not load either model.
+Preflight verifies the binary, the GGUF and that the phase's port is free. It does not load a model. Startup verifies the model hash where one is pinned, asserts the listener is loopback-only and owned by the process it started, and reports VRAM headroom.
 
-Start both loopback services explicitly:
-
-```powershell
-.\scripts\local-ai\Start-LocalAi.ps1
-```
-
-The Qwen process uses the pinned model alias, offline mode, disabled reasoning, one parallel slot, 32K context, GPU/hybrid offload, and API-key protection. The PaddleOCR sidecar loads PaddleOCR-VL, PP-DocLayoutV3, PP-OCRv6 medium detection, and PP-OCRv6 medium recognition once and accepts one image request at a time. Enhanced rescue runs use the explicit `OcrGpu` phase; starting Qwen stops OCR first, so both phases cannot compete for VRAM. Startup fails closed on a model/device mismatch.
-
-To stop only the recorded and executable-verified processes:
+Switch phases with the managed script rather than starting servers by hand:
 
 ```powershell
-.\scripts\local-ai\Stop-LocalAi.ps1
+.\scripts\local-ai\Switch-LocalAiPhase.ps1 -Phase Qwen
 ```
+
+It refuses to adopt a healthy listener this repository did not start, so it cannot silently attach to somebody else's model server.
+
+To stop only the recorded, executable-verified process:
+
+```powershell
+.\scripts\local-ai\Stop-LocalAi.ps1 -Mode Qwen38
+```
+
+By default this stops only the PID this repository recorded. If another process holds the port it reports which one and refuses. `-ForcePortSweep` overrides that and will kill any matching `llama-server` on the port -- including a coding-assistant bridge. Use it deliberately.
 
 Logs and PID files are under ignored `.local-ai/`. Never commit that directory.
 
-## Start the host API with local settings
+### Measured performance on the reference host (RTX 5070, 12 GB)
 
-The API reads process environment variables (and `.env`), while model services use `.env.local-ai`. Import the ignored configuration into the same PowerShell session before starting the API:
+| Model | Config | Sustained decode |
+|---|---|---|
+| Qwen3.6-35B-A3B | `--n-cpu-moe 24`, 32K context | ~67 tok/s |
+| Qwen3.8-27B | `-ngl 40`, 12K context | ~4.4 tok/s on a vision call |
 
-```powershell
-. .\scripts\local-ai\Common.ps1
-Import-LocalAiEnvironment -Path .\.env.local-ai
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps\api --host 127.0.0.1 --port 8000
-```
+Counter-intuitively, moving **more** MoE layers to the CPU is far faster: at `--n-cpu-moe 20` the card sits at 96.6% and the Windows NVIDIA driver spills to system RAM instead of failing, costing ~3.4x. If the machine becomes unstable under load, raise `LOCAL_QWEN_CPU_MOE_LAYERS` to 28 for ~2 GB more headroom at ~12% less throughput.
 
-For OCR drafting and local reference extraction, keep `BRAIN_ALLOW_REAL_PROVIDERS=true`, `LOCAL_QWEN_ENABLED=true`, and `LOCAL_OCR_ENABLED=true`. To authorize safe cohort model execution, explicitly change the ignored local setting to `COHORT_MODEL_GRADING_ENABLED=true`, then restart/reload the host API environment. `COHORT_PROVIDER_RETRY_COUNT` must remain `0`.
+## Reference extraction
 
-Authenticated `GET /local-ai/status` reports enabled/available state and model names. It never returns keys or filesystem paths.
+The teacher uploads question, solution and rubric PDFs once, then confirms them before any model runs.
 
-## Teacher workflow
+With `LOCAL_OCR_ENABLED=false` (default), every rendered page goes to Qwen3.8 in a single call.
 
-1. Upload and teacher-confirm reference materials, canonical questions, model answers, and exactly one active rubric per question.
-2. Upload complete scripts. PaddleOCR maps answer regions and Qwen links those regions to finalized questions; the teacher confirms the mapping.
-3. Compare the direct PaddleOCR baseline reading with the prepared answer image. Approve it only when faithful.
-4. If it is not faithful, choose **None of these readings match — Enhanced local OCR**. The GPU phase detects at most six ordered bands and spends at most eight OCR calls total.
-5. Select exactly one faithful PP-OCRv6 or PaddleOCR-VL reading for every band. Do not select the closest reading when none is correct; reject the run and upload a clearer complete page.
-6. Separately choose **Confirm displayed image is the full answer**. Candidate confirmation alone deliberately leaves grading blocked.
-7. Choose **Grade confirmed answer with local Qwen**. Phase switching stops OCR before Qwen starts; Qwen receives the finalized question, solution, active rubric, and server-assembled confirmed text only.
-8. Review the pending draft suggestion. Only explicit teacher approval may create a final grade.
+With `LOCAL_OCR_ENABLED=true`, the tiered path runs:
 
-Cohort grading remains disabled until the curated gate passes. When later enabled, verify the preflight counts and model alias, keep the call cap at 25 or lower, and inspect failed/uncertain items without automatic retry.
+1. Render each page at `LOCAL_OCR_RENDER_DPI` (300 by default).
+2. Read every page with CPU tier-1 OCR. No model is loaded.
+3. Decide escalation per page from two independent triggers: low recognition confidence, and structural signals that never consult confidence (unusually tall boxes, split fraction boxes, sparse decode, uncovered ink). The second trigger exists because a line recognizer will confidently emit a short plausible string for a display equation.
+4. Escalated pages are batched into **one** Qwen3.8 window, then the run switches **once** to Qwen3.6 for correlation. Escalations are skipped entirely when none are needed.
+5. The teacher reviews the drafts. Pages read by the vision model are called out in the run warnings -- that is a "look closer" signal, not a claim the draft is wrong.
 
-## Bounded synthetic acceptance smoke
+Every page records its engine, render DPI, image SHA-256, per-line confidence, decision and reason codes in `reference_page_ocr_runs`, so an escalation decision can be audited after the fact.
 
-Use synthetic/non-student material only:
+## Student evidence
 
-1. Verify authenticated model and OCR health.
-2. OCR one synthetic PNG/JPEG and inspect normalized text, Markdown, ordered blocks, warnings, and CPU device metadata.
-3. Run one strict structured Qwen grading request and verify the exact alias, JSON schema, zero cost, token/latency metadata, and review flags.
-4. Run two synthetic students through OCR draft, teacher text confirmation, evidence confirmation, queue rebuild, local cohort dispatch, review, approval, and approved-only XLSX export.
-5. Confirm both services remain healthy together and that OCR uses CPU while Qwen uses GPU/hybrid offload.
+1. Upload complete scripts.
+2. Confirm the answer-region mapping.
+3. Create a verbatim visual transcription and confirm it only when it faithfully matches the image.
+4. Confirm separately that the displayed image contains the **full** answer. Text confirmation alone never makes a region grading-ready.
+5. If no reading is faithful, reject and upload a clearer complete page rather than accepting the closest match.
 
-The repeatable two-student smoke is skipped during ordinary CI. Run it only against an isolated disposable PostgreSQL database whose name ends in `_test`; the test clears that database before and after execution:
+## Known limitations
 
-```powershell
-$env:DATABASE_URL = 'postgresql+psycopg://<test-user>@127.0.0.1:<test-port>/teacher_assistant_test'
-$env:RUN_LOCAL_AI_HOST_SMOKE = '1'
-Push-Location apps\api
-..\..\.venv\Scripts\python.exe -m pytest tests\test_local_ai_host_smoke.py -q -s
-Pop-Location
-```
-
-Do not begin a teacher pilot until the 20-case gate in `TEACHER_CURATED_EVAL_PROTOCOL.md` passes.
-
-## Failure handling
-
-- Service unreachable or model mismatch: show the failure and stop; do not fall back.
-- Malformed Qwen JSON: fail the item and stop the dispatch.
-- OCR warning/blank output: keep it as an unconfirmed draft for teacher review.
-- Evidence or rubric changed after queue creation: refuse the item and rebuild the queue after teacher review.
-- Worker heartbeat expires during a call: mark the item `uncertain`; do not retry it automatically.
-- Any cross-teacher visibility, automatic finalization, hidden provider call, unconfirmed OCR use, or blank/irrelevant over-scoring pattern blocks the pilot.
+- Tier-1 OCR drops decimal points on some handwriting (`03` for `0.3`). In a probability question that is a 10x error in the value a mark depends on, so handwriting escalates often and teacher review remains mandatory.
+- Escalation thresholds are **provisional** until the bake-off in `packages/evaluation/ocr_engine_bakeoff.py` is run against teacher-verified fixtures.
+- The 20-case curated evaluation gate cannot currently run: its OCR stage is not wired to the replacement pipeline. No result from that gate may be cited as pilot-authorization evidence until it is.

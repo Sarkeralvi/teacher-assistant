@@ -27,7 +27,7 @@ TA-W1-032 defines a safe process for collecting real teacher-curated grading exa
 
 A tiny synthetic dataset can validate the pipeline, but it is not enough for production trust.
 
-### Local PaddleOCR + Qwen pilot gate
+### Local OCR + Qwen pilot gate
 
 The first local-provider teacher pilot is blocked until at least 20 mixed curated cases have completed the full draft-evidence and grading review path. Use this minimum allocation:
 
@@ -40,7 +40,7 @@ The first local-provider teacher pilot is blocked until at least 20 mixed curate
 - 2 formula-heavy
 - 2 multi-step-work cases
 
-Record PaddleOCR draft text, warnings, teacher-edited confirmed text, review flags, and teacher/reference score for every case. Record a Qwen structured suggestion for each of the 18 nonblank grading-ready cases. The two blank cases must be confirmed as blank, refused before dispatch, and recorded as `not_called_blank_safety_gate`; sending placeholder text to Qwen would invalidate the run. Difficult handwriting and formula cases must measure OCR transcription quality separately from grading quality; a teacher correction can make grading accurate without proving OCR accurate.
+Record the tier-1 OCR draft text, whether the page was escalated to the vision model and why, warnings, teacher-edited confirmed text, review flags, and teacher/reference score for every case. Record a Qwen structured suggestion for each of the 18 nonblank grading-ready cases. The two blank cases must be confirmed as blank, refused before dispatch, and recorded as `not_called_blank_safety_gate`; sending placeholder text to Qwen would invalidate the run. Difficult handwriting and formula cases must measure OCR transcription quality separately from grading quality; a teacher correction can make grading accurate without proving OCR accurate.
 
 The local pilot remains blocked if any case shows:
 
@@ -52,7 +52,7 @@ The local pilot remains blocked if any case shows:
 - a hidden provider call, cloud call, fallback provider, or automatic provider retry
 - an uncertain worker outcome being retried automatically
 
-The report must name the local provider/model aliases, Paddle versions/models/device, prompt version, call cap, and whether Qwen and CPU OCR stayed healthy concurrently. Passing this gate permits only a supervised Custom Controlled pilot; it does not activate Semi-Automated or Fully Automated modes.
+The report must name the local provider/model aliases, the tier-1 OCR engine and version, prompt version, call cap, escalation count and budget, and whether the grading model and CPU OCR stayed healthy concurrently. Passing this gate permits only a supervised Custom Controlled pilot; it does not activate Semi-Automated or Fully Automated modes.
 
 The canonical local harness is `packages.evaluation.local_curated_evaluation`. It enforces the ordered states `prepared`, `ground_truth_locked`, `ocr_completed`, `ocr_confirmed`, `grading_completed`, `review_completed`, and `reported`, with `invalid` as an irreversible terminal state. Its operator workflow and conservative thresholds are documented in `LOCAL_CURATED_EVAL_RUNBOOK.md`.
 

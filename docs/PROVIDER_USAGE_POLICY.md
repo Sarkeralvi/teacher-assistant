@@ -1,6 +1,6 @@
 # Provider Usage Policy
 
-Provider/model usage is prohibited by default. This policy applies to local Qwen/PaddleOCR, Codex CLI, OpenAI, and any other AI/model provider used for grading, mapping, OCR, extraction, or feedback.
+Provider/model usage is prohibited by default. This policy applies to local Qwen3.6/Qwen3.8, Codex CLI, OpenAI, and any other AI/model provider used for grading, mapping, OCR, extraction, or feedback.
 
 ## Default rule
 
@@ -32,7 +32,7 @@ Local Qwen cohort execution is allowed only when all of these controls are activ
 - stop before the next call, stop on first provider failure, and zero automatic retries
 - no provider fallback and no automatic `FinalGrade`
 
-PaddleOCR is also local-provider usage. It accepts image bytes only through the authenticated loopback sidecar, and its output remains a draft until teacher confirmation.
+Tier-1 OCR runs in-process on the CPU and contacts no service, so it is not a provider call. Its output is still a draft until teacher confirmation, and escalating a page it could not read to the local vision model IS a provider call: it is bounded by a pre-authorized escalation budget and stops the run rather than exceeding it.
 
 ## Required authorization packet before provider call
 

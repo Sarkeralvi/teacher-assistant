@@ -1,6 +1,6 @@
 # Windows Teacher Pilot Runtime
 
-The teacher-pilot stack runs directly on Windows. Docker and WSL are not required for this milestone. Qwen and PaddleOCR remain explicit operator-started services, while PostgreSQL, the Redis-compatible queue, the API, the Windows-compatible sequential RQ worker, and the frontend are managed together.
+The teacher-pilot stack runs directly on Windows. Docker and WSL are not required for this milestone. The local models remain explicit operator-started services, while PostgreSQL, the Redis-compatible queue, the API, the Windows-compatible sequential RQ worker, and the frontend are managed together.
 
 ## Local runtime layout
 
@@ -13,7 +13,7 @@ Machine binaries and mutable service data live under ignored `.local-ai/runtime/
 
 Memurai Developer is suitable only for this non-production pilot/evaluation environment and automatically stops after ten continuous days. The status/start workflow detects and restarts it. Replace it with a properly licensed production Redis-compatible service before any production deployment.
 
-Qwen, PaddleOCR models, API keys, and machine paths remain in the ignored `.env.local-ai` configuration and their existing external locations. No model or private evaluation artifact belongs in Git. Local models are deliberately off after ordinary pilot startup: this prevents Qwen from occupying GPU memory while no approved AI action is running.
+Model files, API keys, and machine paths remain in the ignored `.env.local-ai` configuration and their existing external locations. No model or private evaluation artifact belongs in Git. Local models are deliberately off after ordinary pilot startup: this prevents Qwen from occupying GPU memory while no approved AI action is running.
 
 ## Start
 
@@ -23,7 +23,7 @@ From the repository root, use an execution-policy override scoped to this one pr
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\pilot\Start-TeacherPilot.ps1
 ```
 
-The script starts PostgreSQL and Redis, applies Alembic migrations, starts the API and Windows RQ worker, and serves the production frontend. It does not start Qwen or PaddleOCR. An explicit teacher extraction action starts only the required local phase; it does not make a grading call. RQ uses `SimpleWorker` on Windows because RQ 2.10's process monitor depends on the POSIX-only `os.wait4`; dispatches remain sequential, and persisted application heartbeats provide stale/crash reconciliation.
+The script starts PostgreSQL and Redis, applies Alembic migrations, starts the API and Windows RQ worker, and serves the production frontend. It does not start a local model. An explicit teacher extraction action starts only the required local phase; it does not make a grading call. RQ uses `SimpleWorker` on Windows because RQ 2.10's process monitor depends on the POSIX-only `os.wait4`; dispatches remain sequential, and persisted application heartbeats provide stale/crash reconciliation.
 
 The launcher automatically restarts the API and worker when backend source or the
 local configuration is newer than either process. It also rebuilds the production
@@ -37,7 +37,7 @@ For an operator health-check session, explicitly request one local phase (normal
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\pilot\Start-TeacherPilot.ps1 -StartLocalAi -LocalAiMode Qwen
 ```
 
-Use `OcrGpu` instead of `Qwen` to load PaddleOCR on the GPU. The local models can also be started and stopped directly through `scripts\local-ai\Start-LocalAi.ps1` and `Stop-LocalAi.ps1` using the same process-local execution-policy override.
+Use `-LocalAiMode Qwen` to load the Qwen3.6 text model instead of Qwen3.8; tier-1 OCR needs no phase because it runs on the CPU. The local models can also be started and stopped directly through `scripts\local-ai\Start-LocalAi.ps1` and `Stop-LocalAi.ps1` using the same process-local execution-policy override.
 
 To rebuild the frontend before startup:
 

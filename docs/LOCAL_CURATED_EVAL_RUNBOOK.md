@@ -1,6 +1,6 @@
 # Local Curated Evaluation Runbook
 
-This runbook executes the 20-case synthetic, teacher-supervised PaddleOCR and Qwen gate. It never starts a model automatically and never creates a final grade. Raw images, workbooks, prompts, confirmations, and results stay under ignored `data/evaluation/<run_id>/`.
+This runbook executes the 20-case synthetic, teacher-supervised OCR and grading gate. NOTE: the gate is currently NOT RUNNABLE - its OCR stage was retired with the PaddleOCR stack and has not been rewired to the replacement pipeline, so no result from it may be cited as pilot-authorization evidence. It never starts a model automatically and never creates a final grade. Raw images, workbooks, prompts, confirmations, and results stay under ignored `data/evaluation/<run_id>/`.
 
 ## Safety boundaries
 
@@ -29,7 +29,7 @@ Do not reuse `lc_20260807_teacher01`: it was prepared before
 fresh run ID is required so its manifest, images, sign-offs, and prompt hash
 form one consistent lock chain.
 
-This requires a clean worktree and the ignored `.env.local-ai` path settings. It hashes the local Qwen and Paddle model assets, verifies llama.cpp build `10249` and Paddle package versions, then records those values in the run manifest. It also generates 20 deterministic PNGs and `ground_truth_review.xlsx`. It starts no service and makes zero OCR or Qwen calls; hashing the 20.61 GiB GGUF may take several minutes.
+This requires a clean worktree and the ignored `.env.local-ai` path settings. It hashes the local Qwen model assets and verifies llama.cpp build `10249`, then records those values in the run manifest. The OCR engine's assets are not recorded because the tier-1 engine has not been selected yet. It also generates 20 deterministic PNGs and `ground_truth_review.xlsx`. It starts no service and makes zero OCR or Qwen calls; hashing the 20.61 GiB GGUF may take several minutes.
 
 The teacher independently transcribes and scores every case, approves all rows, and marks B4, C3, and E2 as genuinely difficult but legible handwriting. Then lock the workbook:
 
@@ -101,7 +101,7 @@ Verify artifact integrity at any non-invalid stage:
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation verify --run-id $runId
 ```
 
-Stop Qwen and PaddleOCR after review:
+Stop the local model after review:
 
 ```powershell
 .\scripts\local-ai\Stop-LocalAi.ps1
