@@ -155,12 +155,67 @@ def test_unlabelled_fixtures_are_refused(tmp_path: Path) -> None:
         load_fixtures(tmp_path)
 
 
+def test_an_unverified_ocr_draft_is_refused_as_an_answer_key(tmp_path: Path) -> None:
+    """The trap that makes seeding ground_truth from OCR safe.
+
+    Seeding saves the teacher typing, but an unchecked draft is the engine's own
+    reading. Scoring against it would report a flawless result for an engine
+    that misread every line, so it must be refused until a human confirms it.
+    """
+    _png(tmp_path / "a.png")
+    (tmp_path / "fixtures.json").write_text(
+        json.dumps(
+            {
+                "fixtures": [
+                    {
+                        "id": "a",
+                        "image": "a.png",
+                        "ground_truth": "P(D)=03",
+                        "verified": False,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OcrBakeoffError, match="not verified"):
+        load_fixtures(tmp_path)
+
+
+def test_a_verified_fixture_loads(tmp_path: Path) -> None:
+    _png(tmp_path / "a.png")
+    (tmp_path / "fixtures.json").write_text(
+        json.dumps(
+            {
+                "fixtures": [
+                    {
+                        "id": "a",
+                        "image": "a.png",
+                        "ground_truth": "P(D) = 0.3",
+                        "verified": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_fixtures(tmp_path)[0].ground_truth == "P(D) = 0.3"
+
+
 def test_fixtures_written_with_a_windows_bom_still_load(tmp_path: Path) -> None:
     # Notepad and PowerShell's Out-File both add a BOM. A teacher editing this
     # file by hand must not be met with a JSON syntax error they did not cause.
     _png(tmp_path / "a.png")
     (tmp_path / "fixtures.json").write_text(
-        json.dumps({"fixtures": [{"id": "a", "image": "a.png", "ground_truth": "7/12"}]}),
+        json.dumps(
+            {
+                "fixtures": [
+                    {"id": "a", "image": "a.png", "ground_truth": "7/12", "verified": True}
+                ]
+            }
+        ),
         encoding="utf-8-sig",
     )
 
@@ -175,6 +230,7 @@ def test_fixture_template_round_trips_once_labelled(tmp_path: Path) -> None:
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["fixtures"][0]["ground_truth"] = "P(X) = 7/12"
     payload["fixtures"][0]["dataset"] = "holdout"
+    payload["fixtures"][0]["verified"] = True
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
     fixtures = load_fixtures(tmp_path)

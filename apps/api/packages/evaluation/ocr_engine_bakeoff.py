@@ -421,6 +421,16 @@ def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
                 f"Fixture '{entry.get('id')}' has no ground_truth. Every fixture must "
                 "be labelled, or its scores are meaningless."
             )
+        # ground_truth may be seeded from an engine's own output to save the
+        # teacher typing. Until a human has checked it against the image it is
+        # NOT an answer key: scoring an engine against its own reading would
+        # report a flawless result for an engine that misread every line.
+        if not bool(entry.get("verified", False)):
+            raise OcrBakeoffError(
+                f"Fixture '{entry.get('id')}' is not verified. Its ground_truth is an "
+                "unchecked OCR draft; correct it against the image and set "
+                '"verified": true. Delete the fixture to skip it instead.'
+            )
         fixtures.append(
             Fixture(
                 fixture_id=str(entry["id"]),
@@ -456,6 +466,7 @@ def write_fixture_template(fixtures_dir: Path, images: list[Path]) -> Path:
                 "kind": "unknown",
                 "dataset": "dev",
                 "ground_truth": "",
+                "verified": False,
                 "critical_tokens": [],
             }
             for image in images
