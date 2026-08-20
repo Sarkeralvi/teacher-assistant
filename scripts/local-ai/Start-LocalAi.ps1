@@ -33,13 +33,16 @@ if ($Mode -eq "Qwen") {
     #   24 -> 61.6 tok/s (1082 MiB free)  34 -> 53.2 tok/s (5722 MiB free)
     # At 20 the card sits at 96.6% and the Windows NVIDIA driver spills to
     # system RAM instead of failing, which is far slower than offloading the
-    # same layers deliberately. 28 is chosen over the marginally faster 24
-    # because it keeps ~2.9 GB of headroom on a machine with a documented
-    # GPU-instability history, for about 4% less throughput.
+    # same layers deliberately. 24 is the measured peak: 67.6 tok/s sustained
+    # with this flag set, against 60.2 at 28. It leaves ~850 MiB of headroom
+    # rather than ~2.9 GB, so the low-VRAM warning below fires -- an explicit
+    # choice of speed over margin on a machine with a documented
+    # GPU-instability history. If instability recurs under load, raise this to
+    # 28 first: it costs about 12% and buys ~2 GB back.
     $cpuMoeLayers = if ($env:LOCAL_QWEN_CPU_MOE_LAYERS) {
         [int]$env:LOCAL_QWEN_CPU_MOE_LAYERS
     } else {
-        28
+        24
     }
     if ($cpuMoeLayers -lt 1 -or $cpuMoeLayers -gt 64) {
         throw "LOCAL_QWEN_CPU_MOE_LAYERS must be between 1 and 64."

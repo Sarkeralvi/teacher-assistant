@@ -1638,3 +1638,25 @@ longer context, and 4.35 remains the figure to plan escalation cost against.
 A 5,500-token reference bundle costs **~92 seconds** on Qwen3.6 at 60 tok/s,
 against ~21 minutes on Qwen3.8. The plan's original ~83 s estimate was
 essentially correct; only the application's Qwen3.6 configuration was wrong.
+
+### Adopted `--n-cpu-moe 24` (2026-08-20, revised)
+
+Re-measured through the real `Start-LocalAi.ps1` with the application's full
+flag set, which the scratch sweep did not carry (`--flash-attn on`,
+`--batch-size 512`, `--jinja`, `--reasoning off`):
+
+| `--n-cpu-moe` | Sustained decode | VRAM free |
+|---|---|---|
+| 24 | **67.6 tok/s** | 852 MiB |
+| 28 | 60.2 tok/s | 2,931 MiB |
+
+Both beat the scratch-sweep figures (61.6 / 59.0), so the application's extra
+flags help rather than hurt. The real gap between 24 and 28 is ~12%, not the
+~4% the sweep suggested.
+
+Shipped 24 by explicit operator choice: speed over margin. At 852 MiB free the
+low-VRAM warning fires on every Qwen3.6 startup, which is correct and should be
+left visible. If instability recurs under load, `LOCAL_QWEN_CPU_MOE_LAYERS=28`
+buys ~2 GB back for ~12% throughput without a code change.
+
+A 5,500-token reference bundle now costs **~81 seconds** on Qwen3.6.
