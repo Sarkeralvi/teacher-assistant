@@ -306,18 +306,6 @@ class LocalScriptPreparationService:
             "PaddleOCR has been removed. Visual script preparation will be provided by Qwen3.8."
         )
 
-    def _validate_local_ocr_result(self, result: Any) -> None:
-        if (
-            result.provider != "local_paddle_qwen"
-            or result.model != "PaddleOCR-VL-1.6"
-            or result.layout_model != "PP-DocLayoutV3"
-            or result.version != "3.7.0"
-            or result.device != "gpu:0"
-        ):
-            raise LocalScriptPreparationError(
-                "Local PaddleOCR provider, model, version, or GPU device did not match"
-            )
-
     def _block_index(self, pages: list[dict[str, Any]]) -> dict[tuple[int, int], dict[str, Any]]:
         index: dict[tuple[int, int], dict[str, Any]] = {}
         for page in pages:

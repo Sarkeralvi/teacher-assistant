@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Any
 
 import fitz
-from PIL import Image, ImageOps
 
 from app.core.config import Settings, get_settings
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 
-LOCAL_PADDLE_QWEN_PROVIDER = "llama_cpp_qwen38"
+# The provider recorded on reference extraction runs. Named for its role rather
+# than an engine: it previously read "PADDLE_QWEN" while holding the Qwen3.8
+# value, which invites picking the wrong provider when more than one exists.
+LOCAL_REFERENCE_PROVIDER = "llama_cpp_qwen38"
 _IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg"}
 
 
@@ -94,23 +95,3 @@ class LocalReferenceExtractor:
         raise LocalReferenceExtractionError(
             "local Qwen3.8 supports PDF, PNG, and JPEG reference files"
         )
-
-
-def _prepare_rubric_focus_png(image_bytes: bytes) -> bytes:
-    try:
-        with Image.open(io.BytesIO(image_bytes)) as source:
-            image = source.convert("RGB")
-    except Exception as exc:
-        raise LocalReferenceExtractionError(
-            "Rubric page could not be prepared for handwriting OCR"
-        ) from exc
-    # This is a supplemental view: the uncropped full-page OCR remains in the
-    # Qwen context.  Most handwritten mark tables place labels and allocations
-    # in the left two-thirds, while this crop removes unrelated reverse-side
-    # writing that otherwise collapses rows into a single OCR line.
-    image = image.crop((0, 0, max(1, int(image.width * 0.62)), image.height))
-    contrasted = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=1)
-    thresholded = contrasted.point(lambda value: 0 if value < 185 else 255).convert("RGB")
-    output = io.BytesIO()
-    thresholded.save(output, format="PNG")
-    return output.getvalue()

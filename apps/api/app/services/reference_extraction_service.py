@@ -30,7 +30,7 @@ from app.services.document_extraction import (
 )
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_reference_extraction import (
-    LOCAL_PADDLE_QWEN_PROVIDER,
+    LOCAL_REFERENCE_PROVIDER,
     LocalReferenceExtractor,
 )
 
@@ -100,7 +100,7 @@ class ReferenceExtractionService:
             original_filename=grading_run.question_pdf_name or "question.pdf",
             content_type="application/pdf",
             extraction_type="question_paper",
-            provider=LOCAL_PADDLE_QWEN_PROVIDER,
+            provider=LOCAL_REFERENCE_PROVIDER,
             status="pending",
             blockers=[],
         )
@@ -110,7 +110,7 @@ class ReferenceExtractionService:
             original_filename=grading_run.rubric_pdf_name or "rubric.pdf",
             content_type="application/pdf",
             extraction_type="rubric",
-            provider=LOCAL_PADDLE_QWEN_PROVIDER,
+            provider=LOCAL_REFERENCE_PROVIDER,
             status="pending",
             blockers=[],
         )
@@ -407,7 +407,7 @@ class ReferenceExtractionService:
             "grading_run_id": grading_run.id,
             "status": grading_run.reference_extraction_status,
             "stage": grading_run.reference_extraction_stage,
-            "provider": LOCAL_PADDLE_QWEN_PROVIDER,
+            "provider": LOCAL_REFERENCE_PROVIDER,
             "model": self.settings.local_qwen38_model,
             "ocr_device": "qwen38_gpu_single_slot",
             "question_run_id": grading_run.reference_question_run_id,
@@ -459,7 +459,7 @@ class ReferenceExtractionService:
                         "source_question_pages": source_question_pages,
                         "source_solution_pages": item.get("source_solution_pages", []),
                         "model_answer_draft": item.get("model_answer"),
-                        "provider": LOCAL_PADDLE_QWEN_PROVIDER,
+                        "provider": LOCAL_REFERENCE_PROVIDER,
                         "teacher_review_required": True,
                     },
                     "confidence": item.get("confidence"),
@@ -550,12 +550,6 @@ class ReferenceExtractionService:
                 "Reference materials changed after teacher authorization"
             )
 
-    def _record_ocr_call(self, grading_run: GradingRun) -> None:
-        if grading_run.reference_ocr_call_count >= self.settings.local_reference_max_ocr_calls:
-            raise ReferenceExtractionError("Reference OCR call limit reached")
-        grading_run.reference_ocr_call_count += 1
-        self.db.commit()
-
     def _set_stage(self, grading_run: GradingRun, stage: str) -> None:
         grading_run.reference_extraction_stage = stage
         self.db.commit()
@@ -594,7 +588,7 @@ class ReferenceExtractionService:
     ) -> None:
         safe_payload: dict[str, Any] = {
             "assessment_id": grading_run.assessment_id,
-            "provider": LOCAL_PADDLE_QWEN_PROVIDER,
+            "provider": LOCAL_REFERENCE_PROVIDER,
             "model": self.settings.local_qwen38_model,
         }
         if payload:
