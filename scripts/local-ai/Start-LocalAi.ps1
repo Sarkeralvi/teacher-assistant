@@ -50,6 +50,14 @@ if ($Mode -eq "Qwen") {
     $key = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_API_KEY"
     $expectedModelHash = $env:LOCAL_QWEN38_MODEL_SHA256
     $expectedMmprojHash = $env:LOCAL_QWEN38_MMPROJ_SHA256
+    $contextTokens = if ($env:LOCAL_QWEN38_CONTEXT_TOKENS) {
+        [int]$env:LOCAL_QWEN38_CONTEXT_TOKENS
+    } else {
+        16384
+    }
+    if ($contextTokens -lt 12288 -or $contextTokens -gt 32768) {
+        throw "LOCAL_QWEN38_CONTEXT_TOKENS must be between 12288 and 32768."
+    }
     $mmproj = Join-Path ($model | Split-Path) "mmproj-Qwen3.8-27B-Q8_0.gguf"
     if (-not (Test-Path -LiteralPath $mmproj)) { throw "Qwen3.8 mmproj file is missing." }
     if ($expectedModelHash) {
@@ -69,7 +77,7 @@ if ($Mode -eq "Qwen") {
         "--offline",
         "--reasoning", "auto",
         "-ngl", "40",
-        "-c", "8192",
+        "-c", "$contextTokens",
         "--parallel", "1",
         "--flash-attn", "on",
         "--batch-size", "256",
