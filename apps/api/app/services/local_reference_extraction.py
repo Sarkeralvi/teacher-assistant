@@ -14,6 +14,12 @@ from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 LOCAL_REFERENCE_PROVIDER = "llama_cpp_qwen38"
 _IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg"}
 
+# 300 DPI clears the 146-320 DPI range of the reference scans seen in practice,
+# so rendering no longer discards detail the source actually carries.
+DEFAULT_RENDER_DPI = 300
+# Bounds memory on unusually large pages; 4000px still exceeds A4 at 300 DPI.
+MAX_RENDER_SIDE_PX = 4000
+
 
 class LocalReferenceExtractionError(RuntimeError):
     pass
@@ -69,18 +75,46 @@ class LocalReferenceExtractor:
             "PaddleOCR has been removed. Visual transcription will be provided by Qwen3.8."
         )
 
-    def render_pages(self, file_path: Path, content_type: str) -> list[tuple[int, bytes, str]]:
+    def render_pages(
+        self,
+        file_path: Path,
+        content_type: str,
+        *,
+        target_dpi: int = DEFAULT_RENDER_DPI,
+        max_side_px: int = MAX_RENDER_SIDE_PX,
+    ) -> list[tuple[int, bytes, str]]:
+        """Render each page, preserving the source scan's detail.
+
+        The previous fixed ``fitz.Matrix(2, 2)`` renders at 144 DPI regardless
+        of the source. Measured against the real reference bundle that
+        *downsamples* the scans it is given: the handwritten rubric loses ~47%
+        of its linear resolution and the typeset solution ~55%, which is
+        exactly the material that is hardest to read.
+
+        It matters more for classical OCR than for a vision model, whose page
+        input is capped at a fixed token count either way: PP-OCR normalizes
+        every line crop to a fixed height, so halving the line height doubles
+        the upsampling blur, degrading both the text and the confidence score
+        the escalation gate depends on.
+        """
+        if target_dpi <= 0:
+            raise LocalReferenceExtractionError("Reference render DPI must be positive")
         if content_type == "application/pdf":
             try:
                 with fitz.open(file_path) as document:
-                    return [
-                        (
-                            page_index,
-                            page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).tobytes("png"),
-                            "image/png",
-                        )
-                        for page_index, page in enumerate(document, start=1)
-                    ]
+                    rendered: list[tuple[int, bytes, str]] = []
+                    for page_index, page in enumerate(document, start=1):
+                        zoom = target_dpi / 72.0
+                        longest_side = max(page.rect.width, page.rect.height) * zoom
+                        if longest_side > max_side_px:
+                            # Bound memory on unusually large pages rather than
+                            # rendering something that cannot be held.
+                            zoom *= max_side_px / longest_side
+                        pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                        rendered.append((page_index, pixmap.tobytes("png"), "image/png"))
+                    return rendered
+            except LocalReferenceExtractionError:
+                raise
             except Exception as exc:
                 raise LocalReferenceExtractionError(
                     "Reference PDF could not be rendered locally"
