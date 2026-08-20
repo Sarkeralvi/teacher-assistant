@@ -1,4 +1,17 @@
-# TA-LOCAL-003 — Qwen3.8 visual transcription replaces local OCR
+﻿# TA-LOCAL-005 — Tiered OCR pipeline with vision escalation
+
+- Recorded at: 2026-08-20
+- Canonical workflow: Custom Controlled, Windows-host local models.
+- Implemented: migration `0024` (single-holder model lease, per-page reference evidence, CHECK constraints extended for `llama_cpp_qwen` and new OCR engines); `packages/ocr` (engine-agnostic types, pure escalation policy, RapidOCR CPU adapter); tiered reference extraction behind `LOCAL_OCR_ENABLED` (default false); the offline OCR bake-off harness; port hardening so a phase switch can no longer kill an unowned model server; and the `--n-cpu-moe` fix taking Qwen3.6 from 17.9 to 67.6 tok/s.
+- Removed: the retired PaddleOCR UI/API surface, five dead handlers and two teacher-visible panels calling deleted endpoints, and four latent `AttributeError` traps left by the earlier stack removal.
+- Safety: tier-1 OCR disabled by default; escalation is a pre-authorized budget that hard-stops when exceeded rather than degrading silently; batched phase switches enforced by collect-then-execute structure; per-page provenance persisted for audit; teacher gates unchanged; `needs_review` always true; no automatic `FinalGrade`; `COHORT_MODEL_GRADING_ENABLED=false`.
+- Verification completed: 415 backend tests (3 skipped), Ruff clean, migration `0024` up/down/up clean, frontend typecheck and production build pass, `workflow-ui.test.mjs` passes for the first time since `26d7ad0`. Platform throughput measured on the reference host (Qwen3.6 ~67 tok/s, Qwen3.8 ~4.4 tok/s on a vision call, tier-1 OCR ~1 s/page on CPU). Orchestration covered by fake-provider tests asserting stage order, one switch per phase, budget enforcement, evidence written and the teacher warning surfaced. Tesseract control arm confirms the bake-off harness discriminates rather than flattering whatever it measures.
+- Verification remaining: escalation thresholds are PROVISIONAL pending teacher-verified fixtures; only 6 unique handwriting images exist, too few to support the planned dev/holdout split; the grading-model bake-off (Qwen3.6 vs Qwen3.8 on mark accuracy) has not run; script-checking (page-first detection and mapping) is not built; the 20-case curated gate is not runnable because its OCR stage is not rewired; no founder-supervised rehearsal has been completed end to end.
+- Known limitation: tier-1 OCR drops decimal points on some handwriting (`03` for `0.3`), a 10x error in a value a mark depends on. Handwriting therefore escalates often and the speed benefit is concentrated on reference extraction rather than script checking.
+- Pilot status: **Reference pipeline built but unproven. Pilot authorization remains blocked: no result may be cited from the 20-case gate while it cannot run, and no rehearsal has been completed.**
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: In verification
+# TA-LOCAL-003 â€” Qwen3.8 visual transcription replaces local OCR
 
 - Recorded at: 2026-08-19
 - Canonical workflow: Custom Controlled, Windows-host local models.
@@ -25,13 +38,13 @@
 - Verification remaining: only one image has been teacher-reviewed under Gate I4; broader
   transcription-quality confidence should come from more samples before any batch/cohort use. No
   founder-supervised rehearsal grading call (per `docs/FOUNDER_PILOT_REHEARSAL.md`) has been run
-  yet on this path — infra readiness only, not a completed rehearsal.
+  yet on this path â€” infra readiness only, not a completed rehearsal.
 - Pilot status: **Infra ready for a founder-supervised one-packet rehearsal; real grading call
   still requires the explicit founder approval and preflight in `docs/FOUNDER_PILOT_REHEARSAL.md`.**
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
 
-# TA-LOCAL-002 — Image-grounded OCR rescue and safe local grading
+# TA-LOCAL-002 â€” Image-grounded OCR rescue and safe local grading
 
 - Recorded at: 2026-08-17
 - Canonical workflow: Custom Controlled, Windows-host local models.
@@ -44,13 +57,13 @@
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
 
-# TA-LOCAL-001 — Local-first AI integration and safe cohort grading
+# TA-LOCAL-001 â€” Local-first AI integration and safe cohort grading
 
 - Recorded at: 2026-08-07
 - Canonical roadmap: `docs/PRODUCT_ROADMAP.md`
 - Workflow type: Custom Controlled, Windows-host local models
 - Scope: local llama.cpp Qwen provider, CPU/GPU PaddleOCR sidecar, teacher-confirmed OCR evidence, local reference extraction, immutable queue safety, explicit capped cohort dispatch, teacher UI, evaluation gate, and operator documentation.
-- Implemented: Gates 5A–5E code paths, migrations `0018`/`0019`, unified reference extraction migration `0020`, sequential GPU OCR→Qwen phase switching, provider/sidecar tests, progressive frontend workflow, and local runbook.
+- Implemented: Gates 5Aâ€“5E code paths, migrations `0018`/`0019`, unified reference extraction migration `0020`, sequential GPU OCRâ†’Qwen phase switching, provider/sidecar tests, progressive frontend workflow, and local runbook.
 - Safety: disabled by default; explicit teacher actions; text-only Qwen; OCR drafts require confirmation; manual mapping remains canonical; maximum 25 sequential calls; zero automatic retries; stop on first provider failure; no fallback; no automatic final grades; approved-only export unchanged.
 - Verification completed: 373 backend tests, Ruff, migration head `0020`, all PowerShell parsing, frontend type/static/production-build checks, four browser E2E flows, managed runtime restart synchronization, and safe loopback model lifecycle checks. The supplied three-PDF bundle completed exactly five GPU OCR calls followed by one Qwen call and produced all seven expected linked leaves. The engineering-only 20-case rehearsal recorded 20 OCR calls, two blank refusals, and 18/18 exact Qwen scores under `real-grading-v2`, with zero retry/fallback/final-grade calls. A separate live Qwen smoke used the supplied question, linked solution/rubric, and confirmed synthetic answer and returned the expected 6/6.
 - Verification remaining: prepare a fresh curated run under `real-grading-v2` and complete all three independent teacher sign-offs. The earlier prepared `lc_20260807_teacher01` manifest predates the tightened grading contract and cannot be used to unblock the pilot.
@@ -58,7 +71,7 @@
 - Semi/Fully Automated status: Disabled and out of scope.
 - Status: In verification
 
-# TA-PILOT-007 — Freeze Custom Controlled V0 pilot baseline
+# TA-PILOT-007 â€” Freeze Custom Controlled V0 pilot baseline
 
 - Recorded at: 2026-06-13
 - Baseline commit: `e5bac289a2e7992011f78118d2c5951247cd4edd`
@@ -71,15 +84,15 @@
 
 # Next recommended pilot tasks
 
-## TA-PILOT-008 — UI polish for Custom Controlled V0 pilot
+## TA-PILOT-008 â€” UI polish for Custom Controlled V0 pilot
 
 - Planned after: TA-PILOT-007
 - Workflow type: bounded UI polish task.
 - Scope: improve founder/teacher-facing clarity for the Custom Controlled V0 pilot without changing grading authority or provider behavior.
 - Safety: no grading, no provider/model call, no batch grading, no approval/export unless separately approved.
-- Status: Done — duplicate reference upload/extraction controls and the always-visible seven-step scaffold were replaced by progressive teacher actions on 2026-08-07.
+- Status: Done â€” duplicate reference upload/extraction controls and the always-visible seven-step scaffold were replaced by progressive teacher actions on 2026-08-07.
 
-## TA-PILOT-009 — Two-submission human-facing rehearsal
+## TA-PILOT-009 â€” Two-submission human-facing rehearsal
 
 - Planned after: TA-PILOT-008
 - Workflow type: founder-supervised human-facing rehearsal.
@@ -87,7 +100,7 @@
 - Safety: no autonomous grading, no batch grading, no export/finalization beyond explicit task approval.
 - Status: Planned
 
-## TA-PILOT-010 — Batch-safe design and real-teacher safety gate
+## TA-PILOT-010 â€” Batch-safe design and real-teacher safety gate
 
 - Recorded at: 2026-06-13
 - Planned after: TA-PILOT-009
@@ -97,7 +110,7 @@
 - Safety: no provider/model call, no grading, no mock grading, no batch implementation, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no approval/export, no OCR/vision extraction, no answer mapping AI.
 - Status: Done
 
-## TA-PILOT-011 — Teacher-facing quick-start guide
+## TA-PILOT-011 â€” Teacher-facing quick-start guide
 
 - Recorded at: 2026-06-13
 - Planned after: TA-PILOT-010
@@ -107,7 +120,7 @@
 - Safety: no provider/model call, no grading, no mock grading, no batch grading, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no approval/export, no OCR/vision extraction, no answer mapping AI.
 - Status: Done
 
-## TA-PILOT-012 — First supervised teacher test with tiny synthetic data
+## TA-PILOT-012 â€” First supervised teacher test with tiny synthetic data
 
 - Recorded at: 2026-06-13
 - Planned after: TA-PILOT-011
@@ -116,7 +129,7 @@
 - Safety: no private/high-stakes data, no batch grading, no autonomous grading, no autonomous `FinalGrade`, no export of unapproved drafts.
 - Status: Done
 
-## TA-PILOT-013 — Real-teacher observed synthetic pilot protocol
+## TA-PILOT-013 â€” Real-teacher observed synthetic pilot protocol
 
 - Recorded at: 2026-06-13
 - Planned after: TA-PILOT-012
@@ -126,7 +139,7 @@
 - Safety: no provider/model call, no grading, no mock grading, no batch grading, no `GradeSuggestion`, no `FinalGrade`, no `GradingJob`, no approval/export, no OCR/vision extraction, no answer mapping AI.
 - Status: Done
 
-## TA-PILOT-014 — Run real-teacher observed synthetic pilot session
+## TA-PILOT-014 â€” Run real-teacher observed synthetic pilot session
 
 - Planned after: TA-PILOT-013
 - Workflow type: observed synthetic teacher pilot session.
@@ -134,7 +147,7 @@
 - Safety: no private/high-stakes data, no batch grading, no autonomous grading, no automatic `FinalGrade`, no hidden provider calls, no export of unapproved drafts.
 - Status: Planned
 
-# TA-PILOT-003 — Submission privacy/deletion and teacher ownership hardening
+# TA-PILOT-003 â€” Submission privacy/deletion and teacher ownership hardening
 
 - Recorded at: 2026-06-12
 - Baseline commit: `258767f0cd20427da436517110c6db269d228daa`
@@ -146,7 +159,7 @@
 - Safety: no Codex/provider/model call, no grading, no mock grading, no batch grading, no private files, no `GradeSuggestion`, no `FinalGrade`, and no `GradingJob` creation.
 - Status: Done
 
-# TA-PILOT-004 — Founder-safe pilot rehearsal checklist and demo reset plan
+# TA-PILOT-004 â€” Founder-safe pilot rehearsal checklist and demo reset plan
 
 - Recorded at: 2026-06-12
 - Baseline commit: `bd7a2702a247dd64fac66b3f9ed7a76b13186b5b`
@@ -157,7 +170,7 @@
 - Safety: no production grading logic changes, no provider/model call, no grading, no mock grading, no batch grading, no private files, no `GradeSuggestion`, no `FinalGrade`, and no `GradingJob` creation.
 - Status: Done
 
-# TA-PILOT-005 — Small supervised two-packet rehearsal
+# TA-PILOT-005 â€” Small supervised two-packet rehearsal
 
 - Planned after: TA-PILOT-004
 - Workflow type: founder-supervised rehearsal task
@@ -165,7 +178,7 @@
 - Safety: no batch grading or provider retry unless explicitly approved in the task prompt; same evidence, teacher-approval, and export safety gates as `docs/FOUNDER_PILOT_REHEARSAL.md`.
 - Status: Planned
 
-# TA-UX-001 — Founder Evidence Workflow V0
+# TA-UX-001 â€” Founder Evidence Workflow V0
 
 - Recorded at: 2026-06-05
 - Baseline commit: `a9c11b62e72309372c9061e2e6afceb7d31c22c5`
@@ -173,7 +186,7 @@
 - Scope: assessment-page founder/internal evidence-to-queue clarity only; no grading logic changes and no backend functionality removal.
 - Files affected: `apps/web/components/AssessmentDetailClient.tsx`, `apps/web/tests/workflow-ui.test.mjs`, `BACKLOG.md`, `docs/FOUNDER_MANUAL_EVIDENCE_QUEUE_CHECKLIST.md`, `docs/PROJECT_SUPERVISION_CONTEXT.md`, `docs/VALIDATION_LOG.md`
 - Goal: make the founder evidence-to-queue path manually testable by clearly ordering reference materials, canonical grading units/rubrics, scripts, answer evidence mapping, evidence readiness/prep, queue scaffold, and the hard stop.
-- Acceptance criteria: assessment page shows the Founder Evidence Workflow safety banner, step guide, grouped Step 0–7 sections, reference-material upload callout, questions/rubrics blocker checklist, script upload warning, evidence-prep and queue-scaffold warnings, STOP banner, and FUTURE/out-of-scope labels for grading/review/export surfaces. Static workflow test asserts these markers and continues to guard against direct frontend LLM/Codex calls.
+- Acceptance criteria: assessment page shows the Founder Evidence Workflow safety banner, step guide, grouped Step 0â€“7 sections, reference-material upload callout, questions/rubrics blocker checklist, script upload warning, evidence-prep and queue-scaffold warnings, STOP banner, and FUTURE/out-of-scope labels for grading/review/export surfaces. Static workflow test asserts these markers and continues to guard against direct frontend LLM/Codex calls.
 - Safety: no autonomous loop, no provider/model call, no real Codex, no grading, no batch grading, no real AI mapping/OCR, no teacher observation, no private files, no `GradeSuggestion`, no `FinalGrade`, and no provider `GradingJob`.
 - Status: In verification
 
@@ -250,7 +263,7 @@ Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-003, TA-W1-004
 Files affected: apps/api/app/main.py, apps/api/app/api/routes/**, apps/api/app/schemas.py, apps/api/tests/test_academic_crud_api.py, BACKLOG.md
-Goal: Implement minimal backend CRUD APIs for Teacher/User placeholder → Course → Assessment → Question → Rubric.
+Goal: Implement minimal backend CRUD APIs for Teacher/User placeholder â†’ Course â†’ Assessment â†’ Question â†’ Rubric.
 Implementation notes: Adds FastAPI route modules, database session dependency usage, Pydantic create/update/read schemas, relationship validation, Decimal-compatible mark fields, password_hash-safe user responses, and app-level one-active-rubric enforcement. No auth, login, uploads, grading, LLM calls, or frontend UI.
 Acceptance criteria: Required CRUD endpoints exist; invalid parent relationships return 404; rubric_json must be a JSON object; user responses do not expose password_hash; tests and lint pass against the Docker PostgreSQL stack.
 Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; `make test`; `make lint`; optional curl smoke if service is running; `make down`.
@@ -263,7 +276,7 @@ Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-003, TA-W1-004, TA-W1-005
 Files affected: apps/web/app/**, apps/web/components/**, apps/web/lib/api.ts, apps/web/tests/**, BACKLOG.md
-Goal: Implement the first usable browser workflow for Teacher/User placeholder → Course → Assessment → Question → Rubric.
+Goal: Implement the first usable browser workflow for Teacher/User placeholder â†’ Course â†’ Assessment â†’ Question â†’ Rubric.
 Implementation notes: Adds a centralized frontend API client, dashboard/navigation shell, users/dev teacher setup, course list/create/detail, assessment list/create/detail, question list/create/detail, and rubric JSON create/list UI. No auth, uploads, grading, student portal, Brain Adapter, or LLM calls.
 Acceptance criteria: Frontend pages load, API base URL is centralized/env-backed, create/list workflow works from browser-facing routes, records persist after refresh, backend tests and frontend typecheck/lint pass.
 Tests required: `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; `make test`; `make lint`; frontend static workflow check; curl/manual workflow smoke; `make down`.
@@ -341,10 +354,10 @@ Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-008, TA-W1-009
 Files affected: apps/api/app/api/routes/final_grades.py, apps/api/app/services/final_grade_service.py, apps/api/app/schemas.py, apps/api/app/models.py, apps/api/alembic/versions/**, apps/web/lib/api.ts, apps/web/components/AssessmentDetailClient.tsx, apps/api/tests/**, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
-Goal: Implement AnswerRegion → Mock GradeSuggestion → Teacher review → FinalGrade workflow without real LLM/OCR/auth.
+Goal: Implement AnswerRegion â†’ Mock GradeSuggestion â†’ Teacher review â†’ FinalGrade workflow without real LLM/OCR/auth.
 Implementation notes: Added FinalGrade finalize/read endpoints, assessment review queue, explicit teacher_id validation, final_score bounds validation, current-final-grade upsert behavior per AnswerRegion, centralized frontend API calls, and functional assessment-detail review UI with MOCK label, rubric breakdown, final score/comment, and approve/edit/reject actions.
 Acceptance criteria: GradeSuggestion can be finalized into FinalGrade; invalid score/teacher/suggestion cases fail clearly; review queue reports ungraded/suggested/finalized states; browser workflow supports mock grading review and persists final grade after refresh.
-Tests required: Focused final-grade/review API tests, frontend workflow static checks, full backend suite, lint/typecheck, frontend build, health curls, and manual API smoke for upload → answer region → mock grade → final grade.
+Tests required: Focused final-grade/review API tests, frontend workflow static checks, full backend suite, lint/typecheck, frontend build, health curls, and manual API smoke for upload â†’ answer region â†’ mock grade â†’ final grade.
 Risks: No real auth yet; teacher_id is explicit dev input. No audit-event persistence yet.
 Status: Done
 
@@ -526,7 +539,7 @@ Dependencies: TA-W1-022
 Files affected: apps/api/app/api/routes/submissions.py, apps/api/app/services/storage.py, apps/api/tests/test_submission_upload_api.py, apps/web/components/DemoTeacherSelector.tsx, apps/web/lib/demoTeacher.ts, apps/web/lib/api.ts, apps/web/components/UsersClient.tsx, apps/web/components/CoursesClient.tsx, apps/web/components/AssessmentDetailClient.tsx, apps/web/components/AssessmentReviewClient.tsx, apps/web/tests/workflow-ui.test.mjs, BACKLOG.md
 Goal: Improve demo usability by selecting a current demo teacher, using that teacher automatically for course creation and review actions, allowing safe cleanup of wrong submissions, and clarifying that browser demo grading stays mock-provider-only.
 Implementation notes: Added localStorage-backed current demo teacher selection on Users, Courses, Assessment, and Review screens. Removed raw teacher_id entry from course creation and final-grade actions. Added assessment-scoped DELETE for submissions with safe related-row cleanup and best-effort storage cleanup that ignores unsafe stored paths. Added frontend delete button with confirmation. Added Codex/mock safety note in assessment and review UI.
-Acceptance criteria: Teacher selection is visible and persistent; missing teacher shows “Select a demo teacher first.”; approve/edit/reject use selected teacher_id automatically; submission delete is assessment-scoped and refreshes the list; mock grading remains browser-demo default; Codex CLI integration is described but not enabled in UI.
+Acceptance criteria: Teacher selection is visible and persistent; missing teacher shows â€œSelect a demo teacher first.â€; approve/edit/reject use selected teacher_id automatically; submission delete is assessment-scoped and refreshes the list; mock grading remains browser-demo default; Codex CLI integration is described but not enabled in UI.
 Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; focused backend tests; frontend static tests; `make test`; `make lint`; frontend build; `make down`; `git status --short`.
 Risks: This is still dev-mode identity, not real auth. Submission deletion is hard-delete for demo cleanup and uses safe path handling; future production cleanup should likely move to an authenticated/authorized policy.
 Status: Done
@@ -537,7 +550,7 @@ Owner: Hermes
 Priority: P0
 Dependencies: TA-W1-022A
 Files affected: apps/web/components/AssessmentDetailClient.tsx, apps/web/tests/workflow-ui.test.mjs, apps/api/tests/test_submission_upload_api.py, BACKLOG.md
-Goal: Fix the assessment-page upload bug where a selected JPG could still leave the UI in the “Choose a PDF or image file before uploading” state and no submission appeared.
+Goal: Fix the assessment-page upload bug where a selected JPG could still leave the UI in the â€œChoose a PDF or image file before uploadingâ€ state and no submission appeared.
 Implementation notes: Upload submit now falls back to the form file input if React state has not caught up, file selection clears the stale missing-file error, accepted extensions explicitly include .jpg/.jpeg, the selected file name is displayed, and the upload button is disabled until both student_identifier and file are present. Successful upload clears the form/file/error state and refreshes submissions. Added a no-question guidance note under Answer regions without blocking uploads.
 Acceptance criteria: JPG/JPEG/PNG/PDF are accepted; selecting a valid file clears the missing-file error; upload shows loading state and backend errors clearly; successful upload creates exactly one submission and shows the page link; no real Codex/auth/batch/student/payment work added.
 Tests required: `git status --short`; `make up`; `docker compose exec -T backend alembic upgrade head`; `make health`; focused JPG upload tests; frontend static tests; `make test`; `make lint`; frontend build; `make down`; `git status --short`.
@@ -726,7 +739,7 @@ Implementation notes: Implemented a deterministic synthetic 20-case harness with
 Acceptance criteria: Harness shape/integrity/safety tests pass; 20 cases exist with exact coverage; a qualified teacher completes all three gates; real execution uses exactly 20 OCR and 18 Qwen calls with zero retries/fallback/final grades; sanitized report records the verdict.
 Tests required: Focused harness tests with no providers; full backend/Ruff/migrations/frontend/PowerShell checks; bounded real execution only after teacher ground-truth lock.
 Risks: Synthetic handwriting is only a controlled proxy for classroom writing. A quality failure or any invalid safety process keeps the pilot blocked.
-Status: In Progress — harness implemented; mandatory teacher ground-truth sign-off pending
+Status: In Progress â€” harness implemented; mandatory teacher ground-truth sign-off pending
 
 TASK-ID: TA-W1-033B
 Title: Stage teacher-marked answer-sheet evaluation cases
@@ -735,10 +748,10 @@ Priority: P0
 Dependencies: TA-W1-032, TA-W1-033
 Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md; ignored local dataset `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl`
 Goal: Stage a safe teacher-marked evaluation dataset draft from the provided anonymized marking metadata while separating image-backed cases from metadata-only pending-image cases.
-Implementation notes: Created 20 JSONL rows for Q1–Q20 under `/tmp/ta_teacher_eval_cases/`; copied Q1–Q8 answer images to ignored `/tmp/ta_teacher_eval_cases/crops/`; marked Q9–Q20 with `answer_image_path = null` and `image_status = missing_image_pending`; recorded anonymization confirmation and full-score teacher marks. No product code changed, no real Codex grading run, and no raw answer images/crops committed.
-Acceptance criteria: Q1–Q20 rows exist; expected scores do not exceed max scores; rubric marks sum to max score; answer types and anonymization status are present; Q1–Q8 image-backed paths exist locally; Q9–Q20 are marked pending image; notes document limits and remaining human data needs.
+Implementation notes: Created 20 JSONL rows for Q1â€“Q20 under `/tmp/ta_teacher_eval_cases/`; copied Q1â€“Q8 answer images to ignored `/tmp/ta_teacher_eval_cases/crops/`; marked Q9â€“Q20 with `answer_image_path = null` and `image_status = missing_image_pending`; recorded anonymization confirmation and full-score teacher marks. No product code changed, no real Codex grading run, and no raw answer images/crops committed.
+Acceptance criteria: Q1â€“Q20 rows exist; expected scores do not exceed max scores; rubric marks sum to max score; answer types and anonymization status are present; Q1â€“Q8 image-backed paths exist locally; Q9â€“Q20 are marked pending image; notes document limits and remaining human data needs.
 Tests required: git status --short; JSONL validation; make test; make lint; git status --short.
-Risks: Dataset is all full-score correct answers and supports correct-answer evaluation only; it still needs mixed-quality teacher-curated cases and matching answer images for Q9–Q20 before broader grading-quality evaluation.
+Risks: Dataset is all full-score correct answers and supports correct-answer evaluation only; it still needs mixed-quality teacher-curated cases and matching answer images for Q9â€“Q20 before broader grading-quality evaluation.
 Status: Done
 
 TASK-ID: TA-W1-033C
@@ -748,9 +761,9 @@ Priority: P0
 Dependencies: TA-W1-033B
 Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md; ignored local artifacts under `/tmp/ta_teacher_eval_033c_storage` and `/tmp/ta_teacher_eval_033c_artifacts`
 Goal: Run a limited real Codex grading evaluation on the 8 image-backed teacher-marked correct cases and record results without overclaiming grading accuracy.
-Implementation notes: Used only Q1–Q8 from `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl`; did not use Q9–Q20 pending-image rows; ran existing grading evaluation harness with `provider_mode=codex_cli`, `allow_real_provider=true`, `max_real_cases=8`, and image input enabled. No product UI/code changed, no batch production grading run, and no raw images/crops/eval artifacts committed.
+Implementation notes: Used only Q1â€“Q8 from `/tmp/ta_teacher_eval_cases/teacher_marked_correct_cases_q1_q20.jsonl`; did not use Q9â€“Q20 pending-image rows; ran existing grading evaluation harness with `provider_mode=codex_cli`, `allow_real_provider=true`, `max_real_cases=8`, and image input enabled. No product UI/code changed, no batch production grading run, and no raw images/crops/eval artifacts committed.
 Acceptance criteria: Report case_count, exact_match_rate, within_1_mark_rate, mean_absolute_error, false_confident_error_count, severe_error_count, over/under score counts, by-answer-type breakdown, per-case results, artifact paths, caveats, and required test/lint status.
-Tests required: git status --short; verify dataset/crops; safe Codex CLI OK check; real Codex eval capped at 8 Q1–Q8 cases; make test; make lint; git status --short.
+Tests required: git status --short; verify dataset/crops; safe Codex CLI OK check; real Codex eval capped at 8 Q1â€“Q8 cases; make test; make lint; git status --short.
 Risks: All evaluated cases are correct/full-score only; this does not establish accuracy on wrong, partial, blank, irrelevant, or messy teacher-marked answers.
 Status: Done
 
@@ -762,7 +775,7 @@ Dependencies: TA-W1-033C
 Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md; ignored local inputs/artifacts under `/tmp/ta_original_doc_eval/`; local app storage under ignored `data/`.
 Goal: Determine whether the current app can grade selected answer regions from real/original documents using the existing question/rubric/answer-region/Codex evaluation pipeline.
 Implementation notes: Copied the three provided original PDFs into ignored `/tmp/ta_original_doc_eval/input/`, rendered page images/contact sheets, performed a visible privacy pass, created a controlled assessment through the app/API path, uploaded Script-1 and Script-2 through the submission upload endpoint, manually created 3 full-page answer regions only, prepared teacher-score eval cases, passed a safe no-repo Codex OK check, and ran the existing grading evaluation harness with `provider_mode=codex_cli`, `allow_real_provider=true`, image input enabled, and `max_real_cases=3`. No production batch grading, no automatic final grades, no browser default real grading, and no product code changes.
-Acceptance criteria: Original documents are inventoried; privacy/anonymization status is reported; 3–5 selected cases are staged with teacher expected scores; real Codex grading runs only if safe auth check passes; metrics/per-case results and artifact paths are recorded; required checks pass; raw PDFs/images/crops are not committed.
+Acceptance criteria: Original documents are inventoried; privacy/anonymization status is reported; 3â€“5 selected cases are staged with teacher expected scores; real Codex grading runs only if safe auth check passes; metrics/per-case results and artifact paths are recorded; required checks pass; raw PDFs/images/crops are not committed.
 Tests required: git status --short; make up; docker compose exec -T backend alembic upgrade head; make health; safe Codex CLI OK check; capped real Codex eval on 3 cases; make test; make lint; docker compose exec -T frontend npm run build; make down; git status --short.
 Risks: Smoke used manually staged broad/full-page regions and only 3 cases. The partial Script-2 case was over-scored by 2.5 marks, so this confirms pipeline operability but not grading reliability. Tighter region mapping, better question/rubric extraction, anonymization review, and more mixed teacher-marked cases remain manual.
 Status: Done
@@ -892,7 +905,7 @@ Dependencies: TA-W1-037A
 Files affected: docs/GRADING_QUALITY_NOTES.md, BACKLOG.md
 Goal: Run a capped real-original-script evaluation using Codex CLI image input on selected original answer crops and compare against teacher marks.
 Implementation notes: Re-staged original/sample inputs under ignored `/tmp/ta_original_doc_eval_image_input/`, rendered script pages, and created three manually tightened answer crops including the previous problematic `orig_s2_p07_q1c` case. Ran the existing grading evaluation path with `provider=codex_cli`, `TA_EVAL_ALLOW_REAL_PROVIDER=true`, `CODEX_CLI_IMAGE_INPUT_ENABLED=true`, and `max_real_cases=3`. All suggestions recorded `image_input_used`, `needs_review=true`, and `teacher_review_required`; verified no FinalGrade rows were created. Metrics: case_count 3, exact_match_rate 0.3333, within_1_mark_rate 1.0, mean_absolute_error 0.50, false_confident_error_count 0, severe_error_count 0, over_score_count 1, under_score_count 1, average_confidence 0.8433, needs_review_rate 1.0. The previous problematic case improved from 9.5 vs expected 7.0 to 8.0 vs expected 7.0, but remained an over-score.
-Acceptance criteria: Real image-input eval runs on at most 3–5 selected original-script crops; raw docs/crops/artifacts remain ignored; no batch production grading or auto-finalization; metrics and per-case results are recorded; teacher review remains mandatory.
+Acceptance criteria: Real image-input eval runs on at most 3â€“5 selected original-script crops; raw docs/crops/artifacts remain ignored; no batch production grading or auto-finalization; metrics and per-case results are recorded; teacher review remains mandatory.
 Tests required: git status --short; make up-infra; make codex-ok; capped real-provider image-input eval; focused eval tests if code changed; make test; make lint; git status --short.
 Risks: This is only a 3-case manually selected/tight-crop quality smoke. It does not prove production grading reliability, automatic answer-region detection, fully automated grading, or marking policy calibration.
 Status: Done
@@ -923,7 +936,7 @@ Tests required: TBD.
 Risks: Policy prompts may shift scores unpredictably without calibration.
 Status: Pending
 
-## Phase 2 — Functional body first
+## Phase 2 â€” Functional body first
 
 Program direction: do not rush launch or UX polish. Build the full usable teacher grading body first, with Custom Controlled Mode as the safest first complete workflow. AI suggestions remain review-required and never auto-finalize grades.
 
@@ -1181,7 +1194,7 @@ Priority: P1
 Dependencies: TA-W2-018A
 Files affected: BACKLOG.md, docs/VALIDATION_LOG.md, docs/CODEX_DEV_RUNTIME.md, docs/PROJECT_SUPERVISION_CONTEXT.md
 Goal: Record the expert-review-adjusted one-week recovery plan and create a durable supervision context handoff for future LLM supervisors.
-Implementation notes: Documentation-only record. Capture the founder’s corrected product direction, the expert synthesis, the verified TA-W2-018A result, the current non-ready gaps, the one-week recovery plan, the next task sequence, and the pre-pilot gates. Do not implement TA-W2-019/020/021/022A here.
+Implementation notes: Documentation-only record. Capture the founderâ€™s corrected product direction, the expert synthesis, the verified TA-W2-018A result, the current non-ready gaps, the one-week recovery plan, the next task sequence, and the pre-pilot gates. Do not implement TA-W2-019/020/021/022A here.
 Acceptance criteria: The supervision context document exists and is durable; the runtime note captures the explicit supported Codex model requirement; the backlog clearly shows the next sequence after this task.
 Tests required: `git diff --check`; `make lint`; final git status review.
 Risks: If the backlog omits the next sequence, future supervisors may lose the intended recovery order.
@@ -1219,7 +1232,7 @@ Owner: Hermes
 Priority: P1
 Dependencies: TA-W2-020
 Files affected: docs/**, apps/web/**, apps/api/**, BACKLOG.md
-Goal: Make unsupported or non-ready modes clearly gated and reduce misleading “ghost mode” behavior in the product surface and docs.
+Goal: Make unsupported or non-ready modes clearly gated and reduce misleading â€œghost modeâ€ behavior in the product surface and docs.
 Implementation notes: Custom Controlled remains the only teacher-ready path. Semi-Automated is blocked by default behind an explicit backend flag and hidden from the normal assessment page; Fully Automated is rejected with a clear error message until it is genuinely built and validated. Preserve the historical mode/migration scaffolding.
 Acceptance criteria: The mode surface is explicit about readiness; Semi-Automated is not usable from the normal teacher flow by default; Fully Automated is unavailable/rejected; hidden/unsupported behavior is not misleading.
 Tests required: targeted mode-gating checks and any docs or UI checks touched by the change.
@@ -1278,7 +1291,7 @@ Implementation notes: Created a fresh assessment and confirmed canonical units b
 Acceptance criteria: Technical corrected canonical-unit flow works; grading-quality comparison remains review-required.
 Tests required: Runtime/manual controlled founder rehearsal only; no code changes.
 Risks: Quality blocker found: `1(b)(i)` was under-credited by Codex (3/6 vs founder fair 6/6).
-Status: Partial — technically successful, grading-quality blocked
+Status: Partial â€” technically successful, grading-quality blocked
 
 TASK-ID: TA-W2-023
 Title: Improve handwritten math grading prompt
@@ -1288,7 +1301,7 @@ Dependencies: TA-W2-022D
 Files affected: apps/api/packages/brain/prompt_registry.py, apps/api/packages/brain/codex_cli_provider.py, apps/api/packages/evaluation/marking_policy_calibration.py, apps/api/tests/**, docs/**, BACKLOG.md
 Goal: Improve real handwritten math/stat grading prompt and deterministic calibration so near-correct Bayes/statistics work receives appropriate credit instead of severe under-scoring.
 Implementation notes: Added shared handwritten math/stat guidance to grading prompts, included it in Codex/OpenAI prompt paths, preserved Tough/General/Easy policy behavior, and expanded the fake calibration harness with synthetic Bayes/stat cases.
-Acceptance criteria: Prompt includes canonical-unit/max-mark grounding, rubric/model-answer grounding, math/stat credit guidance, conceptual/arithmetic/presentation distinction, teacher review/no-FinalGrade language, and synthetic Bayes compact-working case targets 5–6/6 instead of 3/6.
+Acceptance criteria: Prompt includes canonical-unit/max-mark grounding, rubric/model-answer grounding, math/stat credit guidance, conceptual/arithmetic/presentation distinction, teacher review/no-FinalGrade language, and synthetic Bayes compact-working case targets 5â€“6/6 instead of 3/6.
 Tests required: Focused prompt/provider tests, calibration harness tests, make test, make lint, frontend build only if frontend touched, git diff checks.
 Risks: This is deterministic prompt/harness calibration only; a small founder real-document retest is still needed to verify real Codex behavior after the prompt fix.
 Status: Done
@@ -1528,7 +1541,7 @@ Priority: P0
 Dependencies: TA-REF-001, TA-SCRIPT-001, TA-MAP-003, TA-UI-001, TA-UI-001A
 Files affected: apps/api/app/models.py, apps/api/app/api/routes/evidence_prep.py, apps/api/app/services/evidence_prep_service.py, apps/api/app/schemas.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, docs/tests
 Goal: Prepare evidence packets across a batch without grading side effects.
-Implementation notes: Implemented as an evidence-preparation scaffold only. It creates `BatchEvidencePrepRun` metadata, summarizes student×CGU evidence packet readiness, and quarantines blocked packets. It does not create `GradeSuggestion`, does not create `FinalGrade`, does not start a grading job, does not run real Codex, and does not invoke real AI/OCR providers.
+Implementation notes: Implemented as an evidence-preparation scaffold only. It creates `BatchEvidencePrepRun` metadata, summarizes studentÃ—CGU evidence packet readiness, and quarantines blocked packets. It does not create `GradeSuggestion`, does not create `FinalGrade`, does not start a grading job, does not run real Codex, and does not invoke real AI/OCR providers.
 Acceptance criteria: Batch prep run reports ready/blocked/warning/blank/partial counts plus per-packet blockers/warnings; incomplete/problem packets are quarantined; ownership prevents another teacher from running prep on the assessment.
 Tests required: focused batch evidence prep tests, frontend static workflow test, full tests/lint/build/e2e where available, diff check.
 Risks: Batch preparation is not batch grading. Any later grading queue must consume only confirmed/ready packets.
@@ -1540,9 +1553,9 @@ Owner: Hermes
 Priority: P0
 Dependencies: TA-BATCH-001
 Files affected: apps/api/app/services/evidence_prep_service.py, apps/api/app/schemas.py, apps/api/tests/test_evidence_prep_runs_api.py, apps/web/components/AssessmentDetailClient.tsx, apps/web/lib/api.ts, docs/tests
-Goal: Prove batch prep accounts for every expected submission × grading-unit evidence slot before any grading queue is planned.
+Goal: Prove batch prep accounts for every expected submission Ã— grading-unit evidence slot before any grading queue is planned.
 Implementation notes: Hardens expected-packet accounting with a mixed-state fixture covering two submissions and three grading units. Missing answer regions are explicit blocked packets, missing rubric remains a blocker, and quarantine items include correction target metadata. This remains evidence preparation only and creates no `GradeSuggestion`, `FinalGrade`, `GradingJob`, real Codex job, real AI mapping, or real OCR/vision output.
-Acceptance criteria: `total_expected_packets` equals submissions × grading units; ready/blocked/warning/partial/blank counts are exact for mixed evidence states; cross-teacher create/read access is rejected; frontend blocked-item summary shows actionable correction hints.
+Acceptance criteria: `total_expected_packets` equals submissions Ã— grading units; ready/blocked/warning/partial/blank counts are exact for mixed evidence states; cross-teacher create/read access is rejected; frontend blocked-item summary shows actionable correction hints.
 Tests required: focused evidence prep tests, full test, lint, frontend static/build/e2e if frontend touched, diff check.
 Risks: TA-GRADE-001 must remain blocked until this accounting is green; future zero-mark blank handling is separate.
 Status: Done
@@ -1626,3 +1639,4 @@ Acceptance criteria: Future implementation tasks have Goal, Context, Constraints
 Tests required: docs/config-rules gates: `git status --short`, `git diff --check`, `make lint` if safe for the running app, final `git status --short`. Full test not required because product behavior is unchanged.
 Risks: The contract improves future task quality only if future prompts actually use it and agents obey AGENTS.md.
 Status: Done
+
