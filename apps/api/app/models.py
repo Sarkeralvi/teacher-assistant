@@ -703,6 +703,103 @@ class AnswerRegionOcrCandidate(TimestampMixin, Base):
     band: Mapped[AnswerRegionOcrBand] = relationship(back_populates="candidates")
 
 
+class LocalModelLease(TimestampMixin, Base):
+    """Ownership of the single local model slot.
+
+    Qwen3.6 and Qwen3.8 cannot both be resident in 12 GB of VRAM, so switching
+    phases unloads whichever model is running. Without an owner, one job can
+    switch the model out from under another that is mid-call. One row per
+    ``lease_key``; the unique constraint is what makes it single-holder.
+    A held row always carries ``acquired_at`` and ``expires_at`` so a lease
+    orphaned by a crashed holder can be reclaimed on expiry rather than
+    deadlocking the slot forever.
+    """
+
+    __tablename__ = "local_model_leases"
+    __table_args__ = (
+        CheckConstraint(
+            "model_phase is null or model_phase in ('Qwen', 'Qwen38')",
+            name="ck_local_model_lease_phase",
+        ),
+        CheckConstraint(
+            "holder_id is null or (acquired_at is not null and expires_at is not null)",
+            name="ck_local_model_lease_held_rows_are_complete",
+        ),
+        UniqueConstraint("lease_key", name="uq_local_model_lease_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lease_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    holder_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    holder_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    acquired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReferencePageOcrRun(TimestampMixin, Base):
+    """Per-page provenance for one reference page's reading.
+
+    A confidence-gated escalation decision is only auditable if the inputs to it
+    are recorded: which engine read the page, at what render DPI, over which
+    exact image bytes, what confidence it reported, which triggers fired, and
+    whether the vision model was spent on it.
+    """
+
+    __tablename__ = "reference_page_ocr_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "document_role in ('question_paper', 'solution', 'rubric')",
+            name="ck_reference_page_ocr_role",
+        ),
+        CheckConstraint(
+            "decision in ('tier1_accepted', 'escalated_regions', 'escalated_page', 'failed')",
+            name="ck_reference_page_ocr_decision",
+        ),
+        CheckConstraint("page_no > 0", name="ck_reference_page_ocr_page_no"),
+        CheckConstraint("render_dpi > 0", name="ck_reference_page_ocr_render_dpi"),
+        UniqueConstraint(
+            "grading_run_id",
+            "document_role",
+            "page_no",
+            name="uq_reference_page_ocr_run_page",
+        ),
+        Index("ix_reference_page_ocr_runs_grading_run_id", "grading_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    grading_run_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    document_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    render_dpi: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    engine_model_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_codes: Mapped[list[str]] = mapped_column(
+        "reason_codes_json", JSONB, nullable=False, default=list
+    )
+    lines: Mapped[list[dict[str, Any]]] = mapped_column(
+        "lines_json", JSONB, nullable=False, default=list
+    )
+    min_confidence: Mapped[Decimal | None] = mapped_column(Numeric(7, 6), nullable=True)
+    mean_confidence: Mapped[Decimal | None] = mapped_column(Numeric(7, 6), nullable=True)
+    uncovered_ink_ratio: Mapped[Decimal | None] = mapped_column(Numeric(7, 6), nullable=True)
+    escalated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    vision_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vision_image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    vision_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vision_prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vision_completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class AnswerRegionSegment(TimestampMixin, Base):
     __tablename__ = "answer_region_segments"
     __table_args__ = (

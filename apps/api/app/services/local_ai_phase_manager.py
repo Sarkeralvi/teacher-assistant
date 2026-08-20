@@ -23,12 +23,38 @@ class LocalAiPhaseManager:
         settings: Settings | None = None,
         runner: Any | None = None,
         repository_root: Path | None = None,
+        db: Any | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.runner = runner or subprocess.run
         self.repository_root = repository_root or Path(__file__).resolve().parents[4]
+        self.db = db
 
-    def switch(self, phase: LocalAiPhase) -> None:
+    def _assert_lease_held(self, lease_holder_id: str) -> None:
+        if self.db is None:
+            raise LocalAiPhaseError(
+                "A model-slot lease was named but no database session was provided "
+                "to verify it; refusing to switch the model unverified."
+            )
+        from app.services.local_model_lease_service import LocalModelLeaseService
+
+        state = LocalModelLeaseService(self.db).read()
+        if not state.held or state.holder_id != lease_holder_id:
+            raise LocalAiPhaseError(
+                "This job does not hold the local model slot, so it must not switch "
+                "the model. Another job may be mid-call against the current one."
+            )
+
+    def switch(self, phase: LocalAiPhase, *, lease_holder_id: str | None = None) -> None:
+        """Select a local model phase, unloading the other one.
+
+        ``lease_holder_id`` names the caller's model-slot lease. It is optional
+        only so existing single-job callers keep working; any code path that can
+        run concurrently with another model call must pass it, or two jobs can
+        switch the model out from under each other. See LocalModelLeaseService.
+        """
+        if lease_holder_id is not None:
+            self._assert_lease_held(lease_holder_id)
         if not (
             self.settings.local_reference_extraction_enabled
             or self.settings.local_script_preparation_enabled

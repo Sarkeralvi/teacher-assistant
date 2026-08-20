@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-EXPECTED_REVISION_ID = "0023_qwen38_visual_preparation"
+EXPECTED_REVISION_ID = "0024_model_lease_page_evidence"
 
 
 def test_initial_alembic_migration_exists_and_is_importable() -> None:
