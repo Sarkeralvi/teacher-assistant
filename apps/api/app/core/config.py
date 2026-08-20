@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field
@@ -50,6 +51,33 @@ class Settings(BaseSettings):
 
     local_reference_job_timeout_seconds: int = Field(
         default=2400, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
+    )
+
+    # Tier-1 OCR. Disabled by default: enabling it changes which model reads a
+    # teacher's reference material, so it is an explicit operator decision.
+    local_ocr_enabled: bool = Field(default=False, alias="LOCAL_OCR_ENABLED")
+    local_ocr_render_dpi: int = Field(
+        default=300, alias="LOCAL_OCR_RENDER_DPI", ge=72, le=600
+    )
+    # Escalations are a pre-authorized budget, not a silent fallback. Exhausting
+    # it is a hard failure so a run cannot quietly degrade into reading nothing.
+    local_reference_max_escalations: int = Field(
+        default=6, alias="LOCAL_REFERENCE_MAX_ESCALATIONS", ge=0, le=25
+    )
+    # PROVISIONAL until the bake-off's reliability table and escalation ROC are
+    # computed against teacher-verified fixtures. Treating these as measured
+    # would repeat the reference-bundle token-budget mistake.
+    local_ocr_confidence_escalate_below: Decimal = Field(
+        default=Decimal("0.80"),
+        alias="LOCAL_OCR_CONFIDENCE_ESCALATE_BELOW",
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
+    local_ocr_uncovered_ink_escalate_above: Decimal = Field(
+        default=Decimal("0.20"),
+        alias="LOCAL_OCR_UNCOVERED_INK_ESCALATE_ABOVE",
+        ge=Decimal("0"),
+        le=Decimal("1"),
     )
     cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(

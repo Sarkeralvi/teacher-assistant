@@ -39,7 +39,8 @@ class FakeExtractor:
     def __init__(self) -> None:
         self.qwen_calls = 0
 
-    def render_pages(self, file_path: Path, _content_type: str):
+    def render_pages(self, file_path: Path, _content_type: str, **_kwargs):
+        # **_kwargs absorbs target_dpi, which the tiered path passes.
         return [(1, f"rendered {file_path.stem}".encode(), "image/png")]
 
     def extract_reference_bundle(self, documents):
@@ -266,3 +267,253 @@ def test_reference_bundle_kill_switch_and_model_alias_are_enforced(
             teacher_id=run.created_by_teacher_id,
             expected_model="wrong-model",
         )
+
+
+class FakeOcrReading:
+    """Stands in for a tier-1 engine reading."""
+
+    def __init__(self, text: str, confidence: str, uncovered: str | None = None) -> None:
+        from decimal import Decimal
+
+        from packages.ocr.types import BoundingBox, OcrLine
+
+        self.engine = "fake_tier1"
+        self.engine_version = "0.0.0"
+        self.page_image_sha256 = "b" * 64
+        self.latency_ms = 5
+        self.uncovered_ink_ratio = Decimal(uncovered) if uncovered else None
+        self.lines = [
+            OcrLine(text=text, confidence=Decimal(confidence), bbox=BoundingBox(0, 0, 400, 20)),
+            OcrLine(text=text, confidence=Decimal(confidence), bbox=BoundingBox(0, 30, 400, 50)),
+            OcrLine(text=text, confidence=Decimal(confidence), bbox=BoundingBox(0, 60, 400, 80)),
+        ]
+
+    @property
+    def text(self) -> str:
+        return "\n".join(line.text for line in self.lines)
+
+    @property
+    def confidences(self):
+        return [line.confidence for line in self.lines if line.confidence is not None]
+
+
+def tiered_settings(storage_root: Path, **overrides) -> Settings:
+    values = dict(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        LOCAL_QWEN38_ENABLED=True,
+        LOCAL_QWEN38_API_KEY="key-local-test",
+        LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=True,
+        LOCAL_QWEN_ENABLED=True,
+        LOCAL_QWEN_API_KEY="key-local-test",
+        LOCAL_REFERENCE_EXTRACTION_ENABLED=True,
+        LOCAL_OCR_ENABLED=True,
+        LOCAL_AI_PHASE_SWITCH_ENABLED=True,
+        LOCAL_STORAGE_ROOT=str(storage_root),
+        UPLOADS_DIR=str(storage_root / "uploads"),
+        ARTIFACTS_DIR=str(storage_root / "artifacts"),
+    )
+    values.update(overrides)
+    return Settings(**values)
+
+
+def install_fakes(monkeypatch, *, confidence: str, uncovered: str | None = None):
+    """Replace the OCR engine and both providers with fakes.
+
+    No model is loaded and no provider call is made; the point is to assert the
+    ORCHESTRATION - stage order, switch count, budget enforcement.
+    """
+    import app.services.reference_extraction_service as module
+    from packages.ocr import rapidocr_engine
+
+    calls = {"tier1": 0, "vision": 0, "text": 0}
+
+    class FakeEngine:
+        def read_page(self, image_bytes, *, render_dpi, page_width, page_height):
+            calls["tier1"] += 1
+            return FakeOcrReading("P(D) = 0.3", confidence, uncovered)
+
+    class FakeVisionProvider:
+        def transcribe_image(self, *, image_bytes, mime_type, label):
+            calls["vision"] += 1
+
+            class Output:
+                draft_text = f"vision read of {label}"
+
+            return Output()
+
+    class FakeTextProvider:
+        def extract_reference_bundle_from_ocr_documents(self, *, documents):
+            calls["text"] += 1
+            calls["documents"] = documents
+            return {
+                "questions": [
+                    {
+                        "question_number": "1(a)",
+                        "parent_question_number": "1",
+                        "node_type": "subquestion",
+                        "question_text": "Find x.",
+                        "model_answer": "x = 4",
+                        "marks": 5,
+                        "source_question_pages": [1],
+                        "source_solution_pages": [1],
+                        "source_text_excerpt": "Find x.",
+                        "confidence": 0.9,
+                        "criteria": [
+                            {
+                                "criterion_label": "Answer",
+                                "description": "States x = 4.",
+                                "max_marks": 5,
+                                "confidence": 0.9,
+                                "source_rubric_pages": [1],
+                                "blocker": None,
+                            }
+                        ],
+                        "blockers": [],
+                        "needs_review": True,
+                    }
+                ],
+                "warnings": [],
+            }
+
+    class FakeAdapter:
+        def __init__(self, provider):
+            self.provider = provider
+
+    def for_provider(_settings, name):
+        if name == "llama_cpp_qwen38":
+            return FakeAdapter(FakeVisionProvider())
+        return FakeAdapter(FakeTextProvider())
+
+    monkeypatch.setattr(rapidocr_engine, "RapidOcrEngine", lambda **_kw: FakeEngine())
+    monkeypatch.setattr(module.BrainAdapter, "for_provider", staticmethod(for_provider))
+    return calls
+
+
+def test_confident_pages_never_reach_the_vision_model(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    calls = install_fakes(monkeypatch, confidence="0.99")
+    phases = FakePhaseManager()
+    service = ReferenceExtractionService(
+        db_session,
+        settings=tiered_settings(storage_root),
+        phase_manager=phases,
+        extractor_factory=lambda: FakeExtractor(),
+    )
+    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+
+    service.run(run.id)
+
+    db_session.expire_all()
+    refreshed = db_session.get(GradingRun, run.id)
+    assert refreshed is not None
+    assert refreshed.reference_extraction_status == "succeeded"
+    assert calls["tier1"] == 3
+    # The expensive model is not spent when the cheap one was confident, and
+    # the vision phase is skipped entirely rather than loaded and unused.
+    assert calls["vision"] == 0
+    assert phases.phases == ["Qwen"]
+
+
+def test_unconfident_pages_escalate_in_one_batched_window(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    calls = install_fakes(monkeypatch, confidence="0.10")
+    phases = FakePhaseManager()
+    service = ReferenceExtractionService(
+        db_session,
+        settings=tiered_settings(storage_root),
+        phase_manager=phases,
+        extractor_factory=lambda: FakeExtractor(),
+    )
+    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+
+    service.run(run.id)
+
+    db_session.expire_all()
+    refreshed = db_session.get(GradingRun, run.id)
+    assert refreshed is not None
+    assert refreshed.reference_extraction_status == "succeeded"
+    assert calls["vision"] == 3
+    # Exactly one switch to the vision model then one to the text model. Any
+    # interleaving would cost a 30-90 second reload per page.
+    assert phases.phases == ["Qwen38", "Qwen"]
+
+
+def test_exceeding_the_escalation_budget_is_a_hard_failure(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    calls = install_fakes(monkeypatch, confidence="0.10")
+    service = ReferenceExtractionService(
+        db_session,
+        settings=tiered_settings(storage_root, LOCAL_REFERENCE_MAX_ESCALATIONS=1),
+        phase_manager=FakePhaseManager(),
+        extractor_factory=lambda: FakeExtractor(),
+    )
+    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+
+    service.run(run.id)
+
+    db_session.expire_all()
+    refreshed = db_session.get(GradingRun, run.id)
+    assert refreshed is not None
+    # It must stop, not quietly read fewer pages than the teacher authorized.
+    assert refreshed.reference_extraction_status == "failed"
+    assert calls["vision"] == 0
+
+
+def test_per_page_evidence_is_recorded_for_audit(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.models import ReferencePageOcrRun
+
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    install_fakes(monkeypatch, confidence="0.10")
+    service = ReferenceExtractionService(
+        db_session,
+        settings=tiered_settings(storage_root),
+        phase_manager=FakePhaseManager(),
+        extractor_factory=lambda: FakeExtractor(),
+    )
+    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+
+    service.run(run.id)
+
+    rows = db_session.query(ReferencePageOcrRun).filter_by(grading_run_id=run.id).all()
+    assert len(rows) == 3
+    assert {row.document_role for row in rows} == {"question_paper", "solution", "rubric"}
+    for row in rows:
+        assert row.escalated is True
+        assert row.engine == "fake_tier1"
+        assert row.reason_codes  # which trigger fired must be recorded, not just that one did
+        assert row.page_image_sha256
+
+
+def test_the_teacher_is_told_which_pages_took_the_hard_path(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    install_fakes(monkeypatch, confidence="0.10")
+    service = ReferenceExtractionService(
+        db_session,
+        settings=tiered_settings(storage_root),
+        phase_manager=FakePhaseManager(),
+        extractor_factory=lambda: FakeExtractor(),
+    )
+    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+
+    service.run(run.id)
+
+    db_session.expire_all()
+    refreshed = db_session.get(GradingRun, run.id)
+    assert refreshed is not None
+    warnings = " ".join(refreshed.reference_extraction_warnings or [])
+    assert "read by the vision model" in warnings

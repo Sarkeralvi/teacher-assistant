@@ -19,6 +19,7 @@ from app.models import (
     GradingRun,
     Question,
     QuestionNode,
+    ReferencePageOcrRun,
     Rubric,
     RubricExtractionCriterion,
 )
@@ -30,9 +31,11 @@ from app.services.document_extraction import (
 )
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_reference_extraction import (
+    DEFAULT_RENDER_DPI,
     LOCAL_REFERENCE_PROVIDER,
     LocalReferenceExtractor,
 )
+from packages.brain.adapter import BrainAdapter
 
 _ACTIVE_REFERENCE_STATUSES = {"queued", "running"}
 _API_KEY_PATTERN = re.compile(r"(?i)(?:sk|key)-[A-Za-z0-9_-]+")
@@ -173,8 +176,15 @@ class ReferenceExtractionService:
             documents: dict[str, list[tuple[bytes, str, int]]] = {}
             name_map = {"question_paper": "QUESTION", "solution": "SOLUTION", "rubric": "RUBRIC"}
             total_pages = 0
+            render_dpi = (
+                self.settings.local_ocr_render_dpi
+                if self.settings.local_ocr_enabled
+                else DEFAULT_RENDER_DPI
+            )
             for source_name, document_name in name_map.items():
-                rendered = extractor.render_pages(paths[source_name], "application/pdf")
+                rendered = extractor.render_pages(
+                    paths[source_name], "application/pdf", target_dpi=render_dpi
+                )
                 total_pages += len(rendered)
                 if total_pages > self.settings.local_qwen38_max_visual_calls:
                     raise ReferenceExtractionError(
@@ -185,11 +195,19 @@ class ReferenceExtractionService:
                     for page_no, image_bytes, mime_type in rendered
                 ]
             grading_run.reference_ocr_call_count = total_pages
-            self._set_stage(grading_run, "qwen38_visual_reference_extraction")
-            if self.settings.local_ai_phase_switch_enabled:
-                self.phase_manager.switch("Qwen38")
-            provider_result = extractor.extract_reference_bundle(documents)
-            grading_run.reference_qwen_call_count = 1
+
+            if self.settings.local_ocr_enabled:
+                provider_result = self._run_tiered_extraction(
+                    grading_run, documents, render_dpi=render_dpi
+                )
+            else:
+                # Legacy single-call path: every page goes to the vision model.
+                self._set_stage(grading_run, "qwen38_visual_reference_extraction")
+                if self.settings.local_ai_phase_switch_enabled:
+                    self.phase_manager.switch("Qwen38")
+                provider_result = extractor.extract_reference_bundle(documents)
+                grading_run.reference_qwen_call_count = 1
+
             self._assert_material_hashes(grading_run, paths)
             self._apply_provider_result(grading_run, provider_result)
             grading_run.reference_extraction_status = "succeeded"
@@ -200,7 +218,11 @@ class ReferenceExtractionService:
                 grading_run,
                 "reference_extraction_succeeded",
                 actor_type="worker",
-                payload={"visual_page_count": total_pages, "qwen_call_count": 1},
+                payload={
+                    "visual_page_count": total_pages,
+                    "qwen_call_count": grading_run.reference_qwen_call_count,
+                    "tier1_enabled": self.settings.local_ocr_enabled,
+                },
             )
             self.db.commit()
         except Exception as exc:
@@ -209,6 +231,184 @@ class ReferenceExtractionService:
             if grading_run is not None:
                 self._mark_failed(grading_run, str(exc))
                 self.db.commit()
+
+    def _run_tiered_extraction(
+        self,
+        grading_run: GradingRun,
+        documents: dict[str, list[tuple[bytes, str, int]]],
+        *,
+        render_dpi: int,
+    ) -> dict[str, Any]:
+        """Read cheaply first, spend the vision model only where OCR is unsure.
+
+        Structured collect-then-execute so batching is enforced by shape rather
+        than by convention: every page is read by tier-1 and every escalation
+        decision is made BEFORE any model is loaded. Interleaving would cost a
+        30-90 second model reload per page.
+        """
+        from packages.ocr.escalation import EscalationPolicy, evaluate_page
+        from packages.ocr.rapidocr_engine import RapidOcrEngine
+
+        self._set_stage(grading_run, "tier1_ocr")
+        policy = EscalationPolicy(
+            line_confidence_escalate_below=self.settings.local_ocr_confidence_escalate_below,
+            uncovered_ink_escalate_above=self.settings.local_ocr_uncovered_ink_escalate_above,
+        )
+        engine = RapidOcrEngine()
+        role_by_document = {
+            "QUESTION": "question_paper",
+            "SOLUTION": "solution",
+            "RUBRIC": "rubric",
+        }
+
+        readings: dict[tuple[str, int], Any] = {}
+        escalations: list[tuple[str, int]] = []
+        for document_name, pages in documents.items():
+            for image_bytes, _mime, page_no in pages:
+                reading = engine.read_page(
+                    image_bytes,
+                    render_dpi=render_dpi,
+                    page_width=0,
+                    page_height=0,
+                )
+                # A handwritten rubric is declared, not inferred: a human
+                # lowering the bar for a known-hard document is auditable.
+                decision = evaluate_page(
+                    reading,
+                    policy=policy,
+                    expect_handwritten=document_name == "RUBRIC",
+                )
+                readings[(document_name, page_no)] = (reading, decision)
+                self._record_page_evidence(
+                    grading_run,
+                    document_role=role_by_document[document_name],
+                    page_no=page_no,
+                    reading=reading,
+                    decision=decision,
+                    render_dpi=render_dpi,
+                )
+                if decision.escalated:
+                    escalations.append((document_name, page_no))
+
+        self._set_stage(grading_run, "evaluating_escalation")
+        if len(escalations) > self.settings.local_reference_max_escalations:
+            # A hard stop, never a silent degrade: exceeding the pre-authorized
+            # budget means the teacher authorized less work than this needs.
+            raise ReferenceExtractionError(
+                f"{len(escalations)} reference pages need the vision model but only "
+                f"{self.settings.local_reference_max_escalations} escalations were "
+                "authorized. Re-run with a higher budget, or supply clearer pages."
+            )
+
+        text_documents: dict[str, list[dict[str, Any]]] = {
+            "question_paper": [],
+            "solution": [],
+            "rubric": [],
+        }
+        if escalations:
+            self._set_stage(grading_run, "qwen38_visual_escalation")
+            if self.settings.local_ai_phase_switch_enabled:
+                self.phase_manager.switch("Qwen38")
+            adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
+            provider = adapter.provider
+            for document_name, page_no in escalations:
+                image_bytes = next(
+                    data
+                    for data, _mime, number in documents[document_name]
+                    if number == page_no
+                )
+                transcribe = getattr(provider, "transcribe_image", None)
+                if transcribe is None:
+                    raise ReferenceExtractionError(
+                        "The configured vision provider cannot transcribe an escalated page"
+                    )
+                output = transcribe(
+                    image_bytes=image_bytes,
+                    mime_type="image/png",
+                    label=f"{document_name} page {page_no}",
+                )
+                readings[(document_name, page_no)] = (output.draft_text, None)
+
+        for document_name, pages in documents.items():
+            role = role_by_document[document_name]
+            for _image_bytes, _mime, page_no in pages:
+                value = readings[(document_name, page_no)]
+                text = value[0] if isinstance(value[0], str) else value[0].text
+                text_documents[role].append({"page": page_no, "text": text})
+
+        self._set_stage(grading_run, "qwen36_reference_mapping")
+        if self.settings.local_ai_phase_switch_enabled:
+            self.phase_manager.switch("Qwen")
+        text_adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen")
+        result = text_adapter.provider.extract_reference_bundle_from_ocr_documents(
+            documents=text_documents
+        )
+        grading_run.reference_qwen_call_count = 1
+        warnings = list(result.get("warnings") or [])
+        if escalations:
+            warnings.append(
+                f"{len(escalations)} page(s) were read by the vision model because the "
+                "first-pass reader was not confident; check those drafts most closely."
+            )
+        result["warnings"] = warnings
+        return result
+
+    def _record_page_evidence(
+        self,
+        grading_run: GradingRun,
+        *,
+        document_role: str,
+        page_no: int,
+        reading: Any,
+        decision: Any,
+        render_dpi: int,
+    ) -> None:
+        """Persist why this page was trusted or escalated.
+
+        A confidence-gated decision is only auditable if the inputs to it are
+        recorded, so this stores the engine, the exact image, the per-line
+        scores and which triggers fired - not merely the outcome.
+        """
+        confidences = reading.confidences
+        existing = self.db.scalar(
+            select(ReferencePageOcrRun).where(
+                ReferencePageOcrRun.grading_run_id == grading_run.id,
+                ReferencePageOcrRun.document_role == document_role,
+                ReferencePageOcrRun.page_no == page_no,
+            )
+        )
+        if existing is not None:
+            self.db.delete(existing)
+            self.db.flush()
+        self.db.add(
+            ReferencePageOcrRun(
+                grading_run_id=grading_run.id,
+                document_role=document_role,
+                page_no=page_no,
+                render_dpi=render_dpi,
+                page_image_sha256=reading.page_image_sha256,
+                engine=reading.engine,
+                engine_version=reading.engine_version,
+                decision=decision.decision,
+                reason_codes=list(decision.reason_codes),
+                lines=[
+                    {
+                        "text": line.text,
+                        "confidence": str(line.confidence) if line.confidence else None,
+                        "bbox": list(line.bbox.as_tuple()) if line.bbox else None,
+                    }
+                    for line in reading.lines
+                ],
+                min_confidence=min(confidences) if confidences else None,
+                mean_confidence=(
+                    (sum(confidences) / len(confidences)) if confidences else None
+                ),
+                uncovered_ink_ratio=reading.uncovered_ink_ratio,
+                escalated=decision.escalated,
+                latency_ms=reading.latency_ms,
+            )
+        )
+        self.db.flush()
 
     def confirm(
         self,
