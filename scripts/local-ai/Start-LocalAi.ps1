@@ -18,12 +18,15 @@ $runtimeDirectory = Join-Path $repositoryRoot ".local-ai"
 $logDirectory = Join-Path $runtimeDirectory "logs"
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
+$service = Get-LocalAiServiceDefinition -Mode $Mode
+$port = $service.Port
+$alias = $service.Alias
+$pidFile = $service.PidFileName
+
 if ($Mode -eq "Qwen") {
     $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
     $model = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
     $key = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
-    $port = 8080
-    $alias = "qwen3.6-35b-a3b-q4km"
     $args = @(
         "-m", ('"' + $model + '"'),
         "--alias", $alias,
@@ -43,7 +46,6 @@ if ($Mode -eq "Qwen") {
         "--threads", "12",
         "--batch-size", "512"
     )
-    $pidFile = "qwen.pid"
 } elseif ($Mode -eq "Qwen38") {
     $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_BINARY_PATH"
     $model = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_MODEL_PATH"
@@ -66,8 +68,6 @@ if ($Mode -eq "Qwen") {
     if ($expectedMmprojHash) {
         if ((Get-FileHash -LiteralPath $mmproj -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedMmprojHash.ToLowerInvariant()) { throw "Qwen3.8 mmproj SHA256 does not match LOCAL_QWEN38_MMPROJ_SHA256." }
     }
-    $port = 8085
-    $alias = "qwen3.8-27b-q4km"
     $args = @(
         "-m", ('"' + $model + '"'),
         "--alias", $alias,
@@ -86,7 +86,6 @@ if ($Mode -eq "Qwen") {
         "--ubatch-size", "256",
         "--threads", "12"
     )
-    $pidFile = "qwen38.pid"
 }
 
 $env:LLAMA_API_KEY = $key

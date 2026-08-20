@@ -12,19 +12,12 @@ if (-not $ConfigPath) {
 }
 Import-LocalAiEnvironment -Path $ConfigPath
 
-if ($Mode -eq "Qwen38") {
-    $qwenBinary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_BINARY_PATH"
-    $qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_MODEL_PATH"
-    $null = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_API_KEY"
-    $port = 8085
-    $alias = "qwen3.8-27b-q4km"
-} else {
-    $qwenBinary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
-    $qwenModel = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
-    $null = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
-    $port = 8080
-    $alias = "qwen3.6-35b-a3b-q4km"
-}
+$definition = Get-LocalAiServiceDefinition -Mode $Mode
+$port = $definition.Port
+$alias = $definition.Alias
+$qwenBinary = Assert-RequiredEnvironmentValue -Name $definition.BinaryVariable
+$qwenModel = Assert-RequiredEnvironmentValue -Name $definition.ModelVariable
+$null = Assert-RequiredEnvironmentValue -Name $definition.KeyVariable
 
 $requiredFiles = @(
     $qwenBinary,

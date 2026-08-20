@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     brain_allow_real_providers: bool = Field(default=False, alias="BRAIN_ALLOW_REAL_PROVIDERS")
     local_qwen_enabled: bool = Field(default=False, alias="LOCAL_QWEN_ENABLED")
     local_qwen_base_url: str = Field(
-        default="http://127.0.0.1:8080/v1", alias="LOCAL_QWEN_BASE_URL"
+        # Not 8080: a separate Qwen3.6 coding-assistant bridge commonly holds
+        # that port, and sharing it makes both contend for one single-slot server.
+        default="http://127.0.0.1:8086/v1",
+        alias="LOCAL_QWEN_BASE_URL",
     )
     local_qwen_model: str = Field(default="qwen3.6-35b-a3b-q4km", alias="LOCAL_QWEN_MODEL")
     local_qwen_api_key: str = Field(default="", alias="LOCAL_QWEN_API_KEY")

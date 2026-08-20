@@ -23,9 +23,10 @@ $stopOtherArgs = @{
 }
 & (Join-Path $PSScriptRoot "Stop-LocalAi.ps1") @stopOtherArgs
 
-$targetPort = if ($Phase -eq "Qwen") { 8080 } else { 8085 }
-$targetAlias = if ($Phase -eq "Qwen") { "qwen3.6-35b-a3b-q4km" } else { "qwen3.8-27b-q4km" }
-$targetKey = if ($Phase -eq "Qwen") { $env:LOCAL_QWEN_API_KEY } else { $env:LOCAL_QWEN38_API_KEY }
+$targetDefinition = Get-LocalAiServiceDefinition -Mode $Phase
+$targetPort = $targetDefinition.Port
+$targetAlias = $targetDefinition.Alias
+$targetKey = [Environment]::GetEnvironmentVariable($targetDefinition.KeyVariable)
 
 # If target phase is already healthy on loopback, return immediately
 $alreadyHealthy = $false
@@ -39,6 +40,24 @@ try {
 }
 
 if ($alreadyHealthy) {
+    # Serving the right alias is not proof this repository started it. Without
+    # this check the app would silently adopt someone else's server and contend
+    # with them for its single slot and KV cache.
+    $expectedExecutable = Assert-RequiredEnvironmentValue -Name $targetDefinition.BinaryVariable
+    $pidPath = Join-Path (Join-Path $repositoryRoot ".local-ai") $targetDefinition.PidFileName
+    if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
+        throw ("$Phase is already serving on port $targetPort but this repository has no " +
+            "PID record for it. Refusing to adopt a model server it did not start.")
+    }
+    $recordedProcessId = 0
+    $rawRecordedProcessId = (Get-Content -LiteralPath $pidPath -Raw).Trim()
+    if (-not [int]::TryParse($rawRecordedProcessId, [ref]$recordedProcessId) -or $recordedProcessId -le 0) {
+        throw "$Phase PID file is invalid; refusing to adopt the listener on port $targetPort."
+    }
+    Assert-LocalAiListenerOwnership `
+        -Port $targetPort `
+        -ExpectedExecutable $expectedExecutable `
+        -ExpectedProcessId $recordedProcessId
     Write-Host "$Phase is already healthy on loopback (Port $targetPort)."
     exit 0
 }
