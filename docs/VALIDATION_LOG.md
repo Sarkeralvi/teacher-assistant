@@ -1585,3 +1585,56 @@ does not.
 The calibration verdict needs the teacher-labelled fixtures. Until then no
 threshold may be chosen, and the kill criterion - error flat across confidence
 bins - has not been evaluated.
+
+## Qwen3.6 configuration sweep (2026-08-20)
+
+The 20.2 tok/s measured above was a misconfiguration, not a hardware ceiling.
+Sweeping `--n-cpu-moe` at 32K context on a scratch port:
+
+| `--n-cpu-moe` | Decode | VRAM free |
+|---|---|---|
+| 20 (previous default) | **17.9 tok/s** | 412 MiB |
+| 24 | **61.6 tok/s** | 1,082 MiB |
+| 26 | 54.9 tok/s | 1,957 MiB |
+| 28 | 59.0 tok/s | 2,938 MiB |
+| 30 | 56.3 / 56.8 tok/s (repeat) | 3,866 MiB |
+| 34 | 53.2 tok/s | 5,722 MiB |
+
+Offloading **more** to the CPU is **~3.4x faster**. At 20 the card sits at 96.6%
+and the Windows NVIDIA driver spills to system RAM rather than failing, which
+costs far more than offloading the same layers deliberately. Reducing context to
+12K while leaving `--n-cpu-moe 20` gave only 20.3 tok/s, confirming the cause is
+VRAM pressure and not context size. Measurement noise is roughly +/-5 tok/s
+(26 vs 28 is non-monotonic), so 24-30 should be read as one plateau.
+
+Shipped `--n-cpu-moe 28`: 61.6 at 24 is marginally faster, but 28 keeps ~2.9 GB
+headroom on a machine with a documented GPU-instability history, for about 4%
+less throughput. Verified through the real `Start-LocalAi.ps1` with the
+application's full flag set: **60.2 tok/s sustained, 2,931 MiB free**, and the
+low-VRAM warning no longer fires.
+
+The `--cache-type-k/v q8_0` flags were dropped. They existed to save VRAM under
+the old cramped configuration; with 2.9 GB free the KV cache no longer needs
+quantizing.
+
+### Qwen3.8 has no equivalent win
+
+Qwen3.8 is dense, so `--n-cpu-moe` does not apply and `-ngl` is the only lever.
+It behaves normally - more GPU layers is monotonically faster:
+
+| `-ngl` | Decode | VRAM free |
+|---|---|---|
+| 40 (current) | 6.7 tok/s | 476 MiB |
+| 34 | 6.2 tok/s | 702 MiB |
+| 28 | 5.4 tok/s | 2,340 MiB |
+
+`-ngl 40` is already optimal; there is no configuration fix available for the
+vision model. Note 6.7 tok/s here is a text-only best case: the 4.35 tok/s
+measured earlier came from a real vision call carrying image tokens and a much
+longer context, and 4.35 remains the figure to plan escalation cost against.
+
+### Revised stage-2 estimate
+
+A 5,500-token reference bundle costs **~92 seconds** on Qwen3.6 at 60 tok/s,
+against ~21 minutes on Qwen3.8. The plan's original ~83 s estimate was
+essentially correct; only the application's Qwen3.6 configuration was wrong.

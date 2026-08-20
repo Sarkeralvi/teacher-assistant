@@ -27,6 +27,23 @@ if ($Mode -eq "Qwen") {
     $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
     $model = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
     $key = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
+    # How many MoE expert layers stay on the CPU. Counter-intuitively, MORE is
+    # faster here. Measured on this host at 32K context:
+    #   20 -> 17.9 tok/s (412 MiB free)   28 -> 59.0 tok/s (2938 MiB free)
+    #   24 -> 61.6 tok/s (1082 MiB free)  34 -> 53.2 tok/s (5722 MiB free)
+    # At 20 the card sits at 96.6% and the Windows NVIDIA driver spills to
+    # system RAM instead of failing, which is far slower than offloading the
+    # same layers deliberately. 28 is chosen over the marginally faster 24
+    # because it keeps ~2.9 GB of headroom on a machine with a documented
+    # GPU-instability history, for about 4% less throughput.
+    $cpuMoeLayers = if ($env:LOCAL_QWEN_CPU_MOE_LAYERS) {
+        [int]$env:LOCAL_QWEN_CPU_MOE_LAYERS
+    } else {
+        28
+    }
+    if ($cpuMoeLayers -lt 1 -or $cpuMoeLayers -gt 64) {
+        throw "LOCAL_QWEN_CPU_MOE_LAYERS must be between 1 and 64."
+    }
     $args = @(
         "-m", ('"' + $model + '"'),
         "--alias", $alias,
@@ -37,12 +54,10 @@ if ($Mode -eq "Qwen") {
         "--reasoning", "off",
         "--reasoning-format", "deepseek",
         "-ngl", "99",
-        "--n-cpu-moe", "20",
+        "--n-cpu-moe", "$cpuMoeLayers",
         "-c", "32768",
         "--parallel", "1",
         "--flash-attn", "on",
-        "--cache-type-k", "q8_0",
-        "--cache-type-v", "q8_0",
         "--threads", "12",
         "--batch-size", "512"
     )
