@@ -2,6 +2,7 @@ import re
 import statistics
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi import HTTPException, status
 from PIL import Image
@@ -22,12 +23,17 @@ from app.services.answer_region_processing import (
     create_composite_grading_context_image,
     crop_grading_context_image,
 )
-from app.services.grading_integrity import rubric_snapshot_hash
+from app.services.grading_integrity import canonical_json_hash, rubric_snapshot_hash
+from app.services.local_ai_phase_manager import LocalAiPhaseManager
+from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
+
+class GradingEvidenceChangedError(RuntimeError):
+    """Raised when evidence changes while a local model is being prepared."""
 
 
 
@@ -621,6 +627,9 @@ class GradingService:
         question_total_marks = Decimal(region.question.total_marks)
         student_answer_text = region.manual_answer_text
         pinned_rubric_id = rubric.id
+        evidence_packet_hash = canonical_json_hash(
+            self.get_grading_evidence_packet(region.id)
+        )
 
         grading_answer_image_path, grading_context, segment_metadata = (
             self._prepare_grading_context(region, confirmed_segments, settings)
@@ -634,7 +643,33 @@ class GradingService:
         self.db.commit()
         self.db.refresh(job)
 
+        lease: LocalModelLeaseService | None = None
+        lease_holder_id: str | None = None
+        lease_acquired = False
         try:
+            phase = self._local_model_phase()
+            if phase is not None:
+                lease_holder_id = f"grading_job:{job.id}:{uuid4().hex}"
+                lease = LocalModelLeaseService(self.db)
+                lease.acquire(
+                    model_phase=phase,
+                    holder_kind="grading",
+                    holder_id=lease_holder_id,
+                )
+                lease_acquired = True
+                if settings.local_ai_phase_switch_enabled:
+                    LocalAiPhaseManager(settings=settings, db=self.db).switch(
+                        phase, lease_holder_id=lease_holder_id
+                    )
+                self.adapter.verify_available_model()
+                lease.heartbeat(holder_id=lease_holder_id)
+                if (
+                    canonical_json_hash(self.get_grading_evidence_packet(region.id))
+                    != evidence_packet_hash
+                ):
+                    raise GradingEvidenceChangedError(
+                        "Grading evidence changed while local Qwen was starting"
+                    )
             adapter_output = self.adapter.grade_answer_region(
                 question_text=question_text,
                 question_total_marks=question_total_marks,
@@ -643,6 +678,8 @@ class GradingService:
                 student_answer_text=student_answer_text,
                 marking_policy=marking_policy,
             )
+            if lease is not None and lease_holder_id is not None:
+                lease.heartbeat(holder_id=lease_holder_id)
             output = adapter_output.model_dump(mode="json")
             grade_result = {
                 "score": output.get("score"),
@@ -717,6 +754,30 @@ class GradingService:
             self.db.refresh(job)
             self.db.refresh(suggestion)
             return job, suggestion
+        except LocalModelLeaseError as exc:
+            self.db.rollback()
+            failed_job = self.db.get(GradingJob, job.id)
+            if failed_job is not None:
+                failed_job.status = "failed"
+                failed_job.error = sanitize_provider_error(str(exc))
+                failed_job.completed_at = datetime.now(UTC)
+                self.db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Local model is busy; no grading call was made",
+            ) from exc
+        except GradingEvidenceChangedError as exc:
+            self.db.rollback()
+            failed_job = self.db.get(GradingJob, job.id)
+            if failed_job is not None:
+                failed_job.status = "failed"
+                failed_job.error = str(exc)
+                failed_job.completed_at = datetime.now(UTC)
+                self.db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Grading evidence changed while local Qwen was starting",
+            ) from exc
         except Exception as exc:
             self.db.rollback()
             sanitized_error = sanitize_provider_error(str(exc))
@@ -730,6 +791,17 @@ class GradingService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"AI provider failed: {sanitized_error}",
             ) from exc
+        finally:
+            if lease_acquired and lease is not None and lease_holder_id is not None:
+                lease.release(holder_id=lease_holder_id)
+
+    def _local_model_phase(self) -> str | None:
+        provider_name = getattr(self.adapter.provider, "provider_name", "")
+        if provider_name == "llama_cpp_qwen":
+            return "Qwen"
+        if provider_name == "llama_cpp_qwen38":
+            return "Qwen38"
+        return None
 
     def _prepare_grading_context(
         self,

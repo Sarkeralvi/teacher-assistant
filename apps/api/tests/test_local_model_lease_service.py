@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.db.session import SessionLocal
 from app.models import LocalModelLease
 from app.services.local_ai_phase_manager import LocalAiPhaseError, LocalAiPhaseManager
@@ -107,6 +108,19 @@ def test_release_frees_the_slot(db_session: Session) -> None:
     service.acquire(model_phase="Qwen", holder_kind="worker_job", holder_id="job-2")
 
 
+def test_hold_releases_the_slot_when_the_provider_operation_fails(db_session: Session) -> None:
+    service = LocalModelLeaseService(db_session)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        with service.hold(
+            model_phase="Qwen38", holder_kind="worker_job", holder_id="job-failing"
+        ):
+            assert service.read().holder_id == "job-failing"
+            raise RuntimeError("provider failed")
+
+    assert service.read().held is False
+
+
 def test_release_by_a_non_holder_does_not_steal_the_slot(db_session: Session) -> None:
     service = LocalModelLeaseService(db_session)
     service.acquire(model_phase="Qwen38", holder_kind="worker_job", holder_id="job-1")
@@ -159,6 +173,10 @@ def test_phase_switch_refuses_when_the_caller_does_not_hold_the_lease(
     manager = LocalAiPhaseManager(
         runner=lambda *args, **kwargs: calls.append(args),
         db=db_session,
+        settings=Settings(
+            LOCAL_REFERENCE_EXTRACTION_ENABLED=True,
+            LOCAL_AI_PHASE_SWITCH_ENABLED=True,
+        ),
     )
 
     with pytest.raises(LocalAiPhaseError, match="does not hold the local model slot"):
@@ -171,7 +189,13 @@ def test_phase_switch_refuses_when_the_caller_does_not_hold_the_lease(
 def test_phase_switch_refuses_a_named_lease_without_a_session(db_session: Session) -> None:
     del db_session
     calls: list[object] = []
-    manager = LocalAiPhaseManager(runner=lambda *args, **kwargs: calls.append(args))
+    manager = LocalAiPhaseManager(
+        runner=lambda *args, **kwargs: calls.append(args),
+        settings=Settings(
+            LOCAL_REFERENCE_EXTRACTION_ENABLED=True,
+            LOCAL_AI_PHASE_SWITCH_ENABLED=True,
+        ),
+    )
 
     with pytest.raises(LocalAiPhaseError, match="no database session"):
         manager.switch("Qwen", lease_holder_id="job-1")

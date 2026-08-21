@@ -4,6 +4,7 @@ import hashlib
 import time
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import Settings, get_settings
 from app.models import AnswerRegion, AnswerRegionMapping, AnswerRegionOcrRun, AuditLog, User
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
+from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
 
@@ -124,19 +126,32 @@ class Qwen38VisualTranscriptionService:
                 or mapping.provider != "llama_cpp_qwen38"
             ):
                 raise VisualTranscriptionError("Answer mapping is no longer confirmed")
-            if self.settings.local_ai_phase_switch_enabled:
-                LocalAiPhaseManager(settings=self.settings).switch("Qwen38")
-            adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-            adapter.verify_available_model()
-            provider = adapter.provider
-            images: list[tuple[bytes, str]] = []
-            image_hashes: list[str] = []
-            for segment in sorted(region.segments, key=lambda item: item.order_index):
-                path = self.storage.resolve_relative(segment.image_path)
-                image_bytes = path.read_bytes()
-                images.append((image_bytes, "image/png"))
-                image_hashes.append(hashlib.sha256(image_bytes).hexdigest())
-            result = provider.transcribe_images(images=images, label=region.question.question_no)
+            lease_holder_id = f"visual_transcription:{run.id}:{uuid4().hex}"
+            lease = LocalModelLeaseService(self.db)
+            with lease.hold(
+                model_phase="Qwen38",
+                holder_kind="visual_transcription",
+                holder_id=lease_holder_id,
+            ):
+                if self.settings.local_ai_phase_switch_enabled:
+                    LocalAiPhaseManager(settings=self.settings, db=self.db).switch(
+                        "Qwen38", lease_holder_id=lease_holder_id
+                    )
+                adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
+                adapter.verify_available_model()
+                provider = adapter.provider
+                images: list[tuple[bytes, str]] = []
+                image_hashes: list[str] = []
+                for segment in sorted(region.segments, key=lambda item: item.order_index):
+                    path = self.storage.resolve_relative(segment.image_path)
+                    image_bytes = path.read_bytes()
+                    images.append((image_bytes, "image/png"))
+                    image_hashes.append(hashlib.sha256(image_bytes).hexdigest())
+                lease.heartbeat(holder_id=lease_holder_id)
+                result = provider.transcribe_images(
+                    images=images, label=region.question.question_no
+                )
+                lease.heartbeat(holder_id=lease_holder_id)
             draft_hash = hashlib.sha256(result.draft_text.encode("utf-8")).hexdigest()
             run.status = "succeeded"
             run.completed_at = datetime.now(UTC)

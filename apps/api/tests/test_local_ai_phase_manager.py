@@ -14,7 +14,9 @@ def make_script(root: Path) -> None:
     script.write_text("param([string]$Phase)", encoding="utf-8")
 
 
-def test_phase_manager_uses_only_fixed_repository_script_and_phase(tmp_path: Path) -> None:
+def test_phase_manager_uses_only_fixed_repository_script_and_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     make_script(tmp_path)
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -30,8 +32,9 @@ def test_phase_manager_uses_only_fixed_repository_script_and_phase(tmp_path: Pat
     manager = LocalAiPhaseManager(
         settings=settings, runner=runner, repository_root=tmp_path
     )
+    monkeypatch.setattr(manager, "_assert_lease_held", lambda _holder_id: None)
 
-    manager.switch("Qwen")
+    manager.switch("Qwen", lease_holder_id="test-holder")
 
     command, kwargs = calls[0]
     assert command[:4] == [
@@ -66,5 +69,5 @@ def test_phase_manager_honors_kill_switch_before_starting_process(tmp_path: Path
     )
 
     with pytest.raises(LocalAiPhaseError, match="disabled"):
-        manager.switch("Qwen")
+        manager.switch("Qwen", lease_holder_id="test-holder")
     assert called is False

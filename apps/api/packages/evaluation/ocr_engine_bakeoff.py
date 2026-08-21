@@ -223,24 +223,53 @@ def _qwen38_vision_adapter(*, budget: ProviderCallBudget) -> EngineAdapter:
     """
 
     def run(image_bytes: bytes, mime: str) -> EngineReading:
-        budget.spend()
+        from uuid import uuid4  # noqa: PLC0415
+
         from app.core.config import get_settings  # noqa: PLC0415
+        from app.db.session import SessionLocal  # noqa: PLC0415
+        from app.services.local_ai_phase_manager import LocalAiPhaseManager  # noqa: PLC0415
+        from app.services.local_model_lease_service import (  # noqa: PLC0415
+            LocalModelLeaseError,
+            LocalModelLeaseService,
+        )
         from packages.brain.llama_cpp_qwen38_vision_provider import (  # noqa: PLC0415
             LlamaCppQwen38VisionProvider,
         )
 
         settings = get_settings()
-        provider = LlamaCppQwen38VisionProvider(
-            api_key=settings.local_qwen38_api_key,
-            model_name=settings.local_qwen38_model,
-            base_url=settings.local_qwen38_base_url,
-            timeout_seconds=settings.local_qwen38_timeout_seconds,
-            context_tokens=settings.local_qwen38_context_tokens,
-        )
-        provider.verify_available_model()
-        start = time.perf_counter()
-        output = provider.transcribe_image(image_bytes=image_bytes, mime_type=mime)
-        latency_ms = int((time.perf_counter() - start) * 1000)
+        budget.ensure_allowed()
+        db = SessionLocal()
+        holder_id = f"ocr_bakeoff:{uuid4().hex}"
+        try:
+            lease = LocalModelLeaseService(db)
+            with lease.hold(
+                model_phase="Qwen38",
+                holder_kind="ocr_bakeoff",
+                holder_id=holder_id,
+            ):
+                LocalAiPhaseManager(settings=settings, db=db).switch(
+                    "Qwen38", lease_holder_id=holder_id
+                )
+                provider = LlamaCppQwen38VisionProvider(
+                    api_key=settings.local_qwen38_api_key,
+                    model_name=settings.local_qwen38_model,
+                    base_url=settings.local_qwen38_base_url,
+                    timeout_seconds=settings.local_qwen38_timeout_seconds,
+                    context_tokens=settings.local_qwen38_context_tokens,
+                )
+                provider.verify_available_model()
+                lease.heartbeat(holder_id=holder_id)
+                budget.spend()
+                start = time.perf_counter()
+                output = provider.transcribe_image(image_bytes=image_bytes, mime_type=mime)
+                latency_ms = int((time.perf_counter() - start) * 1000)
+                lease.heartbeat(holder_id=holder_id)
+        except LocalModelLeaseError as exc:
+            raise OcrBakeoffError(
+                "The local model slot is busy; no Qwen3.8 bake-off call was made"
+            ) from exc
+        finally:
+            db.close()
         return EngineReading(
             engine="qwen38_vision",
             text=output.draft_text,
@@ -260,7 +289,7 @@ class ProviderCallBudget:
     maximum: int
     used: int = 0
 
-    def spend(self) -> None:
+    def ensure_allowed(self) -> None:
         if not self.authorized:
             raise OcrBakeoffError(
                 "This arm makes real provider calls; re-run with "
@@ -271,6 +300,9 @@ class ProviderCallBudget:
                 f"Provider call budget of {self.maximum} is exhausted; stopping rather "
                 "than making an unauthorized call."
             )
+
+    def spend(self) -> None:
+        self.ensure_allowed()
         self.used += 1
 
 

@@ -261,11 +261,13 @@ def test_line_scoring_matches_a_single_line_not_the_whole_page() -> None:
     assert _closest_line_cer(ground_truth, "completely different text") > Decimal("0.5")
 
 
-def test_harness_imports_no_application_services() -> None:
-    # It must never be able to touch product state.
+def test_qwen38_bakeoff_arm_uses_the_same_fail_closed_lease_as_production() -> None:
+    # Offline arms remain DB-free.  The optional real Qwen arm must use the
+    # single model slot rather than bypassing the application's scheduler.
     source = Path(
         Path(__file__).resolve().parents[1] / "packages" / "evaluation" / "ocr_engine_bakeoff.py"
     ).read_text(encoding="utf-8")
 
-    assert "from app.services" not in source
-    assert "SessionLocal" not in source
+    assert "LocalModelLeaseService" in source
+    assert "LocalAiPhaseManager" in source
+    assert 'lease_holder_id=holder_id' in source

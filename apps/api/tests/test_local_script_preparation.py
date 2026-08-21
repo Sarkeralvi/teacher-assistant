@@ -72,7 +72,8 @@ class RecordingPhaseManager:
     def __init__(self, events: list[str]) -> None:
         self.events = events
 
-    def switch(self, phase: str) -> None:
+    def switch(self, phase: str, *, lease_holder_id: str) -> None:
+        assert lease_holder_id
         self.events.append(phase)
 
 

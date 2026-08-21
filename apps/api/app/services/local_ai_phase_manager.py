@@ -45,16 +45,13 @@ class LocalAiPhaseManager:
                 "the model. Another job may be mid-call against the current one."
             )
 
-    def switch(self, phase: LocalAiPhase, *, lease_holder_id: str | None = None) -> None:
+    def switch(self, phase: LocalAiPhase, *, lease_holder_id: str) -> None:
         """Select a local model phase, unloading the other one.
 
-        ``lease_holder_id`` names the caller's model-slot lease. It is optional
-        only so existing single-job callers keep working; any code path that can
-        run concurrently with another model call must pass it, or two jobs can
-        switch the model out from under each other. See LocalModelLeaseService.
+        ``lease_holder_id`` names the caller's model-slot lease. It is required:
+        every application-initiated phase switch must prove that it owns the
+        single GPU model slot before it can unload the other model.
         """
-        if lease_holder_id is not None:
-            self._assert_lease_held(lease_holder_id)
         if not (
             self.settings.local_reference_extraction_enabled
             or self.settings.local_script_preparation_enabled
@@ -66,6 +63,7 @@ class LocalAiPhaseManager:
             raise LocalAiPhaseError("Automatic local AI phase switching is disabled")
         if os.name != "nt":
             raise LocalAiPhaseError("Local AI phase switching is supported on Windows host mode")
+        self._assert_lease_held(lease_holder_id)
         script = self.repository_root / "scripts" / "local-ai" / "Switch-LocalAiPhase.ps1"
         if not script.is_file():
             raise LocalAiPhaseError("Local AI phase switch script is unavailable")

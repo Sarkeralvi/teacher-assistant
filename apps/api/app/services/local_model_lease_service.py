@@ -19,6 +19,8 @@ timeout. Failing fast lets the caller report honestly that the model is busy.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -86,6 +88,34 @@ class LocalModelLeaseService:
         self.db.commit()
         self.db.refresh(row)
         return self._state(row, now=datetime.now(UTC))
+
+    @contextmanager
+    def hold(
+        self,
+        *,
+        model_phase: LocalModelPhase,
+        holder_kind: str,
+        holder_id: str,
+        lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    ) -> Iterator[LocalModelLeaseService]:
+        """Hold the only local-model slot for one complete provider operation.
+
+        This is deliberately fail-closed: ``acquire`` raises before the body
+        starts if another operation owns the slot.  The matching ``finally``
+        release means failures cannot leave a healthy worker blocking the next
+        teacher action.  Long operations should still call ``heartbeat``
+        immediately before and after each provider request.
+        """
+        self.acquire(
+            model_phase=model_phase,
+            holder_kind=holder_kind,
+            holder_id=holder_id,
+            lease_seconds=lease_seconds,
+        )
+        try:
+            yield self
+        finally:
+            self.release(holder_id=holder_id)
 
     def heartbeat(
         self,

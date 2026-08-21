@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 from sqlalchemy import select
@@ -25,6 +26,7 @@ from app.models import (
 )
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
+from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
 
@@ -60,7 +62,9 @@ class LocalScriptPreparationService:
         self.settings = settings or get_settings()
         self.storage = storage or LocalStorage()
         self._qwen_adapter = qwen_adapter
-        self.phase_manager = phase_manager or LocalAiPhaseManager(settings=self.settings)
+        self.phase_manager = phase_manager or LocalAiPhaseManager(
+            settings=self.settings, db=self.db
+        )
 
     def prepare(
         self,
@@ -92,16 +96,6 @@ class LocalScriptPreparationService:
             )
         self._assert_replace_is_safe(existing)
 
-        if self.settings.local_ai_phase_switch_enabled:
-            self.phase_manager.switch("Qwen38")
-
-        adapter = self._qwen_adapter or BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-        adapter.verify_available_model()
-        provider = adapter.provider
-        if not hasattr(provider, "map_page_answer_regions"):
-            raise LocalScriptPreparationError(
-                "Configured local provider cannot map visual script pages"
-            )
         labels = [question.question_no for question in questions]
         question_by_label = {question.question_no.casefold(): question for question in questions}
         segments_by_question: dict[int, list[PreparedSegment]] = {
@@ -113,56 +107,80 @@ class LocalScriptPreparationService:
         }
         open_continuations: list[str] = []
         calls_used = 0
-        for page in pages:
-            image_path = self.storage.resolve_relative(page.image_path)
-            image_bytes = image_path.read_bytes()
-            try:
-                result = provider.map_page_answer_regions(
-                    image_bytes=image_bytes,
-                    mime_type=_image_content_type(image_path),
-                    question_labels=labels,
-                    open_continuations=open_continuations,
+        lease_holder_id = f"script_preparation:{submission.id}:{uuid4().hex}"
+        lease = LocalModelLeaseService(self.db)
+        try:
+            with lease.hold(
+                model_phase="Qwen38",
+                holder_kind="script_preparation",
+                holder_id=lease_holder_id,
+            ):
+                if self.settings.local_ai_phase_switch_enabled:
+                    self.phase_manager.switch("Qwen38", lease_holder_id=lease_holder_id)
+
+                adapter = self._qwen_adapter or BrainAdapter.for_provider(
+                    self.settings, "llama_cpp_qwen38"
                 )
-            except Exception as exc:
-                raise LocalScriptPreparationError(
-                    f"Qwen3.8 visual mapping failed safely: {exc}"
-                ) from exc
-            calls_used += 1
-            seen: set[str] = set()
-            next_continuations: list[str] = []
-            for region in result.regions:
-                label = region.question_label.casefold()
-                if label in seen:
+                adapter.verify_available_model()
+                provider = adapter.provider
+                if not hasattr(provider, "map_page_answer_regions"):
                     raise LocalScriptPreparationError(
-                        "Qwen3.8 split one answer into multiple page regions"
+                        "Configured local provider cannot map visual script pages"
                     )
-                seen.add(label)
-                question = question_by_label.get(label)
-                if question is None:
-                    raise LocalScriptPreparationError(
-                        "Qwen3.8 returned an unknown finalized question"
-                    )
-                x1, y1, x2, y2 = region.bbox
-                with Image.open(image_path) as image:
-                    x, y, width, height = _normalized_box_to_page_box(
-                        x1, y1, x2, y2, image.width, image.height
-                    )
-                segments_by_question[question.id].append(
-                    PreparedSegment(
-                        page_id=page.id,
-                        page_no=page.page_no,
-                        x=x,
-                        y=y,
-                        width=width,
-                        height=height,
-                        block_orders=[],
-                    )
-                )
-                confidence_by_question[question.id].append(region.confidence)
-                warning_by_question[question.id].extend(region.warnings)
-                if region.continues_to_next:
-                    next_continuations.append(question.question_no)
-            open_continuations = next_continuations
+                for page in pages:
+                    image_path = self.storage.resolve_relative(page.image_path)
+                    image_bytes = image_path.read_bytes()
+                    try:
+                        lease.heartbeat(holder_id=lease_holder_id)
+                        result = provider.map_page_answer_regions(
+                            image_bytes=image_bytes,
+                            mime_type=_image_content_type(image_path),
+                            question_labels=labels,
+                            open_continuations=open_continuations,
+                        )
+                        lease.heartbeat(holder_id=lease_holder_id)
+                    except Exception as exc:
+                        raise LocalScriptPreparationError(
+                            f"Qwen3.8 visual mapping failed safely: {exc}"
+                        ) from exc
+                    calls_used += 1
+                    seen: set[str] = set()
+                    next_continuations: list[str] = []
+                    for region in result.regions:
+                        label = region.question_label.casefold()
+                        if label in seen:
+                            raise LocalScriptPreparationError(
+                                "Qwen3.8 split one answer into multiple page regions"
+                            )
+                        seen.add(label)
+                        question = question_by_label.get(label)
+                        if question is None:
+                            raise LocalScriptPreparationError(
+                                "Qwen3.8 returned an unknown finalized question"
+                            )
+                        x1, y1, x2, y2 = region.bbox
+                        with Image.open(image_path) as image:
+                            x, y, width, height = _normalized_box_to_page_box(
+                                x1, y1, x2, y2, image.width, image.height
+                            )
+                        segments_by_question[question.id].append(
+                            PreparedSegment(
+                                page_id=page.id,
+                                page_no=page.page_no,
+                                x=x,
+                                y=y,
+                                width=width,
+                                height=height,
+                                block_orders=[],
+                            )
+                        )
+                        confidence_by_question[question.id].append(region.confidence)
+                        warning_by_question[question.id].extend(region.warnings)
+                        if region.continues_to_next:
+                            next_continuations.append(question.question_no)
+                    open_continuations = next_continuations
+        except LocalModelLeaseError as exc:
+            raise LocalScriptPreparationError(str(exc)) from exc
 
         unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
 

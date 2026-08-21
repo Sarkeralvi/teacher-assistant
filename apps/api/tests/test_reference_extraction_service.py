@@ -21,6 +21,7 @@ from app.models import (
     RubricExtractionCriterion,
     User,
 )
+from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.reference_extraction_service import (
     ReferenceExtractionError,
     ReferenceExtractionService,
@@ -31,13 +32,15 @@ class FakePhaseManager:
     def __init__(self) -> None:
         self.phases: list[str] = []
 
-    def switch(self, phase: str) -> None:
+    def switch(self, phase: str, *, lease_holder_id: str) -> None:
+        assert lease_holder_id
         self.phases.append(phase)
 
 
 class FakeExtractor:
     def __init__(self) -> None:
         self.qwen_calls = 0
+        self.qwen_adapter = FakeReferenceAdapter()
 
     def render_pages(self, file_path: Path, _content_type: str, **_kwargs):
         # **_kwargs absorbs target_dpi, which the tiered path passes.
@@ -84,6 +87,11 @@ class FakeExtractor:
             "warnings": [],
             "usage": {"total_tokens": 100},
         }
+
+
+class FakeReferenceAdapter:
+    def verify_available_model(self) -> None:
+        return None
 
 
 @pytest.fixture()
@@ -204,6 +212,45 @@ def test_reference_bundle_runs_with_qwen38_visual_extraction(
     assert run.reference_ocr_call_count == 3
     assert run.reference_qwen_call_count == 1
     assert extractor.qwen_calls == 1
+
+
+def test_reference_bundle_fails_before_switching_or_calling_when_model_slot_is_busy(
+    db_session: Session, tmp_path: Path
+) -> None:
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    extractor = FakeExtractor()
+    phases = FakePhaseManager()
+    service = ReferenceExtractionService(
+        db_session,
+        settings=enabled_settings(storage_root),
+        phase_manager=phases,
+        extractor_factory=lambda: extractor,
+    )
+    service.create(
+        run,
+        teacher_id=run.created_by_teacher_id,
+        expected_model="qwen3.8-27b-q4km",
+    )
+    lease = LocalModelLeaseService(db_session)
+    lease.acquire(
+        model_phase="Qwen",
+        holder_kind="other_operation",
+        holder_id="already-running",
+    )
+    try:
+        service.run(run.id)
+
+        db_session.expire_all()
+        refreshed = db_session.get(GradingRun, run.id)
+        assert refreshed is not None
+        assert refreshed.reference_extraction_status == "failed"
+        assert "held by" in (refreshed.reference_extraction_error or "")
+        assert extractor.qwen_calls == 0
+        assert phases.phases == []
+        assert lease.read().holder_id == "already-running"
+    finally:
+        lease.release(holder_id="already-running")
 
 
 def test_reference_bundle_detects_material_tampering_before_any_model_call(
@@ -378,6 +425,9 @@ def install_fakes(monkeypatch, *, confidence: str, uncovered: str | None = None)
     class FakeAdapter:
         def __init__(self, provider):
             self.provider = provider
+
+        def verify_available_model(self):
+            return None
 
     def for_provider(_settings, name):
         if name == "llama_cpp_qwen38":

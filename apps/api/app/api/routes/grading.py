@@ -38,7 +38,6 @@ from app.schemas import (
 from app.services.grading_dispatch_service import GradingDispatchService
 from app.services.grading_integrity import canonical_json_hash, rubric_snapshot_hash
 from app.services.grading_service import GradingService
-from app.services.local_ai_phase_manager import LocalAiPhaseError, LocalAiPhaseManager
 from app.worker.jobs import run_grade_answer_region_job, run_grading_dispatch_job
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
@@ -186,12 +185,8 @@ def grade_answer_region_with_local_qwen(
     )
     db.commit()
     try:
-        if settings.local_ai_phase_switch_enabled:
-            phase = "Qwen38" if payload.provider == "llama_cpp_qwen38" else "Qwen"
-            LocalAiPhaseManager(settings=settings).switch(phase)
         adapter = BrainAdapter.for_provider(settings, payload.provider)
-        adapter.verify_available_model()
-    except (LocalAiPhaseError, BrainProviderConfigurationError, RuntimeError) as exc:
+    except BrainProviderConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Local Qwen could not be prepared with the expected model",

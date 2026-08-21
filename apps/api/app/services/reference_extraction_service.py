@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,6 +31,7 @@ from app.services.document_extraction import (
     mark_extraction_run_failed,
 )
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
+from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.local_reference_extraction import (
     DEFAULT_RENDER_DPI,
     LOCAL_REFERENCE_PROVIDER,
@@ -56,7 +58,9 @@ class ReferenceExtractionService:
     ) -> None:
         self.db = db
         self.settings = settings or get_settings()
-        self.phase_manager = phase_manager or LocalAiPhaseManager(settings=self.settings)
+        self.phase_manager = phase_manager or LocalAiPhaseManager(
+            settings=self.settings, db=self.db
+        )
         self.extractor_factory = extractor_factory or (
             lambda: LocalReferenceExtractor(settings=self.settings)
         )
@@ -196,16 +200,28 @@ class ReferenceExtractionService:
                 ]
             grading_run.reference_ocr_call_count = total_pages
 
+            lease_holder_id = self._lease_holder_id(grading_run.id)
             if self.settings.local_ocr_enabled:
                 provider_result = self._run_tiered_extraction(
-                    grading_run, documents, render_dpi=render_dpi
+                    grading_run,
+                    documents,
+                    render_dpi=render_dpi,
+                    lease_holder_id=lease_holder_id,
                 )
             else:
                 # Legacy single-call path: every page goes to the vision model.
                 self._set_stage(grading_run, "qwen38_visual_reference_extraction")
-                if self.settings.local_ai_phase_switch_enabled:
-                    self.phase_manager.switch("Qwen38")
-                provider_result = extractor.extract_reference_bundle(documents)
+                lease = LocalModelLeaseService(self.db)
+                with lease.hold(
+                    model_phase="Qwen38",
+                    holder_kind="reference_extraction",
+                    holder_id=lease_holder_id,
+                ):
+                    self._switch_phase("Qwen38", lease_holder_id=lease_holder_id)
+                    extractor.qwen_adapter.verify_available_model()
+                    lease.heartbeat(holder_id=lease_holder_id)
+                    provider_result = extractor.extract_reference_bundle(documents)
+                    lease.heartbeat(holder_id=lease_holder_id)
                 grading_run.reference_qwen_call_count = 1
 
             self._assert_material_hashes(grading_run, paths)
@@ -238,6 +254,7 @@ class ReferenceExtractionService:
         documents: dict[str, list[tuple[bytes, str, int]]],
         *,
         render_dpi: int,
+        lease_holder_id: str,
     ) -> dict[str, Any]:
         """Read cheaply first, spend the vision model only where OCR is unsure.
 
@@ -309,53 +326,83 @@ class ReferenceExtractionService:
             "solution": [],
             "rubric": [],
         }
-        if escalations:
-            self._set_stage(grading_run, "qwen38_visual_escalation")
-            if self.settings.local_ai_phase_switch_enabled:
-                self.phase_manager.switch("Qwen38")
-            adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-            provider = adapter.provider
-            for document_name, page_no in escalations:
-                image_bytes = next(
-                    data
-                    for data, _mime, number in documents[document_name]
-                    if number == page_no
+        lease = LocalModelLeaseService(self.db)
+        lease_held = False
+        try:
+            if escalations:
+                self._set_stage(grading_run, "qwen38_visual_escalation")
+                lease.acquire(
+                    model_phase="Qwen38",
+                    holder_kind="reference_extraction",
+                    holder_id=lease_holder_id,
                 )
-                transcribe = getattr(provider, "transcribe_image", None)
-                if transcribe is None:
-                    raise ReferenceExtractionError(
-                        "The configured vision provider cannot transcribe an escalated page"
+                lease_held = True
+                self._switch_phase("Qwen38", lease_holder_id=lease_holder_id)
+                adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
+                adapter.verify_available_model()
+                provider = adapter.provider
+                for document_name, page_no in escalations:
+                    image_bytes = next(
+                        data
+                        for data, _mime, number in documents[document_name]
+                        if number == page_no
                     )
-                output = transcribe(
-                    image_bytes=image_bytes,
-                    mime_type="image/png",
-                    label=f"{document_name} page {page_no}",
-                )
-                readings[(document_name, page_no)] = (output.draft_text, None)
+                    transcribe = getattr(provider, "transcribe_image", None)
+                    if transcribe is None:
+                        raise ReferenceExtractionError(
+                            "The configured vision provider cannot transcribe an escalated page"
+                        )
+                    lease.heartbeat(holder_id=lease_holder_id)
+                    output = transcribe(
+                        image_bytes=image_bytes,
+                        mime_type="image/png",
+                        label=f"{document_name} page {page_no}",
+                    )
+                    lease.heartbeat(holder_id=lease_holder_id)
+                    readings[(document_name, page_no)] = (output.draft_text, None)
 
-        for document_name, pages in documents.items():
-            role = role_by_document[document_name]
-            for _image_bytes, _mime, page_no in pages:
-                value = readings[(document_name, page_no)]
-                text = value[0] if isinstance(value[0], str) else value[0].text
-                text_documents[role].append({"page": page_no, "text": text})
+            for document_name, pages in documents.items():
+                role = role_by_document[document_name]
+                for _image_bytes, _mime, page_no in pages:
+                    value = readings[(document_name, page_no)]
+                    text = value[0] if isinstance(value[0], str) else value[0].text
+                    text_documents[role].append({"page": page_no, "text": text})
 
-        self._set_stage(grading_run, "qwen36_reference_mapping")
-        if self.settings.local_ai_phase_switch_enabled:
-            self.phase_manager.switch("Qwen")
-        text_adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen")
-        result = text_adapter.provider.extract_reference_bundle_from_ocr_documents(
-            documents=text_documents
-        )
-        grading_run.reference_qwen_call_count = 1
-        warnings = list(result.get("warnings") or [])
-        if escalations:
-            warnings.append(
-                f"{len(escalations)} page(s) were read by the vision model because the "
-                "first-pass reader was not confident; check those drafts most closely."
+            self._set_stage(grading_run, "qwen36_reference_mapping")
+            lease.acquire(
+                model_phase="Qwen",
+                holder_kind="reference_extraction",
+                holder_id=lease_holder_id,
             )
-        result["warnings"] = warnings
-        return result
+            lease_held = True
+            self._switch_phase("Qwen", lease_holder_id=lease_holder_id)
+            text_adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen")
+            text_adapter.verify_available_model()
+            lease.heartbeat(holder_id=lease_holder_id)
+            result = text_adapter.provider.extract_reference_bundle_from_ocr_documents(
+                documents=text_documents
+            )
+            lease.heartbeat(holder_id=lease_holder_id)
+            grading_run.reference_qwen_call_count = 1
+            warnings = list(result.get("warnings") or [])
+            if escalations:
+                warnings.append(
+                    f"{len(escalations)} page(s) were read by the vision model because the "
+                    "first-pass reader was not confident; check those drafts most closely."
+                )
+            result["warnings"] = warnings
+            return result
+        finally:
+            if lease_held:
+                lease.release(holder_id=lease_holder_id)
+
+    def _switch_phase(self, phase: str, *, lease_holder_id: str) -> None:
+        if self.settings.local_ai_phase_switch_enabled:
+            self.phase_manager.switch(phase, lease_holder_id=lease_holder_id)
+
+    @staticmethod
+    def _lease_holder_id(grading_run_id: int) -> str:
+        return f"reference_extraction:{grading_run_id}:{uuid4().hex}"
 
     def _record_page_evidence(
         self,
