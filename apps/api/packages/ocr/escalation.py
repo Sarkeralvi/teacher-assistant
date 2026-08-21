@@ -54,13 +54,22 @@ DECISION_ESCALATED_PAGE = "escalated_page"
 class EscalationPolicy:
     """Thresholds governing escalation.
 
-    PROVISIONAL: every default below is a placeholder until the bake-off's
-    reliability table and escalation ROC are computed against teacher-labelled
-    fixtures. Shipping these as if they were measured would repeat the mistake
-    the reference-bundle token budget made.
+    Calibrated against 10 teacher-verified fixtures (2026-08-20). The headline
+    result is that confidence is a WEAK gate on this material, so the structural
+    triggers and the document-role prior carry most of the decision:
+
+    * Handwriting: 94.7% of lines are wrong, and 82.4% are still wrong in the
+      top confidence bin. No threshold separates them - the best margin was
+      0.038. Handwriting therefore escalates as a page, by role, not by score.
+    * Typeset math: fragmented into confident single digits, which confidence
+      cannot see and geometry can.
+    * Printed text: read perfectly (CER 0.000). This is the case tier-1 handles
+      alone, and the confidence threshold exists mainly to protect it.
     """
 
-    line_confidence_escalate_below: Decimal = Decimal("0.80")
+    # Below the observed 0.79 minimum on a perfectly-read printed page, so a
+    # good printed page is not escalated over one merely-lower-scoring line.
+    line_confidence_escalate_below: Decimal = Decimal("0.70")
     uncovered_ink_escalate_above: Decimal = Decimal("0.20")
     tall_box_median_ratio: float = 1.8
     min_decoded_chars_per_100px: float = 1.0
@@ -69,9 +78,12 @@ class EscalationPolicy:
     region_padding_px: float = 8.0
     # Merge flagged neighbours within this multiple of the median line height.
     region_merge_gap_ratio: float = 1.5
-    # A teacher may declare a document handwritten. A human lowering the bar for
-    # a known-hard document is auditable; a model doing it is not.
-    handwritten_confidence_bonus: Decimal = Decimal("0.05")
+    # A teacher-declared handwritten document escalates outright rather than
+    # being sampled line by line. Measured: 94.7% of handwritten lines are
+    # wrong, so per-line triage would send most of them anyway while risking
+    # the few it happened to score highly. A human declaring a document hard is
+    # auditable; a model inferring it is not.
+    handwritten_escalates_page: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,12 +101,14 @@ class EscalationDecision:
 def effective_confidence_threshold(
     policy: EscalationPolicy, *, expect_handwritten: bool
 ) -> Decimal:
-    if not expect_handwritten:
-        return policy.line_confidence_escalate_below
-    return min(
-        Decimal("1"),
-        policy.line_confidence_escalate_below + policy.handwritten_confidence_bonus,
-    )
+    """The score below which a line is treated as uncertain.
+
+    Handwriting does not raise this: it bypasses the confidence gate entirely
+    via handwritten_escalates_page, because the measurement showed no threshold
+    separates good handwritten lines from bad ones.
+    """
+    del expect_handwritten
+    return policy.line_confidence_escalate_below
 
 
 def _median_line_height(lines: list[OcrLine]) -> float:
@@ -180,6 +194,15 @@ def evaluate_page(
 
     if expect_handwritten:
         reasons.append(REASON_DOCUMENT_ROLE_HANDWRITTEN)
+        if policy.handwritten_escalates_page:
+            # Measured: 94.7% of handwritten lines are wrong and the top
+            # confidence bin is still 82.4% wrong, so triaging line by line
+            # would send most of the page anyway while trusting the handful of
+            # confidently-wrong lines that scored well.
+            return EscalationDecision(
+                decision=DECISION_ESCALATED_PAGE,
+                reason_codes=reasons,
+            )
 
     # No lines at all on a page that plainly has content is a total miss, and
     # there is no per-line signal to catch it.

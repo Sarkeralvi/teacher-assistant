@@ -64,11 +64,13 @@ class Settings(BaseSettings):
     local_reference_max_escalations: int = Field(
         default=6, alias="LOCAL_REFERENCE_MAX_ESCALATIONS", ge=0, le=25
     )
-    # PROVISIONAL until the bake-off's reliability table and escalation ROC are
-    # computed against teacher-verified fixtures. Treating these as measured
-    # would repeat the reference-bundle token-budget mistake.
+    # Calibrated 2026-08-20 against 10 teacher-verified fixtures. Set below the
+    # 0.79 minimum observed on a perfectly-read printed page, so a good printed
+    # page is not escalated over one merely-lower-scoring line. Confidence is a
+    # weak signal on harder material; handwriting escalates by document role and
+    # fragmented math by geometry, not by this number.
     local_ocr_confidence_escalate_below: Decimal = Field(
-        default=Decimal("0.80"),
+        default=Decimal("0.70"),
         alias="LOCAL_OCR_CONFIDENCE_ESCALATE_BELOW",
         ge=Decimal("0"),
         le=Decimal("1"),
@@ -78,6 +80,14 @@ class Settings(BaseSettings):
         alias="LOCAL_OCR_UNCOVERED_INK_ESCALATE_ABOVE",
         ge=Decimal("0"),
         le=Decimal("1"),
+    )
+    # Rubric format varies by teacher and course: some are typed, some are
+    # handwritten mark sheets. A handwritten one must escalate wholesale, but
+    # forcing that on a typed rubric would spend the vision model for nothing.
+    # Defaults true because it fails safe - a needless escalation costs time,
+    # a trusted misreading costs a mark.
+    local_ocr_treat_rubric_as_handwritten: bool = Field(
+        default=True, alias="LOCAL_OCR_TREAT_RUBRIC_AS_HANDWRITTEN"
     )
     cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(

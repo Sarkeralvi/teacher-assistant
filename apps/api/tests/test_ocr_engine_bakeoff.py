@@ -242,6 +242,25 @@ def test_fixture_template_round_trips_once_labelled(tmp_path: Path) -> None:
         write_fixture_template(tmp_path, [image])
 
 
+def test_line_scoring_matches_a_single_line_not_the_whole_page() -> None:
+    """Regression: the reliability table once measured nothing.
+
+    _closest_line_cer normalized before splitting on newlines, but
+    normalize_text collapses all whitespace including newlines, so the whole
+    page became one candidate "line". Every line then scored ~0.97 against the
+    full document, error looked flat across confidence bins, and the confidence
+    gate would have been abandoned on the strength of a measurement artefact.
+    """
+    from packages.evaluation.ocr_engine_bakeoff import _closest_line_cer
+
+    ground_truth = "P(D) = 0.3\nP(W) = 0.3\nP(B) = 0.4"
+
+    # A line that exactly matches one ground-truth line must score ~0.
+    assert _closest_line_cer(ground_truth, "P(W) = 0.3") < Decimal("0.01")
+    # A line matching nothing must score high, so the two are distinguishable.
+    assert _closest_line_cer(ground_truth, "completely different text") > Decimal("0.5")
+
+
 def test_harness_imports_no_application_services() -> None:
     # It must never be able to touch product state.
     source = Path(

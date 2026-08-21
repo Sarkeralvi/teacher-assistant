@@ -37,7 +37,6 @@ from typing import Any
 from packages.evaluation.local_curated_evaluation import (
     character_error_rate,
     critical_token_recall,
-    normalize_text,
     sha256_bytes,
     word_error_rate,
 )
@@ -528,8 +527,15 @@ def _closest_line_cer(ground_truth: str, line_text: str) -> Decimal:
 
     Engines split lines differently, so comparing line N to line N would
     measure segmentation disagreement rather than recognition error.
+
+    Split on raw newlines BEFORE normalizing: normalize_text collapses all
+    whitespace including newlines, so normalizing first yields a single
+    "line" containing the whole page. Every line then scored ~0.97 against
+    the full document, which made confidence look uninformative in the
+    reliability table and would have killed the confidence gate on the
+    strength of a measurement artefact.
     """
-    candidates = [item for item in normalize_text(ground_truth).split("\n") if item.strip()]
+    candidates = [item for item in ground_truth.split("\n") if item.strip()]
     if not candidates:
         candidates = [ground_truth]
     return min(character_error_rate(candidate, line_text) for candidate in candidates)

@@ -6,6 +6,7 @@ from packages.ocr.escalation import (
     DECISION_ACCEPTED,
     DECISION_ESCALATED_PAGE,
     DECISION_ESCALATED_REGIONS,
+    REASON_DOCUMENT_ROLE_HANDWRITTEN,
     REASON_LOW_LINE_CONFIDENCE,
     REASON_NO_LINES_DETECTED,
     REASON_SPARSE_DECODE,
@@ -178,24 +179,37 @@ def test_regions_are_merged_and_padded_rather_than_sent_individually() -> None:
     assert merged[0].y2 > 45
 
 
-def test_a_declared_handwritten_document_raises_the_bar() -> None:
+def test_a_declared_handwritten_document_escalates_regardless_of_confidence() -> None:
+    """Handwriting bypasses the confidence gate entirely.
+
+    Measured on teacher-verified fixtures: 94.7% of handwritten lines are wrong,
+    and 82.4% are still wrong in the highest confidence bin. No threshold
+    separates them, so triaging line by line would send most of the page anyway
+    while trusting the few confidently-wrong lines that happened to score well.
+    """
     policy = EscalationPolicy()
-
-    plain = effective_confidence_threshold(policy, expect_handwritten=False)
-    handwritten = effective_confidence_threshold(policy, expect_handwritten=True)
-
-    assert handwritten > plain
-    # A borderline line passes on a printed page and escalates on a declared
-    # handwritten one.
+    # Every line maximally confident, which per-line triage would accept.
     reading = _reading(
         [
-            _line(box=(0, 0, 400, 20)),
-            _line(confidence="0.82", box=(0, 30, 400, 50)),
-            _line(box=(0, 60, 400, 80)),
+            _line(confidence="1.0", box=(0, 0, 400, 20)),
+            _line(confidence="1.0", box=(0, 30, 400, 50)),
+            _line(confidence="1.0", box=(0, 60, 400, 80)),
         ]
     )
+
     assert evaluate_page(reading, policy=policy).decision == DECISION_ACCEPTED
-    assert evaluate_page(reading, policy=policy, expect_handwritten=True).escalated is True
+    handwritten = evaluate_page(reading, policy=policy, expect_handwritten=True)
+    assert handwritten.decision == DECISION_ESCALATED_PAGE
+    assert REASON_DOCUMENT_ROLE_HANDWRITTEN in handwritten.reason_codes
+
+
+def test_the_confidence_threshold_does_not_escalate_a_good_printed_page() -> None:
+    # The observed minimum on a perfectly-read printed page was 0.79; the
+    # threshold sits below it so a correct page is not escalated over one
+    # merely-lower-scoring line.
+    policy = EscalationPolicy()
+
+    assert effective_confidence_threshold(policy, expect_handwritten=False) < Decimal("0.79")
 
 
 def test_lines_without_reported_confidence_are_not_assumed_bad() -> None:

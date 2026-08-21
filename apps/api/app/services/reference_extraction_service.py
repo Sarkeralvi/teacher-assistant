@@ -271,12 +271,16 @@ class ReferenceExtractionService:
                     page_width=0,
                     page_height=0,
                 )
-                # A handwritten rubric is declared, not inferred: a human
-                # lowering the bar for a known-hard document is auditable.
+                # Declared, not inferred: a human marking a document hard is
+                # auditable where a model inferring it is not. Rubric format
+                # varies by teacher, so this is configurable rather than assumed.
                 decision = evaluate_page(
                     reading,
                     policy=policy,
-                    expect_handwritten=document_name == "RUBRIC",
+                    expect_handwritten=(
+                        document_name == "RUBRIC"
+                        and self.settings.local_ocr_treat_rubric_as_handwritten
+                    ),
                 )
                 readings[(document_name, page_no)] = (reading, decision)
                 self._record_page_evidence(

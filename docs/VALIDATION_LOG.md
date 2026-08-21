@@ -1713,3 +1713,75 @@ smoke-test whether confidence carries any signal; it is not enough to fix a
 threshold with confidence, and it cannot support the dev/holdout split the plan
 assumes. More handwriting samples are required before any threshold is treated
 as validated.
+
+## OCR bake-off calibration (2026-08-21)
+
+Ten teacher-verified fixtures: 1 printed page, 2 typeset-math pages, 7
+handwritten (the handwritten rubric plus 6 unique answer crops). Nine were
+substantially corrected from the seeded OCR draft; `ref_question_p1` was left
+byte-identical because RapidOCR read it perfectly, so RapidOCR's score on that
+one fixture is self-referential and is not independent evidence for it.
+
+### Accuracy
+
+| Engine | Material | n | mean CER | mean math-token recall |
+|---|---|---|---|---|
+| RapidOCR | printed | 1 | **0.000** | 1.000 |
+| RapidOCR | typeset math | 2 | 0.215 | 0.771 |
+| RapidOCR | handwriting | 7 | **0.628** | 0.388 |
+| Tesseract | printed | 1 | 0.011 | 1.000 |
+| Tesseract | typeset math | 2 | 0.181 | 0.792 |
+| Tesseract | handwriting | 7 | **0.832** | 0.107 |
+
+RapidOCR wins decisively on handwriting (0.628 vs 0.832 CER; 0.388 vs 0.107 on
+the tokens that change a mark). The two are comparable on machine-set text.
+**RapidOCR is the tier-1 engine.**
+
+### Calibration: the confidence gate is weak, and unusable on handwriting
+
+A harness bug had to be fixed first: `_closest_line_cer` normalised before
+splitting on newlines, but `normalize_text` collapses newlines, so every line
+was scored against the whole page and returned ~0.97. That made error look flat
+across confidence bins and would have killed the confidence gate on a
+measurement artefact. Fixed, with a regression test.
+
+With correct line matching, error does fall as confidence rises - so confidence
+carries real signal - but nowhere near enough to gate on:
+
+| Material | lines | bad lines | top-bin (0.9-1.0) bad rate | ROC knee |
+|---|---|---|---|---|
+| Machine-set | 132 | 57.6% | 54.9% | 0.95 -> catches 18.4% at 11.4% cost |
+| Handwriting | 75 | **94.7%** | **82.4%** | 0.85 -> catches 70.4% at 66.7% cost |
+
+**Handwriting: 94.7% of lines are wrong, and 82.4% are still wrong among the
+lines the engine is most confident about.** No threshold separates them; the
+best achievable margin was 0.038. Per-line triage would send most of the page
+anyway while trusting the handful of confidently-wrong lines that scored well.
+
+The machine-set figure is dominated by `ref_solution_p1` (CER 0.338, 71 lines),
+where typeset math fragments into confident single digits. That is the
+structural failure, invisible to confidence and visible to geometry.
+
+### Thresholds adopted
+
+- `LOCAL_OCR_CONFIDENCE_ESCALATE_BELOW = 0.70`. Set below the 0.79 minimum
+  observed on the perfectly-read printed page, so a correct printed page is not
+  escalated over one merely-lower-scoring line. Confidence is a secondary
+  signal, not the main gate.
+- Handwriting escalates **by document role, as a whole page**, bypassing
+  confidence entirely. The previous 0.05 "handwriting bonus" was far too weak
+  for a 94.7% error rate.
+- `LOCAL_OCR_TREAT_RUBRIC_AS_HANDWRITTEN = true`, configurable because rubric
+  format varies by teacher. It fails safe: a needless escalation costs time, a
+  trusted misreading costs a mark.
+
+### What this means for the architecture
+
+Tier-1 OCR reliably handles **printed text only**. Typeset math escalates on
+structure; handwriting escalates on role. For the current four-page reference
+bundle that means one page avoids the vision model, not three.
+
+The tiered design still holds, but its value is concentrated where it always
+was: moving the 5,500-token correlation off Qwen3.8 (4.4 tok/s) onto Qwen3.6
+(67 tok/s) is worth ~16 of the ~21 minutes, and that is unaffected by these
+results. Tier-1 OCR trims the remainder rather than transforming it.

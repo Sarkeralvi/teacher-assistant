@@ -411,8 +411,43 @@ def test_confident_pages_never_reach_the_vision_model(
     assert refreshed is not None
     assert refreshed.reference_extraction_status == "succeeded"
     assert calls["tier1"] == 3
-    # The expensive model is not spent when the cheap one was confident, and
-    # the vision phase is skipped entirely rather than loaded and unused.
+    # Only the rubric escalates, and by document role rather than by score:
+    # measured, 94.7% of handwritten lines are wrong even when confidently read,
+    # so a declared-handwritten document is never accepted on confidence alone.
+    # The confident question and solution pages are not sent.
+    assert calls["vision"] == 1
+    assert phases.phases == ["Qwen38", "Qwen"]
+
+
+def test_a_fully_confident_typed_bundle_skips_the_vision_model_entirely(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no handwritten document declared, nothing should escalate.
+
+    This is the case the tiered design exists for: the vision phase is not
+    loaded at all rather than being loaded and left unused, which would cost a
+    30-90 second model load for nothing.
+    """
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    calls = install_fakes(monkeypatch, confidence="0.99")
+    phases = FakePhaseManager()
+    service = ReferenceExtractionService(
+        db_session,
+        # A typed rubric is the normal case for many teachers; only a
+        # teacher-declared handwritten document forces escalation.
+        settings=tiered_settings(storage_root, LOCAL_OCR_TREAT_RUBRIC_AS_HANDWRITTEN=False),
+        phase_manager=phases,
+        extractor_factory=lambda: FakeExtractor(),
+    )
+    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+
+    service.run(run.id)
+
+    db_session.expire_all()
+    refreshed = db_session.get(GradingRun, run.id)
+    assert refreshed is not None
+    assert refreshed.reference_extraction_status == "succeeded"
     assert calls["vision"] == 0
     assert phases.phases == ["Qwen"]
 
