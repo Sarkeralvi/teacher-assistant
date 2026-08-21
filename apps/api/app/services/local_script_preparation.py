@@ -164,6 +164,8 @@ class LocalScriptPreparationService:
                     next_continuations.append(question.question_no)
             open_continuations = next_continuations
 
+        unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
+
         created: list[AnswerRegionMapping] = []
         for question in questions:
             segments = segments_by_question[question.id]
@@ -173,6 +175,18 @@ class LocalScriptPreparationService:
                 "warnings": list(dict.fromkeys(warning_by_question[question.id])),
             }
             node = nodes[question.id]
+            # Attach the unassigned-content warning to questions the mapper did
+            # NOT place. Those are the ones the missed ink might belong to, and
+            # attaching it to every mapping would bury the signal.
+            page_warnings: list[str] = []
+            if not segments:
+                for finding in unassigned_pages:
+                    if finding["blank"]:
+                        continue
+                    page_warnings.append(
+                        f"page {finding['page_no']} has handwriting that was not assigned "
+                        "to any question; this answer may be there"
+                    )
             mapping = self._create_mapping(
                 submission=submission,
                 question=question,
@@ -181,7 +195,7 @@ class LocalScriptPreparationService:
                 segments=segments,
                 draft_text="",
                 ocr_warnings=[],
-                qwen_warnings=[],
+                qwen_warnings=page_warnings,
             )
             created.append(mapping)
 
@@ -207,6 +221,12 @@ class LocalScriptPreparationService:
                     "visual_mapping_call_count": calls_used,
                     "mapping_count": len(created),
                     "mapped_count": sum(1 for item in created if item.answer_region is not None),
+                    "pages_with_unassigned_ink": [
+                        item["page_no"] for item in unassigned_pages if not item["blank"]
+                    ],
+                    "blank_pages": [
+                        item["page_no"] for item in unassigned_pages if item["blank"]
+                    ],
                     "warning_count": sum(
                         len(item.source_reference.get("warnings", [])) for item in created
                     ),
@@ -215,6 +235,62 @@ class LocalScriptPreparationService:
         )
         self.db.commit()
         return self._load_existing(submission.id)
+
+    def _detect_unassigned_content(
+        self,
+        pages: list[Any],
+        segments_by_question: dict[int, list[PreparedSegment]],
+    ) -> list[dict[str, Any]]:
+        """Find pages carrying ink that no mapped answer accounts for.
+
+        The safety net for an answer the mapper missed outright. Such an answer
+        produces no region, so no per-region check can notice it; the only
+        evidence is ink sitting outside every region that WAS placed.
+
+        Geometry only, on the CPU, with no model involved. Detecting that ink
+        exists is a far easier problem than reading it, so this stays reliable
+        on handwriting where recognition is not.
+        """
+        from packages.ocr.coverage import measure_uncovered_ink
+
+        boxes_by_page: dict[int, list[tuple[float, float, float, float]]] = {}
+        for segments in segments_by_question.values():
+            for segment in segments:
+                boxes_by_page.setdefault(segment.page_id, []).append(
+                    (
+                        float(segment.x),
+                        float(segment.y),
+                        float(segment.x) + float(segment.width),
+                        float(segment.y) + float(segment.height),
+                    )
+                )
+
+        findings: list[dict[str, Any]] = []
+        threshold = self.settings.local_script_unassigned_ink_warn_above
+        for page in pages:
+            image_path = self.storage.resolve_relative(page.image_path)
+            try:
+                image_bytes = image_path.read_bytes()
+            except OSError:
+                continue
+            coverage = measure_uncovered_ink(image_bytes, boxes_by_page.get(page.id, []))
+            if coverage is None:
+                continue
+            # A page with no ink at all is blank, not unassigned. Saying
+            # "unassigned content" about an empty page would train the teacher
+            # to ignore the warning.
+            if coverage.is_blank:
+                findings.append({"page_no": page.page_no, "blank": True, "ratio": "0"})
+                continue
+            if coverage.ratio > threshold:
+                findings.append(
+                    {
+                        "page_no": page.page_no,
+                        "blank": False,
+                        "ratio": str(coverage.ratio),
+                    }
+                )
+        return findings
 
     def _validate_authorization(self, expected_model: str) -> None:
         if not self.settings.brain_allow_real_providers:

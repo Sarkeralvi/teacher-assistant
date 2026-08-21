@@ -12,11 +12,11 @@ a clear configuration error rather than breaking application startup.
 from __future__ import annotations
 
 import hashlib
-import io
 import time
 from decimal import Decimal
 from typing import Any
 
+from packages.ocr.coverage import measure_uncovered_ink
 from packages.ocr.types import BoundingBox, OcrLine, OcrPageReading
 
 ENGINE_NAME = "rapidocr"
@@ -50,52 +50,9 @@ def _bbox_from_points(points: Any) -> BoundingBox | None:
 
 
 def uncovered_ink_ratio(image_bytes: bytes, boxes: list[BoundingBox]) -> Decimal | None:
-    """Fraction of dark pixels lying outside every detected box.
-
-    The one signal that catches content the detector missed entirely. A line
-    that was never boxed has no confidence score to be low, so no per-line
-    check can see it; only comparing ink against coverage can.
-    """
-    try:
-        from PIL import Image  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - Pillow is a hard dependency
-        return None
-    try:
-        with Image.open(io.BytesIO(image_bytes)) as source:
-            grey = source.convert("L")
-            # Downscale first: this is a coverage ratio, not a measurement that
-            # needs full resolution, and full-size scans are tens of megapixels.
-            grey.thumbnail((1000, 1000))
-            width, height = grey.size
-            scale_x = width / source.width
-            scale_y = height / source.height
-            pixels = grey.load()
-    except Exception:
-        return None
-    if pixels is None or width == 0 or height == 0:
-        return None
-
-    scaled = [
-        (
-            int(box.x1 * scale_x),
-            int(box.y1 * scale_y),
-            int(box.x2 * scale_x),
-            int(box.y2 * scale_y),
-        )
-        for box in boxes
-    ]
-    ink = 0
-    uncovered = 0
-    for y in range(height):
-        for x in range(width):
-            if pixels[x, y] >= 128:
-                continue
-            ink += 1
-            if not any(x1 <= x <= x2 and y1 <= y <= y2 for x1, y1, x2, y2 in scaled):
-                uncovered += 1
-    if ink == 0:
-        return Decimal("0")
-    return (Decimal(uncovered) / Decimal(ink)).quantize(Decimal("0.000001"))
+    """Fraction of dark pixels lying outside every detected box."""
+    coverage = measure_uncovered_ink(image_bytes, [box.as_tuple() for box in boxes])
+    return None if coverage is None else coverage.ratio
 
 
 class RapidOcrEngine:

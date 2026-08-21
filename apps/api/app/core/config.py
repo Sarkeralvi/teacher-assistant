@@ -89,6 +89,17 @@ class Settings(BaseSettings):
     local_ocr_treat_rubric_as_handwritten: bool = Field(
         default=True, alias="LOCAL_OCR_TREAT_RUBRIC_AS_HANDWRITTEN"
     )
+    # Script pages: how much ink may sit outside every mapped answer region
+    # before the page is flagged as having unassigned content. This catches an
+    # answer the mapper missed entirely, which no per-region check can see
+    # because a missed answer has no region. Generous by default because
+    # headers, page numbers and margin marks are legitimately unassigned.
+    local_script_unassigned_ink_warn_above: Decimal = Field(
+        default=Decimal("0.35"),
+        alias="LOCAL_SCRIPT_UNASSIGNED_INK_WARN_ABOVE",
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
     cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(
         default=25, alias="COHORT_MAX_PROVIDER_CALLS", ge=1, le=25
