@@ -301,6 +301,7 @@ class LlamaCppQwenProvider(BrainProvider):
         base_url: str,
         timeout_seconds: float = 180.0,
         client: Any | None = None,
+        require_model_lease: bool = True,
     ) -> None:
         if not api_key:
             raise ValueError("LOCAL_QWEN_API_KEY is required")
@@ -325,6 +326,7 @@ class LlamaCppQwenProvider(BrainProvider):
             trust_env=False,
         )
         self._model_verified = False
+        self.require_model_lease = require_model_lease
 
     def grade(
         self,
@@ -786,6 +788,12 @@ class LlamaCppQwenProvider(BrainProvider):
         schema_name: str,
         max_tokens: int | None = None,
     ) -> tuple[BaseModel, dict[str, int]]:
+        if self.require_model_lease:
+            from app.services.local_model_call_guard import (
+                assert_local_model_call_authorized,
+            )
+
+            assert_local_model_call_authorized(model_phase="Qwen")
         self.verify_model()
         try:
             request_json: dict[str, Any] = {

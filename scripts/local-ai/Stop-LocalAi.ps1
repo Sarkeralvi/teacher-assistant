@@ -20,6 +20,7 @@ Import-LocalAiEnvironment -Path $ConfigPath
 
 $runtimeDirectory = Join-Path $repositoryRoot ".local-ai"
 $definition = Get-LocalAiServiceDefinition -Mode $Mode
+$apiKeyFile = Join-Path $runtimeDirectory "$($Mode.ToLower()).api-key"
 $services = @(
     @{
         Name = $definition.Name
@@ -91,4 +92,5 @@ foreach ($service in $services) {
     } else {
         Write-Host "$($service.Name) is already stopped."
     }
+    Remove-Item -LiteralPath $apiKeyFile -Force -ErrorAction SilentlyContinue
 }

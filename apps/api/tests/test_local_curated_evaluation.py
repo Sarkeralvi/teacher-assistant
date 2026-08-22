@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -63,6 +64,15 @@ def _operator_assets() -> OperatorAssetMetadata:
                 "model_sha256": "1" * 64,
                 "model_size_bytes": 1024,
                 "device": "gpu_hybrid",
+            },
+            "qwen38_vision": {
+                "build": "10249",
+                "model_alias": "qwen3.8-27b-q4km",
+                "model_sha256": "2" * 64,
+                "model_size_bytes": 2048,
+                "device": "gpu_hybrid_single_slot",
+                "mmproj_sha256": "3" * 64,
+                "mmproj_size_bytes": 1024,
             },
         }
     )
@@ -130,8 +140,8 @@ def _ocr_result(run_dir: Path) -> OcrRunResult:
         first_call_at=now - timedelta(minutes=8),
         completed_at=now - timedelta(minutes=5),
         call_count=20,
-        service_status_before={"qwen": {"available": True}, "ocr": {"available": True}},
-        service_status_after={"qwen": {"available": True}, "ocr": {"available": True}},
+        service_status_before={"qwen38": {"available": True}},
+        service_status_after={"qwen38": {"available": True}},
         database_name=f"teacher_assistant_eval_{manifest.run_id}",
         assessment_id=1,
         grading_run_id=1,
@@ -150,9 +160,13 @@ def _ocr_result(run_dir: Path) -> OcrRunResult:
                 blocks=[],
                 warnings=[],
                 latency_ms=1000 + index,
-                provider="local_paddle_qwen",
-                model="PaddleOCR-VL-1.6",
-                layout_model="PP-DocLayoutV3",
+                provider="llama_cpp_qwen38",
+                model="qwen3.8-27b-q4km",
+                profile="qwen38_verbatim_visual",
+                reasoning_mode="off",
+                source_image_sha256=sha256_text(f"{index:064x}"),
+                source_image_hashes=[f"{index:064x}"],
+                is_blank=case.answer_quality == AnswerQuality.BLANK,
                 draft_text_sha256=sha256_text(case.authored_transcription),
             )
             for index, case in enumerate(manifest.cases, start=1)
@@ -386,17 +400,8 @@ def test_invalid_state_is_irreversible(tmp_path: Path) -> None:
         append_state(run_dir, "ground_truth_locked", locked_artifacts={})
 
 
-def test_ocr_stage_refuses_because_no_tier1_engine_is_wired(tmp_path: Path) -> None:
-    """The OCR stage must fail closed while it has no engine behind it.
-
-    This replaces a test that drove a tampered artifact through run_ocr_stage to
-    prove integrity failures mark a run invalid before any provider call. That
-    path cannot be exercised now: run_ocr_stage refuses up front, and the
-    grading stage - which carries the same verify/mark-invalid guard - requires
-    the ocr_confirmed state that only the OCR stage can produce. The
-    integrity-to-invalid behaviour of a real stage is therefore UNTESTED until
-    the OCR stage is rewired, and must be re-covered then.
-    """
+def test_visual_stage_refuses_tampered_artifacts_before_model_calls(tmp_path: Path) -> None:
+    """Qwen3.8 visual evaluation fails closed before it can call a model."""
     run_dir = _prepare(tmp_path)
     _complete_ground_truth_workbook(run_dir)
     lock_ground_truth(
@@ -407,7 +412,7 @@ def test_ocr_stage_refuses_because_no_tier1_engine_is_wired(tmp_path: Path) -> N
     image_path = run_dir / "images" / "A1.png"
     image_path.write_bytes(image_path.read_bytes() + b"tampered")
 
-    with pytest.raises(LocalCuratedEvaluationError, match="not wired"):
+    with pytest.raises(LocalCuratedEvaluationError, match="Locked evaluation artifact"):
         run_ocr_stage(
             run_dir,
             allow_local_ocr=True,
@@ -415,13 +420,11 @@ def test_ocr_stage_refuses_because_no_tier1_engine_is_wired(tmp_path: Path) -> N
             database_url="",
         )
 
-    # Refusing must not poison an otherwise valid prepared run.
-    assert current_state(run_dir) == "ground_truth_locked"
+    assert current_state(run_dir) == "invalid"
 
 
 def test_asset_versions_and_result_hashes_are_schema_locked(tmp_path: Path) -> None:
-    # The OCR engine's asset block is gone with the PaddleOCR stack, so the
-    # locked-version check now covers the grading model alias instead.
+    # Both text grading and Qwen3.8 visual assets are pinned in the manifest.
     assets = _operator_assets().model_dump(mode="json")
     assets["llama_cpp"]["model_alias"] = "not-a-supported-model"
     with pytest.raises(ValidationError):
@@ -439,9 +442,13 @@ def test_asset_versions_and_result_hashes_are_schema_locked(tmp_path: Path) -> N
             draft_text=first.authored_transcription,
             markdown="",
             latency_ms=1,
-            provider="local_paddle_qwen",
-            model="PaddleOCR-VL-1.6",
-            layout_model="PP-DocLayoutV3",
+            provider="llama_cpp_qwen38",
+            model="qwen3.8-27b-q4km",
+            profile="qwen38_verbatim_visual",
+            reasoning_mode="off",
+            source_image_sha256=sha256_text("1" * 64),
+            source_image_hashes=["1" * 64],
+            is_blank=False,
             draft_text_sha256="0" * 64,
         )
 
@@ -452,10 +459,18 @@ def test_operator_asset_metadata_hashes_local_files_without_recording_paths(
 ) -> None:
     model = tmp_path / "model.gguf"
     binary = tmp_path / "llama-server.exe"
+    qwen38_model_dir = tmp_path / "qwen38"
+    qwen38_model_dir.mkdir()
+    qwen38_model = qwen38_model_dir / "Qwen3.8-27B-Q4_K_M.gguf"
+    qwen38_mmproj = qwen38_model_dir / "mmproj-Qwen3.8-27B-Q8_0.gguf"
     model.write_bytes(b"qwen-model")
     binary.write_bytes(b"llama-binary")
+    qwen38_model.write_bytes(b"qwen38-model")
+    qwen38_mmproj.write_bytes(b"qwen38-projector")
     monkeypatch.setenv("LOCAL_QWEN_MODEL_PATH", str(model))
     monkeypatch.setenv("LOCAL_QWEN_BINARY_PATH", str(binary))
+    monkeypatch.setenv("LOCAL_QWEN38_MODEL_PATH", str(qwen38_model))
+    monkeypatch.setenv("LOCAL_QWEN38_BINARY_PATH", str(binary))
 
     def fake_run(command: list[str], **_kwargs: object) -> object:
         assert command[-1] == "--version"
@@ -467,6 +482,8 @@ def test_operator_asset_metadata_hashes_local_files_without_recording_paths(
 
     assert metadata.llama_cpp.model_sha256 == sha256_file(model)
     assert metadata.llama_cpp.model_alias == "qwen3.6-35b-a3b-q4km"
+    assert metadata.qwen38_vision.model_sha256 == sha256_file(qwen38_model)
+    assert metadata.qwen38_vision.mmproj_sha256 == sha256_file(qwen38_mmproj)
     # Local filesystem paths must never leak into the recorded manifest.
     assert str(tmp_path) not in str(payload)
 
@@ -501,14 +518,18 @@ def test_real_stage_kill_switches_caps_and_model_alias_refuse_before_calls(
 ) -> None:
     run_dir = _prepare(tmp_path)
 
-    # The OCR stage's own --allow-local-ocr and call-cap guards are not asserted
-    # here any more: it refuses before reaching them while no engine is wired.
-    # Those guards must be re-covered when the stage is rewired.
-    with pytest.raises(LocalCuratedEvaluationError, match="not wired"):
+    with pytest.raises(LocalCuratedEvaluationError, match="allow-local-ocr"):
         run_ocr_stage(
             run_dir,
             allow_local_ocr=False,
             max_ocr_calls=20,
+            database_url="",
+        )
+    with pytest.raises(LocalCuratedEvaluationError, match="exactly 20"):
+        run_ocr_stage(
+            run_dir,
+            allow_local_ocr=True,
+            max_ocr_calls=19,
             database_url="",
         )
     with pytest.raises(LocalCuratedEvaluationError, match="allow-local-qwen"):
@@ -548,6 +569,60 @@ def test_real_stage_kill_switches_caps_and_model_alias_refuse_before_calls(
             )
 
 
+def test_local_ai_environment_loader_includes_qwen38_and_phase_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_env = tmp_path / ".env.local-ai"
+    local_env.write_text(
+        "\n".join(
+            [
+                "LOCAL_QWEN38_ENABLED=true",
+                "LOCAL_QWEN38_MODEL=qwen3.8-27b-q4km",
+                "LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=true",
+                "LOCAL_AI_PHASE_SWITCH_ENABLED=true",
+                "LOCAL_REFERENCE_EXTRACTION_ENABLED=true",
+                "BRAIN_ALLOW_REAL_PROVIDERS=true",
+                "UNRELATED_SECRET=must_not_be_loaded",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for key in (
+        "LOCAL_QWEN38_ENABLED",
+        "LOCAL_QWEN38_MODEL",
+        "LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED",
+        "LOCAL_AI_PHASE_SWITCH_ENABLED",
+        "LOCAL_REFERENCE_EXTRACTION_ENABLED",
+        "BRAIN_ALLOW_REAL_PROVIDERS",
+        "UNRELATED_SECRET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    try:
+        evaluation_module._load_local_ai_environment(local_env)
+
+        assert os.environ["LOCAL_QWEN38_ENABLED"] == "true"
+        assert os.environ["LOCAL_QWEN38_MODEL"] == "qwen3.8-27b-q4km"
+        assert os.environ["LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED"] == "true"
+        assert os.environ["LOCAL_AI_PHASE_SWITCH_ENABLED"] == "true"
+        assert os.environ["LOCAL_REFERENCE_EXTRACTION_ENABLED"] == "true"
+        assert os.environ["BRAIN_ALLOW_REAL_PROVIDERS"] == "true"
+        assert "UNRELATED_SECRET" not in os.environ
+    finally:
+        # The production CLI runs each stage in its own process.  Restore this
+        # test process explicitly so a later Settings test cannot inherit it.
+        for key in (
+            "LOCAL_QWEN38_ENABLED",
+            "LOCAL_QWEN38_MODEL",
+            "LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED",
+            "LOCAL_AI_PHASE_SWITCH_ENABLED",
+            "LOCAL_REFERENCE_EXTRACTION_ENABLED",
+            "BRAIN_ALLOW_REAL_PROVIDERS",
+        ):
+            os.environ.pop(key, None)
+
+
 def test_ocr_metrics_normalize_symbols_and_measure_formula_tokens(tmp_path: Path) -> None:
     run_dir = _prepare(tmp_path)
     manifest = load_manifest(run_dir)
@@ -574,7 +649,7 @@ def test_ocr_metrics_normalize_symbols_and_measure_formula_tokens(tmp_path: Path
     assert metrics["block_order_issue_count"] == 1
 
 
-def test_ocr_review_requires_all_confirmed_text_to_match_locked_truth(tmp_path: Path) -> None:
+def test_visual_review_requires_exact_hash_and_teacher_faithfulness(tmp_path: Path) -> None:
     run_dir = _prepare(tmp_path)
     manifest = load_manifest(run_dir)
     ground_truth = _ground_truth(manifest, run_dir)
@@ -583,10 +658,8 @@ def test_ocr_review_requires_all_confirmed_text_to_match_locked_truth(tmp_path: 
     workbook = load_workbook(workbook_path)
     sheet = workbook["OCR Review"]
     headers = {str(cell.value): index for index, cell in enumerate(sheet[1], start=1)}
-    truth_by_id = {case.case_id: case for case in ground_truth.cases}
     for row in range(2, 22):
-        case_id = str(sheet.cell(row, headers["case_id"]).value)
-        sheet.cell(row, headers["confirmed_text"], truth_by_id[case_id].teacher_transcription)
+        sheet.cell(row, headers["teacher_confirms_faithful"], "yes")
         sheet.cell(row, headers["teacher_approved"], "yes")
     workbook.save(workbook_path)
 
@@ -601,10 +674,91 @@ def test_ocr_review_requires_all_confirmed_text_to_match_locked_truth(tmp_path: 
 
     workbook = load_workbook(workbook_path)
     sheet = workbook["OCR Review"]
-    sheet.cell(2, headers["confirmed_text"], "changed answer")
+    sheet.cell(2, headers["visual_draft_sha256"], "0" * 64)
     workbook.save(workbook_path)
-    with pytest.raises(LocalCuratedEvaluationError, match="must match"):
+    with pytest.raises(LocalCuratedEvaluationError, match="hash was changed"):
         read_ocr_review_workbook(workbook_path, manifest, ocr_result, ground_truth)
+
+
+def test_teacher_rejected_visual_ocr_reports_quality_no_go_without_grading(
+    tmp_path: Path,
+) -> None:
+    run_dir = _prepare(tmp_path)
+    manifest = load_manifest(run_dir)
+    ground_truth = _ground_truth(manifest, run_dir)
+    ocr_result = _ocr_result(run_dir)
+    workbook_path = create_ocr_review_workbook(manifest, ground_truth, ocr_result, run_dir)
+    workbook = load_workbook(workbook_path)
+    sheet = workbook["OCR Review"]
+    headers = {str(cell.value): index for index, cell in enumerate(sheet[1], start=1)}
+    sheet.cell(2, headers["teacher_confirms_faithful"], "no")
+    sheet.cell(2, headers["quality_rejection_reason"], "critical_symbol_or_number")
+    sheet.cell(2, headers["teacher_approved"], "no")
+    workbook.save(workbook_path)
+
+    rejected = evaluation_module.read_ocr_quality_no_go_workbook(
+        workbook_path,
+        manifest,
+        ocr_result,
+    )
+    assert rejected == [
+        evaluation_module.OcrQualityNoGoCase(
+            case_id="A1",
+            reason="critical_symbol_or_number",
+        )
+    ]
+
+    ground_truth_path = run_dir / "ground_truth_lock.json"
+    ocr_result_path = run_dir / "ocr_results.json"
+    runtime_path = run_dir / "ocr_runtime.json"
+    evaluation_module.write_json(ground_truth_path, ground_truth)
+    evaluation_module.write_json(ocr_result_path, ocr_result)
+    evaluation_module.write_json(
+        runtime_path,
+        {
+            "visual_reasoning_mode": "off",
+            "gpu_safety_before": {"single_slot": True},
+            "gpu_safety_after": {"single_slot": True},
+        },
+    )
+    append_state(
+        run_dir,
+        "ground_truth_locked",
+        locked_artifacts={"ground_truth_lock.json": sha256_file(ground_truth_path)},
+    )
+    append_state(
+        run_dir,
+        "ocr_completed",
+        locked_artifacts={
+            "ocr_results.json": sha256_file(ocr_result_path),
+            "ocr_runtime.json": sha256_file(runtime_path),
+        },
+    )
+    quality_lock = evaluation_module.OcrQualityNoGoLock(
+        run_id=manifest.run_id,
+        reviewer_id="teacher-reviewer",
+        signed_at=datetime.now(UTC),
+        ocr_results_sha256=sha256_file(ocr_result_path),
+        workbook_sha256=sha256_file(workbook_path),
+        rejected_cases=rejected,
+    )
+    quality_lock_path = run_dir / "ocr_quality_no_go_lock.json"
+    evaluation_module.write_json(quality_lock_path, quality_lock)
+    append_state(
+        run_dir,
+        "ocr_quality_no_go",
+        locked_artifacts={
+            "ocr_review.xlsx": sha256_file(workbook_path),
+            "ocr_quality_no_go_lock.json": sha256_file(quality_lock_path),
+        },
+    )
+
+    report = evaluation_module.generate_report(run_dir)
+
+    assert report["verdict"] == EvaluationVerdict.NO_GO_QUALITY.value
+    assert report["call_counts"]["grading"] == 0
+    assert report["process_checks"]["zero_grading_calls_after_rejection"] is True
+    assert current_state(run_dir) == "reported"
 
 
 def test_grading_metrics_and_all_three_verdicts(tmp_path: Path) -> None:

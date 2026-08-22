@@ -128,6 +128,7 @@ class BrainAdapter:
                     model_name=settings.local_qwen_model,
                     base_url=settings.local_qwen_base_url,
                     timeout_seconds=settings.local_qwen_timeout_seconds,
+                    require_model_lease=True,
                 )
             except ValueError as exc:
                 raise BrainProviderConfigurationError(str(exc)) from exc
@@ -153,6 +154,7 @@ class BrainAdapter:
                     timeout_seconds=settings.local_qwen38_timeout_seconds,
                     grading_reasoning_mode=settings.local_qwen38_grading_reasoning_mode,
                     context_tokens=settings.local_qwen38_context_tokens,
+                    require_model_lease=True,
                 )
             except ValueError as exc:
                 raise BrainProviderConfigurationError(str(exc)) from exc

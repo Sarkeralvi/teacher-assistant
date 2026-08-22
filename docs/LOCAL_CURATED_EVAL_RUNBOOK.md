@@ -1,64 +1,65 @@
 # Local Curated Evaluation Runbook
 
-This runbook executes the 20-case synthetic, teacher-supervised OCR and grading gate. NOTE: the gate is currently NOT RUNNABLE - its OCR stage was retired with the PaddleOCR stack and has not been rewired to the replacement pipeline, so no result from it may be cited as pilot-authorization evidence. It never starts a model automatically and never creates a final grade. Raw images, workbooks, prompts, confirmations, and results stay under ignored `data/evaluation/<run_id>/`.
+This is the 20-case, synthetic, teacher-supervised quality gate. Qwen3.8-27B
+performs visual transcription in a fresh non-thinking call. It never grades an
+image. Qwen3.6 and Qwen3.8 are then compared as separate text-only graders on
+the same hash-pinned teacher-confirmed evidence. Nothing in this run creates a
+`FinalGrade` or changes normal pilot configuration.
 
-## Safety boundaries
+All raw images, workbooks, transcripts, and results stay under ignored
+`data/evaluation/<run_id>/`. A completed evaluation may honestly return
+`NO_GO_QUALITY`; only a complete `PASS` plus the separate grader bake-off can
+support a supervised Custom Controlled rehearsal.
 
-- Use a clean harness commit and a dedicated PostgreSQL database named exactly `teacher_assistant_eval_<run_id>`.
-- Use synthetic material only for this first run. Do not add student files to the run directory.
-- Keep both services loopback-only and load secrets from the ignored `.env.local-ai` file.
-- Do not run OCR before a teacher locks the ground-truth workbook.
-- Do not run Qwen before a teacher confirms all OCR text.
-- OCR is capped at exactly 20 calls. Qwen is capped at exactly 18 calls because both blanks are safety refusals.
-- Every call has one attempt and no fallback. A provider failure makes that run invalid.
-- `direct_host_eval` invokes the production dispatch worker synchronously because Redis is unavailable. It does not validate RQ crash recovery.
+## Safety rules
 
-## 1. Prepare without model calls
+- Use synthetic material only. Never add real student material to this gate.
+- Start models only through `scripts/local-ai`; ordinary app/page startup must not start one.
+- Use a fresh, empty database named exactly `teacher_assistant_eval_<run_id>`.
+- Lock teacher ground truth before any Qwen3.8 visual call.
+- Do not correct a model transcript. A non-faithful transcript is a valid quality failure.
+- Each source run makes exactly 20 Qwen3.8 visual calls. Each grading candidate makes exactly 18 text-only calls; two blanks are refused before dispatch.
+- There are no retries, fallbacks, cloud calls, hidden calls, or automatic finalisation.
+- Model leases are mandatory. A busy/missing lease fails before an inference request is sent.
 
-From `apps/api`, choose a lowercase run ID containing only letters, digits, and underscores. Record the reviewed local-integration commit and current clean harness commit:
+## 1. Prepare and lock ground truth
+
+From `apps/api`, use a lowercase run ID and record the reviewed integration
+commit plus the current clean harness commit:
 
 ```powershell
-$runId = 'lc_20260808_teacher01_v2'
-$integrationCommit = '<full-reviewed-integration-commit-hash>'
+$runId = 'lc_20260822_teacher01'
+$integrationCommit = '<reviewed-integration-commit>'
 $harnessCommit = git rev-parse HEAD
-..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation prepare --run-id $runId --integration-commit $integrationCommit --harness-commit $harnessCommit
+..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation prepare --run-id $runId --integration-commit $integrationCommit --harness-commit $harnessCommit --grading-model qwen3.6-35b-a3b-q4km
 ```
 
-Do not reuse `lc_20260807_teacher01`: it was prepared before
-`real-grading-v2` tightened criterion evidence and dependency handling. A
-fresh run ID is required so its manifest, images, sign-offs, and prompt hash
-form one consistent lock chain.
-
-This requires a clean worktree and the ignored `.env.local-ai` path settings. It hashes the local Qwen model assets and verifies llama.cpp build `10249`, then records those values in the run manifest. The OCR engine's assets are not recorded because the tier-1 engine has not been selected yet. It also generates 20 deterministic PNGs and `ground_truth_review.xlsx`. It starts no service and makes zero OCR or Qwen calls; hashing the 20.61 GiB GGUF may take several minutes.
-
-The teacher independently transcribes and scores every case, approves all rows, and marks B4, C3, and E2 as genuinely difficult but legible handwriting. Then lock the workbook:
+This makes zero model calls. It creates deterministic images and
+`ground_truth_review.xlsx`. A qualified teacher independently transcribes and
+scores all 20 cases, approves every row, and confirms the three difficult
+handwriting cases as legible. Then lock the workbook:
 
 ```powershell
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation lock-ground-truth --run-id $runId --reviewer-id '<teacher-id>' --confirm-teacher-signoff
 ```
 
-The lock refuses missing rows, changed scores, transcription disagreement, or unapproved handwriting. If no qualified teacher is available, stop here; the dataset is only an engineering rehearsal.
+The lock refuses incomplete, altered, or unsigned ground truth.
 
-## 2. Create the disposable database and start services
+## 2. Start host services and create the empty evaluation database
 
-Create the database using the local PostgreSQL operator account, then apply migrations. Substitute the local loopback port and account without writing credentials into Git:
-
-```powershell
-$databaseName = "teacher_assistant_eval_$runId"
-$env:DATABASE_URL = "postgresql+psycopg://<local-user>@127.0.0.1:<port>/$databaseName"
-..\..\.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-Run the explicit preflight/start workflow from the repository root:
+From the repository root, start the Windows host stack, then create the
+create-only evaluation database. The helper refuses an existing database,
+applies migrations to head, and sets `DATABASE_URL` only in the current
+PowerShell session. It does not start a model.
 
 ```powershell
-.\scripts\local-ai\Test-LocalAiPreflight.ps1
-.\scripts\local-ai\Start-LocalAi.ps1
+.\scripts\pilot\Start-TeacherPilot.ps1
+.\scripts\evaluation\New-LocalCuratedEvaluationDatabase.ps1 -RunId $runId
+.\scripts\local-ai\Test-LocalAiPreflight.ps1 -Mode Qwen38
+.\scripts\local-ai\Start-LocalAi.ps1 -Mode Qwen38
 ```
 
-Normal API or page startup must not replace these commands.
-
-## 3. Run and confirm OCR
+## 3. Run Qwen3.8 visual transcription and teacher review
 
 From `apps/api`:
 
@@ -66,45 +67,99 @@ From `apps/api`:
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation run-ocr --run-id $runId --allow-local-ocr --max-ocr-calls 20 --database-url $env:DATABASE_URL
 ```
 
-The stage seeds four synthetic submissions across five questions, manually maps 20 answer regions, calls the production OCR endpoint once per region, verifies ownership isolation, and creates `ocr_review.xlsx`.
+The production visual-transcription job is called once per mapped answer
+region under a Qwen3.8 lease. It produces `ocr_review.xlsx`. The teacher
+compares each hash-pinned transcript against its image and does not type a
+corrected answer.
 
-The teacher enters complete confirmed text for every row, leaves both blank answers empty, fixes every answer-changing OCR error, and explicitly approves all rows. Then run:
+If all readings are faithful, sign the confirmations:
 
 ```powershell
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation lock-ocr-confirmations --run-id $runId --reviewer-id '<teacher-id>' --confirm-teacher-signoff --database-url $env:DATABASE_URL
 ```
 
-This uses the production confirmation API. It separately marks 18 packets complete and two packets blank.
+That uses production confirmation and full-answer gates. Eighteen answers are
+complete; the two genuinely blank answers remain blank and are never grading
+ready.
 
-## 4. Run Qwen and complete teacher review
-
-```powershell
-..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation run-grading --run-id $runId --allow-local-qwen --max-qwen-calls 18 --expected-model qwen3.6-35b-a3b-q4km --database-url $env:DATABASE_URL
-```
-
-The harness builds one immutable queue, verifies 18 ready and two blank-refused packets, then executes five sequential dispatches with limits A=3, B=4, C=3, D=4, and E=4. It stops on the first failure and verifies model alias, evidence hashes, review flags, zero cost, zero final grades, ownership, audit privacy, and an empty approved-only export.
-
-The teacher completes `grading_review.xlsx`, classifies every disagreement, and signs it:
+If any reading is wrong, set `teacher_confirms_faithful=no`, select its fixed
+quality-rejection reason, and set `teacher_approved=no`. Do not grade it. Lock
+the valid quality failure instead:
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation lock-review --run-id $runId --reviewer-id '<teacher-id>' --confirm-teacher-signoff
+..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation record-ocr-no-go --run-id $runId --reviewer-id '<teacher-id>' --confirm-teacher-signoff --database-url $env:DATABASE_URL
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation report --run-id $runId
 ```
 
-The report is `PASS`, `NO_GO_QUALITY`, or `INVALID_RUN`. Do not tune expected scores or rerun failed cases inside the same run. Only `PASS` permits a supervised Custom Controlled pilot.
+This produces `NO_GO_QUALITY` with zero grading calls. It is not an integrity
+failure and must not be tuned or rerun under the same run ID.
+
+## 4. Run the isolated text-grader bake-off
+
+Only after the source reaches `ocr_confirmed`, fork it. The fork locks the same
+teacher-confirmed text and source-image hashes for both candidates. It makes no
+provider call:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m packages.evaluation.grading_model_bakeoff fork --source-run-id $runId
+```
+
+Run one candidate at a time. `Enable-LocalCuratedEvaluation.ps1` is deliberately
+session-scoped: it enables the bounded evaluation CLI only, not cohort grading
+inside the already-running teacher-pilot API process.
+
+```powershell
+# Qwen3.6 text grader
+$candidateRunId = "${runId}_qwen36"
+..\..\scripts\evaluation\New-LocalCuratedEvaluationDatabase.ps1 -RunId $candidateRunId
+..\..\scripts\evaluation\Enable-LocalCuratedEvaluation.ps1 -RunId $candidateRunId
+..\..\.venv\Scripts\python.exe -m packages.evaluation.grading_model_bakeoff seed --source-run-id $runId --candidate qwen36 --database-url $env:DATABASE_URL
+..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation run-grading --run-id $candidateRunId --allow-local-qwen --max-qwen-calls 18 --expected-model qwen3.6-35b-a3b-q4km --database-url $env:DATABASE_URL
+# Teacher completes and signs ${candidateRunId}/grading_review.xlsx
+..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation lock-review --run-id $candidateRunId --reviewer-id '<teacher-id>' --confirm-teacher-signoff
+..\..\scripts\evaluation\Disable-LocalCuratedEvaluation.ps1
+
+# Qwen3.8 text grader
+$candidateRunId = "${runId}_qwen38"
+..\..\scripts\evaluation\New-LocalCuratedEvaluationDatabase.ps1 -RunId $candidateRunId
+..\..\scripts\evaluation\Enable-LocalCuratedEvaluation.ps1 -RunId $candidateRunId
+..\..\.venv\Scripts\python.exe -m packages.evaluation.grading_model_bakeoff seed --source-run-id $runId --candidate qwen38 --database-url $env:DATABASE_URL
+..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation run-grading --run-id $candidateRunId --allow-local-qwen --max-qwen-calls 18 --expected-model qwen3.8-27b-q4km --database-url $env:DATABASE_URL
+# Teacher completes and signs ${candidateRunId}/grading_review.xlsx
+..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation lock-review --run-id $candidateRunId --reviewer-id '<teacher-id>' --confirm-teacher-signoff
+..\..\scripts\evaluation\Disable-LocalCuratedEvaluation.ps1
+```
+
+The production safe dispatch rechecks ownership, evidence, rubric, model alias,
+and call caps immediately before each call. Grading receives only canonical
+question/solution/rubric material and teacher-confirmed text; it receives no
+student image. Every suggestion stays pending teacher review.
+
+Compare only after both signed grading reviews:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m packages.evaluation.grading_model_bakeoff compare --source-run-id $runId
+```
+
+Qwen3.8 is promoted only if it passes every quality/safety gate, gains at least
+two exact cases or improves MAE by at least 0.15, adds no severe error, and
+meets the latency gates. Otherwise Qwen3.6 remains the default if it passes.
+The comparison never changes normal configuration automatically.
 
 ## 5. Close out
 
-Verify artifact integrity at any non-invalid stage:
+At any non-invalid source stage, verify its lock chain:
 
 ```powershell
 ..\..\.venv\Scripts\python.exe -m packages.evaluation.local_curated_evaluation verify --run-id $runId
 ```
 
-Stop the local model after review:
+Stop the model explicitly after the operator review:
 
 ```powershell
 .\scripts\local-ai\Stop-LocalAi.ps1
 ```
 
-Preserve the disposable database until the report has been audited, then remove it using the PostgreSQL operator workflow. Only a sanitized aggregate report may be considered for Git; never commit the generated run directory.
+Keep disposable databases until reports have been audited. Never commit
+generated run directories, raw material, API keys, machine paths, or student
+text.

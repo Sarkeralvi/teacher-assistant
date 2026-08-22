@@ -38,13 +38,9 @@ class Qwen38VisualTranscriptionService:
     ) -> AnswerRegionOcrRun:
         self._assert_enabled(expected_model)
         mapping = self._mapping_for_region(region.id)
-        if (
-            mapping is None
-            or not mapping.teacher_confirmed
-            or mapping.provider != "llama_cpp_qwen38"
-        ):
+        if mapping is None or not mapping.teacher_confirmed:
             raise VisualTranscriptionError(
-                "Confirm the Qwen3.8 answer mapping before transcription"
+                "Confirm the answer mapping before Qwen3.8 visual transcription"
             )
         if not region.segments:
             raise VisualTranscriptionError("Mapped answer has no image segments")
@@ -120,11 +116,7 @@ class Qwen38VisualTranscriptionService:
                     "Answer image changed after transcription was authorized"
                 )
             mapping = self._mapping_for_region(region.id)
-            if (
-                mapping is None
-                or not mapping.teacher_confirmed
-                or mapping.provider != "llama_cpp_qwen38"
-            ):
+            if mapping is None or not mapping.teacher_confirmed:
                 raise VisualTranscriptionError("Answer mapping is no longer confirmed")
             lease_holder_id = f"visual_transcription:{run.id}:{uuid4().hex}"
             lease = LocalModelLeaseService(self.db)
@@ -221,7 +213,8 @@ class Qwen38VisualTranscriptionService:
             raise VisualTranscriptionError(
                 "Visual transcription run does not belong to this answer"
             )
-        if run.status != "succeeded" or not run.draft_text:
+        is_blank = bool((run.normalized_result or {}).get("is_blank"))
+        if run.status != "succeeded" or (not run.draft_text and not is_blank):
             raise VisualTranscriptionError("Only a completed visual transcription can be confirmed")
         if hashlib.sha256(run.draft_text.encode("utf-8")).hexdigest() != draft_hash:
             raise VisualTranscriptionError(

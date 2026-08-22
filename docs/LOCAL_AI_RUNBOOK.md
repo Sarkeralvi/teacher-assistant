@@ -6,8 +6,8 @@ This runbook operates the local model integration for the Custom Controlled work
 
 | Phase | Model | Port | Role |
 |---|---|---|---|
-| `Qwen38` | Qwen3.8-27B (vision) | 8085 | Reads pages OCR could not read confidently; transcribes handwriting; grades |
-| `Qwen` | Qwen3.6-35B-A3B (text) | 8086 | Correlates question, solution and rubric text into draft references |
+| `Qwen38` | Qwen3.8-27B (vision) | 8085 | Reads escalated pages; maps/transcribes handwriting without thinking; text-grading bake-off candidate |
+| `Qwen` | Qwen3.6-35B-A3B (text) | 8086 | Correlates question, solution and rubric text; text-grading bake-off candidate |
 
 Only one fits in this card's VRAM, so selecting a phase unloads the other. Qwen3.6 deliberately does **not** use port 8080: a separate coding-assistant bridge commonly runs there with the same `llama-server.exe`, and sharing the port makes the two contend for one single-slot server.
 
@@ -16,8 +16,9 @@ Tier-1 OCR (RapidOCR, PP-OCRv6 ONNX) runs on the **CPU** in the worker process. 
 ## Safety contract
 
 - Qwen3.6 receives text only. Answer-image bytes and local image paths are never sent to it.
-- OCR output is draft evidence until a teacher confirms it.
-- OCR confirmation updates `manual_answer_text`; it does not confirm a complete answer or make evidence grading-ready.
+- Every Qwen3.6/Qwen3.8 inference request has a second fail-closed guard for the matching active database lease. A missing, busy, expired, or wrong-phase lease prevents the request before `/chat/completions` is sent.
+- Qwen3.8 visual output is draft evidence until a teacher confirms its exact displayed hash.
+- Visual-transcription confirmation copies the unedited model draft into `manual_answer_text`; it does not confirm a complete answer or make evidence grading-ready.
 - Question-to-answer mapping remains manual or teacher-confirmed.
 - Escalation to the vision model is a **pre-authorized budget**, not a hidden fallback. Exceeding `LOCAL_REFERENCE_MAX_ESCALATIONS` stops the run rather than silently reading fewer pages.
 - Cohort grading is sequential, draft-only, stop-on-first-provider-failure, capped at 25 calls, and has zero automatic retries.
@@ -46,7 +47,7 @@ If Windows blocks repository scripts under the machine execution policy, invoke 
 .\scripts\local-ai\Start-LocalAi.ps1 -Mode Qwen38
 ```
 
-Preflight verifies the binary, the GGUF and that the phase's port is free. It does not load a model. Startup verifies the model hash where one is pinned, asserts the listener is loopback-only and owned by the process it started, and reports VRAM headroom.
+Preflight verifies the binary, the GGUF and that the phase's port is free. It does not load a model. Startup verifies the model hash where one is pinned, asserts the listener is loopback-only and owned by the process it started, and reports VRAM headroom. The launcher passes an ignored short-lived API-key file to llama.cpp rather than exposing the key in its command line. `/v1/models` may be publicly discoverable in llama.cpp, but unauthenticated `/v1/chat/completions` must return `401` before a rehearsal begins.
 
 Switch phases with the managed script rather than starting servers by hand:
 
@@ -95,12 +96,13 @@ Every page records its engine, render DPI, image SHA-256, per-line confidence, d
 
 1. Upload complete scripts.
 2. Confirm the answer-region mapping.
-3. Create a verbatim visual transcription and confirm it only when it faithfully matches the image.
+3. Create a fresh non-thinking verbatim visual transcription and confirm it only when its exact hash faithfully matches the image. Do not edit or mathematically repair it.
 4. Confirm separately that the displayed image contains the **full** answer. Text confirmation alone never makes a region grading-ready.
 5. If no reading is faithful, reject and upload a clearer complete page rather than accepting the closest match.
 
 ## Known limitations
 
 - Tier-1 OCR drops decimal points on some handwriting (`03` for `0.3`). In a probability question that is a 10x error in the value a mark depends on, so handwriting escalates often and teacher review remains mandatory.
-- Escalation thresholds are **provisional** until the bake-off in `packages/evaluation/ocr_engine_bakeoff.py` is run against teacher-verified fixtures.
-- The 20-case curated evaluation gate cannot currently run: its OCR stage is not wired to the replacement pipeline. No result from that gate may be cited as pilot-authorization evidence until it is.
+- RapidOCR escalation thresholds are calibrated only on the current small fixture set and remain unsuitable as a classroom-wide handwriting-quality claim. Handwriting is deliberately sent to Qwen3.8 visual review instead.
+- The 20-case curated evaluation gate is wired to the production Qwen3.8 visual-transcription job and text-only dispatch path, but no completed signed real run exists yet. No result may be cited as pilot-authorization evidence until it completes with `PASS`.
+- The Qwen3.6-versus-Qwen3.8 text-grading bake-off is implemented but has no live candidate result yet. Its evidence replay makes zero new visual calls and its result does not automatically change the normal grading configuration.

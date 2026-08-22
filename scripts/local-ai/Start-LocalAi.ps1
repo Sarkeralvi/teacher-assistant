@@ -106,13 +106,25 @@ if ($Mode -eq "Qwen") {
     )
 }
 
-$env:LLAMA_API_KEY = $key
 $proc = $null
 $pidFullPath = Join-Path $runtimeDirectory $pidFile
 Remove-Item -LiteralPath $pidFullPath -Force -ErrorAction SilentlyContinue
 
 $stdout = Join-Path $logDirectory "$($Mode.ToLower()).stdout.log"
 $stderr = Join-Path $logDirectory "$($Mode.ToLower()).stderr.log"
+$apiKeyFile = Join-Path $runtimeDirectory "$($Mode.ToLower()).api-key"
+
+# llama-server does not read LLAMA_API_KEY from its environment.  Its supported
+# authentication mechanism is --api-key/--api-key-file.  Keep the secret out of
+# the process command line (which other local processes can inspect) and out of
+# logs by writing a short-lived ignored runtime key file instead.  Stop-LocalAi
+# removes it after the repository-owned server exits.
+[IO.File]::WriteAllText(
+    $apiKeyFile,
+    "$key`n",
+    [System.Text.UTF8Encoding]::new($false)
+)
+$args += @("--api-key-file", ('"' + $apiKeyFile + '"'))
 
 $argListFormatted = ($args | ForEach-Object {
     "'" + ($_ -replace "'", "''") + "'"
@@ -189,5 +201,6 @@ try {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath (Join-Path $runtimeDirectory $pidFile) -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $apiKeyFile -Force -ErrorAction SilentlyContinue
     throw
 }

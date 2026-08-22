@@ -5,7 +5,7 @@ param(
     # as omitting -StartLocalAi.
     [switch]$SkipLocalAi,
     [switch]$RebuildFrontend,
-    [ValidateSet("Qwen38")]
+    [ValidateSet("Qwen", "Qwen38")]
     [string]$LocalAiMode = "Qwen38",
     [int]$HealthTimeoutSeconds = 600
 )
@@ -124,24 +124,16 @@ try {
     Pop-Location
 }
 
-# Qwen3.8 is the only local model. Keep it off during ordinary pilot startup;
-# an operator may explicitly opt in with -StartLocalAi.
+# Local models stay off during ordinary pilot startup; an operator may
+# explicitly select one managed phase with -StartLocalAi.
 if ($StartLocalAi) {
-    $qwenReady = $false
-    try {
-        $models = Invoke-RestMethod -Uri "http://127.0.0.1:8085/v1/models" `
-            -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN38_API_KEY" } -TimeoutSec 3
-        $qwenReady = @($models.data.id) -contains $env:LOCAL_QWEN38_MODEL
-    } catch {
-        $qwenReady = $false
-    }
-    if (-not $qwenReady) {
-        & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Stop-LocalAi.ps1") -Mode Qwen38
-        & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Start-LocalAi.ps1") `
-            -HealthTimeoutSeconds $HealthTimeoutSeconds -Mode Qwen38
-    } else {
-        Write-Host "Local Qwen3.8 is already healthy."
-    }
+    . (Join-Path $paths.RepositoryRoot "scripts\local-ai\Common.ps1")
+    # Always use the phase switch, even when the requested server is already
+    # healthy: it first stops the other repository-owned phase, which is the
+    # only way to preserve the one-model VRAM invariant after an interrupted
+    # host session or a manual operator action.
+    & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Switch-LocalAiPhase.ps1") `
+        -HealthTimeoutSeconds $HealthTimeoutSeconds -Phase $LocalAiMode
 } else {
     Write-Host "Local AI is on demand and was not started by this pilot command."
 }

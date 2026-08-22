@@ -11,6 +11,11 @@ from app.core.config import Settings
 from app.db.session import SessionLocal
 from app.models import LocalModelLease
 from app.services.local_ai_phase_manager import LocalAiPhaseError, LocalAiPhaseManager
+from app.services.local_model_call_guard import (
+    LocalModelCallGuardError,
+    assert_local_model_call_authorized,
+    clear_local_model_call_authorization_for_shutdown,
+)
 from app.services.local_model_lease_service import (
     LEASE_KEY,
     LocalModelLeaseError,
@@ -26,6 +31,7 @@ def db_session() -> Iterator[Session]:
         db.commit()
         yield db
     finally:
+        clear_local_model_call_authorization_for_shutdown()
         db.execute(delete(LocalModelLease))
         db.commit()
         db.close()
@@ -53,6 +59,19 @@ def test_acquire_takes_the_slot_and_records_the_phase(db_session: Session) -> No
     assert state.model_phase == "Qwen38"
     assert state.holder_id == "job-1"
     assert service.read().held is True
+
+
+def test_acquire_authorizes_only_the_matching_local_model_phase(db_session: Session) -> None:
+    service = LocalModelLeaseService(db_session)
+    service.acquire(model_phase="Qwen38", holder_kind="worker_job", holder_id="job-1")
+
+    assert_local_model_call_authorized(model_phase="Qwen38")
+    with pytest.raises(LocalModelCallGuardError, match="phase does not match"):
+        assert_local_model_call_authorized(model_phase="Qwen")
+
+    service.release(holder_id="job-1")
+    with pytest.raises(LocalModelCallGuardError, match="lease is required"):
+        assert_local_model_call_authorized(model_phase="Qwen38")
 
 
 def test_second_holder_is_refused_while_the_lease_is_live(db_session: Session) -> None:
@@ -130,6 +149,26 @@ def test_release_by_a_non_holder_does_not_steal_the_slot(db_session: Session) ->
     service.release(holder_id="job-2")
 
     assert service.read().holder_id == "job-1"
+
+
+def test_release_clears_a_stale_process_authorization_after_ownership_is_lost(
+    db_session: Session,
+) -> None:
+    service = LocalModelLeaseService(db_session)
+    service.acquire(model_phase="Qwen38", holder_kind="worker_job", holder_id="job-1")
+    assert_local_model_call_authorized(model_phase="Qwen38")
+
+    # Simulate a database-side lease takeover before this worker's finally
+    # block runs.  It must never retain an in-process proof it no longer owns.
+    row = _row(db_session)
+    row.holder_id = "job-2"
+    db_session.commit()
+
+    service.release(holder_id="job-1")
+
+    assert service.read().holder_id == "job-2"
+    with pytest.raises(LocalModelCallGuardError, match="lease is required"):
+        assert_local_model_call_authorized(model_phase="Qwen38")
 
 
 def test_heartbeat_extends_only_for_the_holder(db_session: Session) -> None:

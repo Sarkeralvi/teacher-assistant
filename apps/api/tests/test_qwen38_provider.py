@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from app.core.config import Settings
+from packages.brain.adapter import BrainAdapter
 from packages.brain.llama_cpp_qwen38_vision_provider import LlamaCppQwen38VisionProvider
 
 
@@ -34,10 +36,56 @@ class FakeClient:
 
 
 def provider_with(completion: dict[str, Any]) -> tuple[LlamaCppQwen38VisionProvider, FakeClient]:
-    provider = LlamaCppQwen38VisionProvider(api_key="test-key")
+    # Unit tests exercise provider parsing in isolation.  Production
+    # construction is always lease-enforced by default.
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key", require_model_lease=False)
     client = FakeClient(completion)
     provider.client = client
     return provider, client
+
+
+def test_qwen38_refuses_an_unleased_inference_call_before_http() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"draft_text":"x = 4","uncertain_glyphs":[],"is_blank":false,'
+                        '"is_irrelevant":false,"confidence":0.9,"needs_review":true}'
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider = LlamaCppQwen38VisionProvider(
+        api_key="test-key",
+    )
+    client = FakeClient(completion)
+    provider.client = client
+
+    with pytest.raises(RuntimeError, match="lease is required"):
+        provider.transcribe_image(
+            image_bytes=b"\x89PNG\r\n\x1a\nimage",
+            mime_type="image/png",
+            label="1(a)",
+        )
+
+    assert client.requests == []
+
+
+def test_configured_qwen38_adapter_enforces_the_provider_lease_guard() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        LOCAL_QWEN38_ENABLED=True,
+        LOCAL_QWEN38_API_KEY="key-local-test",
+        LOCAL_QWEN38_MODEL="qwen3.8-27b-q4km",
+    )
+
+    adapter = BrainAdapter.for_provider(settings, "llama_cpp_qwen38")
+
+    assert isinstance(adapter.provider, LlamaCppQwen38VisionProvider)
+    assert adapter.provider.require_model_lease is True
 
 
 def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None:
@@ -65,6 +113,32 @@ def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None
     }
     with pytest.raises(ValueError, match="magic"):
         provider.transcribe_image(image_bytes=b"not-an-image", mime_type="image/png")
+
+
+def test_visual_transcription_keeps_blank_evidence_empty() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"draft_text":"","uncertain_glyphs":[],"is_blank":true,'
+                        '"is_irrelevant":false,"confidence":0.95,"needs_review":true}'
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+    provider, client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nblank", mime_type="image/png", label="1(a)"
+    )
+
+    assert result.is_blank is True
+    assert result.draft_text == ""
+    prompt = client.requests[0]["messages"][0]["content"][0]["text"]
+    assert "empty string" in prompt
 
 
 def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:

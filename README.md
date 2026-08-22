@@ -16,9 +16,11 @@ FinalGrade exists or is exported.
 - AI boundary: the Brain Adapter (`apps/api/packages/brain`) is the only
   module allowed to call grading/extraction language-model providers.
   Providers include `mock` (default), `gemini`, `openai`, `codex_cli`, and
-  loopback-only `llama_cpp_qwen`. Local PaddleOCR is isolated behind its
-  authenticated image-only sidecar. All real/local providers are off unless
-  explicitly configured.
+  loopback-only `llama_cpp_qwen` (Qwen3.6 text) and `llama_cpp_qwen38`
+  (Qwen3.8 vision). Qwen3.8 performs non-thinking visual transcription of
+  answer evidence; Qwen3.6/Qwen3.8 grading receives teacher-confirmed text
+  only. The retired PaddleOCR sidecar is not part of the active workflow. All
+  real/local providers are off unless explicitly configured.
 
 ## First Run
 
@@ -32,7 +34,7 @@ make down
 ```
 
 For a reliable local demo path and troubleshooting notes, see `docs/DEMO_RUNBOOK.md`.
-For Windows-host Qwen/PaddleOCR operation, see `docs/LOCAL_AI_RUNBOOK.md`.
+For Windows-host local-Qwen operation, see `docs/LOCAL_AI_RUNBOOK.md`.
 For the complete Windows teacher-pilot service stack, see
 `docs/WINDOWS_TEACHER_PILOT_RUNTIME.md`.
 

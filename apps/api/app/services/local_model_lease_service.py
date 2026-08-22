@@ -30,6 +30,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import LocalModelLease
+from app.services.local_model_call_guard import (
+    activate_local_model_call_authorization,
+    clear_local_model_call_authorization,
+)
 
 LocalModelPhase = Literal["Qwen", "Qwen38"]
 
@@ -87,7 +91,18 @@ class LocalModelLeaseService:
         row.expires_at = now + timedelta(seconds=lease_seconds)
         self.db.commit()
         self.db.refresh(row)
-        return self._state(row, now=datetime.now(UTC))
+        # Providers independently verify this process-local proof immediately
+        # before /chat/completions. The database row remains the authoritative
+        # cross-process lock.
+        state = self._state(row, now=datetime.now(UTC))
+        if state.expires_at is None:
+            raise LocalModelLeaseError("The local model lease did not record an expiry")
+        activate_local_model_call_authorization(
+            model_phase=model_phase,
+            holder_id=holder_id,
+            expires_at=state.expires_at,
+        )
+        return state
 
     @contextmanager
     def hold(
@@ -139,6 +154,13 @@ class LocalModelLeaseService:
         row.heartbeat_at = now
         row.expires_at = now + timedelta(seconds=lease_seconds)
         self.db.commit()
+        if row.model_phase not in {"Qwen", "Qwen38"} or row.expires_at is None:
+            raise LocalModelLeaseError("The local model lease heartbeat is missing its phase")
+        activate_local_model_call_authorization(
+            model_phase=row.model_phase,
+            holder_id=holder_id,
+            expires_at=row.expires_at,
+        )
 
     def release(self, *, holder_id: str) -> None:
         """Give the slot back. Releasing a lease you do not hold is a no-op.
@@ -146,12 +168,19 @@ class LocalModelLeaseService:
         A no-op rather than an error so a ``finally`` block can release
         unconditionally without masking the original failure.
         """
-        row = self._locked_row()
-        if row.holder_id != holder_id:
+        # Clear the in-process proof even if the durable release cannot finish
+        # (for example because the session is being torn down).  Clearing only
+        # makes a later inference fail, while retaining it could otherwise
+        # leave an unexpired authorization after a failed release.
+        try:
+            row = self._locked_row()
+            if row.holder_id != holder_id:
+                self.db.commit()
+                return
+            self._clear(row)
             self.db.commit()
-            return
-        self._clear(row)
-        self.db.commit()
+        finally:
+            clear_local_model_call_authorization(holder_id=holder_id)
 
     def read(self) -> LeaseState:
         now = datetime.now(UTC)

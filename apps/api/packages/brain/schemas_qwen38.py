@@ -54,8 +54,10 @@ class VisualTranscriptionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft_text: str = Field(
-        min_length=1,
-        description="Verbatim transcription of the handwritten student answer in Markdown/LaTeX.",
+        description=(
+            "Verbatim transcription of the handwritten student answer in Markdown/LaTeX. "
+            "It is an empty string only when is_blank is true."
+        ),
     )
     uncertain_glyphs: list[UncertainGlyph] = Field(
         default_factory=list,
@@ -81,12 +83,11 @@ class VisualTranscriptionOutput(BaseModel):
     completion_tokens: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
-    def blank_or_irrelevant_may_have_empty_draft(self) -> VisualTranscriptionOutput:
-        if (self.is_blank or self.is_irrelevant) and len(self.draft_text.strip()) == 0:
-            raise ValueError(
-                "draft_text must have at least one character even for blank/irrelevant answers "
-                "(use a sentinel such as '[blank]' or '[irrelevant]')"
-            )
+    def blank_contract_is_exact(self) -> VisualTranscriptionOutput:
+        if self.is_blank and self.draft_text.strip():
+            raise ValueError("blank visual transcriptions must use an empty draft_text")
+        if not self.is_blank and not self.draft_text.strip():
+            raise ValueError("nonblank visual transcriptions require draft_text")
         return self
 
 

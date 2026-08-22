@@ -72,6 +72,8 @@ class LocalAiStatusService:
             "device": "gpu_hybrid_single_slot",
             "detail": None,
             "models": [self.settings.local_qwen38_model],
+            "visual_preparation_enabled": self.settings.local_qwen38_visual_preparation_enabled,
+            "grading_enabled": self.settings.local_qwen38_grading_enabled,
         }
         if not self.settings.local_qwen38_enabled:
             base["detail"] = "disabled"
@@ -95,12 +97,14 @@ class LocalAiStatusService:
         except Exception:
             base["detail"] = "unavailable_or_model_mismatch"
             return base
-        if not self.settings.local_qwen38_visual_preparation_enabled:
-            base["detail"] = "ready_visual_preparation_disabled"
-            return base
-        if not self.settings.local_qwen38_grading_enabled:
-            base["detail"] = "ready_grading_disabled"
-            return base
         base["available"] = True
-        base["detail"] = "ready"
+        if (
+            not self.settings.local_qwen38_visual_preparation_enabled
+            and not self.settings.local_qwen38_grading_enabled
+        ):
+            base["detail"] = "ready_features_disabled"
+        elif self.settings.local_qwen38_visual_preparation_enabled:
+            base["detail"] = "ready"
+        else:
+            base["detail"] = "ready_grading_only"
         return base

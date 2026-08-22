@@ -210,7 +210,37 @@ def make_provider(client: FakeClient) -> LlamaCppQwenProvider:
         model_name="qwen3.6-35b-a3b-q4km",
         base_url="http://127.0.0.1:8080/v1",
         client=client,
+        # Unit tests exercise provider parsing in isolation.  Production
+        # construction is always lease-enforced by default.
+        require_model_lease=False,
     )
+
+
+def test_qwen_refuses_an_unleased_inference_call_before_http() -> None:
+    client = FakeClient(valid_submission_mapping_completion())
+    provider = LlamaCppQwenProvider(
+        api_key="key-local-secret",
+        model_name="qwen3.6-35b-a3b-q4km",
+        base_url="http://127.0.0.1:8080/v1",
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="lease is required"):
+        provider.map_submission_answers_from_ocr_pages(
+            pages=[{"page": 1, "blocks": [{"order": 1, "text": "1(a)"}]}],
+            questions=[
+                {
+                    "question_id": 41,
+                    "question_no": "1(a)",
+                    "question_text": "Calculate force",
+                    "model_answer": "10 N",
+                    "rubric": {"criteria": []},
+                }
+            ],
+        )
+
+    assert client.get_calls == []
+    assert client.post_calls == []
 
 
 def test_qwen_maps_only_supplied_submission_ocr_block_ids() -> None:
@@ -678,3 +708,17 @@ def test_qwen_adapter_requires_all_local_provider_switches() -> None:
     )
     with pytest.raises(BrainProviderConfigurationError, match="LOCAL_QWEN_API_KEY"):
         BrainAdapter.from_settings(missing_key)
+
+
+def test_configured_qwen_adapter_enforces_the_provider_lease_guard() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        LOCAL_QWEN_ENABLED=True,
+        LOCAL_QWEN_API_KEY="key-local-secret",
+        LOCAL_QWEN_MODEL="qwen3.6-35b-a3b-q4km",
+    )
+
+    adapter = BrainAdapter.for_provider(settings, "llama_cpp_qwen")
+
+    assert isinstance(adapter.provider, LlamaCppQwenProvider)
+    assert adapter.provider.require_model_lease is True

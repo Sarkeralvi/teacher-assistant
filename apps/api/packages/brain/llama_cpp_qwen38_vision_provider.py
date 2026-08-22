@@ -141,7 +141,7 @@ class _Qwen38TranscriptionPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    draft_text: str = Field(min_length=1)
+    draft_text: str
     uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
     is_blank: bool
     is_irrelevant: bool
@@ -220,6 +220,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         timeout_seconds: float = 900.0,
         grading_reasoning_mode: str = "off",
         context_tokens: int = 12288,
+        require_model_lease: bool = True,
     ) -> None:
         from urllib.parse import urlparse
 
@@ -241,6 +242,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         if normalized_reasoning not in {"off", "low"}:
             raise ValueError("LOCAL_QWEN38_GRADING_REASONING_MODE must be 'off' or 'low'")
         self.grading_reasoning_mode = normalized_reasoning
+        self.require_model_lease = require_model_lease
         self.client: httpx.Client | None = None
 
     def _http(self) -> httpx.Client:
@@ -306,6 +308,12 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         Raises ValueError for schema violations, RuntimeError for HTTP errors.
         Zero retries — callers handle failure explicitly.
         """
+        if self.require_model_lease:
+            from app.services.local_model_call_guard import (
+                assert_local_model_call_authorized,
+            )
+
+            assert_local_model_call_authorized(model_phase="Qwen38")
         schema = _llama_cpp_json_schema(response_model)
         body: dict[str, Any] = {
             "model": EXPECTED_ALIAS,
@@ -449,6 +457,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "conditional bar, complement bar, intersection, unit and crossed-out item.\n"
             "Use LaTeX for mathematics. If a glyph is ambiguous, return bounded alternatives\n"
             "marked uncertain. Never infer a character from arithmetic consistency.\n\n"
+            "If the answer region is genuinely blank, set is_blank=true and draft_text to an "
+            "empty string. Do not use a placeholder such as [blank].\n\n"
             "Return your answer as JSON matching the required schema."
         )
 

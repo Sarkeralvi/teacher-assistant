@@ -25,8 +25,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.engine import make_url
 
-PROTOCOL_VERSION = "local-curated-v1"
-SCHEMA_VERSION = 1
+PROTOCOL_VERSION = "local-curated-qwen38-vision-v2"
+SCHEMA_VERSION = 2
 # The grading model is not settled: Qwen3.6 and Qwen3.8 are being compared on
 # measured mark accuracy before one is pinned. Until that decision lands, a run
 # must name which alias it used rather than the harness assuming one.
@@ -36,6 +36,7 @@ EXPECTED_PROMPT_VERSION = "real-grading-v2"
 OCR_CALL_LIMIT = 20
 QWEN_CALL_LIMIT = 18
 DEFAULT_SEED = 360_020
+_EVALUATION_SCOPE_ENV = "LOCAL_CURATED_EVALUATION_RUN_ID"
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 _STATE_ORDER = (
@@ -47,6 +48,13 @@ _STATE_ORDER = (
     "review_completed",
     "reported",
 )
+_OCR_QUALITY_NO_GO_REASONS = {
+    "transcription_mismatch",
+    "blank_hallucination",
+    "critical_symbol_or_number",
+    "missing_or_extra_content",
+    "image_or_region_problem",
+}
 _REVIEW_REASONS = {
     "none",
     "rubric_ambiguity",
@@ -71,8 +79,8 @@ _REQUIRED_GRADING_SAFETY_CHECKS = {
     "needs_review_true",
     "no_final_grade",
     "queue_18_fresh_2_blank_refused",
-    "qwen_and_cpu_ocr_healthy_concurrently",
-    "qwen_gpu_ocr_cpu_isolation",
+    "qwen38_visual_transcription_reasoning_off",
+    "single_model_gpu_slot_enforced",
     "zero_cloud_calls",
     "zero_fallback_calls",
     "zero_monetary_cost",
@@ -184,22 +192,37 @@ class LlamaCppAssetMetadata(BaseModel):
     model_alias: Literal["qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"]
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     model_size_bytes: int = Field(gt=0)
-    device: Literal["gpu_hybrid"] = "gpu_hybrid"
+    device: Literal["gpu_hybrid", "gpu_hybrid_single_slot"] = "gpu_hybrid"
+
+
+class Qwen38VisionAssetMetadata(LlamaCppAssetMetadata):
+    """Pinned assets for the only visual transcription engine.
+
+    Qwen3.8 requires both the language GGUF and its multimodal projector.  A
+    run that cannot record both is not allowed to claim that it evaluated the
+    visual path.
+    """
+
+    model_alias: Literal["qwen3.8-27b-q4km"]
+    device: Literal["gpu_hybrid_single_slot"] = "gpu_hybrid_single_slot"
+    mmproj_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mmproj_size_bytes: int = Field(gt=0)
 
 
 class OperatorAssetMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # The OCR engine's asset metadata is intentionally absent: the PaddleOCR
-    # stack it pinned has been removed, and the replacement tier-1 engine has
-    # not been chosen yet. It returns when the OCR stage is wired.
+    # ``llama_cpp`` is the text-only candidate selected for this particular
+    # grading run.  ``qwen38_vision`` is always present because all handwriting
+    # transcription uses Qwen3.8 in fresh, non-thinking multimodal calls.
     llama_cpp: LlamaCppAssetMetadata
+    qwen38_vision: Qwen38VisionAssetMetadata
 
 
 class LocalCuratedEvaluationManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = SCHEMA_VERSION
+    schema_version: Literal[2] = SCHEMA_VERSION
     protocol_version: str = PROTOCOL_VERSION
     run_id: str
     seed: int
@@ -277,16 +300,26 @@ class OcrCaseResult(BaseModel):
     blocks: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     latency_ms: int = Field(ge=0)
-    provider: Literal["local_paddle_qwen"]
-    model: Literal["PaddleOCR-VL-1.6"]
-    layout_model: Literal["PP-DocLayoutV3"]
-    device: Literal["cpu"] = "cpu"
+    provider: Literal["llama_cpp_qwen38"]
+    model: Literal["qwen3.8-27b-q4km"]
+    profile: Literal["qwen38_verbatim_visual"]
+    reasoning_mode: Literal["off"]
+    device: Literal["gpu_hybrid_single_slot"] = "gpu_hybrid_single_slot"
+    source_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_image_hashes: list[str] = Field(min_length=1)
+    is_blank: bool
     draft_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_draft_hash(self) -> OcrCaseResult:
         if self.draft_text_sha256 != sha256_text(self.draft_text):
             raise ValueError("OCR draft hash does not match draft text")
+        if any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in self.source_image_hashes):
+            raise ValueError("visual transcription source hashes must be SHA-256 values")
+        if self.source_image_sha256 != sha256_text("".join(self.source_image_hashes)):
+            raise ValueError("visual transcription source hash does not match source images")
+        if self.is_blank != (not self.draft_text.strip()):
+            raise ValueError("visual transcription blank flag does not match draft text")
         return self
 
 
@@ -296,6 +329,16 @@ class OcrRunResult(BaseModel):
     run_id: str
     first_call_at: datetime
     completed_at: datetime
+    # ``call_count`` is the number of Qwen3.8 visual calls represented by this
+    # evidence packet.  A grading-model bake-off may replay that already
+    # teacher-confirmed packet into a fresh disposable database, but it must
+    # never present the replay as twenty fresh visual calls.  These fields make
+    # the provenance explicit and keep the historical source-call count intact.
+    evidence_origin: Literal["live_qwen38_visual", "locked_bakeoff_replay"] = (
+        "live_qwen38_visual"
+    )
+    source_evaluation_run_id: str | None = None
+    new_provider_call_count: Literal[0, 20] = 20
     call_count: Literal[20]
     retry_count: Literal[0] = 0
     service_status_before: dict[str, Any]
@@ -319,13 +362,24 @@ class OcrRunResult(BaseModel):
             raise ValueError("OCR results require 20 unique answer regions")
         if len({case.ocr_run_id for case in self.cases}) != OCR_CALL_LIMIT:
             raise ValueError("OCR results require 20 unique OCR runs")
-        # The engine, layout model and device are recorded per case but no longer
-        # asserted against fixed values: the PaddleOCR constants they pinned are
-        # gone and the replacement engine is unchosen. Re-pin these against the
-        # selected engine when the OCR stage is wired, so a run cannot silently
-        # use a different reader than the one it claims.
-        if any(not case.model.strip() or not case.device.strip() for case in self.cases):
-            raise ValueError("OCR result metadata must record its engine and device")
+        if self.evidence_origin == "live_qwen38_visual":
+            if self.source_evaluation_run_id is not None or self.new_provider_call_count != 20:
+                raise ValueError(
+                    "live visual evidence must record exactly 20 newly made provider calls"
+                )
+        elif not self.source_evaluation_run_id or self.new_provider_call_count != 0:
+            raise ValueError(
+                "locked bake-off evidence must identify its source and record zero new visual calls"
+            )
+        if any(
+            case.provider != "llama_cpp_qwen38"
+            or case.model != "qwen3.8-27b-q4km"
+            or case.profile != "qwen38_verbatim_visual"
+            or case.reasoning_mode != "off"
+            or case.device != "gpu_hybrid_single_slot"
+            for case in self.cases
+        ):
+            raise ValueError("OCR result metadata does not match Qwen3.8 visual transcription")
         if set(self.question_ids) != set("ABCDE") or set(self.rubric_ids) != set("ABCDE"):
             raise ValueError("OCR run must pin all five questions and rubrics")
         return self
@@ -378,6 +432,43 @@ class OcrConfirmationLock(BaseModel):
         return self
 
 
+class OcrQualityNoGoCase(BaseModel):
+    """A teacher-declared visual-transcription failure, without raw answer text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str
+    reason: Literal[
+        "transcription_mismatch",
+        "blank_hallucination",
+        "critical_symbol_or_number",
+        "missing_or_extra_content",
+        "image_or_region_problem",
+    ]
+
+
+class OcrQualityNoGoLock(BaseModel):
+    """Locks a valid quality failure before a grade could be created."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    reviewer_id: str = Field(min_length=1, max_length=255)
+    signed_at: datetime
+    ocr_results_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workbook_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rejected_cases: list[OcrQualityNoGoCase] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_cases(self) -> OcrQualityNoGoLock:
+        case_ids = [case.case_id for case in self.rejected_cases]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("OCR quality rejection cases must be unique")
+        if any(case_id not in _EXPECTED_CASE_IDS for case_id in case_ids):
+            raise ValueError("OCR quality rejection includes an unknown case")
+        return self
+
+
 class GradingCaseResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -427,7 +518,7 @@ class GradingCaseResult(BaseModel):
                 "teacher_review_required",
             }
             if (
-                self.model_provider != "llama_cpp_qwen"
+                self.model_provider not in {"llama_cpp_qwen", "llama_cpp_qwen38"}
                 or self.model_name not in SUPPORTED_GRADING_MODELS
                 or self.prompt_version != EXPECTED_PROMPT_VERSION
                 or self.marking_policy != "general"
@@ -550,6 +641,7 @@ class LedgerEntry(BaseModel):
         "ocr_confirmed",
         "grading_completed",
         "review_completed",
+        "ocr_quality_no_go",
         "reported",
         "invalid",
     ]
@@ -1532,11 +1624,19 @@ def append_state(
     if state != "invalid":
         verify_locked_artifacts(run_dir, entries)
     previous_state = entries[-1].state if entries else None
-    if previous_state == "invalid":
+    if previous_state in {"invalid", "reported"}:
         raise LocalCuratedEvaluationError("The evaluation is already terminal")
     if state == "invalid":
-        if previous_state == "reported":
-            raise LocalCuratedEvaluationError("The evaluation is already terminal")
+        pass
+    elif state == "ocr_quality_no_go":
+        if previous_state != "ocr_completed":
+            raise LocalCuratedEvaluationError(
+                "An OCR quality no-go may only follow completed visual transcription"
+            )
+    elif state == "reported" and previous_state == "ocr_quality_no_go":
+        # A signed teacher rejection is a valid quality outcome, not an integrity
+        # failure.  It reports directly and never opens a grading path.
+        pass
     else:
         expected_index = 0 if previous_state is None else _STATE_ORDER.index(previous_state) + 1
         if expected_index >= len(_STATE_ORDER) or _STATE_ORDER[expected_index] != state:
@@ -1683,7 +1783,11 @@ def _load_local_ai_environment(path: Path | None) -> None:
         raise LocalCuratedEvaluationError(
             "Ignored local-AI environment configuration is required for a real stage"
         )
-    allowed_prefixes = ("BRAIN_", "LOCAL_QWEN_", "LOCAL_OCR_", "COHORT_")
+    # The ignored operator file is intentionally limited to the local-AI
+    # namespace, but it must include Qwen3.8 and the phase/reference controls
+    # as well as the legacy Qwen3.6 keys.  `LOCAL_QWEN_` does not match
+    # `LOCAL_QWEN38_`.
+    allowed_prefixes = ("BRAIN_", "LOCAL_", "COHORT_")
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -1698,6 +1802,7 @@ def _configure_runtime(
     *,
     database_url: str,
     local_ai_env: Path | None,
+    require_grading: bool = False,
 ) -> tuple[Any, Any, Any]:
     manifest = load_manifest(run_dir)
     validate_database_url(database_url, manifest.run_id)
@@ -1714,19 +1819,41 @@ def _configure_runtime(
     settings = get_settings()
     if not settings.brain_allow_real_providers:
         raise LocalCuratedEvaluationError("BRAIN_ALLOW_REAL_PROVIDERS must be true")
-    # LOCAL_OCR_ENABLED was removed from Settings with the PaddleOCR stack; the
-    # check that read it would have raised AttributeError. The replacement
-    # tier-1 OCR switch is added when the OCR stage is wired.
-    if not settings.local_qwen_enabled:
-        raise LocalCuratedEvaluationError("LOCAL_QWEN_ENABLED must be true")
-    if not settings.cohort_model_grading_enabled:
-        raise LocalCuratedEvaluationError("COHORT_MODEL_GRADING_ENABLED must be true")
-    if settings.cohort_provider_retry_count != 0:
-        raise LocalCuratedEvaluationError("Provider retry count must be zero")
-    if settings.cohort_max_provider_calls != 25:
-        raise LocalCuratedEvaluationError("The server cohort-call ceiling must be exactly 25")
-    if settings.local_qwen_model != manifest.expected_qwen_model:
-        raise LocalCuratedEvaluationError("Configured Qwen model alias does not match the manifest")
+    if (
+        not settings.local_qwen38_enabled
+        or not settings.local_qwen38_visual_preparation_enabled
+        or settings.local_qwen38_model != manifest.operator_assets.qwen38_vision.model_alias
+    ):
+        raise LocalCuratedEvaluationError(
+            "Qwen3.8 non-thinking visual transcription is not enabled with the pinned model"
+        )
+    if require_grading:
+        if not settings.cohort_model_grading_enabled:
+            raise LocalCuratedEvaluationError("COHORT_MODEL_GRADING_ENABLED must be true")
+        if settings.cohort_provider_retry_count != 0:
+            raise LocalCuratedEvaluationError("Provider retry count must be zero")
+        if settings.cohort_max_provider_calls != 25:
+            raise LocalCuratedEvaluationError(
+                "The server cohort-call ceiling must be exactly 25"
+        )
+        if manifest.expected_qwen_model == "qwen3.6-35b-a3b-q4km":
+            if (
+                not settings.local_qwen_enabled
+                or settings.local_qwen_model != manifest.expected_qwen_model
+            ):
+                raise LocalCuratedEvaluationError(
+                    "Configured Qwen3.6 model alias does not match the manifest"
+                )
+        elif manifest.expected_qwen_model == "qwen3.8-27b-q4km":
+            if (
+                not settings.local_qwen38_grading_enabled
+                or settings.local_qwen38_model != manifest.expected_qwen_model
+            ):
+                raise LocalCuratedEvaluationError(
+                    "Configured Qwen3.8 grading model alias does not match the manifest"
+                )
+        else:
+            raise LocalCuratedEvaluationError("Configured grading model is unsupported")
 
     from app.db.session import SessionLocal, engine
 
@@ -1740,31 +1867,68 @@ def _configure_runtime(
     return settings, SessionLocal, storage_root
 
 
-def _sanitized_status(expected_qwen_model: str) -> dict[str, Any]:
+def _sanitized_status(
+    *,
+    expected_visual_model: str,
+    expected_grading_model: str | None = None,
+    require_visual: bool = True,
+) -> dict[str, Any]:
     from app.services.local_ai_status_service import LocalAiStatusService
 
     status = LocalAiStatusService().read()
-    if not status["qwen"]["available"]:
-        raise LocalCuratedEvaluationError("Local Qwen must be healthy")
-    qwen = status["qwen"]
-    if not status["real_providers_allowed"] or not status["cohort_model_grading_enabled"]:
-        raise LocalCuratedEvaluationError("Local provider safety switches are not enabled")
-    if (
-        qwen.get("provider") != "llama_cpp_qwen"
-        or qwen.get("model") != expected_qwen_model
-        or qwen.get("device") != "gpu_hybrid"
-        or qwen.get("detail") != "ready"
-    ):
-        raise LocalCuratedEvaluationError("Qwen health metadata does not match the run manifest")
-    # No "ocr" block: the retired PaddleOCR stack used to report its own model,
-    # layout model and package versions here. The replacement tier-1 engine is
-    # not chosen yet, so recording nothing is honest where recording a retired
-    # engine's constants would not be.
-    return {
+    if not status["real_providers_allowed"]:
+        raise LocalCuratedEvaluationError("Real local-provider switch is not enabled")
+    qwen38 = status["qwen38"]
+    result = {
         "real_providers_allowed": status["real_providers_allowed"],
         "cohort_model_grading_enabled": status["cohort_model_grading_enabled"],
-        "qwen": qwen,
     }
+    if require_visual:
+        if (
+            not qwen38.get("available")
+            or qwen38.get("provider") != "llama_cpp_qwen38"
+            or qwen38.get("model") != expected_visual_model
+            or qwen38.get("device") != "gpu_hybrid_single_slot"
+            or not qwen38.get("visual_preparation_enabled")
+            or qwen38.get("detail") != "ready"
+        ):
+            raise LocalCuratedEvaluationError(
+                "Qwen3.8 visual transcription health metadata does not match the run manifest"
+            )
+        result["qwen38"] = qwen38
+    if expected_grading_model is None:
+        return result
+    if not status["cohort_model_grading_enabled"]:
+        raise LocalCuratedEvaluationError("Cohort grading switch is not enabled")
+    if expected_grading_model == "qwen3.6-35b-a3b-q4km":
+        qwen = status["qwen"]
+        if (
+            not qwen.get("available")
+            or qwen.get("provider") != "llama_cpp_qwen"
+            or qwen.get("model") != expected_grading_model
+            or qwen.get("device") != "gpu_hybrid"
+            or qwen.get("detail") != "ready"
+        ):
+            raise LocalCuratedEvaluationError(
+                "Qwen3.6 grading health metadata does not match the run manifest"
+            )
+        result["qwen"] = qwen
+    elif expected_grading_model != expected_visual_model:
+        raise LocalCuratedEvaluationError("Unsupported grading-model alias")
+    else:
+        if (
+            not qwen38.get("available")
+            or qwen38.get("provider") != "llama_cpp_qwen38"
+            or qwen38.get("model") != expected_grading_model
+            or qwen38.get("device") != "gpu_hybrid_single_slot"
+            or not qwen38.get("grading_enabled")
+            or qwen38.get("detail") not in {"ready", "ready_grading_only"}
+        ):
+            raise LocalCuratedEvaluationError(
+                "Qwen3.8 grading health metadata does not match the run manifest"
+            )
+        result["qwen38"] = qwen38
+    return result
 
 
 def _directory_digest(path: Path) -> tuple[str, int, int]:
@@ -1781,13 +1945,16 @@ def _directory_digest(path: Path) -> tuple[str, int, int]:
     return digest.hexdigest(), total_size, file_count
 
 
-def _gpu_safety_snapshot() -> dict[str, Any]:
+def _gpu_safety_snapshot(*, phase: Literal["Qwen", "Qwen38"]) -> dict[str, Any]:
     runtime_dir = _repository_root() / ".local-ai"
     try:
-        qwen_pid = int((runtime_dir / "qwen.pid").read_text(encoding="utf-8").strip())
-        ocr_pid = int((runtime_dir / "ocr.pid").read_text(encoding="utf-8").strip())
+        active_pid = int(
+            (runtime_dir / ("qwen.pid" if phase == "Qwen" else "qwen38.pid"))
+            .read_text(encoding="utf-8")
+            .strip()
+        )
     except (OSError, ValueError) as exc:
-        raise LocalCuratedEvaluationError("Local AI service PID records are unavailable") from exc
+        raise LocalCuratedEvaluationError("Active local-model PID record is unavailable") from exc
     try:
         result = subprocess.run(
             [
@@ -1811,74 +1978,152 @@ def _gpu_safety_snapshot() -> dict[str, Any]:
         compute_pids.add(int(fields[0]))
         if len(fields) > 1:
             process_names.add(Path(fields[1]).name)
+    other_pid: int | None = None
+    other_pid_path = runtime_dir / ("qwen38.pid" if phase == "Qwen" else "qwen.pid")
+    try:
+        candidate = int(other_pid_path.read_text(encoding="utf-8").strip())
+        if candidate != active_pid:
+            other_pid = candidate
+    except (OSError, ValueError):
+        pass
     snapshot = {
-        "qwen_present_in_gpu_compute_clients": qwen_pid in compute_pids,
-        "ocr_absent_from_gpu_compute_clients": ocr_pid not in compute_pids,
+        "active_phase": phase,
+        "active_model_present_in_gpu_compute_clients": active_pid in compute_pids,
+        "other_managed_model_absent_from_gpu_compute_clients": (
+            other_pid is None or other_pid not in compute_pids
+        ),
         "gpu_compute_client_names": sorted(process_names),
     }
-    if not snapshot["qwen_present_in_gpu_compute_clients"]:
-        raise LocalCuratedEvaluationError("Qwen is not visible as a GPU compute client")
-    if not snapshot["ocr_absent_from_gpu_compute_clients"]:
-        raise LocalCuratedEvaluationError("PaddleOCR unexpectedly appears as a GPU compute client")
+    if not snapshot["active_model_present_in_gpu_compute_clients"]:
+        raise LocalCuratedEvaluationError("The active local model is not visible as a GPU client")
+    if not snapshot["other_managed_model_absent_from_gpu_compute_clients"]:
+        raise LocalCuratedEvaluationError(
+            "Both managed Qwen models are visible in GPU clients at once"
+        )
     return snapshot
 
 
+def _activate_model_for_evaluation(
+    *,
+    settings: Any,
+    session_factory: Any,
+    expected_model: str,
+    holder_kind: str,
+) -> Literal["Qwen", "Qwen38"]:
+    """Switch and verify an evaluation model while holding the mandatory lease.
+
+    The status endpoint verifies the server that is currently resident.  Since
+    this host intentionally has one GPU slot, an evaluation cannot check both
+    models as simultaneously available.  This helper makes the intended phase
+    explicit, proves lease ownership during the switch, and verifies the exact
+    alias before the next stage is allowed to dispatch a provider call.
+    """
+    if expected_model == "qwen3.6-35b-a3b-q4km":
+        phase: Literal["Qwen", "Qwen38"] = "Qwen"
+        provider_name = "llama_cpp_qwen"
+    elif expected_model == "qwen3.8-27b-q4km":
+        phase = "Qwen38"
+        provider_name = "llama_cpp_qwen38"
+    else:
+        raise LocalCuratedEvaluationError("Unsupported evaluation model alias")
+
+    from uuid import uuid4
+
+    from app.services.local_ai_phase_manager import LocalAiPhaseManager
+    from app.services.local_model_lease_service import LocalModelLeaseService
+    from packages.brain.adapter import BrainAdapter
+
+    holder_id = f"{holder_kind}:{uuid4().hex}"
+    with session_factory() as db:
+        lease = LocalModelLeaseService(db)
+        with lease.hold(
+            model_phase=phase,
+            holder_kind=holder_kind,
+            holder_id=holder_id,
+        ):
+            if settings.local_ai_phase_switch_enabled:
+                LocalAiPhaseManager(settings=settings, db=db).switch(
+                    phase, lease_holder_id=holder_id
+                )
+            adapter = BrainAdapter.for_provider(settings, provider_name)
+            adapter.verify_available_model()
+            lease.heartbeat(holder_id=holder_id)
+    return phase
+
+
 def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
-    # The three Paddle entries that used to be required here pointed at
-    # LOCAL_OCR_VL_MODEL_PATH / LOCAL_OCR_LAYOUT_MODEL_PATH / LOCAL_OCR_PYTHON_PATH,
-    # none of which exist any more, so this function could only ever fail.
-    raw_paths = {
-        "Qwen model": ("LOCAL_QWEN_MODEL_PATH", "file"),
-        "llama.cpp binary": ("LOCAL_QWEN_BINARY_PATH", "file"),
-    }
-    paths: dict[str, Path] = {}
-    missing: list[str] = []
-    for name, (variable, expected_kind) in raw_paths.items():
+    """Pin both the chosen text grader and Qwen3.8's visual assets.
+
+    Filesystem paths are intentionally consumed here but never written to the
+    manifest.  The projector is part of a visual model's executable identity;
+    omitting it would make a transcription result non-reproducible.
+    """
+
+    def required_file(label: str, variable: str) -> Path:
         raw_value = os.environ.get(variable, "").strip()
-        if not raw_value:
-            missing.append(name)
-            continue
-        candidate = Path(raw_value)
-        valid = candidate.is_file() if expected_kind == "file" else candidate.is_dir()
-        if not valid:
-            missing.append(name)
-            continue
-        paths[name] = candidate
-    if missing:
-        raise LocalCuratedEvaluationError(
-            "Operator asset metadata is unavailable: " + ", ".join(missing)
-        )
-    qwen_model_path = paths["Qwen model"]
-    qwen_binary_path = paths["llama.cpp binary"]
-    qwen_hash = sha256_file(qwen_model_path)
-    try:
-        version_result = subprocess.run(
-            [str(qwen_binary_path), "--version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+        path = Path(raw_value) if raw_value else None
+        if path is None or not path.is_file():
+            raise LocalCuratedEvaluationError(f"Operator asset metadata is unavailable: {label}")
+        return path
+
+    def assert_build(binary: Path) -> None:
+        try:
+            version_result = subprocess.run(
+                [str(binary), "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise LocalCuratedEvaluationError("Could not record the llama.cpp build") from exc
         llama_version_text = (version_result.stdout + version_result.stderr).strip()
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise LocalCuratedEvaluationError("Could not record the llama.cpp build") from exc
-    if not re.search(rf"\b{EXPECTED_LLAMA_CPP_BUILD}\b", llama_version_text):
-        raise LocalCuratedEvaluationError("llama.cpp build does not match 10249")
+        if not re.search(rf"\b{EXPECTED_LLAMA_CPP_BUILD}\b", llama_version_text):
+            raise LocalCuratedEvaluationError("llama.cpp build does not match 10249")
+
+    qwen38_binary = required_file("Qwen3.8 llama.cpp binary", "LOCAL_QWEN38_BINARY_PATH")
+    qwen38_model = required_file("Qwen3.8 model", "LOCAL_QWEN38_MODEL_PATH")
+    qwen38_mmproj = qwen38_model.parent / "mmproj-Qwen3.8-27B-Q8_0.gguf"
+    if not qwen38_mmproj.is_file():
+        raise LocalCuratedEvaluationError(
+            "Operator asset metadata is unavailable: Qwen3.8 projector"
+        )
+    assert_build(qwen38_binary)
+
+    if expected_qwen_model == "qwen3.6-35b-a3b-q4km":
+        grader_binary = required_file("Qwen3.6 llama.cpp binary", "LOCAL_QWEN_BINARY_PATH")
+        grader_model = required_file("Qwen3.6 model", "LOCAL_QWEN_MODEL_PATH")
+        grader_device = "gpu_hybrid"
+        assert_build(grader_binary)
+    elif expected_qwen_model == "qwen3.8-27b-q4km":
+        grader_model = qwen38_model
+        grader_device = "gpu_hybrid_single_slot"
+    else:
+        raise LocalCuratedEvaluationError("Unsupported grading-model alias")
     try:
         return OperatorAssetMetadata.model_validate(
             {
                 "llama_cpp": {
                     "build": EXPECTED_LLAMA_CPP_BUILD,
                     "model_alias": expected_qwen_model,
-                    "model_sha256": qwen_hash,
-                    "model_size_bytes": qwen_model_path.stat().st_size,
-                    "device": "gpu_hybrid",
+                    "model_sha256": sha256_file(grader_model),
+                    "model_size_bytes": grader_model.stat().st_size,
+                    "device": grader_device,
+                },
+                "qwen38_vision": {
+                    "build": EXPECTED_LLAMA_CPP_BUILD,
+                    "model_alias": "qwen3.8-27b-q4km",
+                    "model_sha256": sha256_file(qwen38_model),
+                    "model_size_bytes": qwen38_model.stat().st_size,
+                    "device": "gpu_hybrid_single_slot",
+                    "mmproj_sha256": sha256_file(qwen38_mmproj),
+                    "mmproj_size_bytes": qwen38_mmproj.stat().st_size,
                 },
             }
         )
     except ValueError as exc:
         raise LocalCuratedEvaluationError(
-            "Operator model or package metadata does not match the locked baseline"
+            "Operator model metadata does not match the locked baseline"
         ) from exc
 
 
@@ -1902,8 +2147,8 @@ def _database_is_migrated_and_empty(session_factory: Any) -> None:
             raise LocalCuratedEvaluationError(
                 "Evaluation database is not migrated to the application schema"
             ) from exc
-        if revision != "0022_ocr_rescue_v2":
-            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0022")
+        if revision != "0024_model_lease_page_evidence":
+            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0024")
         populated_models = [
             model.__name__
             for model in (
@@ -1930,11 +2175,14 @@ def _seed_production_evaluation(
 ) -> dict[str, Any]:
     from app.models import (
         AnswerRegion,
+        AnswerRegionMapping,
         AnswerRegionSegment,
         Assessment,
         Course,
+        ExtractionRun,
         GradingRun,
         Question,
+        QuestionNode,
         Rubric,
         Submission,
         SubmissionPage,
@@ -1992,6 +2240,24 @@ def _seed_production_evaluation(
 
         question_ids: dict[str, int] = {}
         rubric_ids: dict[str, int] = {}
+        question_nodes: dict[str, QuestionNode] = {}
+        extraction_run = ExtractionRun(
+            assessment_id=assessment.id,
+            artifact_file_path="evaluation://teacher-locked-reference-bundle",
+            original_filename="teacher_locked_evaluation_reference.json",
+            content_type="application/vnd.teacher-assistant.evaluation+json",
+            extraction_type="question_paper",
+            provider="llama_cpp_qwen38",
+            status="succeeded",
+            raw_output=None,
+            normalized_output={
+                "source": "teacher_locked_evaluation_blueprint",
+                "teacher_confirmed": True,
+            },
+            blockers=[],
+        )
+        db.add(extraction_run)
+        db.flush()
         for pack_id in "ABCDE":
             representative = next(case for case in manifest.cases if case.pack_id == pack_id)
             question = Question(
@@ -2025,8 +2291,28 @@ def _seed_production_evaluation(
             )
             db.add(rubric)
             db.flush()
+            question_node = QuestionNode(
+                assessment_id=assessment.id,
+                extraction_run_id=extraction_run.id,
+                question_number=pack_id,
+                parent_question_number=None,
+                label=f"Evaluation question {pack_id}",
+                text=representative.question_text,
+                marks=representative.max_score,
+                node_type="question",
+                source_page=1,
+                source_reference={
+                    "source": "teacher_locked_evaluation_blueprint",
+                    "pack_id": pack_id,
+                },
+                confidence=Decimal("1.0000"),
+                teacher_confirmed=True,
+            )
+            db.add(question_node)
+            db.flush()
             question_ids[pack_id] = question.id
             rubric_ids[pack_id] = rubric.id
+            question_nodes[pack_id] = question_node
 
         region_ids: dict[str, int] = {}
         for response_index in range(1, 5):
@@ -2086,6 +2372,26 @@ def _seed_production_evaluation(
                         is_primary=True,
                     )
                 )
+                db.add(
+                    AnswerRegionMapping(
+                        assessment_id=assessment.id,
+                        submission_id=submission.id,
+                        question_node_id=question_nodes[pack_id].id,
+                        question_id=question_ids[pack_id],
+                        answer_region_id=region.id,
+                        source_page=page_number,
+                        source_reference={
+                            "source": "teacher_locked_evaluation_mapping",
+                            "case_id": case.case_id,
+                            "image_sha256": case.image_sha256,
+                        },
+                        confidence=Decimal("1.0000"),
+                        mapping_status="teacher_confirmed",
+                        blocker_reason=None,
+                        provider="deterministic_layout",
+                        teacher_confirmed=True,
+                    )
+                )
                 region_ids[case.case_id] = region.id
         db.commit()
         return {
@@ -2096,6 +2402,7 @@ def _seed_production_evaluation(
             "question_ids": question_ids,
             "rubric_ids": rubric_ids,
             "region_ids": region_ids,
+            "mapping_provenance": "teacher_locked_evaluation_mapping",
         }
 
 
@@ -2137,9 +2444,13 @@ def create_ocr_review_workbook(
         [
             "Required",
             (
-                "Review the OCR draft against the image and locked ground truth. Enter the "
-                "complete confirmed text yourself, correct every answer-changing error, and "
-                "explicitly approve every row. Blank rows must remain empty."
+                "Review Qwen3.8's non-thinking visual transcription against the image and "
+                "locked ground truth. Do not edit or repair model text: approval confirms the "
+                "exact displayed hash. Mark every row faithful only if it matches the pixels. "
+                "For any wrong reading, set teacher_confirms_faithful to no, choose one fixed "
+                "quality_rejection_reason, then use record-ocr-no-go. That creates a valid "
+                "NO_GO_QUALITY report with zero grading calls. Blank rows must remain genuinely "
+                "empty."
             ),
         ]
     )
@@ -2151,20 +2462,24 @@ def create_ocr_review_workbook(
     headers = [
         "case_id",
         "primary_category",
-        "ocr_draft",
+        "qwen38_visual_draft",
         "locked_ground_truth",
+        "visual_model",
+        "reasoning_mode",
         "warnings",
         "cer",
         "wer",
         "latency_ms",
-        "confirmed_text",
+        "visual_draft_sha256",
+        "teacher_confirms_faithful",
+        "quality_rejection_reason",
         "teacher_notes",
         "teacher_approved",
         "answer_image",
     ]
     sheet.append(headers)
     _style_workbook_header(sheet)
-    widths = [12, 24, 55, 55, 35, 14, 14, 16, 55, 35, 20, 72]
+    widths = [12, 24, 55, 55, 28, 18, 35, 14, 14, 16, 66, 28, 30, 45, 20, 72]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     for row_index, case in enumerate(manifest.cases, start=2):
@@ -2176,10 +2491,14 @@ def create_ocr_review_workbook(
                 case.primary_category.value,
                 ocr_case.draft_text,
                 truth.teacher_transcription,
+                ocr_case.model,
+                ocr_case.reasoning_mode,
                 "\n".join(ocr_case.warnings),
                 str(character_error_rate(truth.teacher_transcription, ocr_case.draft_text)),
                 str(word_error_rate(truth.teacher_transcription, ocr_case.draft_text)),
                 ocr_case.latency_ms,
+                ocr_case.draft_text_sha256,
+                None,
                 None,
                 None,
                 None,
@@ -2192,7 +2511,7 @@ def create_ocr_review_workbook(
         workbook_image = WorkbookImage(str(run_dir / case.image_relative_path))
         workbook_image.width = 560
         workbook_image.height = 315
-        sheet.add_image(workbook_image, f"L{row_index}")
+        sheet.add_image(workbook_image, f"P{row_index}")
     sheet.freeze_panes = "A2"
     path = run_dir / "ocr_review.xlsx"
     workbook.save(path)
@@ -2229,20 +2548,238 @@ def run_ocr_stage(
     database_url: str,
     local_ai_env: Path | None = None,
 ) -> OcrRunResult:
-    """Not wired: the tier-1 OCR engine has not been selected yet.
+    """Run exactly twenty production Qwen3.8 visual-transcription calls.
 
-    The previous implementation drove the PaddleOCR recognition stack through
-    ``/answer-regions/{id}/ocr-runs``. Both that stack and those routes were
-    removed, so this stage cannot run. It now fails immediately and loudly
-    rather than issuing requests that would 404, and rather than appearing to
-    pass. Restore it against the replacement pipeline; the retired
-    implementation remains in Git history.
+    The evaluation deliberately calls the same durable service used by the
+    teacher workflow.  It does not use a fake OCR adapter, a hidden retry, or
+    the retired PaddleOCR endpoints.  Every synthetic region is pre-mapped by
+    the locked evaluation blueprint and then read by Qwen3.8 with reasoning
+    disabled through one leased visual call.
     """
-    raise LocalCuratedEvaluationError(
-        "The curated evaluation OCR stage is not wired: the PaddleOCR stack was "
-        "removed and no replacement tier-1 engine has been selected. This gate "
-        "cannot be run, and no result from it may be cited as evidence."
-    )
+    if not allow_local_ocr:
+        raise LocalCuratedEvaluationError(
+            "Real Qwen3.8 visual transcription requires --allow-local-ocr"
+        )
+    if max_ocr_calls != OCR_CALL_LIMIT:
+        raise LocalCuratedEvaluationError("The visual-transcription call cap must be exactly 20")
+    if current_state(run_dir) != "ground_truth_locked":
+        raise LocalCuratedEvaluationError(
+            "Visual transcription requires a locked teacher ground-truth gate"
+        )
+    try:
+        verify_locked_artifacts(run_dir)
+        require_clean_git_worktree()
+        manifest = load_manifest(run_dir)
+        if current_git_commit() != manifest.harness_commit:
+            raise LocalCuratedEvaluationError(
+                "Current Git commit does not match the harness commit"
+            )
+        ground_truth = GroundTruthLock.model_validate(read_json(run_dir / "ground_truth_lock.json"))
+        settings, session_factory, _storage_root = _configure_runtime(
+            run_dir,
+            database_url=database_url,
+            local_ai_env=local_ai_env,
+            require_grading=False,
+        )
+        if datetime.now(UTC) <= ground_truth.signed_at:
+            raise LocalCuratedEvaluationError(
+                "Visual-transcription calls must follow ground-truth sign-off"
+            )
+        current_assets = _operator_asset_metadata(manifest.expected_qwen_model)
+        if current_assets != manifest.operator_assets:
+            raise LocalCuratedEvaluationError(
+                "Pinned local-model assets changed after the evaluation was prepared"
+            )
+        _database_is_migrated_and_empty(session_factory)
+        seeded = _seed_production_evaluation(manifest, run_dir, session_factory)
+        _activate_model_for_evaluation(
+            settings=settings,
+            session_factory=session_factory,
+            expected_model=manifest.operator_assets.qwen38_vision.model_alias,
+            holder_kind="evaluation_visual_preflight",
+        )
+        status_before = _sanitized_status(
+            expected_visual_model=manifest.operator_assets.qwen38_vision.model_alias
+        )
+        gpu_before = _gpu_safety_snapshot(phase="Qwen38")
+
+        from fastapi import HTTPException
+
+        from app.api.routes.answer_regions import get_owned_answer_region_or_404
+        from app.models import AnswerRegion, AnswerRegionOcrRun, User
+        from app.services.qwen38_visual_transcription_service import (
+            Qwen38VisualTranscriptionService,
+        )
+        from app.worker.jobs import run_qwen38_visual_transcription_job
+
+        cases: list[OcrCaseResult] = []
+        first_call_at: datetime | None = None
+        for definition in manifest.cases:
+            answer_region_id = int(seeded["region_ids"][definition.case_id])
+            with session_factory() as db:
+                region = db.get(AnswerRegion, answer_region_id)
+                owner = db.get(User, int(seeded["owner_teacher_id"]))
+                if region is None or owner is None:
+                    raise LocalCuratedEvaluationError("Seeded evaluation evidence is missing")
+                created = Qwen38VisualTranscriptionService(db, settings=settings).create(
+                    region,
+                    teacher=owner,
+                    expected_model=manifest.operator_assets.qwen38_vision.model_alias,
+                )
+                run_id = created.id
+
+            # Production worker entry point, intentionally invoked synchronously
+            # because this bounded host evaluation does not claim RQ crash
+            # recovery validation.  The job itself opens its own DB session.
+            run_qwen38_visual_transcription_job(run_id)
+
+            with session_factory() as db:
+                run = db.get(AnswerRegionOcrRun, run_id)
+                if (
+                    run is None
+                    or run.status != "succeeded"
+                    or run.calls_used != 1
+                    or run.call_limit != 1
+                    or run.provider != "llama_cpp_qwen38"
+                    or run.model_name != manifest.operator_assets.qwen38_vision.model_alias
+                    or run.profile != "qwen38_verbatim_visual"
+                    or run.reasoning_mode != "off"
+                    or not run.source_image_sha256
+                    or not run.source_image_hashes
+                    or run.latency_ms is None
+                ):
+                    raise LocalCuratedEvaluationError(
+                        f"Visual transcription failed safely for {definition.case_id}"
+                    )
+                normalized = dict(run.normalized_result or {})
+                draft_text = run.draft_text or ""
+                if normalized.get("draft_text_sha256") != sha256_text(draft_text):
+                    raise LocalCuratedEvaluationError(
+                        f"Visual transcription output hash is invalid for {definition.case_id}"
+                    )
+                if list(normalized.get("input_image_sha256") or []) != list(
+                    run.source_image_hashes
+                ):
+                    raise LocalCuratedEvaluationError(
+                        f"Visual transcription image hashes changed for {definition.case_id}"
+                    )
+                if first_call_at is None:
+                    first_call_at = run.started_at or datetime.now(UTC)
+                cases.append(
+                    OcrCaseResult(
+                        case_id=definition.case_id,
+                        answer_region_id=answer_region_id,
+                        ocr_run_id=run.id,
+                        status="succeeded",
+                        draft_text=draft_text,
+                        markdown=draft_text,
+                        blocks=[],
+                        warnings=list(run.warnings or []),
+                        latency_ms=run.latency_ms,
+                        provider="llama_cpp_qwen38",
+                        model="qwen3.8-27b-q4km",
+                        profile="qwen38_verbatim_visual",
+                        reasoning_mode="off",
+                        source_image_sha256=run.source_image_sha256,
+                        source_image_hashes=list(run.source_image_hashes),
+                        is_blank=bool(normalized.get("is_blank")),
+                        draft_text_sha256=sha256_text(draft_text),
+                    )
+                )
+
+        if len(cases) != OCR_CALL_LIMIT:
+            raise LocalCuratedEvaluationError(
+                "The visual-transcription call count is not exactly 20"
+            )
+        with session_factory() as db:
+            owner = db.get(User, int(seeded["owner_teacher_id"]))
+            intruder = db.get(User, int(seeded["intruder_teacher_id"]))
+            if owner is None or intruder is None:
+                raise LocalCuratedEvaluationError("Evaluation teachers disappeared")
+            for case in cases:
+                # Use the production ownership helper rather than assuming a
+                # synthetic database makes isolation true by construction.
+                get_owned_answer_region_or_404(case.answer_region_id, db, owner)
+                try:
+                    get_owned_answer_region_or_404(case.answer_region_id, db, intruder)
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise LocalCuratedEvaluationError(
+                            "Cross-teacher visual-evidence access did not return 404"
+                        ) from exc
+                else:
+                    raise LocalCuratedEvaluationError(
+                        "Cross-teacher visual-evidence access was not refused"
+                    )
+
+        status_after = _sanitized_status(
+            expected_visual_model=manifest.operator_assets.qwen38_vision.model_alias
+        )
+        gpu_after = _gpu_safety_snapshot(phase="Qwen38")
+        result = OcrRunResult(
+            run_id=manifest.run_id,
+            first_call_at=first_call_at or datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            call_count=OCR_CALL_LIMIT,
+            retry_count=0,
+            service_status_before=status_before,
+            service_status_after=status_after,
+            database_name=validate_database_url(database_url, manifest.run_id),
+            assessment_id=int(seeded["assessment_id"]),
+            grading_run_id=int(seeded["grading_run_id"]),
+            owner_teacher_id=int(seeded["owner_teacher_id"]),
+            intruder_teacher_id=int(seeded["intruder_teacher_id"]),
+            question_ids={key: int(value) for key, value in seeded["question_ids"].items()},
+            rubric_ids={key: int(value) for key, value in seeded["rubric_ids"].items()},
+            cases=cases,
+        )
+        result_path = run_dir / "ocr_results.json"
+        runtime_path = run_dir / "ocr_runtime.json"
+        write_json(result_path, result)
+        write_json(
+            runtime_path,
+            {
+                "operator_assets": manifest.operator_assets,
+                "service_status_before": status_before,
+                "service_status_after": status_after,
+                "gpu_safety_before": gpu_before,
+                "gpu_safety_after": gpu_after,
+                "mapping_provenance": seeded["mapping_provenance"],
+                "visual_model": manifest.operator_assets.qwen38_vision.model_alias,
+                "visual_reasoning_mode": "off",
+                "transport": "direct_host_eval",
+                "rq_crash_recovery_validated": False,
+            },
+        )
+        create_ocr_review_workbook(manifest, ground_truth, result, run_dir)
+        append_state(
+            run_dir,
+            "ocr_completed",
+            locked_artifacts={
+                "ocr_results.json": sha256_file(result_path),
+                "ocr_runtime.json": sha256_file(runtime_path),
+            },
+            metadata={
+                "qwen38_visual_call_count": OCR_CALL_LIMIT,
+                "retry_count": 0,
+                "reasoning_mode": "off",
+                "cross_teacher_visual_evidence_refused": True,
+                "transport": "direct_host_eval",
+            },
+        )
+        return result
+    except Exception as exc:
+        _mark_invalid(
+            run_dir,
+            stage="run_ocr_stage",
+            detail=(
+                "Qwen3.8 visual transcription failed; no OCR confirmation or grading "
+                "was authorized."
+            ),
+        )
+        if isinstance(exc, LocalCuratedEvaluationError):
+            raise
+        raise LocalCuratedEvaluationError("Qwen3.8 visual transcription failed safely") from exc
 
 
 def read_ocr_review_workbook(
@@ -2258,7 +2795,8 @@ def read_ocr_review_workbook(
     headers = {str(cell.value): index for index, cell in enumerate(sheet[1], start=1)}
     required = {
         "case_id",
-        "confirmed_text",
+        "visual_draft_sha256",
+        "teacher_confirms_faithful",
         "teacher_notes",
         "teacher_approved",
     }
@@ -2277,27 +2815,44 @@ def read_ocr_review_workbook(
         ocr_case = ocr_by_id.get(case_id)
         if definition is None or truth is None or ocr_case is None:
             raise LocalCuratedEvaluationError(f"Unknown OCR review case: {case_id}")
-        confirmed_value = sheet.cell(row, headers["confirmed_text"]).value
-        confirmed_text = str(confirmed_value or "").strip()
+        displayed_hash = str(
+            sheet.cell(row, headers["visual_draft_sha256"]).value or ""
+        ).strip()
+        if displayed_hash != ocr_case.draft_text_sha256:
+            raise LocalCuratedEvaluationError(
+                f"{case_id}: displayed visual-transcription hash was changed"
+            )
+        faithful = _parse_bool(
+            sheet.cell(row, headers["teacher_confirms_faithful"]).value,
+            field="teacher_confirms_faithful",
+            case_id=case_id,
+        )
         approved = _parse_bool(
             sheet.cell(row, headers["teacher_approved"]).value,
             field="teacher_approved",
             case_id=case_id,
         )
-        if not approved:
-            raise LocalCuratedEvaluationError(f"{case_id}: OCR confirmation is required")
-        if normalize_text(confirmed_text) != normalize_text(truth.teacher_transcription):
+        if not faithful or not approved:
             raise LocalCuratedEvaluationError(
-                f"{case_id}: confirmed OCR text must match the locked teacher transcription"
+                f"{case_id}: a teacher must confirm the exact visual transcription is faithful"
+            )
+        if normalize_text(ocr_case.draft_text) != normalize_text(truth.teacher_transcription):
+            raise LocalCuratedEvaluationError(
+                f"{case_id}: Qwen3.8 visual transcription does not match locked teacher truth; "
+                "reject the model reading and do not grade it"
             )
         is_blank = definition.answer_quality == AnswerQuality.BLANK
+        if ocr_case.is_blank != is_blank:
+            raise LocalCuratedEvaluationError(
+                f"{case_id}: Qwen3.8 blank classification does not match locked teacher truth"
+            )
         confirmations.append(
             OcrConfirmationCase(
                 case_id=case_id,
                 answer_region_id=ocr_case.answer_region_id,
                 ocr_run_id=ocr_case.ocr_run_id,
-                confirmed_text=confirmed_text,
-                confirmed_text_sha256=sha256_text(confirmed_text),
+                confirmed_text=ocr_case.draft_text,
+                confirmed_text_sha256=ocr_case.draft_text_sha256,
                 teacher_approved=True,
                 evidence_status="blank" if is_blank else "complete",
                 full_answer_confirmed=not is_blank,
@@ -2307,6 +2862,195 @@ def read_ocr_review_workbook(
     if [case.case_id for case in confirmations] != expected_order:
         raise LocalCuratedEvaluationError("All 20 OCR cases must be confirmed in blueprint order")
     return confirmations
+
+
+def read_ocr_quality_no_go_workbook(
+    workbook_path: Path,
+    manifest: LocalCuratedEvaluationManifest,
+    ocr_result: OcrRunResult,
+    *,
+    require_rejection: bool = True,
+) -> list[OcrQualityNoGoCase]:
+    """Read a teacher-declared OCR quality failure without accepting any text.
+
+    The only durable information is the locked draft hash and a fixed reason
+    code.  In particular, this must not turn the spreadsheet into a back-door
+    transcription or correction mechanism.
+    """
+
+    workbook = load_workbook(workbook_path, data_only=True)
+    if "OCR Review" not in workbook.sheetnames:
+        raise LocalCuratedEvaluationError("OCR workbook has no OCR Review sheet")
+    sheet = workbook["OCR Review"]
+    headers = {str(cell.value): index for index, cell in enumerate(sheet[1], start=1)}
+    required = {
+        "case_id",
+        "visual_draft_sha256",
+        "teacher_confirms_faithful",
+        "quality_rejection_reason",
+        "teacher_approved",
+    }
+    if not required.issubset(headers):
+        raise LocalCuratedEvaluationError("OCR workbook columns were changed")
+    known_case_ids = {case.case_id for case in manifest.cases}
+    result_by_id = {case.case_id: case for case in ocr_result.cases}
+    rejected: list[OcrQualityNoGoCase] = []
+    for row in range(2, sheet.max_row + 1):
+        case_id = str(sheet.cell(row, headers["case_id"]).value or "").strip()
+        if not case_id:
+            continue
+        if case_id not in known_case_ids or case_id not in result_by_id:
+            raise LocalCuratedEvaluationError(f"Unknown OCR review case: {case_id}")
+        displayed_hash = str(
+            sheet.cell(row, headers["visual_draft_sha256"]).value or ""
+        ).strip()
+        if displayed_hash != result_by_id[case_id].draft_text_sha256:
+            raise LocalCuratedEvaluationError(
+                f"{case_id}: displayed visual-transcription hash was changed"
+            )
+        faithful_value = sheet.cell(row, headers["teacher_confirms_faithful"]).value
+        reason = str(
+            sheet.cell(row, headers["quality_rejection_reason"]).value or ""
+        ).strip()
+        if faithful_value is None or not str(faithful_value).strip():
+            if reason:
+                raise LocalCuratedEvaluationError(
+                    f"{case_id}: a quality rejection reason requires an explicit no"
+                )
+            continue
+        faithful = _parse_bool(
+            faithful_value,
+            field="teacher_confirms_faithful",
+            case_id=case_id,
+        )
+        if faithful:
+            if reason:
+                raise LocalCuratedEvaluationError(
+                    f"{case_id}: a faithful reading cannot have a rejection reason"
+                )
+            continue
+        approved = _parse_bool(
+            sheet.cell(row, headers["teacher_approved"]).value,
+            field="teacher_approved",
+            case_id=case_id,
+        )
+        if approved:
+            raise LocalCuratedEvaluationError(
+                f"{case_id}: a rejected visual reading cannot be approved"
+            )
+        if reason not in _OCR_QUALITY_NO_GO_REASONS:
+            allowed = ", ".join(sorted(_OCR_QUALITY_NO_GO_REASONS))
+            raise LocalCuratedEvaluationError(
+                f"{case_id}: quality_rejection_reason must be one of {allowed}"
+            )
+        rejected.append(OcrQualityNoGoCase(case_id=case_id, reason=reason))
+    if not rejected and require_rejection:
+        raise LocalCuratedEvaluationError(
+            "At least one teacher-declared visual-transcription quality failure is required"
+        )
+    return rejected
+
+
+def _assert_no_grading_artifacts_or_records(
+    run_dir: Path,
+    *,
+    session_factory: Any,
+) -> None:
+    """Prove a quality no-go happened before any grade could exist."""
+
+    forbidden_artifacts = (
+        "ocr_confirmation_lock.json",
+        "grading_results.json",
+        "grading_runtime.json",
+        "grading_review.xlsx",
+        "review_lock.json",
+    )
+    present = [name for name in forbidden_artifacts if (run_dir / name).exists()]
+    if present:
+        raise LocalCuratedEvaluationError(
+            "OCR quality no-go cannot follow grading artifacts: " + ", ".join(present)
+        )
+    from sqlalchemy import func, select
+
+    from app.models import FinalGrade, GradeSuggestion, GradingDispatchRun, GradingJob
+
+    with session_factory() as db:
+        counts = {
+            model.__tablename__: int(db.scalar(select(func.count()).select_from(model)) or 0)
+            for model in (GradingJob, GradeSuggestion, GradingDispatchRun, FinalGrade)
+        }
+    present_records = {name: count for name, count in counts.items() if count}
+    if present_records:
+        raise LocalCuratedEvaluationError(
+            "OCR quality no-go found grading records in its disposable database"
+        )
+
+
+def record_ocr_quality_no_go(
+    run_dir: Path,
+    *,
+    reviewer_id: str,
+    confirm_teacher_signoff: bool,
+    database_url: str,
+    local_ai_env: Path | None = None,
+) -> OcrQualityNoGoLock:
+    """Close a valid but poor visual-OCR run without grading any student answer."""
+
+    if not confirm_teacher_signoff:
+        raise LocalCuratedEvaluationError("Explicit OCR quality no-go sign-off is required")
+    if current_state(run_dir) != "ocr_completed":
+        raise LocalCuratedEvaluationError(
+            "An OCR quality no-go requires a completed visual-transcription stage"
+        )
+    try:
+        verify_locked_artifacts(run_dir)
+        manifest = load_manifest(run_dir)
+        ocr_result = OcrRunResult.model_validate(read_json(run_dir / "ocr_results.json"))
+        workbook_path = run_dir / "ocr_review.xlsx"
+        rejected_cases = read_ocr_quality_no_go_workbook(
+            workbook_path,
+            manifest,
+            ocr_result,
+        )
+        _settings, session_factory, _storage_root = _configure_runtime(
+            run_dir,
+            database_url=database_url,
+            local_ai_env=local_ai_env,
+        )
+        _assert_no_grading_artifacts_or_records(run_dir, session_factory=session_factory)
+        lock = OcrQualityNoGoLock(
+            run_id=manifest.run_id,
+            reviewer_id=reviewer_id.strip(),
+            signed_at=datetime.now(UTC),
+            ocr_results_sha256=sha256_file(run_dir / "ocr_results.json"),
+            workbook_sha256=sha256_file(workbook_path),
+            rejected_cases=rejected_cases,
+        )
+        lock_path = run_dir / "ocr_quality_no_go_lock.json"
+        write_json(lock_path, lock)
+        append_state(
+            run_dir,
+            "ocr_quality_no_go",
+            locked_artifacts={
+                "ocr_review.xlsx": sha256_file(workbook_path),
+                "ocr_quality_no_go_lock.json": sha256_file(lock_path),
+            },
+            metadata={
+                "rejected_case_count": len(rejected_cases),
+                "grading_calls": 0,
+                "automatic_retry_allowed": False,
+            },
+        )
+        return lock
+    except Exception as exc:
+        _mark_invalid(
+            run_dir,
+            stage="record_ocr_quality_no_go",
+            detail="OCR quality no-go recording failed; grading remained unauthorized.",
+        )
+        if isinstance(exc, LocalCuratedEvaluationError):
+            raise
+        raise LocalCuratedEvaluationError("OCR quality no-go recording failed safely") from exc
 
 
 def lock_ocr_confirmations(
@@ -2328,6 +3072,16 @@ def lock_ocr_confirmations(
     if ocr_result.first_call_at <= ground_truth.signed_at:
         raise LocalCuratedEvaluationError("OCR calls did not follow ground-truth sign-off")
     workbook_path = run_dir / "ocr_review.xlsx"
+    declared_rejections = read_ocr_quality_no_go_workbook(
+        workbook_path,
+        manifest,
+        ocr_result,
+        require_rejection=False,
+    )
+    if declared_rejections:
+        raise LocalCuratedEvaluationError(
+            "Teacher rejected visual transcription; use record-ocr-no-go instead of grading"
+        )
     confirmations = read_ocr_review_workbook(
         workbook_path,
         manifest,
@@ -2339,54 +3093,78 @@ def lock_ocr_confirmations(
         database_url=database_url,
         local_ai_env=local_ai_env,
     )
-    owner_headers, intruder_headers = _auth_headers(
-        session_factory,
-        ocr_result.owner_teacher_id,
-        ocr_result.intruder_teacher_id,
-    )
     try:
-        from fastapi.testclient import TestClient
+        from fastapi import HTTPException
 
-        from app.main import app
-        from app.models import AnswerRegion, AnswerRegionOcrRun
+        from app.api.routes.answer_regions import (
+            confirm_visual_transcription_run,
+            correct_answer_region_full_answer_confirmation,
+        )
+        from app.models import AnswerRegion, AnswerRegionOcrRun, User
+        from app.schemas import (
+            AnswerRegionFullAnswerConfirmation,
+            VisualTranscriptionConfirmationRequest,
+        )
 
-        with TestClient(app) as client:
+        with session_factory() as db:
+            owner = db.get(User, ocr_result.owner_teacher_id)
+            intruder = db.get(User, ocr_result.intruder_teacher_id)
+            if owner is None or intruder is None:
+                raise LocalCuratedEvaluationError("Evaluation teachers are missing")
             for confirmation in confirmations:
-                intrusion = client.post(
-                    f"/answer-regions/{confirmation.answer_region_id}/ocr-runs/"
-                    f"{confirmation.ocr_run_id}/confirm",
-                    headers=intruder_headers,
-                    json={"confirmed_text": "cross-teacher attempt"},
-                )
-                if intrusion.status_code != 404:
+                try:
+                    confirm_visual_transcription_run(
+                        confirmation.answer_region_id,
+                        confirmation.ocr_run_id,
+                        VisualTranscriptionConfirmationRequest(
+                            teacher_confirmed=True,
+                            draft_text_sha256=confirmation.confirmed_text_sha256,
+                        ),
+                        db,
+                        intruder,
+                    )
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise LocalCuratedEvaluationError(
+                            "Cross-teacher visual confirmation was not refused"
+                        ) from exc
+                else:
                     raise LocalCuratedEvaluationError(
-                        "Cross-teacher OCR confirmation was not refused"
+                        "Cross-teacher visual confirmation was not refused"
                     )
             for confirmation in confirmations:
-                confirmed = client.post(
-                    f"/answer-regions/{confirmation.answer_region_id}/ocr-runs/"
-                    f"{confirmation.ocr_run_id}/confirm",
-                    headers=owner_headers,
-                    json={"confirmed_text": confirmation.confirmed_text},
+                confirmed = confirm_visual_transcription_run(
+                    confirmation.answer_region_id,
+                    confirmation.ocr_run_id,
+                    VisualTranscriptionConfirmationRequest(
+                        teacher_confirmed=True,
+                        draft_text_sha256=confirmation.confirmed_text_sha256,
+                    ),
+                    db,
+                    owner,
                 )
-                if confirmed.status_code != 200 or confirmed.json().get("status") != "confirmed":
+                if confirmed.status != "confirmed":
                     raise LocalCuratedEvaluationError(
-                        f"Production OCR confirmation failed on {confirmation.case_id}"
+                        "Production visual-transcription confirmation failed on "
+                        f"{confirmation.case_id}"
                     )
-                evidence = client.patch(
-                    f"/answer-regions/{confirmation.answer_region_id}/corrections/"
-                    "full-answer-confirmation",
-                    headers=owner_headers,
-                    json={
-                        "full_answer_confirmed": confirmation.full_answer_confirmed,
-                        "continuation_not_needed": confirmation.full_answer_confirmed,
-                        "packet_status": confirmation.evidence_status,
-                        "manual_answer_text": confirmation.confirmed_text,
-                    },
+                evidence = correct_answer_region_full_answer_confirmation(
+                    confirmation.answer_region_id,
+                    AnswerRegionFullAnswerConfirmation(
+                        full_answer_confirmed=confirmation.full_answer_confirmed,
+                        continuation_not_needed=True,
+                        packet_status=confirmation.evidence_status,
+                        # This is the exact already-confirmed visual draft, not a
+                        # teacher-entered correction.  The server reuses it only
+                        # to set the existing full-answer evidence gate.
+                        manual_answer_text=confirmation.confirmed_text,
+                    ),
+                    db,
+                    owner,
                 )
-                if evidence.status_code != 200:
+                if evidence.answer_region.id != confirmation.answer_region_id:
                     raise LocalCuratedEvaluationError(
-                        f"Evidence confirmation failed on {confirmation.case_id}"
+                        f"Full-answer evidence confirmation failed on {confirmation.case_id}"
                     )
         with session_factory() as db:
             for confirmation in confirmations:
@@ -2435,14 +3213,24 @@ def lock_ocr_confirmations(
             },
         )
         return lock
+    except LocalCuratedEvaluationError as exc:
+        if (
+            current_state(run_dir) == "ocr_completed"
+            and str(exc).startswith("Teacher rejected visual transcription")
+        ):
+            raise
+        _mark_invalid(
+            run_dir,
+            stage="lock_ocr_confirmations",
+            detail="OCR confirmation stage failed; no grading was authorized.",
+        )
+        raise
     except Exception as exc:
         _mark_invalid(
             run_dir,
             stage="lock_ocr_confirmations",
             detail="OCR confirmation stage failed; no grading was authorized.",
         )
-        if isinstance(exc, LocalCuratedEvaluationError):
-            raise
         raise LocalCuratedEvaluationError("OCR confirmation failed safely") from exc
 
 
@@ -2556,6 +3344,11 @@ def _safe_dispatch_results(
     confirmation_by_id = {case.case_id: case for case in confirmation_lock.cases}
     region_to_case = {case.answer_region_id: case.case_id for case in confirmation_lock.cases}
     call_limits = {"A": 3, "B": 4, "C": 3, "D": 4, "E": 4}
+    provider_name = (
+        "llama_cpp_qwen"
+        if manifest.expected_qwen_model == "qwen3.6-35b-a3b-q4km"
+        else "llama_cpp_qwen38"
+    )
     dispatch_ids: list[int] = []
     first_call_at: datetime | None = None
     with session_factory() as db:
@@ -2582,7 +3375,7 @@ def _safe_dispatch_results(
             request = CohortDispatchRequest(
                 queue_run_id=queue_run.id,
                 grading_run_id=ocr_result.grading_run_id,
-                provider="llama_cpp_qwen",
+                provider=provider_name,
                 expected_model=manifest.expected_qwen_model,
                 call_limit=call_limits[pack_id],
                 draft_only_confirmed=True,
@@ -2732,7 +3525,7 @@ def _safe_dispatch_results(
             required_flags.issubset(item.review_flags) for item in suggested_results
         )
         provider_exact = all(
-            item.model_provider == "llama_cpp_qwen"
+            item.model_provider == provider_name
             and item.model_name == manifest.expected_qwen_model
             for item in suggested_results
         )
@@ -2754,7 +3547,7 @@ def _safe_dispatch_results(
             if item.status == "succeeded"
         )
         dispatch_contract_exact = all(
-            run.provider == "llama_cpp_qwen"
+            run.provider == provider_name
             and run.model_name == manifest.expected_qwen_model
             and run.marking_policy == "general"
             and run.maximum_calls == call_limits[region_to_case[run.items[0].answer_region_id][0]]
@@ -2845,10 +3638,23 @@ def run_grading_stage(
         )
     if current_state(run_dir) != "ocr_confirmed":
         raise LocalCuratedEvaluationError("Qwen grading requires confirmed OCR evidence")
+    # Scope authorization is an operator precondition, not an evaluation
+    # attempt. Failing it must leave the signed OCR-confirmed run resumable:
+    # no model has been selected and no provider call has been made yet.
+    scope_manifest = load_manifest(run_dir)
+    if os.environ.get(_EVALUATION_SCOPE_ENV) != scope_manifest.run_id:
+        raise LocalCuratedEvaluationError(
+            "Local curated grading must be explicitly scoped to this run ID; "
+            "use the evaluation operator script before enabling its call budget"
+        )
     try:
         verify_locked_artifacts(run_dir)
         require_clean_git_worktree()
         manifest = load_manifest(run_dir)
+        if expected_model != manifest.expected_qwen_model:
+            raise LocalCuratedEvaluationError(
+                "Requested grading model does not match the locked evaluation manifest"
+            )
         if current_git_commit() != manifest.harness_commit:
             raise LocalCuratedEvaluationError(
                 "Current Git commit does not match the harness commit"
@@ -2857,17 +3663,28 @@ def run_grading_stage(
         confirmation_lock = OcrConfirmationLock.model_validate(
             read_json(run_dir / "ocr_confirmation_lock.json")
         )
-        _settings, session_factory, _storage_root = _configure_runtime(
+        settings, session_factory, _storage_root = _configure_runtime(
             run_dir,
             database_url=database_url,
             local_ai_env=local_ai_env,
+            require_grading=True,
         )
         if datetime.now(UTC) <= confirmation_lock.signed_at:
             raise LocalCuratedEvaluationError(
                 "Grading calls must follow OCR confirmation sign-off"
             )
-        status_before = _sanitized_status(manifest.expected_qwen_model)
-        gpu_before = _gpu_safety_snapshot()
+        active_phase = _activate_model_for_evaluation(
+            settings=settings,
+            session_factory=session_factory,
+            expected_model=manifest.expected_qwen_model,
+            holder_kind="evaluation_grading_preflight",
+        )
+        status_before = _sanitized_status(
+            expected_visual_model=manifest.operator_assets.qwen38_vision.model_alias,
+            expected_grading_model=manifest.expected_qwen_model,
+            require_visual=False,
+        )
+        gpu_before = _gpu_safety_snapshot(phase=active_phase)
         result, runtime_details = _safe_dispatch_results(
             manifest,
             confirmation_lock,
@@ -2876,58 +3693,66 @@ def run_grading_stage(
         )
         if result.first_call_at <= confirmation_lock.signed_at:
             raise LocalCuratedEvaluationError("Qwen calls did not follow OCR confirmation")
-        owner_headers, intruder_headers = _auth_headers(
-            session_factory,
-            ocr_result.owner_teacher_id,
-            ocr_result.intruder_teacher_id,
-        )
-        from fastapi.testclient import TestClient
+        from fastapi import HTTPException
 
-        from app.main import app
+        from app.api.routes.final_grades import get_assessment_review_queue
+        from app.api.routes.grading import read_grading_dispatch_run
+        from app.core.ownership import get_owned_assessment_or_404
+        from app.models import User
+        from app.services.final_grade_service import FinalGradeService
 
-        with TestClient(app) as client:
-            dispatch_access_checks = [
-                (
-                    client.get(
-                        f"/grading-dispatch-runs/{dispatch_id}",
-                        headers=owner_headers,
-                    ),
-                    client.get(
-                        f"/grading-dispatch-runs/{dispatch_id}",
-                        headers=intruder_headers,
-                    ),
-                )
-                for dispatch_id in result.dispatch_run_ids
-            ]
-            owner_review = client.get(
-                f"/assessments/{ocr_result.assessment_id}/review-queue",
-                headers=owner_headers,
+        with session_factory() as db:
+            owner = db.get(User, ocr_result.owner_teacher_id)
+            intruder = db.get(User, ocr_result.intruder_teacher_id)
+            if owner is None or intruder is None:
+                raise LocalCuratedEvaluationError("Evaluation teachers are missing")
+            for dispatch_id in result.dispatch_run_ids:
+                owner_read = read_grading_dispatch_run(dispatch_id, db, owner)
+                if owner_read.id != dispatch_id:
+                    raise LocalCuratedEvaluationError(
+                        "Dispatch ownership read returned the wrong run"
+                    )
+                try:
+                    read_grading_dispatch_run(dispatch_id, db, intruder)
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise LocalCuratedEvaluationError(
+                            "Dispatch ownership isolation returned the wrong status"
+                        ) from exc
+                else:
+                    raise LocalCuratedEvaluationError("Dispatch ownership isolation failed")
+            owner_review_items = list(
+                get_assessment_review_queue(ocr_result.assessment_id, db, owner)
             )
-            intruder_review = client.get(
-                f"/assessments/{ocr_result.assessment_id}/review-queue",
-                headers=intruder_headers,
+            try:
+                get_assessment_review_queue(ocr_result.assessment_id, db, intruder)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise LocalCuratedEvaluationError(
+                        "Review-queue ownership isolation returned the wrong status"
+                    ) from exc
+            else:
+                raise LocalCuratedEvaluationError("Review-queue ownership isolation failed")
+            get_owned_assessment_or_404(ocr_result.assessment_id, db, owner)
+            export_content = FinalGradeService(db).build_final_grades_workbook(
+                ocr_result.assessment_id
             )
-            export = client.get(
-                f"/assessments/{ocr_result.assessment_id}/export/final-grades.xlsx",
-                headers=owner_headers,
-            )
-            intruder_export = client.get(
-                f"/assessments/{ocr_result.assessment_id}/export/final-grades.xlsx",
-                headers=intruder_headers,
-            )
-        if any(
-            owner_read.status_code != 200 or intrusion.status_code != 404
-            for owner_read, intrusion in dispatch_access_checks
-        ):
-            raise LocalCuratedEvaluationError("Dispatch ownership isolation failed")
-        owner_review_items = owner_review.json() if owner_review.status_code == 200 else []
+            try:
+                get_owned_assessment_or_404(ocr_result.assessment_id, db, intruder)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise LocalCuratedEvaluationError(
+                        "Export ownership isolation returned the wrong status"
+                    ) from exc
+            else:
+                raise LocalCuratedEvaluationError("Export ownership isolation failed")
         suggested_review_items = [
-            item for item in owner_review_items if item.get("review_status") == "suggested"
+            item for item in owner_review_items if item.review_status == "suggested"
         ]
         ungraded_region_ids = {
-            int(item["answer_region"]["id"])
+            item.answer_region.id
             for item in owner_review_items
-            if item.get("review_status") == "ungraded"
+            if item.review_status == "ungraded"
         }
         expected_blank_region_ids = {
             case.answer_region_id
@@ -2938,15 +3763,10 @@ def run_grading_stage(
             len(owner_review_items) != 20
             or len(suggested_review_items) != 18
             or ungraded_region_ids != expected_blank_region_ids
-            or intruder_review.status_code != 404
         ):
             raise LocalCuratedEvaluationError("Review-queue ownership isolation failed")
-        if intruder_export.status_code != 404:
-            raise LocalCuratedEvaluationError("Export ownership isolation failed")
-        if export.status_code != 200:
-            raise LocalCuratedEvaluationError("Approved-only export could not be inspected")
         export_rows = list(
-            load_workbook(io.BytesIO(export.content)).active.iter_rows(values_only=True)
+            load_workbook(io.BytesIO(export_content)).active.iter_rows(values_only=True)
         )
         empty_approved_export = len(export_rows) == 1
         if not empty_approved_export:
@@ -2959,23 +3779,31 @@ def run_grading_stage(
                 "approved_only_export_has_zero_data_rows": True,
             }
         )
-        status_after = _sanitized_status(manifest.expected_qwen_model)
-        gpu_after = _gpu_safety_snapshot()
-        if not status_before["qwen"]["available"] or not status_after["qwen"]["available"]:
-            raise LocalCuratedEvaluationError("Qwen was not healthy throughout grading")
-        if not status_before["ocr"]["available"] or not status_after["ocr"]["available"]:
-            raise LocalCuratedEvaluationError("CPU OCR was not healthy alongside Qwen")
+        status_after = _sanitized_status(
+            expected_visual_model=manifest.operator_assets.qwen38_vision.model_alias,
+            expected_grading_model=manifest.expected_qwen_model,
+            require_visual=False,
+        )
+        gpu_after = _gpu_safety_snapshot(phase=active_phase)
+        grading_status_key = "qwen" if active_phase == "Qwen" else "qwen38"
+        if (
+            not status_before[grading_status_key]["available"]
+            or not status_after[grading_status_key]["available"]
+        ):
+            raise LocalCuratedEvaluationError("The selected Qwen grading model was not healthy")
         if not all(
             (
-                gpu_before["qwen_present_in_gpu_compute_clients"],
-                gpu_before["ocr_absent_from_gpu_compute_clients"],
-                gpu_after["qwen_present_in_gpu_compute_clients"],
-                gpu_after["ocr_absent_from_gpu_compute_clients"],
+                gpu_before["active_model_present_in_gpu_compute_clients"],
+                gpu_before["other_managed_model_absent_from_gpu_compute_clients"],
+                gpu_after["active_model_present_in_gpu_compute_clients"],
+                gpu_after["other_managed_model_absent_from_gpu_compute_clients"],
             )
         ):
-            raise LocalCuratedEvaluationError("GPU/CPU provider isolation did not remain valid")
-        result.safety_checks["qwen_and_cpu_ocr_healthy_concurrently"] = True
-        result.safety_checks["qwen_gpu_ocr_cpu_isolation"] = True
+            raise LocalCuratedEvaluationError("The single local-model GPU slot was not isolated")
+        result.safety_checks["qwen38_visual_transcription_reasoning_off"] = all(
+            case.reasoning_mode == "off" for case in ocr_result.cases
+        )
+        result.safety_checks["single_model_gpu_slot_enforced"] = True
         _validate_complete_grading_safety_checks(result)
         result_path = run_dir / "grading_results.json"
         runtime_path = run_dir / "grading_runtime.json"
@@ -3178,12 +4006,21 @@ def _report_markdown(report: dict[str, Any]) -> str:
             "",
             "## Runtime",
             "",
-            f"- Provider/model: llama_cpp_qwen / {report['models']['qwen_alias']}",
             (
-                "- OCR/layout/device: "
-                f"{report['models']['ocr_model']} / {report['models']['layout_model']} / CPU"
+                "- Text grading provider/model: "
+                f"{report['models']['grading_provider']} / {report['models']['grading_alias']}"
             ),
-            "- Qwen calls: 18; OCR calls: 20; retries: 0; fallback/cloud calls: 0",
+            (
+                "- Visual transcription provider/model/mode: "
+                f"llama_cpp_qwen38 / {report['models']['visual_alias']} / "
+                "reasoning disabled"
+            ),
+            (
+                "- Text-grading calls: "
+                f"{report['call_counts']['grading']}; visual-transcription calls: "
+                f"{report['call_counts']['visual_transcription']}; retries: "
+                f"{report['call_counts']['retries']}; fallback/cloud calls: 0"
+            ),
             "- Dispatch transport: direct_host_eval (RQ crash recovery was not evaluated)",
             "",
         ]
@@ -3191,13 +4028,130 @@ def _report_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _generate_ocr_quality_no_go_report(run_dir: Path) -> dict[str, Any]:
+    """Report an honestly failed visual-OCR quality gate without grading."""
+
+    verify_locked_artifacts(run_dir)
+    manifest = load_manifest(run_dir)
+    ground_truth = GroundTruthLock.model_validate(read_json(run_dir / "ground_truth_lock.json"))
+    ocr_result = OcrRunResult.model_validate(read_json(run_dir / "ocr_results.json"))
+    quality_lock = OcrQualityNoGoLock.model_validate(
+        read_json(run_dir / "ocr_quality_no_go_lock.json")
+    )
+    if quality_lock.ocr_results_sha256 != sha256_file(run_dir / "ocr_results.json"):
+        raise LocalCuratedEvaluationError("OCR quality no-go lock does not match OCR results")
+    if (
+        (run_dir / "grading_results.json").exists()
+        or (run_dir / "ocr_confirmation_lock.json").exists()
+    ):
+        raise LocalCuratedEvaluationError(
+            "OCR quality no-go cannot report after an OCR confirmation or grading result"
+        )
+    runtime = read_json(run_dir / "ocr_runtime.json")
+    ocr_metrics = calculate_ocr_metrics(manifest, ocr_result.cases)
+    process_checks = {
+        "twenty_teacher_signed_cases": len(ground_truth.cases) == OCR_CALL_LIMIT,
+        "ground_truth_signed_before_ocr": ground_truth.signed_at < ocr_result.first_call_at,
+        "exactly_twenty_visual_transcription_calls": ocr_result.call_count == OCR_CALL_LIMIT,
+        "zero_visual_retries": ocr_result.retry_count == 0,
+        "exact_qwen38_visual_provider_model": all(
+            case.provider == "llama_cpp_qwen38"
+            and case.model == manifest.operator_assets.qwen38_vision.model_alias
+            and case.reasoning_mode == "off"
+            for case in ocr_result.cases
+        ),
+        "teacher_recorded_ocr_quality_rejection": bool(quality_lock.rejected_cases),
+        "zero_grading_calls_after_rejection": True,
+        "no_final_grade": True,
+        "no_unconfirmed_text_used_for_grading": True,
+        "zero_cloud_calls": True,
+        "zero_fallback_calls": True,
+        "single_model_gpu_slot_enforced": bool(runtime.get("gpu_safety_before"))
+        and bool(runtime.get("gpu_safety_after")),
+    }
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": manifest.run_id,
+        "generated_at": datetime.now(UTC),
+        "verdict": EvaluationVerdict.NO_GO_QUALITY.value,
+        "verdict_reasons": [
+            "Teacher rejected Qwen3.8 visual transcription: "
+            f"{case.case_id} ({case.reason})"
+            for case in quality_lock.rejected_cases
+        ],
+        "integration_commit": manifest.integration_commit,
+        "harness_commit": manifest.harness_commit,
+        "protocol_version": manifest.protocol_version,
+        "dataset": {
+            "case_count": OCR_CALL_LIMIT,
+            "synthetic": True,
+            "teacher_signed": True,
+            "primary_category_distribution": dict(
+                Counter(case.primary_category.value for case in manifest.cases)
+            ),
+        },
+        "models": {
+            "grading_provider": None,
+            "grading_alias": None,
+            "grading_model_sha256": None,
+            "visual_alias": manifest.operator_assets.qwen38_vision.model_alias,
+            "visual_model_sha256": manifest.operator_assets.qwen38_vision.model_sha256,
+            "visual_mmproj_sha256": manifest.operator_assets.qwen38_vision.mmproj_sha256,
+            "visual_reasoning_mode": runtime["visual_reasoning_mode"],
+            "llama_cpp_build": manifest.operator_assets.qwen38_vision.build,
+        },
+        "call_counts": {
+            "visual_transcription": OCR_CALL_LIMIT,
+            "grading": 0,
+            "retries": 0,
+        },
+        "process_checks": process_checks,
+        "ocr_metrics": ocr_metrics,
+        "grading_metrics": {
+            "not_run": True,
+            "reason": "Teacher-rejected visual transcription blocked grading safely.",
+            "suggested_case_count": 0,
+        },
+        "review_summary": {
+            "ocr_quality_rejections": len(quality_lock.rejected_cases),
+        },
+        "limitations": [
+            "A rejected OCR reading is a valid quality failure, not an integrity failure.",
+            "No student answer was sent to a text-grading model after the rejection.",
+            "A fresh run with new source images or a changed validated model is required.",
+        ],
+    }
+    report_path = run_dir / "report.json"
+    markdown_path = run_dir / "report.md"
+    write_json(report_path, report)
+    markdown_path.write_text(_report_markdown(_jsonable(report)), encoding="utf-8")
+    append_state(
+        run_dir,
+        "reported",
+        locked_artifacts={
+            "report.json": sha256_file(report_path),
+            "report.md": sha256_file(markdown_path),
+        },
+        metadata={"verdict": EvaluationVerdict.NO_GO_QUALITY.value},
+    )
+    return report
+
+
 def generate_report(run_dir: Path) -> dict[str, Any]:
-    if current_state(run_dir) != "review_completed":
+    state = current_state(run_dir)
+    if state == "ocr_quality_no_go":
+        return _generate_ocr_quality_no_go_report(run_dir)
+    if state != "review_completed":
         raise LocalCuratedEvaluationError("Report generation requires signed teacher review")
     verify_locked_artifacts(run_dir)
     manifest = load_manifest(run_dir)
     ground_truth = GroundTruthLock.model_validate(read_json(run_dir / "ground_truth_lock.json"))
     ocr_result = OcrRunResult.model_validate(read_json(run_dir / "ocr_results.json"))
+    if ocr_result.evidence_origin != "live_qwen38_visual":
+        raise LocalCuratedEvaluationError(
+            "A grading bake-off replay is not an independent visual-OCR evaluation; "
+            "use the grading-model bake-off comparison report instead"
+        )
     confirmations = OcrConfirmationLock.model_validate(
         read_json(run_dir / "ocr_confirmation_lock.json")
     )
@@ -3205,7 +4159,7 @@ def generate_report(run_dir: Path) -> dict[str, Any]:
         read_json(run_dir / "grading_results.json")
     )
     review = ReviewLock.model_validate(read_json(run_dir / "review_lock.json"))
-    environment = read_json(run_dir / "environment.json")
+    environment = read_json(run_dir / "ocr_runtime.json")
     ocr_metrics = calculate_ocr_metrics(manifest, ocr_result.cases, confirmations.cases)
     grading_metrics = calculate_grading_metrics(manifest, grading_result.cases)
 
@@ -3253,7 +4207,7 @@ def generate_report(run_dir: Path) -> dict[str, Any]:
         grading_metrics=grading_metrics,
     )
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": manifest.run_id,
         "generated_at": datetime.now(UTC),
         "verdict": verdict.value,
@@ -3269,12 +4223,24 @@ def generate_report(run_dir: Path) -> dict[str, Any]:
                 Counter(case.primary_category.value for case in manifest.cases)
             ),
         },
-        # OCR engine identity is absent until the tier-1 engine is selected and
-        # the OCR stage is wired; see run_ocr_stage.
         "models": {
-            "qwen_alias": manifest.expected_qwen_model,
-            "qwen_model_sha256": environment["llama_cpp"]["model_sha256"],
-            "llama_cpp_build": environment["llama_cpp"]["build"],
+            "grading_provider": (
+                "llama_cpp_qwen"
+                if manifest.expected_qwen_model == "qwen3.6-35b-a3b-q4km"
+                else "llama_cpp_qwen38"
+            ),
+            "grading_alias": manifest.expected_qwen_model,
+            "grading_model_sha256": manifest.operator_assets.llama_cpp.model_sha256,
+            "visual_alias": manifest.operator_assets.qwen38_vision.model_alias,
+            "visual_model_sha256": manifest.operator_assets.qwen38_vision.model_sha256,
+            "visual_mmproj_sha256": manifest.operator_assets.qwen38_vision.mmproj_sha256,
+            "visual_reasoning_mode": environment["visual_reasoning_mode"],
+            "llama_cpp_build": manifest.operator_assets.qwen38_vision.build,
+        },
+        "call_counts": {
+            "visual_transcription": OCR_CALL_LIMIT,
+            "grading": QWEN_CALL_LIMIT,
+            "retries": 0,
         },
         "process_checks": process_checks,
         "ocr_metrics": ocr_metrics,
@@ -3699,6 +4665,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     confirm_parser.add_argument("--local-ai-env", type=Path, default=None)
 
+    no_go_parser = subparsers.add_parser("record-ocr-no-go")
+    no_go_parser.add_argument("--run-id", required=True)
+    no_go_parser.add_argument("--reviewer-id", required=True)
+    no_go_parser.add_argument("--confirm-teacher-signoff", action="store_true")
+    no_go_parser.add_argument(
+        "--database-url", default=os.environ.get("DATABASE_URL", "")
+    )
+    no_go_parser.add_argument("--local-ai-env", type=Path, default=None)
+
     grading_parser = subparsers.add_parser("run-grading")
     grading_parser.add_argument("--run-id", required=True)
     grading_parser.add_argument("--allow-local-qwen", action="store_true")
@@ -3794,6 +4769,27 @@ def main() -> None:
                 local_ai_env=args.local_ai_env,
             )
             print(json.dumps(_jsonable(lock), indent=2, sort_keys=True))
+            return
+        if args.command == "record-ocr-no-go":
+            lock = record_ocr_quality_no_go(
+                run_dir,
+                reviewer_id=args.reviewer_id,
+                confirm_teacher_signoff=args.confirm_teacher_signoff,
+                database_url=args.database_url,
+                local_ai_env=args.local_ai_env,
+            )
+            print(
+                json.dumps(
+                    {
+                        "run_id": lock.run_id,
+                        "state": current_state(run_dir),
+                        "rejected_case_count": len(lock.rejected_cases),
+                        "grading_calls": 0,
+                        "next_gate": "report (NO_GO_QUALITY; grading is blocked)",
+                    },
+                    indent=2,
+                )
+            )
             return
         if args.command == "run-grading":
             result = run_grading_stage(

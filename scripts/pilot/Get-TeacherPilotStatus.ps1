@@ -87,20 +87,41 @@ try {
 } catch {
     $redisReady = $false
 }
-$localAiRuntimeDirectory = Join-Path $paths.RepositoryRoot ".local-ai"
-$qwen38Runtime = Get-LocalAiRuntimeState -Port 8085 `
-    -ExpectedExecutable $env:LOCAL_QWEN38_BINARY_PATH `
-    -PidPath (Join-Path $localAiRuntimeDirectory "qwen38.pid")
+function Get-ManagedLocalAiPhaseStatus {
+    param([Parameter(Mandatory = $true)][ValidateSet("Qwen", "Qwen38")][string]$Mode)
 
-$qwen38Ready = $false
-try {
-    $models = Invoke-RestMethod -Uri "http://127.0.0.1:8085/v1/models" `
-        -Headers @{ Authorization = "Bearer $env:LOCAL_QWEN38_API_KEY" } -TimeoutSec 5
-    $qwen38Ready = $qwen38Runtime.Safe `
-        -and (@($models.data.id) -contains $env:LOCAL_QWEN38_MODEL)
-} catch {
-    $qwen38Ready = $false
+    $definition = Get-LocalAiServiceDefinition -Mode $Mode
+    $runtimeDirectory = Join-Path $paths.RepositoryRoot ".local-ai"
+    $binary = [Environment]::GetEnvironmentVariable($definition.BinaryVariable)
+    $key = [Environment]::GetEnvironmentVariable($definition.KeyVariable)
+    if ([string]::IsNullOrWhiteSpace($binary)) {
+        $listeners = @(Get-LocalAiListenerInfo -Port $definition.Port)
+        $runtime = if ($listeners.Count -eq 0) {
+            [pscustomobject]@{ Running = $false; Safe = $true; Managed = $false; Label = "off" }
+        } else {
+            [pscustomobject]@{ Running = $true; Safe = $false; Managed = $false; Label = "UNSAFE missing config" }
+        }
+        return [pscustomobject]@{ Definition = $definition; Runtime = $runtime; Ready = $false }
+    }
+
+    $runtime = Get-LocalAiRuntimeState -Port $definition.Port `
+        -ExpectedExecutable $binary `
+        -PidPath (Join-Path $runtimeDirectory $definition.PidFileName)
+    $ready = $false
+    if ($runtime.Running -and $runtime.Safe -and -not [string]::IsNullOrWhiteSpace($key)) {
+        try {
+            $models = Invoke-RestMethod -Uri "http://127.0.0.1:$($definition.Port)/v1/models" `
+                -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 5
+            $ready = @($models.data.id) -contains $definition.Alias
+        } catch {
+            $ready = $false
+        }
+    }
+    return [pscustomobject]@{ Definition = $definition; Runtime = $runtime; Ready = $ready }
 }
+
+$qwenRuntime = Get-ManagedLocalAiPhaseStatus -Mode Qwen
+$qwen38Runtime = Get-ManagedLocalAiPhaseStatus -Mode Qwen38
 $workerReady = $null -ne (Get-PilotOwnedProcess -Paths $paths -Name "worker" -ExpectedExecutable $paths.ApiPython)
 
 $status = @(
@@ -109,15 +130,16 @@ $status = @(
     [pscustomobject]@{ Service = "Backend"; Ready = (Test-HttpEndpoint "http://127.0.0.1:8000/health"); State = "managed"; Endpoint = "http://localhost:8000" },
     [pscustomobject]@{ Service = "RQ worker"; Ready = $workerReady; State = "managed"; Endpoint = "teacher-assistant-default" },
     [pscustomobject]@{ Service = "Frontend"; Ready = (Test-HttpEndpoint "http://127.0.0.1:3000"); State = "managed"; Endpoint = "http://localhost:3000" },
-    [pscustomobject]@{ Service = "Local Qwen3.8"; Ready = $qwen38Ready; State = $qwen38Runtime.Label; Endpoint = "127.0.0.1:8085" }
+    [pscustomobject]@{ Service = "Local Qwen3.6"; Ready = $qwenRuntime.Ready; State = $qwenRuntime.Runtime.Label; Endpoint = "127.0.0.1:$($qwenRuntime.Definition.Port)" },
+    [pscustomobject]@{ Service = "Local Qwen3.8"; Ready = $qwen38Runtime.Ready; State = $qwen38Runtime.Runtime.Label; Endpoint = "127.0.0.1:$($qwen38Runtime.Definition.Port)" }
 )
 $status | Format-Table -AutoSize
 Write-Host "Cohort model grading enabled: $env:COHORT_MODEL_GRADING_ENABLED"
 $coreReady = $postgresReady -and $redisReady -and $workerReady `
     -and (Test-HttpEndpoint "http://127.0.0.1:8000/health") `
     -and (Test-HttpEndpoint "http://127.0.0.1:3000")
-$localPhaseReady = $qwen38Ready
-$unsafeLocalAi = -not $qwen38Runtime.Safe
+$localPhaseReady = $qwenRuntime.Ready -or $qwen38Runtime.Ready
+$unsafeLocalAi = -not $qwenRuntime.Runtime.Safe -or -not $qwen38Runtime.Runtime.Safe
 if ($unsafeLocalAi) {
     Write-Warning "An unsafe or unmanaged local AI listener was detected."
     exit 1

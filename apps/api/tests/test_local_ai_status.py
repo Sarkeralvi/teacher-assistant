@@ -52,6 +52,34 @@ def test_local_ai_status_reports_verified_loopback_services(
     assert payload["cohort_model_grading_enabled"] is True
 
 
+def test_qwen38_visual_status_is_available_without_grading_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = SimpleNamespace(
+        provider=SimpleNamespace(client=None),
+        verify_available_model=lambda: None,
+    )
+    monkeypatch.setattr(
+        BrainAdapter,
+        "for_provider",
+        classmethod(lambda cls, settings, provider: adapter),
+    )
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        LOCAL_QWEN38_ENABLED=True,
+        LOCAL_QWEN38_API_KEY="qwen38-key",
+        LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=True,
+        LOCAL_QWEN38_GRADING_ENABLED=False,
+    )
+
+    payload = LocalAiStatusService(settings).read()
+
+    assert payload["qwen38"]["available"] is True
+    assert payload["qwen38"]["detail"] == "ready"
+    assert payload["qwen38"]["visual_preparation_enabled"] is True
+    assert payload["qwen38"]["grading_enabled"] is False
+
+
 def test_cohort_provider_retry_count_is_fixed_at_zero() -> None:
     assert Settings().cohort_provider_retry_count == 0
     with pytest.raises(ValidationError):
