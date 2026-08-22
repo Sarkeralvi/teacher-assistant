@@ -44,7 +44,9 @@ class QwenGradePayload(BaseModel):
     score: Decimal = Field(ge=Decimal("0"))
     max_score: Decimal = Field(gt=Decimal("0"))
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    needs_review: Literal[True]
+    # Review status is set by the application after validation; the model is
+    # not permitted to make a draft final merely by returning false.
+    needs_review: bool = True
     rubric_breakdown: list[QwenRubricBreakdownItem] = Field(min_length=1)
     detected_answer_summary: str = Field(min_length=1)
     major_errors: list[str]
@@ -151,7 +153,8 @@ class QwenReferenceQuestionDraft(BaseModel):
     # Pydantic will reject an empty response before it reaches persistence.
     criteria: list[QwenReferenceCriterionDraft] = Field(min_length=1, max_length=8)
     blockers: list[str] = Field(default_factory=list, max_length=8)
-    needs_review: Literal[True]
+    # Teacher review is enforced by the service, not delegated to model text.
+    needs_review: bool = True
 
 
 class QwenReferenceBundlePayload(BaseModel):
@@ -566,6 +569,8 @@ class LlamaCppQwenProvider(BrainProvider):
                     "Local Qwen output did not match the detected source question structure"
                 )
         result = payload.model_dump(mode="json")
+        for question in result["questions"]:
+            question["needs_review"] = True
         result["usage"] = usage
         return result
 

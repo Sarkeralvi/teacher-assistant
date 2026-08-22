@@ -631,9 +631,21 @@ class GradingService:
             self.get_grading_evidence_packet(region.id)
         )
 
-        grading_answer_image_path, grading_context, segment_metadata = (
-            self._prepare_grading_context(region, confirmed_segments, settings)
-        )
+        # Local Qwen providers grade only teacher-confirmed text. Generating a
+        # crop or composite here is unnecessary, creates a second student-data
+        # artifact, and can fail on deeply nested Windows evaluation paths
+        # before the text-only provider is ever called.
+        provider_name = getattr(getattr(self.adapter, "provider", None), "provider_name", "")
+        if provider_name in {
+            "llama_cpp_qwen",
+            "llama_cpp_qwen38",
+        }:
+            grading_answer_image_path = "[image input disabled]"
+            grading_context: dict[str, object] | None = None
+        else:
+            grading_answer_image_path, grading_context, _segment_metadata = (
+                self._prepare_grading_context(region, confirmed_segments, settings)
+            )
 
         if job is None:
             job = GradingJob(answer_region_id=region.id, status="running")

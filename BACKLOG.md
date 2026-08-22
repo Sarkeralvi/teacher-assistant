@@ -22,7 +22,7 @@
   `BRAIN_PROVIDER=llama_cpp_qwen38` / `LOCAL_QWEN38_ENABLED`. Retired PaddleOCR recognition and
   transcription stack removed in a prior commit. Operator rollout gates I0-I4 added:
   architecture-compatibility probe, hash-verified model download, isolated server smoke, and a
-  manual-review-required vision-transcription smoke, plus `Enable-Qwen38TeacherRehearsal.ps1`.
+  manual-review-required vision-transcription workflow, plus `Enable-Qwen38TeacherRehearsal.ps1`.
 - Safety: disabled by default; loopback-only; image input stays disabled on the text-only grading
   call, matching the existing Qwen3.6 provider; zero retries; exact model-alias verification;
   sanitized errors strip API keys and image data; `needs_review` always true; no `FinalGrade`
@@ -35,7 +35,7 @@
   transcription smoke) ran once against a real answer-region crop from submission `#39`
   (`1(a)` probability/Bayes' theorem); teacher visually compared the raw transcription against the
   source image and confirmed it faithful (verbatim digits, no solving/correcting/inferring); this
-  is the recorded Gate I4 teacher sign-off referenced by `Test-Qwen38VisionSmoke.ps1`.
+  is the recorded teacher sign-off in the supervised visual-preparation workflow.
 - Verification remaining: only one image has been teacher-reviewed under Gate I4; broader
   transcription-quality confidence should come from more samples before any batch/cohort use. No
   founder-supervised rehearsal grading call (per `docs/FOUNDER_PILOT_REHEARSAL.md`) has been run

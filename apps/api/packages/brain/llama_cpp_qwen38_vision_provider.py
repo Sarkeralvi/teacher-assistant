@@ -35,7 +35,6 @@ import base64
 import hashlib
 import re
 import time
-from copy import deepcopy
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -48,6 +47,7 @@ from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy, RubricBre
 from packages.brain.schemas_qwen38 import (
     UncertainGlyph,
     VisualPageMappingOutput,
+    VisualPageRegion,
     VisualTranscriptionOutput,
 )
 
@@ -109,7 +109,9 @@ class _Qwen38GradePayload(BaseModel):
     score: Decimal = Field(ge=Decimal("0"))
     max_score: Decimal = Field(gt=Decimal("0"))
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    needs_review: Literal[True]
+    # Review status is authorization metadata, never model authority. The
+    # provider accepts either value then forces True on its public output.
+    needs_review: bool | None = None
     rubric_breakdown: list[_Qwen38RubricItem] = Field(min_length=1)
     detected_answer_summary: str = Field(min_length=1)
     major_errors: list[str]
@@ -146,42 +148,18 @@ class _Qwen38TranscriptionPayload(BaseModel):
     is_blank: bool
     is_irrelevant: bool
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    needs_review: Literal[True]
+    # Review status is authorization metadata, never model authority. The
+    # provider accepts either value then forces True on its public output.
+    needs_review: bool | None = None
 
 
-# ── JSON-schema helpers ───────────────────────────────────────────────────
+class _Qwen38PageMappingPayload(BaseModel):
+    """Model-owned mapping fields; review status is set by the server."""
 
+    model_config = ConfigDict(extra="forbid")
 
-def _prefer_json_numbers(value: Any) -> Any:
-    """Remove Pydantic regex-string Decimal alternatives (llama.cpp grammar compat)."""
-    if isinstance(value, list):
-        return [_prefer_json_numbers(v) for v in value]
-    if not isinstance(value, dict):
-        return value
-    normalized = {k: _prefer_json_numbers(v) for k, v in value.items()}
-    alternatives = normalized.get("anyOf")
-    if not isinstance(alternatives, list):
-        return normalized
-    has_number = any(isinstance(o, dict) and o.get("type") == "number" for o in alternatives)
-    if not has_number:
-        return normalized
-    filtered = [
-        o
-        for o in alternatives
-        if not (isinstance(o, dict) and o.get("type") == "string" and "pattern" in o)
-    ]
-    if len(filtered) == len(alternatives):
-        return normalized
-    if len(filtered) == 1:
-        excluded = {"anyOf", "type", "minimum", "maximum"}
-        meta = {k: v for k, v in normalized.items() if k not in excluded}
-        return {**filtered[0], **meta}
-    normalized["anyOf"] = filtered
-    return normalized
-
-
-def _llama_cpp_json_schema(response_model: type[BaseModel]) -> dict[str, Any]:
-    return _prefer_json_numbers(deepcopy(response_model.model_json_schema()))
+    regions: list[VisualPageRegion]
+    needs_review: bool | None = None
 
 
 # ── Main provider class ───────────────────────────────────────────────────
@@ -272,6 +250,13 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         Raises RuntimeError if the alias is absent or the server is unreachable.
         """
         try:
+            # llama.cpp may expose /v1/models without authentication. Check a
+            # lightweight protected endpoint first so a stale or wrong key is
+            # never reported as a ready local provider.
+            auth_response = self._http().get("../props", headers=self._headers())
+            if auth_response.status_code in {401, 403}:
+                raise RuntimeError("Local Qwen3.8 API-key authentication failed")
+            auth_response.raise_for_status()
             resp = self._http().get(
                 "/models",
                 headers=self._headers(),
@@ -302,11 +287,20 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         temperature: float = 0.0,
         enable_thinking: bool = False,
     ) -> tuple[BaseModel, dict[str, Any]]:
-        """Call /v1/chat/completions with JSON grammar and parse the result.
+        """Call /v1/chat/completions and validate its JSON response.
 
         Returns the validated Pydantic model and the usage dict.
         Raises ValueError for schema violations, RuntimeError for HTTP errors.
         Zero retries — callers handle failure explicitly.
+
+        llama.cpp build 10249 can raise a server-side grammar exception for
+        valid-looking complex Pydantic JSON Schemas (notably when a transcript
+        contains mathematical slash characters). JSON-object mode can also
+        keep decoding whitespace after the JSON object completes. Therefore
+        this provider does not delegate output grammar to the server. Explicit
+        contract instructions plus Pydantic are the strict, fail-closed schema
+        authority: malformed, missing, extra, truncated, or contract-breaking
+        fields are rejected before any draft evidence or grade is persisted.
         """
         if self.require_model_lease:
             from app.services.local_model_call_guard import (
@@ -314,20 +308,40 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             )
 
             assert_local_model_call_authorized(model_phase="Qwen38")
-        schema = _llama_cpp_json_schema(response_model)
+        output_instruction = {
+            "role": "system",
+            "content": (
+                "Return exactly one JSON object and nothing else: no Markdown fence, "
+                "preamble, explanation, or reasoning. Follow every field name and "
+                f"constraint stated in the task for the {schema_name} contract."
+            ),
+        }
+        # Qwen's chat template permits one system message and requires it to
+        # be first. Grading already supplies the authoritative safety system
+        # prompt, so append our output contract to it rather than creating a
+        # second system turn that llama.cpp rejects with HTTP 500.
+        request_messages = list(messages)
+        if request_messages and request_messages[0].get("role") == "system":
+            first = dict(request_messages[0])
+            existing_content = first.get("content")
+            if isinstance(existing_content, str):
+                first["content"] = existing_content + "\n\n" + output_instruction["content"]
+                request_messages[0] = first
+            else:
+                raise ValueError(
+                    "llama_cpp_qwen38_vision: system prompt content must be plain text"
+                )
+        else:
+            request_messages.insert(0, output_instruction)
         body: dict[str, Any] = {
             "model": EXPECTED_ALIAS,
-            "messages": messages,
+            "messages": request_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
             "chat_template_kwargs": {
                 "enable_thinking": enable_thinking,
                 "preserve_thinking": False,
-            },
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
             },
         }
         try:
@@ -359,6 +373,11 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         )
         if not content.strip():
             raise ValueError(f"llama_cpp_qwen38_vision: empty content in response ({diagnostics})")
+        if finish_reason == "length":
+            raise ValueError(
+                "llama_cpp_qwen38_vision: response was cut off before finishing; "
+                f"the model needs a larger token budget for this input ({diagnostics})"
+            )
 
         try:
             import json as _json
@@ -459,7 +478,11 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "marked uncertain. Never infer a character from arithmetic consistency.\n\n"
             "If the answer region is genuinely blank, set is_blank=true and draft_text to an "
             "empty string. Do not use a placeholder such as [blank].\n\n"
-            "Return your answer as JSON matching the required schema."
+            "Return exactly this JSON shape with no extra keys: "
+            '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
+            '"alternatives":["option 1","option 2"]}],"is_blank":false,'
+            '"is_irrelevant":false,"confidence":0.0,"needs_review":true}. '
+            "Use an empty uncertain_glyphs array when there are no ambiguities."
         )
 
         messages: list[dict[str, Any]] = [
@@ -534,7 +557,12 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "solve, grade, or use a handwritten header as the identity. Mark continuation flags "
             "when the answer visibly continues between pages. Every result needs review.\n\n"
             f"FINALIZED LABELS: {labels}\n"
-            f"OPEN CONTINUATIONS FROM PREVIOUS PAGE: {continuation_hint}"
+            f"OPEN CONTINUATIONS FROM PREVIOUS PAGE: {continuation_hint}\n\n"
+            "Return exactly this JSON shape with no extra keys: "
+            '{"regions":[{"question_label":"one supplied label","bbox":[0,0,1000,1000],'
+            '"continues_from_previous":false,"continues_to_next":false,'
+            '"confidence":0.0,"warnings":[]}],"needs_review":true}. '
+            "Use an empty regions array only if this page has no visible answer segment."
         )
         payload, _usage = self._structured_completion(
             messages=[
@@ -543,17 +571,17 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                     "content": [{"type": "text", "text": prompt}, image_part],
                 }
             ],
-            response_model=VisualPageMappingOutput,
+            response_model=_Qwen38PageMappingPayload,
             schema_name="visual_page_mapping",
             max_tokens=900,
             temperature=0.0,
             enable_thinking=False,
         )
-        assert isinstance(payload, VisualPageMappingOutput)
+        assert isinstance(payload, _Qwen38PageMappingPayload)
         known = {label.casefold() for label in question_labels}
         if any(region.question_label.casefold() not in known for region in payload.regions):
             raise ValueError("Visual mapping returned an unknown finalized question label")
-        return payload
+        return VisualPageMappingOutput(regions=payload.regions, needs_review=True)
 
     def _reference_bundle_token_budget(self, total_pages: int) -> int:
         """Size the completion budget to the input, bounded by real context room.
@@ -597,7 +625,17 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                     "and wording; SOLUTION pages define worked model answers; RUBRIC pages define "
                     "criteria and marks. Extract one editable draft per gradable leaf question. "
                     "Never solve or invent missing text, marks, or criteria. Preserve mathematics. "
-                    "Every output needs teacher review. Return strict JSON only."
+                    "Every output needs teacher review. Return exactly one JSON object with keys "
+                    "questions and warnings. Each question must contain question_number, "
+                    "parent_question_number (string or null), node_type (question or subquestion), "
+                    "question_text, model_answer (string or null), marks (number or null), "
+                    "source_question_pages, source_solution_pages, source_text_excerpt, "
+                    "confidence, "
+                    "criteria, blockers, and needs_review=true. Each criterion must contain "
+                    "criterion_label, description, max_marks (number or null), confidence, "
+                    "source_rubric_pages, and blocker (string or null). Use arrays even "
+                    "when empty; "
+                    "never add extra keys or prose."
                 ),
             }
         ]
@@ -616,6 +654,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         )
         assert isinstance(payload, QwenReferenceBundlePayload)
         result = payload.model_dump(mode="json")
+        for question in result["questions"]:
+            question["needs_review"] = True
         result["usage"] = usage
         return result
 

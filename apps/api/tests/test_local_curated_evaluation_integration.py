@@ -509,6 +509,9 @@ def test_full_harness_rehearsal_uses_only_fake_providers(
     assert grading_result.qwen_call_count == 18
     assert grading_result.blank_refusal_count == 2
     assert grading_result.retry_count == 0
+    # Local Qwen grading is text-only: it must not create unused cropped or
+    # composite student-image artifacts before dispatching the provider call.
+    assert not (runtime_storage / "artifacts" / "grading_context").exists()
     assert evaluation.current_state(run_dir) == "grading_completed"
 
     _complete_grading_review(run_dir)

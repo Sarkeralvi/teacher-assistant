@@ -8,12 +8,16 @@ import pytest
 
 from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter
-from packages.brain.llama_cpp_qwen38_vision_provider import LlamaCppQwen38VisionProvider
+from packages.brain.llama_cpp_qwen38_vision_provider import (
+    LlamaCppQwen38VisionProvider,
+    _Qwen38TranscriptionPayload,
+)
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], *, status_code: int = 200) -> None:
         self.payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
         return None
@@ -33,6 +37,11 @@ class FakeClient:
     def post(self, _path: str, *, json: dict[str, Any], **_kwargs: object) -> FakeResponse:
         self.requests.append(json)
         return FakeResponse(self.completion)
+
+
+class AuthFailClient(FakeClient):
+    def get(self, *_args: object, **_kwargs: object) -> FakeResponse:
+        return FakeResponse({}, status_code=401)
 
 
 def provider_with(completion: dict[str, Any]) -> tuple[LlamaCppQwen38VisionProvider, FakeClient]:
@@ -74,6 +83,32 @@ def test_qwen38_refuses_an_unleased_inference_call_before_http() -> None:
     assert client.requests == []
 
 
+def test_qwen38_rejects_a_nontext_system_prompt_before_http() -> None:
+    provider, client = provider_with(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"draft_text":"","uncertain_glyphs":[],"is_blank":true,'
+                            '"is_irrelevant":false,"confidence":1.0,"needs_review":true}'
+                        )
+                    }
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="system prompt content must be plain text"):
+        provider._structured_completion(
+            messages=[{"role": "system", "content": []}],
+            response_model=_Qwen38TranscriptionPayload,
+            schema_name="invalid",
+        )
+
+    assert client.requests == []
+
+
 def test_configured_qwen38_adapter_enforces_the_provider_lease_guard() -> None:
     settings = Settings(
         BRAIN_ALLOW_REAL_PROVIDERS=True,
@@ -86,6 +121,14 @@ def test_configured_qwen38_adapter_enforces_the_provider_lease_guard() -> None:
 
     assert isinstance(adapter.provider, LlamaCppQwen38VisionProvider)
     assert adapter.provider.require_model_lease is True
+
+
+def test_qwen38_model_check_refuses_an_invalid_api_key() -> None:
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key", require_model_lease=False)
+    provider.client = AuthFailClient({})
+
+    with pytest.raises(RuntimeError, match="API-key authentication failed"):
+        provider.verify_available_model()
 
 
 def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None:
@@ -111,6 +154,9 @@ def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None
         "enable_thinking": False,
         "preserve_thinking": False,
     }
+    assert "response_format" not in client.requests[0]
+    assert client.requests[0]["messages"][0]["role"] == "system"
+    assert "exactly one JSON object" in client.requests[0]["messages"][0]["content"]
     with pytest.raises(ValueError, match="magic"):
         provider.transcribe_image(image_bytes=b"not-an-image", mime_type="image/png")
 
@@ -122,7 +168,7 @@ def test_visual_transcription_keeps_blank_evidence_empty() -> None:
                 "message": {
                     "content": (
                         '{"draft_text":"","uncertain_glyphs":[],"is_blank":true,'
-                        '"is_irrelevant":false,"confidence":0.95,"needs_review":true}'
+                        '"is_irrelevant":false,"confidence":0.95,"needs_review":false}'
                     )
                 }
             }
@@ -137,8 +183,11 @@ def test_visual_transcription_keeps_blank_evidence_empty() -> None:
 
     assert result.is_blank is True
     assert result.draft_text == ""
-    prompt = client.requests[0]["messages"][0]["content"][0]["text"]
+    # The model cannot weaken the mandatory teacher-review gate.
+    assert result.needs_review is True
+    prompt = client.requests[0]["messages"][1]["content"][0]["text"]
     assert "empty string" in prompt
+    assert '"draft_text"' in prompt
 
 
 def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:
@@ -276,7 +325,7 @@ def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
         ],
         "usage": {},
     }
-    provider, _client = provider_with(completion)
+    provider, client = provider_with(completion)
     with pytest.raises(ValueError, match="maximum score"):
         provider.grade(
             question_text="Solve x.",
@@ -285,5 +334,14 @@ def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
             answer_image_path="[image input disabled]",
             student_answer_text="x = 4",
             prompt_version="test",
-            messages=[{"role": "user", "content": "fresh"}],
+            messages=[
+                {"role": "system", "content": "grade safely"},
+                {"role": "user", "content": "fresh"},
+            ],
         )
+
+    assert [message["role"] for message in client.requests[0]["messages"]] == [
+        "system",
+        "user",
+    ]
+    assert "Return exactly one JSON object" in client.requests[0]["messages"][0]["content"]

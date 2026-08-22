@@ -120,4 +120,4 @@ Write-Host "=== Gate I2 complete ===" -ForegroundColor Green
 Write-Host "Manifest : $manifestPath"
 Write-Host "Model    : $TARGET_FILE"
 Write-Host ""
-Write-Host "Next: run Test-Qwen38Compatibility.ps1, then Start-Qwen38Smoke.ps1" -ForegroundColor Cyan
+Write-Host "Next: run Test-Qwen38Compatibility.ps1, then Test-LocalAiPreflight.ps1 -Mode Qwen38" -ForegroundColor Cyan
