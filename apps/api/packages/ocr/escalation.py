@@ -45,6 +45,15 @@ REASON_NO_LINES_DETECTED = "no_lines_detected"
 REASON_AREA_ROLLUP = "escalated_area_rollup"
 REASON_REGION_COUNT_ROLLUP = "escalated_region_count_rollup"
 
+# A fraction component is short; a prose line runs the text column's width.
+# Measured on a real printed page, ordinary lines sit near the median width
+# while stacked math components are a small fraction of it.
+MAX_FRACTION_COMPONENT_WIDTH_RATIO = 0.45
+# Numerator over denominator are centred on each other. Prose lines merely
+# share a left margin, so requiring most of the narrower box to be covered
+# separates the two cases.
+MIN_FRACTION_STACK_OVERLAP = 0.6
+
 DECISION_ACCEPTED = "tier1_accepted"
 DECISION_ESCALATED_REGIONS = "escalated_regions"
 DECISION_ESCALATED_PAGE = "escalated_page"
@@ -118,6 +127,13 @@ def _median_line_height(lines: list[OcrLine]) -> float:
     return float(median(heights))
 
 
+def _median_line_width(lines: list[OcrLine]) -> float:
+    widths = [line.bbox.width for line in lines if line.bbox is not None and line.bbox.width > 0]
+    if not widths:
+        return 0.0
+    return float(median(widths))
+
+
 def _is_tall_box(line: OcrLine, *, median_height: float, policy: EscalationPolicy) -> bool:
     """A box much taller than the page's typical line is usually stacked math."""
     if line.bbox is None or median_height <= 0:
@@ -134,28 +150,44 @@ def _is_sparse_decode(line: OcrLine, *, policy: EscalationPolicy) -> bool:
     return per_100px < policy.min_decoded_chars_per_100px
 
 
-def _split_box_partners(lines: list[OcrLine], *, median_height: float) -> set[int]:
+def _split_box_partners(
+    lines: list[OcrLine], *, median_height: float, median_width: float
+) -> set[int]:
     """Indexes of boxes that look like the halves of one split fraction.
 
-    Two boxes stacked directly above one another with overlapping x-range and a
-    gap far smaller than a line height are usually a numerator and denominator
-    the recognizer read as separate lines, losing the division entirely.
+    A numerator and denominator read as separate lines lose the division
+    entirely, and no confidence score reflects that.
+
+    The hard part is not detecting stacked boxes, it is NOT detecting ordinary
+    text. Consecutive lines of prose are also "overlapping in x with a small
+    vertical gap", so an early version of this rule escalated a perfectly-read
+    printed page (CER 0.000, mean confidence 0.986) on every one of its lines.
+
+    What separates them is WIDTH and ALIGNMENT: fraction components are short
+    and sit centred over one another, where prose lines run the width of the
+    text column and start at a common left margin.
     """
     flagged: set[int] = set()
-    if median_height <= 0:
+    if median_height <= 0 or median_width <= 0:
         return flagged
+    narrow_limit = median_width * MAX_FRACTION_COMPONENT_WIDTH_RATIO
     for i, first in enumerate(lines):
-        if first.bbox is None:
+        if first.bbox is None or first.bbox.width > narrow_limit:
             continue
         for j in range(i + 1, len(lines)):
             second = lines[j]
-            if second.bbox is None:
+            if second.bbox is None or second.bbox.width > narrow_limit:
                 continue
-            if not first.bbox.overlaps_horizontally(second.bbox):
+            if first.bbox.vertical_gap_to(second.bbox) >= median_height * 0.5:
                 continue
-            if first.bbox.vertical_gap_to(second.bbox) < median_height * 0.5:
-                flagged.add(i)
-                flagged.add(j)
+            # Centred stacking, not merely touching: prose lines share a left
+            # margin, so overlap alone does not distinguish them.
+            overlap = min(first.bbox.x2, second.bbox.x2) - max(first.bbox.x1, second.bbox.x1)
+            narrower = min(first.bbox.width, second.bbox.width)
+            if narrower <= 0 or overlap / narrower < MIN_FRACTION_STACK_OVERLAP:
+                continue
+            flagged.add(i)
+            flagged.add(j)
     return flagged
 
 
@@ -223,7 +255,10 @@ def evaluate_page(
 
     threshold = effective_confidence_threshold(policy, expect_handwritten=expect_handwritten)
     median_height = _median_line_height(reading.lines)
-    split_partners = _split_box_partners(reading.lines, median_height=median_height)
+    median_width = _median_line_width(reading.lines)
+    split_partners = _split_box_partners(
+        reading.lines, median_height=median_height, median_width=median_width
+    )
 
     flagged_indexes: list[int] = []
     for index, line in enumerate(reading.lines):

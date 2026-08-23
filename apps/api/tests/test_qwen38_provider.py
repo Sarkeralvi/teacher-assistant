@@ -345,3 +345,90 @@ def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
         "user",
     ]
     assert "Return exactly one JSON object" in client.requests[0]["messages"][0]["content"]
+
+
+def test_every_call_sends_a_repetition_penalty() -> None:
+    """Regression: greedy decoding looped until the token cap on a real page.
+
+    A handwritten rubric produced "10/10\\n10/10\\n10/10..." until it exhausted
+    2048 tokens -- 325 seconds, unparseable JSON. The same page with this
+    penalty returned correct complete output in 44 seconds using 296 tokens.
+
+    The failure presented as "needs a larger token budget", which it did not.
+    Without this the pipeline fails on exactly the hard pages it exists to read.
+    """
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "P(X) = 7/12",
+                            "uncertain_glyphs": [],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.9,
+                            "needs_review": True,
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider, client = provider_with(completion)
+
+    provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage", mime_type="image/png"
+    )
+
+    request = client.requests[0]
+    assert request["repeat_penalty"] > 1.0
+
+
+def test_a_markdown_fenced_json_response_is_still_parsed() -> None:
+    """Regression: three backticks discarded a correct transcription.
+
+    The system prompt asks for a bare JSON object with "no Markdown fence" and
+    the model wraps it in ```json regardless. Reference extraction failed with
+    "not valid JSON at char 0" while the transcription inside was complete and
+    correct. An instruction is a request, not a constraint.
+    """
+    payload = {
+        "draft_text": "P(X) = 7/12",
+        "uncertain_glyphs": [],
+        "is_blank": False,
+        "is_irrelevant": False,
+        "confidence": 0.9,
+        "needs_review": True,
+    }
+    completion = {
+        "choices": [{"message": {"content": "```json\n" + json.dumps(payload) + "\n```"}}],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage", mime_type="image/png"
+    )
+
+    assert result.draft_text == "P(X) = 7/12"
+
+
+def test_an_unfenced_json_response_is_unaffected() -> None:
+    payload = {
+        "draft_text": "x = 4",
+        "uncertain_glyphs": [],
+        "is_blank": False,
+        "is_irrelevant": False,
+        "confidence": 0.9,
+        "needs_review": True,
+    }
+    completion = {"choices": [{"message": {"content": json.dumps(payload)}}], "usage": {}}
+    provider, _client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage", mime_type="image/png"
+    )
+
+    assert result.draft_text == "x = 4"

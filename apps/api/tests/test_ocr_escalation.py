@@ -10,7 +10,7 @@ from packages.ocr.escalation import (
     REASON_LOW_LINE_CONFIDENCE,
     REASON_NO_LINES_DETECTED,
     REASON_SPARSE_DECODE,
-    REASON_SPLIT_BOX_FRACTION,
+    REASON_SPLIT_BOX_FRACTION,  # noqa: F401 - used by the prose/fraction tests
     REASON_TALL_BOX_MATH,
     REASON_UNCOVERED_INK,
     EscalationPolicy,
@@ -99,6 +99,47 @@ def test_confidently_shredded_math_still_escalates() -> None:
     assert decision.escalated is True
     assert REASON_SPLIT_BOX_FRACTION in decision.reason_codes
     assert REASON_LOW_LINE_CONFIDENCE not in decision.reason_codes
+
+
+def test_ordinary_prose_lines_are_not_mistaken_for_split_fractions() -> None:
+    """Regression from a real run: a perfect printed page escalated anyway.
+
+    The question paper was read with CER 0.000 and mean confidence 0.986, yet
+    every line tripped the split-fraction rule -- consecutive prose lines are
+    also "overlapping in x with a small vertical gap". Width and centring are
+    what separate a stacked fraction from a paragraph.
+    """
+    reading = _reading(
+        [
+            # Full-width lines at normal tight spacing, sharing a left margin.
+            _line(text="In a chemical engineering laboratory, two", box=(0, 0, 400, 20)),
+            _line(text="engineers X and Y are independently", box=(0, 24, 400, 44)),
+            _line(text="attempting to complete the process", box=(0, 48, 400, 68)),
+        ]
+    )
+
+    decision = evaluate_page(reading)
+
+    assert decision.decision == DECISION_ACCEPTED
+    assert REASON_SPLIT_BOX_FRACTION not in decision.reason_codes
+
+
+def test_a_narrow_centred_stack_is_still_caught_as_a_fraction() -> None:
+    # The rule must still fire on what it exists for: short components centred
+    # over one another, among otherwise full-width lines.
+    reading = _reading(
+        [
+            _line(text="Given the following values,", box=(0, 0, 400, 20)),
+            _line(text="another full width line here", box=(0, 200, 400, 220)),
+            _line(text="7", box=(180, 100, 210, 118)),
+            _line(text="12", box=(178, 122, 212, 140)),
+        ]
+    )
+
+    decision = evaluate_page(reading)
+
+    assert decision.escalated is True
+    assert REASON_SPLIT_BOX_FRACTION in decision.reason_codes
 
 
 def test_a_tall_box_escalates_without_consulting_confidence() -> None:

@@ -40,6 +40,16 @@ from app.services.local_reference_extraction import (
 from packages.brain.adapter import BrainAdapter
 
 _ACTIVE_REFERENCE_STATUSES = {"queued", "running"}
+# A whole page needs more room than a single answer crop, but not dramatically:
+# measured, the densest reference page (71 detected lines) transcribes in ~620
+# tokens. This is headroom, not a workaround.
+#
+# An earlier value of 6000 was chosen for the wrong reason. The pipeline was
+# failing with "cut off at the token cap", which looked like too small a budget
+# but was actually the model looping on an ambiguous page. A repetition penalty
+# fixed that at the provider; raising the budget would only have bought more
+# looping before the same failure.
+REFERENCE_PAGE_TRANSCRIBE_MAX_TOKENS = 3000
 _API_KEY_PATTERN = re.compile(r"(?i)(?:sk|key)-[A-Za-z0-9_-]+")
 
 
@@ -353,10 +363,14 @@ class ReferenceExtractionService:
                             "The configured vision provider cannot transcribe an escalated page"
                         )
                     lease.heartbeat(holder_id=lease_holder_id)
+                    # A whole reference page carries far more text than the one
+                    # answer crop the default budget was sized for. A real run
+                    # hit that 2048-token cap and was cut off mid-JSON.
                     output = transcribe(
                         image_bytes=image_bytes,
                         mime_type="image/png",
                         label=f"{document_name} page {page_no}",
+                        max_tokens=REFERENCE_PAGE_TRANSCRIBE_MAX_TOKENS,
                     )
                     lease.heartbeat(holder_id=lease_holder_id)
                     readings[(document_name, page_no)] = (output.draft_text, None)

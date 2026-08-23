@@ -56,6 +56,14 @@ PROVIDER_NAME = "llama_cpp_qwen38"
 EXPECTED_ALIAS = "qwen3.8-27b-q4km"
 
 _TRANSCRIBE_MAX_TOKENS = 2048
+# Greedy decoding on an ambiguous page can fall into a degenerate loop. A real
+# handwritten rubric produced "10/10\n10/10\n10/10..." until it exhausted the
+# token cap: 325 s, 2048 tokens, unparseable JSON. With this penalty the same
+# page returned correct, complete output in 44 s using 296 tokens.
+#
+# This is why a bigger token budget was the wrong fix: the budget was not too
+# small, the model was looping, and more budget only buys more looping.
+_REPEAT_PENALTY = 1.1
 _GRADE_MAX_TOKENS = 1500
 
 # Reference-bundle completion budget is sized per request, not a flat
@@ -160,6 +168,30 @@ class _Qwen38PageMappingPayload(BaseModel):
 
     regions: list[VisualPageRegion]
     needs_review: bool | None = None
+
+
+def _strip_json_fence(content: str) -> str:
+    """Unwrap a Markdown code fence around a JSON object.
+
+    The system prompt asks for a bare JSON object with "no Markdown fence", and
+    the model wraps it in ```json anyway. That is what broke reference
+    extraction in practice: a complete, correct transcription was thrown away
+    because of three backticks.
+
+    An instruction is a request, not a constraint. Parsing what the model
+    actually emits is more reliable than insisting it comply, and this stays
+    correct if grammar-constrained decoding is reinstated.
+    """
+    text = content.strip()
+    if not text.startswith("```"):
+        return content
+    newline = text.find("\n")
+    if newline == -1:
+        return content
+    # Drop the opening fence with its optional language tag, then the closing one.
+    body = text[newline + 1 :]
+    closing = body.rfind("```")
+    return body[:closing].strip() if closing != -1 else body.strip()
 
 
 # ── Main provider class ───────────────────────────────────────────────────
@@ -338,6 +370,9 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "messages": request_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            # Without this, greedy decoding loops on ambiguous pages until the
+            # token cap is exhausted, producing truncated unparseable output.
+            "repeat_penalty": _REPEAT_PENALTY,
             "stream": False,
             "chat_template_kwargs": {
                 "enable_thinking": enable_thinking,
@@ -382,16 +417,22 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         try:
             import json as _json
 
-            parsed = _json.loads(content)
+            parsed = _json.loads(_strip_json_fence(content))
         except Exception as exc:
             if finish_reason == "length":
                 raise ValueError(
                     "llama_cpp_qwen38_vision: response was cut off before finishing — the "
                     f"model needs a larger token budget for this input ({diagnostics})"
                 ) from exc
+            # Show what actually arrived. "Expecting value: line 1 column 1"
+            # says the response was not JSON but not what it WAS, which forced
+            # a round of guesswork the first time this fired in practice. The
+            # opening characters distinguish a Markdown fence from a preamble
+            # from reasoning that leaked into the content field.
             raise ValueError(
                 "llama_cpp_qwen38_vision: response is not valid JSON — "
-                f"{self._sanitize(str(exc))} ({diagnostics})"
+                f"{self._sanitize(str(exc))} ({diagnostics}) "
+                f"content starts: {self._sanitize(content[:200])!r}"
             ) from exc
 
         try:
@@ -426,6 +467,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         image_bytes: bytes,
         mime_type: str,
         label: str = "answer",
+        max_tokens: int | None = None,
     ) -> VisualTranscriptionOutput:
         """Verbatim transcription of a handwritten student answer image.
 
@@ -451,15 +493,24 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         RuntimeError
             If the HTTP call fails.
         """
-        return self.transcribe_images(images=[(image_bytes, mime_type)], label=label)
+        return self.transcribe_images(
+            images=[(image_bytes, mime_type)], label=label, max_tokens=max_tokens
+        )
 
     def transcribe_images(
         self,
         *,
         images: list[tuple[bytes, str]],
         label: str = "answer",
+        max_tokens: int | None = None,
     ) -> VisualTranscriptionOutput:
-        """Transcribe ordered answer segments in one fresh, non-thinking visual call."""
+        """Transcribe ordered answer segments in one fresh, non-thinking visual call.
+
+        ``max_tokens`` overrides the answer-crop default. A whole escalated page
+        carries far more text than one answer region: a real reference page hit
+        the 2048-token crop budget and was cut off mid-JSON, so callers passing
+        full pages must ask for a page-sized budget.
+        """
         if not images:
             raise ValueError("At least one answer image is required")
         image_parts: list[dict[str, Any]] = []
@@ -500,7 +551,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             messages=messages,
             response_model=_Qwen38TranscriptionPayload,
             schema_name="visual_transcription",
-            max_tokens=_TRANSCRIBE_MAX_TOKENS,
+            max_tokens=max_tokens or _TRANSCRIBE_MAX_TOKENS,
             temperature=0.0,
             enable_thinking=False,
         )

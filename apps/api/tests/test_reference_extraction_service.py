@@ -380,8 +380,9 @@ def install_fakes(monkeypatch, *, confidence: str, uncovered: str | None = None)
             return FakeOcrReading("P(D) = 0.3", confidence, uncovered)
 
     class FakeVisionProvider:
-        def transcribe_image(self, *, image_bytes, mime_type, label):
+        def transcribe_image(self, *, image_bytes, mime_type, label, max_tokens=None):
             calls["vision"] += 1
+            calls["max_tokens"] = max_tokens
 
             class Output:
                 draft_text = f"vision read of {label}"
