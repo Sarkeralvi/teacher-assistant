@@ -1879,3 +1879,88 @@ which was not running on this host during the task and was not started because
 that is an operational action requiring authorization. Those 8 tests are written
 and collect cleanly but have not been executed. The tiered path has never run
 against a real script.
+
+# TA-LOCAL-007 - OCR engine bake-off, final result (2026-08-24)
+
+- Recorded at: 2026-08-24
+- Baseline commit: `d4f8f37`
+- Workflow type: measurement only; no application code path changed
+- Provider/model calls: 0 (all five arms are local: CPU subprocess or in-process GPU)
+- GradeSuggestion/FinalGrade/GradingJob created: 0
+- Stack started/stopped/rebuilt: no (backend/frontend already running; no Qwen server touched)
+- Private files/artifacts used: no (fixtures are teacher-verified but non-identifying crops already gitignored under data/evaluation/)
+
+## Result
+
+10 teacher-verified fixtures, 5 engines, mean CER by material:
+
+| Engine | Printed | Typeset math | Handwriting | Overall | Avg latency |
+|---|---:|---:|---:|---:|---:|
+| RapidOCR | 0.000 | 0.215 | 0.628 | 0.482 | 0.6 s |
+| Tesseract | 0.011 | 0.181 | 0.832 | 0.619 | 0.5 s |
+| Unlimited-OCR | 0.021 | 0.449 | 1.461 | 1.114 | 20.7 s |
+| GOT-OCR2 (CPU) | 0.016 | 0.135 | 0.816 | 0.600 | 10.3 s |
+| GOT-OCR2 (GPU) | 0.011 | 0.122 | 0.828 | 0.605 | 3.3 s |
+
+**RapidOCR stays tier-1.** Unlimited-OCR ruled out on every axis, including a
+CER above 1.0 on 4 of 7 handwriting fixtures - it hallucinates content beyond
+the ground truth, not just misreads it. GOT-OCR2 is a genuine specialist for
+typeset math (0.122-0.135, beating both incumbents) but does not beat RapidOCR
+on handwriting and is far slower per page, so it is not a tier-1 replacement.
+Full detail and interpretation recorded in `docs/LOCAL_AI_RUNBOOK.md` under
+"OCR engine bake-off - final result".
+
+## Two defects found and fixed en route
+
+1. `run_bakeoff` broke out of an engine's entire fixture loop on its first
+   failure, which would have discarded up to 9 good readings over 1 bad one -
+   a real risk once two of the arms became slow CPU-bound subprocess calls
+   capable of hitting their own timeout on a single hard image. Now records
+   each failure individually and continues; `skipped_engines` is reserved for
+   an engine with zero successful readings.
+2. The `got_ocr2` arm applied `--task formula` unconditionally to every
+   fixture, including plain handwritten prose. Diagnosed via a controlled A/B
+   on a GPU build of the same model: formula mode on the rubric fixture
+   degenerated into repeating unrelated CJK glyphs; plain mode on the
+   identical image produced real, coherent text matching what RapidOCR read.
+   Isolated bf16 matmul/attention numerics on this card showed no NaN/Inf,
+   and the model reproduced its documented output exactly on its own
+   reference test image - ruling out GPU/driver corruption as the
+   explanation. The arm now always runs plain mode; a pinned-invocation test
+   guards against silently reintroducing formula mode.
+
+## Infrastructure added for this measurement
+
+- `franken_ocr` CPU CLI (`focr`) installed and both model weights pulled
+  (Unlimited-OCR 3.96 GB, GOT-OCR2 776 MB), from the project's own scratchpad,
+  not committed.
+- `torch` (CUDA 12.8 build), `transformers==4.57.1` (pinned - Baidu's
+  Unlimited-OCR custom code targets that exact version and breaks on 5.x),
+  `accelerate`, `torchvision`, `einops`, `addict`, `easydict`, `timm`
+  installed into the project venv. None of these are imported by `apps/api`;
+  they exist only for `packages/evaluation/ocr_engine_bakeoff.py`'s two GPU
+  arms.
+- Verified this exact card (RTX 5070, Blackwell) is numerically sound under
+  CUDA/bf16 for this workload - relevant given this repository's prior
+  PaddleOCR history of Blackwell-specific corruption; that issue does not
+  reproduce here.
+
+## Checks run
+
+- `ruff check .` - passed throughout.
+- `pytest tests/test_ocr_engine_bakeoff.py` - 27 passed, 1 skipped (a
+  CUDA-unavailable-refusal test, environment-dependent skip since CUDA is
+  available on this host).
+- The bake-off script itself, twice (once before the two fixes, once after),
+  final run: `provider_calls_used: 0`, `skipped_engines: {}`,
+  `failed_fixtures: {}` across all 50 (5 x 10) readings.
+
+## Not done
+
+- Unlimited-OCR's GPU arm (`unlimited_ocr_gpu`) is wired and unit-tested for
+  its CUDA-unavailable refusal path, but its 30B-MoE HF-format weight
+  download did not complete in this session and it has not actually run.
+  Moot for the tier-1 decision - the CPU arm already measured it decisively
+  worse than everything else - but noted so it is not mistaken for verified.
+- The narrower "GOT-OCR2 as a typeset-math vision-escalation alternative"
+  idea in the runbook is a proposal, not a plan; not scoped or estimated.

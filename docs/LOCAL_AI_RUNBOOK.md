@@ -110,6 +110,30 @@ Two paths exist. The UI uses the tiered one; the vision-only path stays selectab
 | `llama_cpp_qwen` (default) | Tier-1 OCR locates the answers on the CPU, Qwen3.6 maps them in one text call, Qwen3.8 vision is called only for pages tier-1 could not read. |
 | `llama_cpp_qwen38` | Qwen3.8 vision maps every page, one call each. |
 
+### OCR engine bake-off — final result (2026-08-24)
+
+Measured on all 10 teacher-verified fixtures (`data/evaluation/ocr_bakeoff_20260821`), mean CER by material and average latency per page:
+
+| Engine | Printed | Typeset math | Handwriting | Overall | Avg latency |
+|---|---:|---:|---:|---:|---:|
+| **RapidOCR** | 0.000 | 0.215 | **0.628** | 0.482 | **0.6 s** |
+| Tesseract | 0.011 | 0.181 | 0.832 | 0.619 | 0.5 s |
+| Unlimited-OCR | 0.021 | 0.449 | 1.461 | 1.114 | 20.7 s |
+| GOT-OCR2 (CPU) | 0.016 | 0.135 | 0.816 | 0.600 | 10.3 s |
+| GOT-OCR2 (GPU) | 0.011 | **0.122** | 0.828 | 0.605 | 3.3 s |
+
+**Decision: RapidOCR stays the tier-1 engine.** It wins handwriting decisively — the material tier-1 must actually be good at, since it dominates the escalation decision. Neither candidate came close (0.816–0.828 CER against RapidOCR's 0.628).
+
+**Unlimited-OCR is not viable as any part of this pipeline.** Worst engine measured on every material, by a wide margin, and the only one whose CER exceeds 1.0 — on 4 of 7 handwriting fixtures it hallucinates content beyond the ground truth rather than just misreading it, consistent with its `document parsing.` prompt trying to structure the whole page (early manual testing saw it emit 17 `![](images/N.jpg)` placeholders for a single handwritten page instead of transcribing the ink). It is also by far the slowest (20.7 s/page average, CPU). Ruled out; not revisited unless the underlying model changes.
+
+**GOT-OCR2 is a genuine specialist for typeset math**, beating both RapidOCR (0.215) and Tesseract (0.181) at 0.122–0.135 CER — plausible, since it is a structured-output OCR model rather than a line recognizer, so a correctly-read fraction survives as `\frac{...}{...}` instead of flattening into digits the way RapidOCR's failure mode is documented above. It does not beat RapidOCR on handwriting and is far slower per page even on GPU, so **it is not a tier-1 replacement**, but it is a candidate worth a future look as a targeted alternative to vision escalation specifically for typeset-math reference pages, which today escalate straight to Qwen3.8. That is a new, narrower proposal, not implemented.
+
+**Formula mode is unsafe to apply blanket-wide.** `--task formula`/`format=True` is trained for genuine formula content; applied to ordinary handwritten prose it does not just score worse, it degenerates into repeating unrelated CJK glyphs. Confirmed independent of any hardware issue: isolated GPU numerics (bf16 matmul/attention) showed no NaN/Inf, and the same model produces its documented correct output on its own official reference test image. The `got_ocr2` arm therefore always runs in plain mode; a formula-mode arm would need its own per-fixture routing to be safe, which this harness does not currently do.
+
+**CPU vs GPU, for GOT-OCR2 specifically:** GPU is ~3× faster (3.3 s vs 10.3 s/page) at statistically indistinguishable accuracy (0.605 vs 0.600 overall). This does not change the tier-1 decision, but it is the number to use if GOT-OCR2 is ever adopted for the typeset-math-escalation idea above — reuse `packages/evaluation/ocr_engine_bakeoff.py::_got_ocr2_gpu_adapter` rather than the CPU CLI arm.
+
+Bake-off arms live in `packages/evaluation/ocr_engine_bakeoff.py`; run with `python -m packages.evaluation.ocr_engine_bakeoff --fixtures data/evaluation/ocr_bakeoff_20260821 --engines rapidocr,tesseract,unlimited_ocr,got_ocr2,got_ocr2_gpu --out <path>`. The GPU arms need `torch` (CUDA build), `transformers==4.57.1` pinned exactly (Baidu's Unlimited-OCR custom code targets that version and breaks on newer releases), `accelerate`, `torchvision`, and for Unlimited-OCR specifically `einops`, `addict`, `easydict`, `timm` — none of these are runtime dependencies of the application itself, only of this one-time measurement script; nothing in `apps/api` imports `torch` or `transformers`.
+
 The tiered path runs in stages, deliberately batched — interleaving would cost a 60-90 s model reload per page:
 
 1. Tier-1 OCR every page. No model resident, no VRAM, `LOCAL_OCR_ENABLED` must be true.
@@ -130,4 +154,4 @@ The approximate OCR text is never presented as the answer. Mappings carry `text_
 - The 20-case curated evaluation gate is wired to the production Qwen3.8 visual-transcription job and text-only dispatch path, but no completed signed real run exists yet. No result may be cited as pilot-authorization evidence until it completes with `PASS`.
 - The Qwen3.6-versus-Qwen3.8 text-grading bake-off is implemented but has no live candidate result yet. Its evidence replay makes zero new visual calls and its result does not automatically change the normal grading configuration. Grading still dispatches to Qwen3.8 until that bake-off produces a result.
 - The tiered script path has never been run end to end against a real script. Its stages are covered by tests with fake engines and providers, which is not evidence about a real page.
-- Baidu Unlimited-OCR is under evaluation as a replacement tier-1 engine (3B MoE VLM, MIT, no llama.cpp support merged upstream). Its published OmniDocBench score explicitly excludes handwriting, so it cannot be adopted on that evidence; it must win on the local teacher-verified fixtures first. RapidOCR remains the tier-1 engine until then.
+- **Resolved 2026-08-24:** Baidu Unlimited-OCR and GOT-OCR2.0 were measured against RapidOCR and Tesseract on all 10 teacher-verified fixtures. **RapidOCR remains the tier-1 engine.** See "OCR engine bake-off — final result" below.
