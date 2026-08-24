@@ -147,6 +147,71 @@ def test_missing_engine_dependency_skips_its_arm_rather_than_failing(
     assert "not installed" in report["skipped_engines"]["rapidocr_ppocrv5"]
 
 
+def test_one_bad_fixture_does_not_discard_the_engines_other_readings(
+    tmp_path: Path,
+) -> None:
+    """A hang or a malformed image on ONE fixture must not erase every other
+    fixture the engine already read successfully.
+
+    This used to ``break`` out of the fixture loop on the first failure,
+    discarding 9 good readings over 1 bad one - exactly the shape of failure a
+    slow CPU-only VLM subprocess arm can hit on a real page (a timeout the
+    subprocess budget eventually kills)."""
+    good_a = Fixture(
+        fixture_id="good_a",
+        image_path=_png(tmp_path / "good_a.png"),
+        ground_truth="first page",
+    )
+    bad = Fixture(
+        fixture_id="bad",
+        image_path=_png(tmp_path / "bad.png"),
+        ground_truth="second page",
+        kind="handwriting",
+    )
+    good_b = Fixture(
+        fixture_id="good_b",
+        image_path=_png(tmp_path / "good_b.png"),
+        ground_truth="third page",
+    )
+
+    calls: list[str] = []
+
+    def flaky(_image: bytes, _mime: str) -> EngineReading:
+        calls.append("call")
+        if len(calls) == 2:
+            raise OcrBakeoffError("focr did not finish within 900s")
+        return EngineReading(
+            engine="flaky", text="ok", lines=[OcrLine(text="ok", confidence=None)], latency_ms=1
+        )
+
+    report = run_bakeoff(
+        fixtures=[good_a, bad, good_b], engines={"flaky": flaky}
+    )
+
+    assert len(report["readings"]) == 2
+    assert "flaky" not in report["skipped_engines"]
+    assert report["failed_fixtures"]["flaky"] == [
+        {"fixture_id": "bad", "error": "focr did not finish within 900s"}
+    ]
+
+
+def test_an_engine_that_fails_every_fixture_is_still_reported_skipped(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+
+    def always_fails(_image: bytes, _mime: str) -> EngineReading:
+        raise OcrBakeoffError("focr exited 1: model artifact not found")
+
+    report = run_bakeoff(fixtures=[fixture], engines={"broken": always_fails})
+
+    assert report["readings"] == []
+    assert "model artifact not found" in report["skipped_engines"]["broken"]
+    # Every individual failure is still recorded, even for a fully-skipped
+    # engine - skipped_engines is a summary, not a replacement for the detail.
+    assert len(report["failed_fixtures"]["broken"]) == 1
+
+
 def test_unlabelled_fixtures_are_refused(tmp_path: Path) -> None:
     _png(tmp_path / "a.png")
     (tmp_path / "fixtures.json").write_text(

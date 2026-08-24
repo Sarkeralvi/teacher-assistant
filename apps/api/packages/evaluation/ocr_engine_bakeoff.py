@@ -747,18 +747,30 @@ def run_bakeoff(
     per_reading: list[dict[str, Any]] = []
     line_observations: dict[str, list[tuple[Decimal, Decimal]]] = {}
     skipped: dict[str, str] = {}
+    failed_fixtures: dict[str, list[dict[str, str]]] = {}
 
     for engine_name, adapter in engines.items():
+        engine_had_success = False
+        last_error: str | None = None
         for fixture in fixtures:
             image_bytes = fixture.image_path.read_bytes()
             mime = "image/png" if fixture.image_path.suffix.lower() == ".png" else "image/jpeg"
             try:
                 reading = adapter(image_bytes, mime)
             except OcrBakeoffError as exc:
-                # A missing optional dependency or an exhausted budget skips the
-                # arm; it must not look like a zero-error result.
-                skipped[engine_name] = str(exc)
-                break
+                # One fixture's failure - a timeout, a hang the subprocess
+                # budget eventually kills, a single malformed image - must not
+                # discard every OTHER fixture this engine already read
+                # successfully. `break` here once threw away 9 good readings
+                # over 1 bad one. Only an engine with ZERO successful readings
+                # (a genuinely missing dependency, or every fixture failing
+                # the same way) is reported as skipped.
+                last_error = str(exc)
+                failed_fixtures.setdefault(engine_name, []).append(
+                    {"fixture_id": fixture.fixture_id, "error": last_error}
+                )
+                continue
+            engine_had_success = True
             row = score_reading(fixture, reading)
             row["image_sha256"] = sha256_bytes(image_bytes)
             per_reading.append(row)
@@ -768,10 +780,13 @@ def run_bakeoff(
                 line_observations.setdefault(engine_name, []).append(
                     (line.confidence, _closest_line_cer(fixture.ground_truth, line.text))
                 )
+        if not engine_had_success and last_error is not None:
+            skipped[engine_name] = last_error
 
     return {
         "readings": per_reading,
         "skipped_engines": skipped,
+        "failed_fixtures": failed_fixtures,
         "reliability": {
             engine: reliability_table(observations)
             for engine, observations in line_observations.items()
