@@ -538,6 +538,106 @@ class ProviderCallBudget:
 _GOT_OCR2_GPU_MODEL_ID = "stepfun-ai/GOT-OCR-2.0-hf"
 _UNLIMITED_OCR_GPU_MODEL_ID = "baidu/Unlimited-OCR"
 
+PADDLEOCR_VL_BASE_URL_ENV_VAR = "PADDLEOCR_VL_BASE_URL"
+_PADDLEOCR_VL_DEFAULT_BASE_URL = "http://127.0.0.1:8087/v1"
+# Right-sized, not generous: measured directly on these fixtures, the genuine
+# reading of a reference/rubric page finishes within ~150 tokens. A larger
+# budget only buys more of the degenerate tail described below.
+_PADDLEOCR_VL_MAX_TOKENS = 400
+# The model does not reliably emit its own stop token on hard pages: greedy
+# decode runs on past the real content into a repeating tail ("(ii) - (1)"
+# forever, or counting up integers once repeat_penalty forbids the exact
+# repeat). repeat_penalty narrows but does not close this - 1.1 gave the
+# cleanest content and never stopped, 1.3 stopped but was noisier, 1.2 gave
+# the best content of the three and still didn't stop. 1.15 plus the token
+# cap above is the practical middle: bound the cost of the tail when it does
+# not terminate, without pushing decode hard enough to trade accuracy for it.
+_PADDLEOCR_VL_REPEAT_PENALTY = 1.15
+
+
+def _paddleocr_vl_adapter() -> EngineAdapter:
+    """PaddleOCR-VL-1.6 (0.9B, ERNIE-4.5-0.3B) via a local llama-server.
+
+    Not one of this project's configured/leased models (Qwen3.6, Qwen3.8):
+    this is a standalone llama-server instance started only for this
+    measurement, on its own port, so it does not touch the local_model_leases
+    single-GPU-slot protection those two models depend on. Base URL is
+    therefore an env var, not applies-to-production Settings.
+
+    On the one teacher-verified rubric fixture this was hand-tested against
+    before being wired in, its content was the most accurate of every engine
+    measured -- it recovered the exact mark sequence (6, 4, 6, 6, 5, 4) for
+    six of seven criteria in one attempt, better than RapidOCR's page-level
+    reading of the same content. Its correctness is not yet quantified across
+    the full fixture set; that is what this arm exists to produce.
+    """
+
+    def run(image_bytes: bytes, mime: str) -> EngineReading:
+        import base64 as _base64  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+        import os  # noqa: PLC0415
+        import urllib.error  # noqa: PLC0415
+        import urllib.request  # noqa: PLC0415
+
+        base_url = os.environ.get(
+            PADDLEOCR_VL_BASE_URL_ENV_VAR, _PADDLEOCR_VL_DEFAULT_BASE_URL
+        ).rstrip("/")
+        b64 = _base64.b64encode(image_bytes).decode("ascii")
+        payload = {
+            "model": "paddleocr-vl-1.6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "OCR:"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": _PADDLEOCR_VL_MAX_TOKENS,
+            "temperature": 0,
+            "repeat_penalty": _PADDLEOCR_VL_REPEAT_PENALTY,
+        }
+        request = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=_json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        start = time.perf_counter()
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+                data = _json.loads(response.read())
+        except urllib.error.URLError as exc:
+            raise OcrBakeoffError(
+                f"PaddleOCR-VL server at {base_url} is not reachable: {exc}. Start it "
+                "with a local llama-server instance, or set "
+                f"{PADDLEOCR_VL_BASE_URL_ENV_VAR} to point at one that is running."
+            ) from exc
+        latency_ms = int((time.perf_counter() - start) * 1000)
+
+        choices = data.get("choices") or []
+        if not choices:
+            raise OcrBakeoffError("PaddleOCR-VL returned no choices")
+        text = ((choices[0].get("message") or {}).get("content") or "").strip()
+        if not text:
+            raise OcrBakeoffError("PaddleOCR-VL returned empty content")
+        finish_reason = choices[0].get("finish_reason")
+        warnings = ["engine_reports_no_per_line_confidence", "no_geometry_plain_text_only"]
+        if finish_reason == "length":
+            warnings.append("hit_token_budget_without_a_clean_stop")
+        return EngineReading(
+            engine="paddleocr_vl",
+            text=text,
+            lines=[OcrLine(text=text, confidence=None)],
+            latency_ms=latency_ms,
+            warnings=warnings,
+        )
+
+    return run
+
 
 def _require_cuda() -> Any:
     try:
@@ -723,6 +823,9 @@ def build_engine_adapters(budget: ProviderCallBudget) -> dict[str, EngineAdapter
         # they do not change that production constraint.
         "got_ocr2_gpu": _got_ocr2_gpu_adapter(),
         "unlimited_ocr_gpu": _unlimited_ocr_gpu_adapter(),
+        # A third GPU candidate, on its own standalone llama-server rather
+        # than the app's leased Qwen slot. See _paddleocr_vl_adapter.
+        "paddleocr_vl": _paddleocr_vl_adapter(),
         "qwen38_vision": _qwen38_vision_adapter(budget=budget),
     }
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from decimal import Decimal
@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from packages.evaluation.ocr_engine_bakeoff import (
+    PADDLEOCR_VL_BASE_URL_ENV_VAR,
     UNLIMITED_OCR_ENV_VAR,
     EngineReading,
     Fixture,
@@ -343,7 +344,7 @@ def test_qwen38_bakeoff_arm_uses_the_same_fail_closed_lease_as_production() -> N
     assert 'lease_holder_id=holder_id' in source
 
 
-# ── Unlimited-OCR arm ──────────────────────────────────────────────────────
+# --- Unlimited-OCR arm ------------------------------------------------------
 
 
 def test_unlimited_ocr_reads_grounded_spans_as_lines_with_no_confidence() -> None:
@@ -513,3 +514,124 @@ def test_gpu_arms_are_offered_and_refuse_cleanly_without_cuda() -> None:
         adapters["got_ocr2_gpu"](b"\x89PNG\r\n\x1a\n", "image/png")
     with pytest.raises(OcrBakeoffError):
         adapters["unlimited_ocr_gpu"](b"\x89PNG\r\n\x1a\n", "image/png")
+
+
+# --- PaddleOCR-VL arm --------------------------------------------------------
+
+
+def test_paddleocr_vl_arm_is_registered() -> None:
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    assert "paddleocr_vl" in adapters
+
+
+def test_paddleocr_vl_reports_an_actionable_error_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Port 1 is a reserved/unused port that will refuse the connection
+    # immediately rather than hanging, so this test stays fast.
+    monkeypatch.setenv(PADDLEOCR_VL_BASE_URL_ENV_VAR, "http://127.0.0.1:1/v1")
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    with pytest.raises(OcrBakeoffError, match="not reachable"):
+        adapters["paddleocr_vl"](b"\x89PNG\r\n\x1a\n", "image/png")
+
+
+def test_paddleocr_vl_sends_the_tuned_decode_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the repeat_penalty/max_tokens combination chosen after the model
+    was found to run past its own stop token on hard pages -- see the long
+    comment on _paddleocr_vl_adapter. A future edit removing this silently
+    would reproduce the unbounded degenerate-tail failure."""
+    import http.server
+    import threading
+
+    captured: dict[str, Any] = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            captured["payload"] = json.loads(self.rfile.read(length))
+            body = json.dumps(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": "Solution Rubric: 6, 4, 6, 6, 5, 4, 4"},
+                        }
+                    ]
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002  # silence test output
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv(PADDLEOCR_VL_BASE_URL_ENV_VAR, f"http://127.0.0.1:{port}/v1")
+        adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+        reading = adapters["paddleocr_vl"](b"\x89PNG\r\n\x1a\n", "image/png")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    payload = captured["payload"]
+    assert payload["max_tokens"] == 400
+    assert payload["repeat_penalty"] == 1.15
+    assert payload["temperature"] == 0
+    assert reading.engine == "paddleocr_vl"
+    assert reading.text == "Solution Rubric: 6, 4, 6, 6, 5, 4, 4"
+    assert "hit_token_budget_without_a_clean_stop" not in reading.warnings
+
+
+def test_paddleocr_vl_flags_a_response_that_never_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            body = json.dumps(
+                {
+                    "choices": [
+                        {"finish_reason": "length", "message": {"content": "(ii) - (1) " * 50}}
+                    ]
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv(PADDLEOCR_VL_BASE_URL_ENV_VAR, f"http://127.0.0.1:{port}/v1")
+        adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+        reading = adapters["paddleocr_vl"](b"\x89PNG\r\n\x1a\n", "image/png")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert "hit_token_budget_without_a_clean_stop" in reading.warnings
+
