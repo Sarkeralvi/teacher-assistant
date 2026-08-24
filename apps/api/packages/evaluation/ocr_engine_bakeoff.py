@@ -1054,6 +1054,21 @@ def run_bakeoff(
                     {"fixture_id": fixture.fixture_id, "error": last_error}
                 )
                 continue
+            except Exception as exc:  # noqa: BLE001
+                # An adapter can reach into application code it does not fully
+                # control (qwen38_vision calls the app's phase manager/lease
+                # service) and that code can raise its own exception types, not
+                # just OcrBakeoffError. This crashed a real run: five arms had
+                # already completed - real CPU time, real GPU inference - and
+                # one uncaught LocalAiPhaseError on the LAST arm took the whole
+                # process down before main() ever wrote the report, discarding
+                # all of it. An adapter's own bug must cost this one reading,
+                # never the run.
+                last_error = f"{type(exc).__name__}: {exc}"
+                failed_fixtures.setdefault(engine_name, []).append(
+                    {"fixture_id": fixture.fixture_id, "error": last_error}
+                )
+                continue
             engine_had_success = True
             row = score_reading(fixture, reading)
             row["image_sha256"] = sha256_bytes(image_bytes)
