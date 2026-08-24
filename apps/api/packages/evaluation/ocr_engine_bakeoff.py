@@ -213,6 +213,171 @@ def _tesseract_adapter() -> EngineAdapter:
     return run
 
 
+UNLIMITED_OCR_ENV_VAR = "FOCR_BINARY"
+_UNLIMITED_OCR_TIMEOUT_SECONDS = 900
+
+
+def _unlimited_ocr_binary() -> str | None:
+    """Locate the focr CLI without importing anything or assuming a PATH entry.
+
+    Its Windows installer adds itself to the user PATH, which an already-running
+    process does not see, so the default install location is checked directly.
+    """
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    override = os.environ.get(UNLIMITED_OCR_ENV_VAR, "").strip()
+    if override:
+        return override if Path(override).is_file() else None
+    found = shutil.which("focr")
+    if found:
+        return found
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        candidate = Path(local_app_data) / "Programs" / "focr" / "focr.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _unlimited_ocr_adapter() -> EngineAdapter:
+    """Baidu Unlimited-OCR via the franken_ocr CPU-only Rust CLI.
+
+    A candidate tier-1 engine, run as a subprocess rather than an import: there
+    is no Python package, and the official runtimes are CUDA/vLLM, which would
+    contend for the single GPU model slot the lease exists to protect.
+
+    It is a generative VLM, so it reports no per-line decoding statistic. Lines
+    therefore carry ``confidence=None``, which the escalation policy already
+    handles: the detection-only script policy never consults confidence, and the
+    reference-phase policy treats a missing score as "not suspicious on that
+    basis alone" rather than substituting a number the engine never produced.
+
+    Its published OmniDocBench score explicitly excludes handwriting, so nothing
+    here may be inferred from it. This arm exists to measure handwriting on the
+    local teacher-verified fixtures, which is the only evidence that counts.
+    """
+
+    def run(image_bytes: bytes, mime: str) -> EngineReading:
+        import json as _json  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        binary = _unlimited_ocr_binary()
+        if binary is None:
+            raise OcrBakeoffError(
+                "the focr CLI is not installed; install franken_ocr or set "
+                f"{UNLIMITED_OCR_ENV_VAR} to run this arm"
+            )
+        suffix = ".png" if "png" in mime else ".jpg"
+        with tempfile.TemporaryDirectory(prefix="focr-bakeoff-") as directory:
+            image_path = Path(directory) / f"page{suffix}"
+            image_path.write_bytes(image_bytes)
+            start = time.perf_counter()
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    [binary, "ocr", str(image_path), "--json"],
+                    capture_output=True,
+                    timeout=_UNLIMITED_OCR_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise OcrBakeoffError(
+                    f"focr did not finish within {_UNLIMITED_OCR_TIMEOUT_SECONDS}s"
+                ) from exc
+            latency_ms = int((time.perf_counter() - start) * 1000)
+
+        if completed.returncode != 0:
+            detail = completed.stderr.decode("utf-8", "replace").strip()[:400]
+            raise OcrBakeoffError(f"focr exited {completed.returncode}: {detail}")
+        raw = completed.stdout.decode("utf-8", "replace").strip()
+        if not raw:
+            raise OcrBakeoffError("focr produced no output")
+        try:
+            payload = _json.loads(raw)
+        except ValueError as exc:
+            raise OcrBakeoffError(f"focr output was not JSON: {raw[:200]!r}") from exc
+
+        lines = _unlimited_ocr_lines(payload)
+        return EngineReading(
+            engine="unlimited_ocr",
+            text=_unlimited_ocr_text(payload, lines),
+            lines=lines,
+            latency_ms=latency_ms,
+            warnings=["engine_reports_no_per_line_confidence"],
+        )
+
+    return run
+
+
+def _unlimited_ocr_lines(payload: Any) -> list[OcrLine]:
+    """Read grounded spans out of the focr JSON.
+
+    Tolerant by design: this is a third-party CLI at 0.x, so an unexpected shape
+    must degrade to "no geometry" rather than crash the whole bake-off. A shape
+    change shows up as an arm with no boxes, which is visible in the report.
+    """
+    if not isinstance(payload, dict):
+        return []
+    layout = payload.get("layout")
+    if not isinstance(layout, list):
+        return []
+    lines: list[OcrLine] = []
+    for entry in layout:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("label") or entry.get("text") or "").strip()
+        boxes = entry.get("boxes") or entry.get("bbox")
+        if isinstance(boxes, list) and boxes and isinstance(boxes[0], (list, tuple)):
+            candidates = boxes
+        elif isinstance(boxes, list) and boxes:
+            candidates = [boxes]
+        else:
+            candidates = [None]
+        for box in candidates:
+            if not text and box is None:
+                continue
+            lines.append(OcrLine(text=text, confidence=None, bbox=_focr_bbox(box)))
+    return lines
+
+
+def _focr_bbox(box: Any) -> tuple[float, float, float, float] | None:
+    """Convert a focr box to (x1, y1, x2, y2) in source-image pixels.
+
+    focr reports a flat ``[x1, y1, x2, y2]``, where RapidOCR reports a polygon
+    of corner points. ``_normalize_bbox`` handles the polygon form and returns
+    None for the flat one, so this is a separate converter rather than a change
+    to the shared helper. A polygon is still accepted in case the CLI's shape
+    changes.
+    """
+    if box is None:
+        return None
+    try:
+        values = list(box)
+    except TypeError:
+        return None
+    if len(values) == 4 and all(isinstance(item, (int, float)) for item in values):
+        x1, y1, x2, y2 = (float(item) for item in values)
+        return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+    return _normalize_bbox(box)
+
+
+def _unlimited_ocr_text(payload: Any, lines: list[OcrLine]) -> str:
+    """Prefer the model's own rendered markdown over re-joining spans.
+
+    The spans exist to give geometry; the markdown is what the model actually
+    read, and joining spans would drop structure it encoded there.
+    """
+    if isinstance(payload, dict):
+        for key in ("markdown", "text", "content"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return "\n".join(line.text for line in lines if line.text)
+
+
 def _qwen38_vision_adapter(*, budget: ProviderCallBudget) -> EngineAdapter:
     """The incumbent, as an accuracy ceiling and latency baseline.
 
@@ -313,6 +478,9 @@ def build_engine_adapters(budget: ProviderCallBudget) -> dict[str, EngineAdapter
     return {
         "rapidocr": _rapidocr_adapter(),
         "tesseract": _tesseract_adapter(),
+        # Candidate tier-1 replacement. Local CPU subprocess, so it needs no
+        # provider budget and never touches the GPU model slot.
+        "unlimited_ocr": _unlimited_ocr_adapter(),
         "qwen38_vision": _qwen38_vision_adapter(budget=budget),
     }
 
@@ -578,7 +746,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument(
         "--engines",
-        default="rapidocr_ppocrv5,rapidocr_ppocrv6,tesseract",
+        # Defaults to every arm that runs locally and makes no provider call.
+        # The previous default named rapidocr_ppocrv5/v6, which
+        # build_engine_adapters does not provide, so the CLI exited on its own
+        # defaults with "Unknown engine arms".
+        default="rapidocr,tesseract,unlimited_ocr",
         help="Comma-separated arms. qwen38_vision makes real provider calls.",
     )
     parser.add_argument("--i-authorize-provider-calls", action="store_true")

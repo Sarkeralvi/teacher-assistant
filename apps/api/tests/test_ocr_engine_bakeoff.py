@@ -7,12 +7,16 @@ from pathlib import Path
 import pytest
 
 from packages.evaluation.ocr_engine_bakeoff import (
+    UNLIMITED_OCR_ENV_VAR,
     EngineReading,
     Fixture,
     OcrBakeoffError,
     OcrLine,
     ProviderCallBudget,
+    _unlimited_ocr_lines,
+    _unlimited_ocr_text,
     build_engine_adapters,
+    build_parser,
     escalation_roc,
     load_fixtures,
     reliability_table,
@@ -271,3 +275,88 @@ def test_qwen38_bakeoff_arm_uses_the_same_fail_closed_lease_as_production() -> N
     assert "LocalModelLeaseService" in source
     assert "LocalAiPhaseManager" in source
     assert 'lease_holder_id=holder_id' in source
+
+
+# ── Unlimited-OCR arm ──────────────────────────────────────────────────────
+
+
+def test_unlimited_ocr_reads_grounded_spans_as_lines_with_no_confidence() -> None:
+    """It is a generative VLM, so there is no per-line decoding statistic.
+
+    Lines must carry confidence=None rather than a substituted number the
+    engine never produced; the escalation policy already handles None.
+    """
+    payload = {
+        "markdown": "1(a)(i)\n\nP(D) = 0.3",
+        "layout": [
+            {"label": "1(a)(i)", "boxes": [[10, 20, 110, 60]]},
+            {"label": "P(D) = 0.3", "boxes": [[10, 70, 300, 110]]},
+        ],
+    }
+
+    lines = _unlimited_ocr_lines(payload)
+
+    assert [line.text for line in lines] == ["1(a)(i)", "P(D) = 0.3"]
+    assert all(line.confidence is None for line in lines)
+    assert lines[1].bbox == (10.0, 70.0, 300.0, 110.0)
+
+
+def test_unlimited_ocr_prefers_the_models_own_markdown_over_rejoined_spans() -> None:
+    payload = {"markdown": "# Heading\n\n$P(D)=0.3$", "layout": [{"label": "x", "boxes": []}]}
+
+    assert _unlimited_ocr_text(payload, _unlimited_ocr_lines(payload)) == "# Heading\n\n$P(D)=0.3$"
+
+
+def test_unlimited_ocr_falls_back_to_span_text_when_no_markdown_is_present() -> None:
+    payload = {"layout": [{"label": "one", "boxes": []}, {"label": "two", "boxes": []}]}
+
+    assert _unlimited_ocr_text(payload, _unlimited_ocr_lines(payload)) == "one\ntwo"
+
+
+def test_unlimited_ocr_expands_a_span_carrying_several_boxes() -> None:
+    payload = {"layout": [{"label": "continued", "boxes": [[0, 0, 10, 10], [0, 20, 10, 30]]}]}
+
+    lines = _unlimited_ocr_lines(payload)
+
+    assert len(lines) == 2
+    assert {line.text for line in lines} == {"continued"}
+
+
+def test_unlimited_ocr_degrades_to_no_geometry_on_an_unexpected_shape() -> None:
+    """A 0.x third-party CLI may change its JSON; that must not crash the run.
+
+    An arm reporting no boxes is visible in the report, which is the intended
+    failure mode. Raising here would take down the other arms with it.
+    """
+    for payload in ({"layout": "not a list"}, {"layout": [42, None]}, [], "text", None):
+        assert _unlimited_ocr_lines(payload) == []
+
+
+def test_unlimited_ocr_arm_is_offered_without_a_provider_budget() -> None:
+    # It runs as a local CPU subprocess, so it must not consume provider calls.
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    assert "unlimited_ocr" in adapters
+
+
+def test_the_cli_default_engine_list_names_only_real_arms() -> None:
+    """The previous default named arms build_engine_adapters does not provide,
+    so the CLI exited with "Unknown engine arms" on its own defaults."""
+    available = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+    default = build_parser().get_default("engines")
+
+    requested = [name.strip() for name in default.split(",") if name.strip()]
+    assert requested
+    assert [name for name in requested if name not in available] == []
+    # The default must not make real provider calls.
+    assert "qwen38_vision" not in requested
+
+
+def test_a_missing_focr_binary_reports_how_to_enable_the_arm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(UNLIMITED_OCR_ENV_VAR, str(tmp_path / "definitely-absent.exe"))
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    with pytest.raises(OcrBakeoffError, match="focr CLI is not installed"):
+        adapters["unlimited_ocr"](b"\x89PNG\r\n\x1a\n", "image/png")
