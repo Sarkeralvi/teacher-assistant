@@ -330,17 +330,21 @@ def _unlimited_ocr_adapter() -> EngineAdapter:
     return run
 
 
-def _got_ocr2_formula_adapter() -> EngineAdapter:
-    """GOT-OCR2.0 in formula mode: math/formulas -> LaTeX, via the same CLI.
+def _got_ocr2_adapter() -> EngineAdapter:
+    """GOT-OCR2.0 in plain-OCR mode, via the same CPU CLI as Unlimited-OCR.
 
-    A second tier-1 candidate, specifically for the failure Unlimited-OCR's
-    "FAST plain-text OCR" framing does not claim to solve: typeset and
-    handwritten mathematics shredded into confident fragments, which is
-    RapidOCR's own measured weak point (0.215 CER, 0.771 math-token recall on
-    typeset math; worse on handwriting). ``--task formula`` routes to
-    got-ocr2's structured "OCR with format" mode, which emits inline LaTeX
-    rather than plain text, so a correctly-read fraction survives as
-    ``\\frac{...}{...}`` instead of being flattened into digits.
+    A second tier-1 candidate. Deliberately plain mode, not ``--task
+    formula``: an earlier version of this arm used formula mode
+    unconditionally, and a controlled A/B on a GPU build of the same model
+    (transformers, ``format=True`` vs plain) showed formula mode is
+    out-of-distribution for ordinary handwritten prose - it does not just
+    perform worse, it degenerates into repeating unrelated CJK glyphs
+    (confirmed independent of any GPU/driver issue: the exact same collapse
+    reproduced in bf16 on this card and does not reproduce on the model's own
+    reference test image or in plain mode on this same image). Formula mode
+    is worth measuring separately, but only on genuinely math-heavy fixtures,
+    never blanket-applied across a mixed fixture set the way this harness
+    runs one adapter over every fixture.
 
     Needs ``focr pull got-ocr2`` in addition to the default model. Apache-2.0,
     so no licence blocker if it is ever adopted for the reference phase's
@@ -358,11 +362,11 @@ def _got_ocr2_formula_adapter() -> EngineAdapter:
             binary,
             image_bytes,
             mime,
-            ["--model", "got-ocr2.int8.focrq", "--task", "formula"],
+            ["--model", "got-ocr2.int8.focrq"],
         )
         lines = _unlimited_ocr_lines(payload)
         return EngineReading(
-            engine="got_ocr2_formula",
+            engine="got_ocr2",
             text=_unlimited_ocr_text(payload, lines),
             lines=lines,
             latency_ms=latency_ms,
@@ -531,6 +535,175 @@ class ProviderCallBudget:
         self.used += 1
 
 
+_GOT_OCR2_GPU_MODEL_ID = "stepfun-ai/GOT-OCR-2.0-hf"
+_UNLIMITED_OCR_GPU_MODEL_ID = "baidu/Unlimited-OCR"
+
+
+def _require_cuda() -> Any:
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError as exc:
+        raise OcrBakeoffError(
+            "torch is not installed; pip install torch (with a CUDA index) to run "
+            "this GPU arm"
+        ) from exc
+    if not torch.cuda.is_available():
+        raise OcrBakeoffError("CUDA is not available; this arm needs a GPU")
+    return torch
+
+
+def _got_ocr2_gpu_adapter() -> EngineAdapter:
+    """GOT-OCR2.0 (580M params) via transformers on GPU, plain-OCR mode.
+
+    Verified correct on this exact card before being wired in: raw bf16
+    matmul/attention numerics were checked independently for NaN/Inf (clean),
+    and this model's own reference HF test image reproduces its documented
+    output exactly. Plain mode, not ``--format``/formula - see
+    ``_got_ocr2_adapter`` for why formula mode is unsafe to blanket-apply.
+
+    Model stays resident across calls (module-level cache): reloading a
+    freshly-imported transformers model per fixture would spend most of the
+    bake-off's wall time on repeated weight loads rather than inference.
+    """
+    state: dict[str, Any] = {}
+
+    def run(image_bytes: bytes, mime: str) -> EngineReading:
+        del mime
+        torch = _require_cuda()
+        if "model" not in state:
+            try:
+                from transformers import (  # noqa: PLC0415
+                    AutoModelForImageTextToText,
+                    AutoProcessor,
+                )
+            except ImportError as exc:
+                raise OcrBakeoffError(
+                    "transformers is not installed; pip install transformers to "
+                    "run this GPU arm"
+                ) from exc
+            state["model"] = AutoModelForImageTextToText.from_pretrained(
+                _GOT_OCR2_GPU_MODEL_ID, device_map="cuda", dtype=torch.bfloat16
+            )
+            state["processor"] = AutoProcessor.from_pretrained(_GOT_OCR2_GPU_MODEL_ID)
+
+        import io  # noqa: PLC0415
+
+        from PIL import Image  # noqa: PLC0415
+
+        model = state["model"]
+        processor = state["processor"]
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        inputs = processor(image, return_tensors="pt").to(model.device)
+        start = time.perf_counter()
+        generate_ids = model.generate(
+            **inputs,
+            do_sample=False,
+            tokenizer=processor.tokenizer,
+            stop_strings="<|im_end|>",
+            max_new_tokens=4096,
+            no_repeat_ngram_size=20,
+        )
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        text = processor.decode(
+            generate_ids[0, inputs["input_ids"].shape[1] :], skip_special_tokens=True
+        )
+        return EngineReading(
+            engine="got_ocr2_gpu",
+            text=text,
+            lines=[OcrLine(text=text, confidence=None)],
+            latency_ms=latency_ms,
+            warnings=["engine_reports_no_per_line_confidence", "no_geometry_plain_text_only"],
+        )
+
+    return run
+
+
+def _unlimited_ocr_gpu_adapter() -> EngineAdapter:
+    """Baidu Unlimited-OCR (30B MoE, 5B activated) via transformers on GPU.
+
+    Uses the model's own custom ``trust_remote_code`` inference code
+    (``model.infer(...)``), which is the only documented entrypoint - there is
+    no native transformers integration for this model, unlike GOT-OCR2.
+    ``save_results=False`` returns the result string in memory with no disk
+    writes.
+
+    Pinned dependency risk: Baidu's modeling code targets
+    ``transformers==4.57.1`` specifically and breaks against newer releases
+    (confirmed: ``5.15.1`` removed an import it needs). The project's
+    ``pyproject.toml``/lockfile is not touched by this bake-off script: this
+    adapter assumes whatever transformers version is installed in the active
+    environment at run time and surfaces a clear error if incompatible,
+    rather than silently reinstalling dependencies out from under the caller.
+    """
+    state: dict[str, Any] = {}
+
+    def run(image_bytes: bytes, mime: str) -> EngineReading:
+        torch = _require_cuda()
+        if "model" not in state:
+            try:
+                from transformers import AutoModel, AutoTokenizer  # noqa: PLC0415
+            except ImportError as exc:
+                raise OcrBakeoffError(
+                    "transformers is not installed; pip install transformers to "
+                    "run this GPU arm"
+                ) from exc
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    _UNLIMITED_OCR_GPU_MODEL_ID, trust_remote_code=True
+                )
+                model = AutoModel.from_pretrained(
+                    _UNLIMITED_OCR_GPU_MODEL_ID,
+                    trust_remote_code=True,
+                    use_safetensors=True,
+                    torch_dtype=torch.bfloat16,
+                )
+            except ImportError as exc:
+                raise OcrBakeoffError(
+                    f"Unlimited-OCR's custom code failed to import: {exc}. Its "
+                    "modeling file targets transformers==4.57.1; a newer "
+                    "installed version may be incompatible."
+                ) from exc
+            state["tokenizer"] = tokenizer
+            state["model"] = model.eval().cuda()
+
+        import tempfile  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        suffix = ".png" if "png" in mime else ".jpg"
+        with tempfile.TemporaryDirectory(prefix="unlimitedocr-gpu-bakeoff-") as directory:
+            image_path = Path(directory) / f"page{suffix}"
+            image_path.write_bytes(image_bytes)
+            start = time.perf_counter()
+            try:
+                result = state["model"].infer(
+                    state["tokenizer"],
+                    prompt="<image>document parsing.",
+                    image_file=str(image_path),
+                    output_path="",
+                    base_size=1024,
+                    image_size=640,
+                    crop_mode=False,
+                    max_length=4096,
+                    no_repeat_ngram_size=35,
+                    ngram_window=128,
+                    save_results=False,
+                )
+            except Exception as exc:
+                raise OcrBakeoffError(f"Unlimited-OCR GPU inference failed: {exc}") from exc
+            latency_ms = int((time.perf_counter() - start) * 1000)
+
+        text = str(result)
+        return EngineReading(
+            engine="unlimited_ocr_gpu",
+            text=text,
+            lines=[OcrLine(text=text, confidence=None)],
+            latency_ms=latency_ms,
+            warnings=["engine_reports_no_per_line_confidence", "no_geometry_plain_text_only"],
+        )
+
+    return run
+
+
 def build_engine_adapters(budget: ProviderCallBudget) -> dict[str, EngineAdapter]:
     # One rapidocr arm, not two: rapidocr 3.9.2 ships PP-OCRv6 det/rec/cls as
     # its defaults, so naming separate v5 and v6 arms would have labelled the
@@ -541,7 +714,15 @@ def build_engine_adapters(budget: ProviderCallBudget) -> dict[str, EngineAdapter
         # Candidate tier-1 replacements. Local CPU subprocess, so neither needs
         # a provider budget and neither touches the GPU model slot.
         "unlimited_ocr": _unlimited_ocr_adapter(),
-        "got_ocr2_formula": _got_ocr2_formula_adapter(),
+        "got_ocr2": _got_ocr2_adapter(),
+        # In-process GPU arms via transformers, for the SAME two candidates.
+        # This bake-off is a one-time measurement with nothing else on the
+        # card, unlike the production pipeline where tier-1 must stay
+        # CPU-only to avoid contending with the Qwen model lease - these
+        # arms measure the same models on faster, verified-correct hardware,
+        # they do not change that production constraint.
+        "got_ocr2_gpu": _got_ocr2_gpu_adapter(),
+        "unlimited_ocr_gpu": _unlimited_ocr_gpu_adapter(),
         "qwen38_vision": _qwen38_vision_adapter(budget=budget),
     }
 
@@ -826,7 +1007,7 @@ def build_parser() -> argparse.ArgumentParser:
         # The previous default named rapidocr_ppocrv5/v6, which
         # build_engine_adapters does not provide, so the CLI exited on its own
         # defaults with "Unknown engine arms".
-        default="rapidocr,tesseract,unlimited_ocr,got_ocr2_formula",
+        default="rapidocr,tesseract,unlimited_ocr,got_ocr2",
         help="Comma-separated arms. qwen38_vision makes real provider calls.",
     )
     parser.add_argument("--i-authorize-provider-calls", action="store_true")

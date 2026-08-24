@@ -431,7 +431,7 @@ def test_a_missing_focr_binary_reports_how_to_enable_the_arm(
 def test_got_ocr2_arm_is_also_offered_without_a_provider_budget() -> None:
     adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
 
-    assert "got_ocr2_formula" in adapters
+    assert "got_ocr2" in adapters
 
 
 def test_a_missing_focr_binary_blocks_the_got_ocr2_arm_too(
@@ -441,15 +441,22 @@ def test_a_missing_focr_binary_blocks_the_got_ocr2_arm_too(
     adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
 
     with pytest.raises(OcrBakeoffError, match="focr CLI is not installed"):
-        adapters["got_ocr2_formula"](b"\x89PNG\r\n\x1a\n", "image/png")
+        adapters["got_ocr2"](b"\x89PNG\r\n\x1a\n", "image/png")
 
 
-def test_got_ocr2_invokes_focr_with_the_formula_task_and_explicit_model(
+def test_got_ocr2_invokes_focr_in_plain_mode_not_formula(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The arm exists specifically to route to got-ocr2's structured LaTeX
-    mode; a wrong invocation would silently fall back to plain-text unlimited-ocr
-    and the whole point of measuring this arm separately would be lost."""
+    """Formula mode is deliberately NOT used here.
+
+    A controlled A/B on a GPU build of this same model showed --format/
+    --task formula is out-of-distribution for ordinary handwritten prose: it
+    does not just score worse, it degenerates into repeating unrelated CJK
+    glyphs. That reproduced on this exact card in isolation and did not
+    reproduce on the model's own reference image or in plain mode on the
+    same failing image, so it is a mode problem, not a hardware one. This
+    test pins the invocation so a future edit cannot silently reintroduce
+    --task formula and reproduce the degeneration."""
     import subprocess as _subprocess
 
     fake_binary = tmp_path / "focr.exe"
@@ -460,7 +467,7 @@ def test_got_ocr2_invokes_focr_with_the_formula_task_and_explicit_model(
 
     class _FakeCompleted:
         returncode = 0
-        stdout = b'{"markdown": "\\\\frac{1}{2}", "layout": []}'
+        stdout = b'{"markdown": "MAH- Z T CHE", "layout": []}'
         stderr = b""
 
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
@@ -470,14 +477,39 @@ def test_got_ocr2_invokes_focr_with_the_formula_task_and_explicit_model(
     monkeypatch.setattr(_subprocess, "run", fake_run)
 
     adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
-    reading = adapters["got_ocr2_formula"](b"\x89PNG\r\n\x1a\n", "image/png")
+    reading = adapters["got_ocr2"](b"\x89PNG\r\n\x1a\n", "image/png")
 
     cmd = captured["cmd"]
     assert cmd[0] == str(fake_binary)
     assert cmd[1] == "ocr"
     assert "--model" in cmd
     assert cmd[cmd.index("--model") + 1] == "got-ocr2.int8.focrq"
-    assert "--task" in cmd
-    assert cmd[cmd.index("--task") + 1] == "formula"
-    assert reading.engine == "got_ocr2_formula"
-    assert reading.text == "\\frac{1}{2}"
+    assert "--task" not in cmd
+    assert "--format" not in cmd
+    assert reading.engine == "got_ocr2"
+    assert reading.text == "MAH- Z T CHE"
+
+
+def test_gpu_arms_are_offered_and_refuse_cleanly_without_cuda() -> None:
+    """Both GPU arms must exist in the registry even when torch/CUDA are
+    unavailable, and must fail with a clear, actionable message rather than
+    an ImportError/AttributeError leaking out of the bake-off loop."""
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    assert "got_ocr2_gpu" in adapters
+    assert "unlimited_ocr_gpu" in adapters
+
+    try:
+        import torch  # noqa: PLC0415
+
+        cuda_available = torch.cuda.is_available()
+    except ImportError:
+        cuda_available = False
+
+    if cuda_available:
+        pytest.skip("CUDA is available on this host; the refusal path cannot be exercised")
+
+    with pytest.raises(OcrBakeoffError):
+        adapters["got_ocr2_gpu"](b"\x89PNG\r\n\x1a\n", "image/png")
+    with pytest.raises(OcrBakeoffError):
+        adapters["unlimited_ocr_gpu"](b"\x89PNG\r\n\x1a\n", "image/png")
