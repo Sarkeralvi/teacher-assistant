@@ -168,6 +168,15 @@ function localMappingWarnings(mapping: AnswerRegionMapping): string[] {
     : [];
 }
 
+// Both local paths lead to the same three teacher confirmations: confirm the
+// region, confirm the verbatim transcription, confirm it is the full answer.
+// The evidence panel is therefore gated on "a local model prepared this", not on
+// which one did — gating on the vision provider alone hid the panel for tiered
+// mappings and left the teacher no way to confirm or grade them.
+function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
+  return mapping.provider === "llama_cpp_qwen38" || mapping.provider === "llama_cpp_qwen";
+}
+
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const uploadFormRef = useRef<HTMLFormElement | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -799,8 +808,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       const responses = await runAssessmentQuestionNodeMappings(assessmentId, {
         replace_existing: true,
-        provider: "llama_cpp_qwen38",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        // Tiered: first-pass OCR locates the answers on the CPU and Qwen3.6 maps
+        // them in one fast text call. Qwen3.8 vision is spent only on pages the
+        // first-pass reader could not read, instead of on every page.
+        provider: "llama_cpp_qwen",
+        expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
+        expected_vision_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
         draft_only_confirmed: true,
         maximum_visual_calls: 25,
       });
@@ -1630,11 +1643,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         No visible answer was found. This question is excluded from local Qwen grading; no answer text will be fabricated.
                       </p>
                     ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
-                    {mapping.provider === "llama_cpp_qwen38" && mapping.answer_region_id ? (
+                    {isLocalPreparedMapping(mapping) && mapping.answer_region_id ? (
                       <section className="grid gap-3 rounded border border-cyan-700 bg-slate-950/50 p-3 text-sm">
                         <div>
-                          <p className="font-semibold text-slate-100">Qwen3.8 visual evidence</p>
+                          <p className="font-semibold text-slate-100">{mapping.provider === "llama_cpp_qwen" ? "First-pass OCR + Qwen3.6 mapping" : "Qwen3.8 visual evidence"}</p>
                           <p className="text-xs text-amber-200">Mapping, verbatim transcription, and full-answer coverage are three separate teacher confirmations.</p>
+                          {mapping.provider === "llama_cpp_qwen" ? <p className="text-xs text-slate-300">This region was located by first-pass OCR, whose text is approximate. The verbatim reading below is produced separately by Qwen3.8.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
                           <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id} onClick={() => void handleConfirmMapping(mapping)}>
@@ -1663,7 +1677,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         </div> : null}
                       </section>
                     ) : null}
-                    {mapping.answer_region_id && mapping.provider !== "llama_cpp_qwen38" ? (
+                    {mapping.answer_region_id && !isLocalPreparedMapping(mapping) ? (
                       <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(mapping.answer_region_id)} target="_blank" rel="noreferrer">
                         Open prepared answer image
                       </a>

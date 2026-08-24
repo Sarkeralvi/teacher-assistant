@@ -95,14 +95,39 @@ Every page records its engine, render DPI, image SHA-256, per-line confidence, d
 ## Student evidence
 
 1. Upload complete scripts.
-2. Confirm the answer-region mapping.
-3. Create a fresh non-thinking verbatim visual transcription and confirm it only when its exact hash faithfully matches the image. Do not edit or mathematically repair it.
-4. Confirm separately that the displayed image contains the **full** answer. Text confirmation alone never makes a region grading-ready.
-5. If no reading is faithful, reject and upload a clearer complete page rather than accepting the closest match.
+2. Prepare draft answer mappings (see **Script mapping** below).
+3. Confirm the answer-region mapping.
+4. Create a fresh non-thinking verbatim visual transcription and confirm it only when its exact hash faithfully matches the image. Do not edit or mathematically repair it.
+5. Confirm separately that the displayed image contains the **full** answer. Text confirmation alone never makes a region grading-ready.
+6. If no reading is faithful, reject and upload a clearer complete page rather than accepting the closest match.
+
+### Script mapping
+
+Two paths exist. The UI uses the tiered one; the vision-only path stays selectable as a direct fallback.
+
+| Provider | What runs |
+|---|---|
+| `llama_cpp_qwen` (default) | Tier-1 OCR locates the answers on the CPU, Qwen3.6 maps them in one text call, Qwen3.8 vision is called only for pages tier-1 could not read. |
+| `llama_cpp_qwen38` | Qwen3.8 vision maps every page, one call each. |
+
+The tiered path runs in stages, deliberately batched — interleaving would cost a 60-90 s model reload per page:
+
+1. Tier-1 OCR every page. No model resident, no VRAM, `LOCAL_OCR_ENABLED` must be true.
+2. Escalate only pages whose **detection** failed: no boxes at all, or ink outside every box (`LOCAL_OCR_UNCOVERED_INK_ESCALATE_ABOVE`). Recognition quality is deliberately *not* a trigger here — see below.
+3. Escalated pages go to Qwen3.8 `map_page_answer_regions`, bounded by `LOCAL_SCRIPT_MAX_ESCALATIONS` and the request's `maximum_visual_calls`. Exceeding either is a hard stop, never a quiet degrade.
+4. The remaining pages go to Qwen3.6 in **one** text call. It selects OCR block identifiers and never produces coordinates.
+5. The two mappers own disjoint pages, so segments concatenate in page order. A question the vision pass already placed is not re-placed by the text pass.
+6. Any finalized question with no region becomes a visible blocker, and pages carrying unassigned ink are named on it.
+
+**Why recognition quality is not an escalation trigger on scripts.** Tier-1 OCR supplies *geometry* here, not text: its boxes locate the answer and Qwen3.8 reads it later, per confirmed region. Since 94.7% of handwritten lines are misread, escalating on recognition quality would send every page to the vision model and the tiered path would save nothing. A page whose ink was found is usable even when badly read. This is `evaluate_page_detection_only` in `packages/ocr/escalation.py`, kept separate from the reference-phase policy, which does care about text and escalates handwriting wholesale.
+
+The approximate OCR text is never presented as the answer. Mappings carry `text_source = "tier1_ocr_mapping_pending_transcription"`, and the verbatim reading remains a separate teacher confirmation on the vision path.
 
 ## Known limitations
 
 - Tier-1 OCR drops decimal points on some handwriting (`03` for `0.3`). In a probability question that is a 10x error in the value a mark depends on, so handwriting escalates often and teacher review remains mandatory.
 - RapidOCR escalation thresholds are calibrated only on the current small fixture set and remain unsuitable as a classroom-wide handwriting-quality claim. Handwriting is deliberately sent to Qwen3.8 visual review instead.
 - The 20-case curated evaluation gate is wired to the production Qwen3.8 visual-transcription job and text-only dispatch path, but no completed signed real run exists yet. No result may be cited as pilot-authorization evidence until it completes with `PASS`.
-- The Qwen3.6-versus-Qwen3.8 text-grading bake-off is implemented but has no live candidate result yet. Its evidence replay makes zero new visual calls and its result does not automatically change the normal grading configuration.
+- The Qwen3.6-versus-Qwen3.8 text-grading bake-off is implemented but has no live candidate result yet. Its evidence replay makes zero new visual calls and its result does not automatically change the normal grading configuration. Grading still dispatches to Qwen3.8 until that bake-off produces a result.
+- The tiered script path has never been run end to end against a real script. Its stages are covered by tests with fake engines and providers, which is not evidence about a real page.
+- Baidu Unlimited-OCR is under evaluation as a replacement tier-1 engine (3B MoE VLM, MIT, no llama.cpp support merged upstream). Its published OmniDocBench score explicitly excludes handwriting, so it cannot be adopted on that evidence; it must win on the local teacher-verified fixtures first. RapidOCR remains the tier-1 engine until then.

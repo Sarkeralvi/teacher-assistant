@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -102,3 +103,23 @@ class OcrPageReading:
     @property
     def confidences(self) -> list[Decimal]:
         return [line.confidence for line in self.lines if line.confidence is not None]
+
+
+class TierOneOcrEngine(Protocol):
+    """What the pipeline requires of a tier-1 engine, and nothing more.
+
+    Stated as a Protocol so the engine is chosen by measurement rather than by
+    import: any reader that returns lines with geometry satisfies this, whether
+    it is a CTC recognizer reporting per-line scores or a vision-language model
+    reporting none. Callers must therefore treat ``OcrLine.confidence`` as
+    genuinely optional.
+    """
+
+    def read_page(
+        self,
+        image_bytes: bytes,
+        *,
+        render_dpi: int,
+        page_width: int,
+        page_height: int,
+    ) -> OcrPageReading: ...

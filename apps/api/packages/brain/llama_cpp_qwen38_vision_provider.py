@@ -79,6 +79,22 @@ _REFERENCE_BUNDLE_BASE_TOKENS = 1500
 _REFERENCE_BUNDLE_TOKENS_PER_PAGE = 1000
 _REFERENCE_BUNDLE_MIN_TOKENS = 1500
 _REFERENCE_BUNDLE_MAX_TOKENS_CEILING = 6500
+
+# Page-mapping budget scales with the label count for the same reason: the
+# response carries up to one region object per finalized label, so a fixed
+# ceiling that suits a 2-part paper truncates a 7-part one. A real 7-label page
+# was cut off at a flat 900 (finish_reason=length, completion_tokens=900) —
+# roughly what one correct response to 7 labels actually needs, so there was no
+# headroom left for warnings.
+#
+# One region object is ~150 characters of JSON, about 50 tokens. 120 gives 2.4x
+# headroom for a long label and a warning string. This provider sends no grammar
+# to the server (see _structured_completion), so nothing caps the array server
+# side and the budget is the only truncation guard there is.
+_PAGE_MAPPING_BASE_TOKENS = 200
+_PAGE_MAPPING_TOKENS_PER_LABEL = 120
+_PAGE_MAPPING_MIN_TOKENS = 900
+_PAGE_MAPPING_MAX_TOKENS_CEILING = 4000
 # Must match --image-max-tokens on the running llama-server (Start-LocalAi.ps1).
 _IMAGE_MAX_TOKENS_PER_PAGE = 1280
 _REFERENCE_BUNDLE_PROMPT_OVERHEAD_TOKENS = 300
@@ -409,9 +425,16 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         if not content.strip():
             raise ValueError(f"llama_cpp_qwen38_vision: empty content in response ({diagnostics})")
         if finish_reason == "length":
+            # Deliberately names both causes. The earlier wording said only
+            # "needs a larger token budget", and on a looping response that
+            # reading was wrong: raising the budget bought more looping. Whether
+            # the output was near-complete or repetitive is the thing that tells
+            # them apart, so the opening characters are quoted here too.
             raise ValueError(
-                "llama_cpp_qwen38_vision: response was cut off before finishing; "
-                f"the model needs a larger token budget for this input ({diagnostics})"
+                "llama_cpp_qwen38_vision: response was cut off before finishing. Either the "
+                "budget is too small for this input, or decoding repeated until it ran out; "
+                f"the content shows which ({diagnostics} "
+                f"content starts: {self._sanitize(content[:200])!r})"
             )
 
         try:
@@ -624,7 +647,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             ],
             response_model=_Qwen38PageMappingPayload,
             schema_name="visual_page_mapping",
-            max_tokens=900,
+            max_tokens=self._page_mapping_token_budget(len(question_labels)),
             temperature=0.0,
             enable_thinking=False,
         )
@@ -633,6 +656,33 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         if any(region.question_label.casefold() not in known for region in payload.regions):
             raise ValueError("Visual mapping returned an unknown finalized question label")
         return VisualPageMappingOutput(regions=payload.regions, needs_review=True)
+
+    def _page_mapping_token_budget(self, label_count: int) -> int:
+        """Size the mapping budget to the number of labels the page may carry.
+
+        Bounded by real context room the same way the reference bundle is: one
+        page image costs up to _IMAGE_MAX_TOKENS_PER_PAGE prompt tokens, so the
+        room left for the response is not the whole context window.
+        """
+        # MIN is a floor on the budget, not on the estimate: a 2-label page
+        # needs ~440 tokens, and it must not be given less room than the 900
+        # that already worked for small pages.
+        content_need = max(
+            _PAGE_MAPPING_BASE_TOKENS + _PAGE_MAPPING_TOKENS_PER_LABEL * label_count,
+            _PAGE_MAPPING_MIN_TOKENS,
+        )
+        prompt_estimate = _IMAGE_MAX_TOKENS_PER_PAGE + _REFERENCE_BUNDLE_PROMPT_OVERHEAD_TOKENS
+        context_room = self.context_tokens - prompt_estimate - _CONTEXT_SAFETY_MARGIN_TOKENS
+        budget = min(content_need, context_room, _PAGE_MAPPING_MAX_TOKENS_CEILING)
+        # Only reachable when the context window itself cannot hold the floor.
+        if budget < _PAGE_MAPPING_MIN_TOKENS:
+            raise ValueError(
+                f"llama_cpp_qwen38_vision: mapping {label_count} finalized labels leaves only "
+                f"~{max(context_room, 0)} completion tokens in a {self.context_tokens}-token "
+                "context — too little room to map safely in one call. Raise "
+                "LOCAL_QWEN38_CONTEXT_TOKENS if VRAM allows it."
+            )
+        return budget
 
     def _reference_bundle_token_budget(self, total_pages: int) -> int:
         """Size the completion budget to the input, bounded by real context room.

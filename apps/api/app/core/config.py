@@ -100,6 +100,12 @@ class Settings(BaseSettings):
         ge=Decimal("0"),
         le=Decimal("1"),
     )
+    # Script pages whose ink tier-1 OCR failed to find fall back to the vision
+    # mapper, one call each. A pre-authorized ceiling, not a silent fallback:
+    # exceeding it stops the run rather than quietly reading less.
+    local_script_max_escalations: int = Field(
+        default=6, alias="LOCAL_SCRIPT_MAX_ESCALATIONS", ge=0, le=40
+    )
     cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(
         default=25, alias="COHORT_MAX_PROVIDER_CALLS", ge=1, le=25

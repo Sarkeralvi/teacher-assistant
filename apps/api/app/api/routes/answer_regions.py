@@ -1038,15 +1038,27 @@ def run_submission_question_node_mappings(
     submission = get_submission_or_404(submission_id, db)
     get_owned_assessment_or_404(submission.assessment_id, db, current_user)
     request = payload or AnswerRegionMappingRunRequest()
-    if request.provider == "llama_cpp_qwen38":
+    if request.provider in {"llama_cpp_qwen38", "llama_cpp_qwen"}:
+        tiered = request.provider == "llama_cpp_qwen"
+        service = LocalScriptPreparationService(db)
         try:
-            mappings = LocalScriptPreparationService(db).prepare(
-                submission=submission,
-                teacher=current_user,
-                expected_model=request.expected_model or "",
-                replace_existing=request.replace_existing,
-                maximum_ocr_calls=request.maximum_visual_calls,
-            )
+            if tiered:
+                mappings = service.prepare_from_tier1_ocr(
+                    submission=submission,
+                    teacher=current_user,
+                    expected_text_model=request.expected_model or "",
+                    expected_vision_model=request.expected_vision_model or "",
+                    replace_existing=request.replace_existing,
+                    maximum_visual_calls=request.maximum_visual_calls,
+                )
+            else:
+                mappings = service.prepare(
+                    submission=submission,
+                    teacher=current_user,
+                    expected_model=request.expected_model or "",
+                    replace_existing=request.replace_existing,
+                    maximum_ocr_calls=request.maximum_visual_calls,
+                )
         except LocalScriptPreparationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1059,12 +1071,23 @@ def run_submission_question_node_mappings(
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Local Qwen3.8 visual script preparation failed",
+                detail=(
+                    "Local tiered script preparation failed"
+                    if tiered
+                    else "Local Qwen3.8 visual script preparation failed"
+                ),
             ) from exc
         return AnswerRegionMappingRunResponse(
             message=(
-                "Qwen3.8 prepared draft answer mappings. Confirm the regions, then "
-                "confirm visual evidence before grading."
+                (
+                    "First-pass OCR located the answers and Qwen3.6 mapped them. Confirm the "
+                    "regions, then confirm visual evidence before grading."
+                )
+                if tiered
+                else (
+                    "Qwen3.8 prepared draft answer mappings. Confirm the regions, then "
+                    "confirm visual evidence before grading."
+                )
             ),
             created_count=len(mappings),
             mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),

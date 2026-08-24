@@ -281,7 +281,7 @@ def test_reference_bundle_truncation_reports_a_clear_actionable_error() -> None:
     provider, _client = provider_with(completion)
     image = b"\x89PNG\r\n\x1a\nimage"
 
-    with pytest.raises(ValueError, match="needs a larger token budget"):
+    with pytest.raises(ValueError, match="cut off before finishing") as caught:
         provider.extract_reference_bundle_from_images(
             documents={
                 "QUESTION": [(image, "image/png", 1)],
@@ -289,6 +289,55 @@ def test_reference_bundle_truncation_reports_a_clear_actionable_error() -> None:
                 "RUBRIC": [(image, "image/png", 1)],
             }
         )
+    # Names both causes and quotes the output, because "needs a larger budget"
+    # alone pointed the wrong way on a looping response once already.
+    message = str(caught.value)
+    assert "budget is too small" in message
+    assert "repeated until it ran out" in message
+    assert "question_number" in message
+
+
+def test_page_mapping_token_budget_scales_with_label_count() -> None:
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key")
+    # Few labels: held at the floor rather than dropping below what already worked.
+    assert provider._page_mapping_token_budget(1) == 900
+    assert provider._page_mapping_token_budget(2) == 900
+    # The 7-label paper that was truncated at a flat 900 now gets real headroom.
+    assert provider._page_mapping_token_budget(7) == 1040
+    assert provider._page_mapping_token_budget(20) == 2600
+    # Ceiling-bound, never unbounded.
+    assert provider._page_mapping_token_budget(200) == 4000
+
+
+def test_page_mapping_request_carries_the_scaled_budget() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": '{"regions": [], "needs_review": true}'},
+            }
+        ],
+        "usage": {"prompt_tokens": 1577, "completion_tokens": 12},
+    }
+    provider, client = provider_with(completion)
+
+    provider.map_page_answer_regions(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+        question_labels=[
+            "1(a)(i)",
+            "1(a)(ii)",
+            "1(b)(i)",
+            "1(b)(ii)",
+            "1(c)(i)",
+            "1(c)(ii)",
+            "1(c)(iii)",
+        ],
+    )
+
+    # The real failure on assessment 61: 7 labels against a flat 900.
+    assert client.requests[0]["max_tokens"] == 1040
+    assert client.requests[0]["chat_template_kwargs"]["enable_thinking"] is False
 
 
 def test_qwen38_grading_rejects_changed_rubric_contract() -> None:

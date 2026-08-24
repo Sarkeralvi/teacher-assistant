@@ -1406,12 +1406,18 @@ export function suggestAnswerRegionMappings(
   );
 }
 
+// "llama_cpp_qwen" is the tiered path: first-pass OCR locates the answers,
+// Qwen3.6 maps them, and Qwen3.8 vision is spent only on pages OCR could not
+// read. "llama_cpp_qwen38" is the vision-only path, kept as a direct fallback.
+export type ScriptMappingProvider = "deterministic_layout" | "llama_cpp_qwen38" | "llama_cpp_qwen";
+
 export function runSubmissionQuestionNodeMappings(
   submissionId: number,
   payload: {
     replace_existing?: boolean;
-    provider?: "deterministic_layout" | "llama_cpp_qwen38";
+    provider?: ScriptMappingProvider;
     expected_model?: string;
+    expected_vision_model?: string;
     draft_only_confirmed?: boolean;
     maximum_visual_calls?: number;
   } = {},
@@ -1428,8 +1434,9 @@ export function runAssessmentQuestionNodeMappings(
   assessmentId: number,
   payload: {
     replace_existing?: boolean;
-    provider?: "deterministic_layout" | "llama_cpp_qwen38";
+    provider?: ScriptMappingProvider;
     expected_model?: string;
+    expected_vision_model?: string;
     draft_only_confirmed?: boolean;
     maximum_visual_calls?: number;
   } = {},

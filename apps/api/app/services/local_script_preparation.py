@@ -46,6 +46,20 @@ class PreparedSegment:
     block_orders: list[int]
 
 
+@dataclass(frozen=True)
+class _ScriptPageReading:
+    """One script page as tier-1 OCR saw it, plus whether detection can be trusted."""
+
+    page: Any
+    blocks: list[dict[str, Any]]
+    reading: Any
+    decision: Any
+
+    @property
+    def escalated(self) -> bool:
+        return bool(self.decision.escalated)
+
+
 class LocalScriptPreparationService:
     """Prepare draft answer regions from full script pages without manual cropping."""
 
@@ -57,11 +71,17 @@ class LocalScriptPreparationService:
         storage: LocalStorage | None = None,
         qwen_adapter: BrainAdapter | None = None,
         phase_manager: LocalAiPhaseManager | None = None,
+        ocr_engine: Any | None = None,
+        text_adapter: BrainAdapter | None = None,
     ) -> None:
         self.db = db
         self.settings = settings or get_settings()
         self.storage = storage or LocalStorage()
         self._qwen_adapter = qwen_adapter
+        # Injected so the whole staged pipeline is testable without an engine
+        # installed or a model resident. See TierOneOcrEngine in packages.ocr.types.
+        self._ocr_engine = ocr_engine
+        self._text_adapter = text_adapter
         self.phase_manager = phase_manager or LocalAiPhaseManager(
             settings=self.settings, db=self.db
         )
@@ -254,6 +274,395 @@ class LocalScriptPreparationService:
         self.db.commit()
         return self._load_existing(submission.id)
 
+    def prepare_from_tier1_ocr(
+        self,
+        *,
+        submission: Submission,
+        teacher: User,
+        expected_text_model: str,
+        expected_vision_model: str,
+        replace_existing: bool,
+        maximum_visual_calls: int,
+    ) -> list[AnswerRegionMapping]:
+        """Map a script by reading it cheaply first and spending vision only where needed.
+
+        Staged collect-then-execute, in this order:
+
+        1. Tier-1 OCR every page on the CPU. No model resident, no VRAM.
+        2. Pages whose DETECTION failed go to the Qwen3.8 vision mapper. Their
+           blocks are absent or untrustworthy, so feeding them to a text mapper
+           would be mapping noise.
+        3. Qwen3.6 maps the blocks of the remaining pages in ONE text call.
+        4. Merge. The two mappers work on disjoint page sets, so segments
+           concatenate in page order and never need arbitration.
+
+        Interleaving stages would cost a 60-90 s model reload per page, so the
+        shape enforces the batching rather than a convention asking for it.
+
+        Performs no transcription and no grading: mapping, verbatim evidence and
+        full-answer coverage remain three separate teacher confirmations.
+        """
+        self._validate_tier1_authorization(
+            expected_text_model=expected_text_model,
+            expected_vision_model=expected_vision_model,
+        )
+        pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
+        if not pages:
+            raise LocalScriptPreparationError("The uploaded script has no rendered pages")
+        questions, nodes, references = self._load_finalized_references(submission)
+        existing = self._load_existing(submission.id)
+        if existing and not replace_existing:
+            raise LocalScriptPreparationError(
+                "Draft mappings already exist; explicitly replace them to prepare again"
+            )
+        self._assert_replace_is_safe(existing)
+
+        readings = self._ocr_pages(pages)
+        escalated = [item for item in readings if item.escalated]
+        budget = min(maximum_visual_calls, self.settings.local_script_max_escalations)
+        if len(escalated) > budget:
+            raise LocalScriptPreparationError(
+                f"{len(escalated)} script page(s) could not be read by the first-pass reader "
+                f"but only {budget} vision call(s) were authorized. Re-run with a higher "
+                "budget, or supply clearer pages."
+            )
+
+        segments_by_question: dict[int, list[PreparedSegment]] = {q.id: [] for q in questions}
+        warning_by_question: dict[int, list[str]] = {q.id: [] for q in questions}
+        confidence_by_question: dict[int, list[Decimal]] = {q.id: [] for q in questions}
+        warnings: list[str] = []
+        visual_calls = 0
+        text_calls = 0
+
+        lease = LocalModelLeaseService(self.db)
+        holder = f"script_tier1_preparation:{submission.id}:{uuid4().hex}"
+        try:
+            if escalated:
+                visual_calls = self._map_escalated_pages_with_vision(
+                    escalated=escalated,
+                    questions=questions,
+                    segments_by_question=segments_by_question,
+                    warning_by_question=warning_by_question,
+                    confidence_by_question=confidence_by_question,
+                    lease=lease,
+                    holder=holder,
+                )
+                warnings.append(
+                    f"{len(escalated)} page(s) were mapped by the vision model because the "
+                    "first-pass reader could not locate their handwriting: "
+                    + ", ".join(str(item.page.page_no) for item in escalated)
+                )
+
+            accepted = [item for item in readings if not item.escalated and item.blocks]
+            if accepted:
+                text_calls = self._map_accepted_pages_with_text_model(
+                    accepted=accepted,
+                    questions=questions,
+                    references=references,
+                    segments_by_question=segments_by_question,
+                    warning_by_question=warning_by_question,
+                    confidence_by_question=confidence_by_question,
+                    lease=lease,
+                    holder=holder,
+                )
+            elif not escalated:
+                raise LocalScriptPreparationError(
+                    "Tier-1 OCR found no text blocks on any page and no page was escalated; "
+                    "there is nothing to map"
+                )
+        except LocalModelLeaseError as exc:
+            raise LocalScriptPreparationError(str(exc)) from exc
+
+        return self._persist_prepared_mappings(
+            submission=submission,
+            teacher=teacher,
+            questions=questions,
+            nodes=nodes,
+            pages=pages,
+            existing=existing,
+            segments_by_question=segments_by_question,
+            warning_by_question=warning_by_question,
+            confidence_by_question=confidence_by_question,
+            run_warnings=warnings,
+            provider="llama_cpp_qwen",
+            audit_payload={
+                "expected_text_model": expected_text_model,
+                "expected_vision_model": expected_vision_model,
+                "tier1_engine": readings[0].reading.engine if readings else None,
+                "tier1_page_count": len(readings),
+                "visual_mapping_call_count": visual_calls,
+                "text_mapping_call_count": text_calls,
+                "escalated_pages": [item.page.page_no for item in escalated],
+                "escalation_reasons": sorted(
+                    {reason for item in escalated for reason in item.decision.reason_codes}
+                ),
+            },
+        )
+
+    def _map_escalated_pages_with_vision(
+        self,
+        *,
+        escalated: list[_ScriptPageReading],
+        questions: list[Question],
+        segments_by_question: dict[int, list[PreparedSegment]],
+        warning_by_question: dict[int, list[str]],
+        confidence_by_question: dict[int, list[Decimal]],
+        lease: LocalModelLeaseService,
+        holder: str,
+    ) -> int:
+        """Map the pages tier-1 could not read, using the vision model, once each."""
+        labels = [question.question_no for question in questions]
+        question_by_label = {q.question_no.casefold(): q for q in questions}
+        calls = 0
+        with lease.hold(model_phase="Qwen38", holder_kind="script_preparation", holder_id=holder):
+            if self.settings.local_ai_phase_switch_enabled:
+                self.phase_manager.switch("Qwen38", lease_holder_id=holder)
+            adapter = self._qwen_adapter or BrainAdapter.for_provider(
+                self.settings, "llama_cpp_qwen38"
+            )
+            adapter.verify_available_model()
+            provider = adapter.provider
+            if not hasattr(provider, "map_page_answer_regions"):
+                raise LocalScriptPreparationError(
+                    "Configured local provider cannot map visual script pages"
+                )
+            open_continuations: list[str] = []
+            for item in escalated:
+                image_path = self.storage.resolve_relative(item.page.image_path)
+                try:
+                    lease.heartbeat(holder_id=holder)
+                    result = provider.map_page_answer_regions(
+                        image_bytes=image_path.read_bytes(),
+                        mime_type=_image_content_type(image_path),
+                        question_labels=labels,
+                        open_continuations=open_continuations,
+                    )
+                    lease.heartbeat(holder_id=holder)
+                except Exception as exc:
+                    raise LocalScriptPreparationError(
+                        f"Qwen3.8 visual mapping failed safely: {exc}"
+                    ) from exc
+                calls += 1
+                seen: set[str] = set()
+                next_continuations: list[str] = []
+                for region in result.regions:
+                    label = region.question_label.casefold()
+                    if label in seen:
+                        raise LocalScriptPreparationError(
+                            "Qwen3.8 split one answer into multiple page regions"
+                        )
+                    seen.add(label)
+                    question = question_by_label.get(label)
+                    if question is None:
+                        raise LocalScriptPreparationError(
+                            "Qwen3.8 returned an unknown finalized question"
+                        )
+                    x1, y1, x2, y2 = region.bbox
+                    with Image.open(image_path) as image:
+                        x, y, width, height = _normalized_box_to_page_box(
+                            x1, y1, x2, y2, image.width, image.height
+                        )
+                    segments_by_question[question.id].append(
+                        PreparedSegment(
+                            page_id=item.page.id,
+                            page_no=item.page.page_no,
+                            x=x,
+                            y=y,
+                            width=width,
+                            height=height,
+                            block_orders=[],
+                        )
+                    )
+                    confidence_by_question[question.id].append(region.confidence)
+                    warning_by_question[question.id].extend(region.warnings)
+                    warning_by_question[question.id].append(
+                        f"page {item.page.page_no} was located by the vision model because the "
+                        "first-pass reader could not; check this region most closely"
+                    )
+                    if region.continues_to_next:
+                        next_continuations.append(question.question_no)
+                open_continuations = next_continuations
+        return calls
+
+    def _map_accepted_pages_with_text_model(
+        self,
+        *,
+        accepted: list[_ScriptPageReading],
+        questions: list[Question],
+        references: list[dict[str, Any]],
+        segments_by_question: dict[int, list[PreparedSegment]],
+        warning_by_question: dict[int, list[str]],
+        confidence_by_question: dict[int, list[Decimal]],
+        lease: LocalModelLeaseService,
+        holder: str,
+    ) -> int:
+        """Map tier-1 blocks to locked questions with Qwen3.6, in one text call.
+
+        Qwen3.6 selects block identifiers; it never produces coordinates. The
+        geometry comes from the boxes tier-1 detected, so a misread block still
+        crops the right part of the page.
+        """
+        ocr_pages = [{"page": item.page.page_no, "blocks": item.blocks} for item in accepted]
+        block_index = self._block_index(ocr_pages)
+        with lease.hold(model_phase="Qwen", holder_kind="script_preparation", holder_id=holder):
+            if self.settings.local_ai_phase_switch_enabled:
+                self.phase_manager.switch("Qwen", lease_holder_id=holder)
+            adapter = self._text_adapter or BrainAdapter.for_provider(
+                self.settings, "llama_cpp_qwen"
+            )
+            adapter.verify_available_model()
+            provider = adapter.provider
+            if not hasattr(provider, "map_submission_answers_from_ocr_pages"):
+                raise LocalScriptPreparationError(
+                    "Configured local provider cannot map script answers from OCR text"
+                )
+            try:
+                lease.heartbeat(holder_id=holder)
+                result = provider.map_submission_answers_from_ocr_pages(
+                    pages=ocr_pages, questions=references
+                )
+                lease.heartbeat(holder_id=holder)
+            except Exception as exc:
+                raise LocalScriptPreparationError(
+                    f"Qwen3.6 answer mapping failed safely: {exc}"
+                ) from exc
+
+        drafts = list(result.get("mappings") or [])
+        self._validate_draft_set(drafts, questions)
+        pages_by_no = [item.page for item in accepted]
+        used_blocks: set[tuple[int, int]] = set()
+        for draft in drafts:
+            question_id = int(draft["question_id"])
+            # A question the vision pass already placed is not re-placed here:
+            # the two mappers own disjoint pages, and letting both claim one
+            # answer would produce two regions for it.
+            if segments_by_question[question_id]:
+                continue
+            segments, draft_text = self._resolve_draft(
+                draft=draft,
+                pages=pages_by_no,
+                block_index=block_index,
+                used_blocks=used_blocks,
+            )
+            segments_by_question[question_id].extend(segments)
+            warning_by_question[question_id].extend(list(draft.get("warnings") or []))
+            if draft_text:
+                warning_by_question[question_id].append(
+                    "first-pass OCR text is approximate and is used only to locate this answer; "
+                    "the verbatim reading is a separate confirmation"
+                )
+            confidence = draft.get("confidence")
+            if confidence is not None:
+                confidence_by_question[question_id].append(Decimal(str(confidence)))
+        return 1
+
+    def _persist_prepared_mappings(
+        self,
+        *,
+        submission: Submission,
+        teacher: User,
+        questions: list[Question],
+        nodes: dict[int, QuestionNode],
+        pages: list[Any],
+        existing: list[AnswerRegionMapping],
+        segments_by_question: dict[int, list[PreparedSegment]],
+        warning_by_question: dict[int, list[str]],
+        confidence_by_question: dict[int, list[Decimal]],
+        run_warnings: list[str],
+        provider: str,
+        audit_payload: dict[str, Any],
+    ) -> list[AnswerRegionMapping]:
+        unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
+
+        created: list[AnswerRegionMapping] = []
+        for question in questions:
+            segments = sorted(
+                segments_by_question[question.id], key=lambda item: (item.page_no, item.y)
+            )
+            draft = {
+                "status": "mapped" if segments else "not_found",
+                "confidence": str(min(confidence_by_question[question.id], default=Decimal("0"))),
+                "warnings": list(dict.fromkeys(warning_by_question[question.id])),
+            }
+            page_warnings = list(run_warnings)
+            # Attach the unassigned-content warning to questions that were NOT
+            # placed. Those are the ones the missed ink might belong to, and
+            # attaching it to every mapping would bury the signal.
+            if not segments:
+                for finding in unassigned_pages:
+                    if finding["blank"]:
+                        continue
+                    page_warnings.append(
+                        f"page {finding['page_no']} has handwriting that was not assigned "
+                        "to any question; this answer may be there"
+                    )
+            created.append(
+                self._create_mapping(
+                    submission=submission,
+                    question=question,
+                    node=nodes[question.id],
+                    draft=draft,
+                    segments=segments,
+                    draft_text="",
+                    ocr_warnings=[],
+                    qwen_warnings=page_warnings,
+                    provider=provider,
+                    text_source="tier1_ocr_mapping_pending_transcription",
+                )
+            )
+
+        for mapping in existing:
+            region = mapping.answer_region
+            self.db.delete(mapping)
+            if region is not None:
+                self.db.delete(region)
+        self.db.flush()
+        for mapping in created:
+            self.db.add(mapping)
+        self.db.add(
+            AuditLog(
+                actor_type="teacher",
+                actor_id=teacher.id,
+                event_type="submission_script_draft_prepared",
+                entity_type="submission",
+                entity_id=submission.id,
+                payload_json={
+                    "assessment_id": submission.assessment_id,
+                    "provider": provider,
+                    "mapping_count": len(created),
+                    "mapped_count": sum(1 for item in created if item.answer_region is not None),
+                    "pages_with_unassigned_ink": [
+                        item["page_no"] for item in unassigned_pages if not item["blank"]
+                    ],
+                    "blank_pages": [item["page_no"] for item in unassigned_pages if item["blank"]],
+                    "warning_count": sum(
+                        len((item.source_reference or {}).get("warnings", [])) for item in created
+                    ),
+                    **audit_payload,
+                },
+            )
+        )
+        self.db.commit()
+        return self._load_existing(submission.id)
+
+    def _validate_tier1_authorization(
+        self, *, expected_text_model: str, expected_vision_model: str
+    ) -> None:
+        if not self.settings.brain_allow_real_providers:
+            raise LocalScriptPreparationError("Real local providers are disabled")
+        if not self.settings.local_qwen_enabled:
+            raise LocalScriptPreparationError("Qwen3.6 must be enabled to map script answers")
+        if expected_text_model != self.settings.local_qwen_model:
+            raise LocalScriptPreparationError("Expected Qwen3.6 model alias does not match")
+        # The vision model is only the fallback here, but a page that needs it
+        # must not discover mid-run that it is unavailable.
+        if not self.settings.local_qwen38_visual_preparation_enabled:
+            raise LocalScriptPreparationError("Qwen3.8 visual preparation is disabled")
+        if not self.settings.local_qwen38_enabled:
+            raise LocalScriptPreparationError("Qwen3.8 must be enabled")
+        if expected_vision_model != self.settings.local_qwen38_model:
+            raise LocalScriptPreparationError("Expected Qwen3.8 model alias does not match")
+
     def _detect_unassigned_content(
         self,
         pages: list[Any],
@@ -375,11 +784,88 @@ class LocalScriptPreparationService:
             )
         return questions, node_by_question, references
 
-    def _ocr_pages(self, pages: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
-        del pages
-        raise LocalScriptPreparationError(
-            "PaddleOCR has been removed. Visual script preparation will be provided by Qwen3.8."
+    def _ocr_pages(self, pages: list[Any]) -> list[_ScriptPageReading]:
+        """Read every script page with the tier-1 engine, on the CPU.
+
+        Supplies the geometry the mapper needs: one block per detected line,
+        numbered in reading order, with its box in page pixels. The text is
+        carried too and is deliberately treated as approximate - it exists so
+        Qwen3.6 can tell one answer from the next, not so anyone can mark from
+        it. Verbatim reading happens later, per confirmed region, on the vision
+        model.
+
+        Escalation here asks only whether DETECTION failed, via
+        ``evaluate_page_detection_only``. A page whose ink was found is usable
+        even when badly misread.
+        """
+        from packages.ocr.escalation import EscalationPolicy, evaluate_page_detection_only
+
+        if not self.settings.local_ocr_enabled:
+            raise LocalScriptPreparationError(
+                "Tier-1 OCR is disabled; set LOCAL_OCR_ENABLED to prepare scripts from OCR"
+            )
+        engine = self._ocr_engine or self._default_ocr_engine()
+        policy = EscalationPolicy(
+            line_confidence_escalate_below=self.settings.local_ocr_confidence_escalate_below,
+            uncovered_ink_escalate_above=self.settings.local_ocr_uncovered_ink_escalate_above,
         )
+
+        results: list[_ScriptPageReading] = []
+        for page in pages:
+            image_path = self.storage.resolve_relative(page.image_path)
+            image_bytes = image_path.read_bytes()
+            with Image.open(image_path) as image:
+                width, height = image.width, image.height
+            try:
+                reading = engine.read_page(
+                    image_bytes,
+                    render_dpi=self.settings.local_ocr_render_dpi,
+                    page_width=width,
+                    page_height=height,
+                )
+            except Exception as exc:
+                raise LocalScriptPreparationError(f"Tier-1 OCR failed safely: {exc}") from exc
+
+            blocks: list[dict[str, Any]] = []
+            for line in reading.lines:
+                text = line.text.strip()
+                # A block with no text or no box cannot be mapped or cropped, so
+                # it is dropped rather than given an order number the mapper
+                # could select and the crop step could not honour.
+                if not text or line.bbox is None:
+                    continue
+                blocks.append(
+                    {
+                        "order": len(blocks) + 1,
+                        "text": text,
+                        "bbox": [
+                            float(line.bbox.x1),
+                            float(line.bbox.y1),
+                            float(line.bbox.x2),
+                            float(line.bbox.y2),
+                        ],
+                        "confidence": (
+                            str(line.confidence) if line.confidence is not None else None
+                        ),
+                    }
+                )
+            results.append(
+                _ScriptPageReading(
+                    page=page,
+                    blocks=blocks,
+                    reading=reading,
+                    decision=evaluate_page_detection_only(reading, policy=policy),
+                )
+            )
+        return results
+
+    def _default_ocr_engine(self) -> Any:
+        from packages.ocr.rapidocr_engine import OcrEngineUnavailableError, RapidOcrEngine
+
+        try:
+            return RapidOcrEngine()
+        except OcrEngineUnavailableError as exc:
+            raise LocalScriptPreparationError(str(exc)) from exc
 
     def _page_geometry(self, pages: list[Any]) -> dict[int, tuple[int, int, int]]:
         geometry: dict[int, tuple[int, int, int]] = {}
@@ -491,6 +977,8 @@ class LocalScriptPreparationService:
         draft_text: str,
         ocr_warnings: list[str],
         qwen_warnings: list[str],
+        provider: str = "llama_cpp_qwen38",
+        text_source: str = "qwen38_visual_mapping_pending_transcription",
     ) -> AnswerRegionMapping:
         status = "blocked" if not segments else str(draft["status"])
         if status == "not_found":
@@ -513,7 +1001,7 @@ class LocalScriptPreparationService:
                 ],
                 "warnings": warnings,
                 "teacher_review_required": True,
-                "text_source": "qwen38_visual_mapping_pending_transcription",
+                "text_source": text_source,
             },
             confidence=Decimal(str(draft["confidence"])),
             mapping_status=status,
@@ -522,7 +1010,7 @@ class LocalScriptPreparationService:
                 if not segments
                 else ("Qwen marked this mapping uncertain" if status == "uncertain" else None)
             ),
-            provider="llama_cpp_qwen38",
+            provider=provider,
             teacher_confirmed=False,
         )
         if not segments:

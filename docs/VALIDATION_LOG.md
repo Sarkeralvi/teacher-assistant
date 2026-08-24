@@ -1785,3 +1785,97 @@ The tiered design still holds, but its value is concentrated where it always
 was: moving the 5,500-token correlation off Qwen3.8 (4.4 tok/s) onto Qwen3.6
 (67 tok/s) is worth ~16 of the ~21 minutes, and that is unaffected by these
 results. Tier-1 OCR trims the remainder rather than transforming it.
+
+# TA-LOCAL-006 - Tiered script mapping (2026-08-24)
+
+- Recorded at: 2026-08-24
+- Baseline commit: `d193203`
+- Workflow type: implementation; fake engines and fake providers only
+- Provider/model calls: 0
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Stack started/stopped/rebuilt: no
+- Private files/artifacts used: no
+
+## Why
+
+The reference phase reads cheaply first and spends the vision model only where
+OCR is unsure. The script phase did not: it called Qwen3.8
+`map_page_answer_regions` on every page unconditionally, and `_ocr_pages` still
+raised "PaddleOCR has been removed". That put a 4.35 tok/s vision model on the
+question "where on this page is 1(a)(i)", which is geometry, and it is the call
+that failed on assessment 61.
+
+## The design point
+
+Tier-1 OCR supplies **geometry** on scripts, not text. Its boxes locate the
+answer; Qwen3.8 reads it later, per teacher-confirmed region, on the Gate-I4
+path. That distinction is what makes the tiered path viable at all: 94.7% of
+handwritten lines are misread, so escalating on recognition quality would send
+every page to the vision model and save nothing. A page whose ink was found is
+usable even when badly read.
+
+`evaluate_page_detection_only` therefore keeps only the two detection triggers -
+no boxes at all, and ink outside every box - and is deliberately separate from
+the reference-phase policy, which does care about text and escalates handwriting
+wholesale. A regression test asserts the two policies disagree on the same
+misread page, so the split cannot be silently collapsed.
+
+## Changed
+
+1. **Tiered script mapping.** `prepare_from_tier1_ocr` runs staged
+   collect-then-execute: OCR every page on the CPU, escalate only failed
+   detection to Qwen3.8 within a pre-authorized budget, then map the remaining
+   pages with Qwen3.6 in one text call. The two mappers own disjoint pages, so
+   segments concatenate without arbitration. Each model loads at most once.
+   `map_submission_answers_from_ocr_pages` and `_resolve_draft` already existed
+   and had no caller; this wires them.
+
+2. **The assessment-61 failure.** `map_page_answer_regions` capped completions at
+   a flat `max_tokens=900`. With 7 finalized labels that is roughly what one
+   correct response needs, leaving no headroom, and the response was cut off
+   (`finish_reason=length`, `completion_tokens=900`). The budget now scales with
+   the label count, bounded by real context room, floored at the previous 900.
+   This provider sends no grammar to the server, so the budget is the only
+   truncation guard there is.
+
+3. **Truncation error wording.** It said only "needs a larger token budget",
+   which pointed the wrong way once already on a looping response - more budget
+   bought more looping. It now names both causes and quotes the opening
+   characters of the output, which is what distinguishes them.
+
+4. **Metadata/migration drift.** Migration 0024 widened
+   `ck_extraction_runs_provider` and `ck_ocr_candidate_engine` in the database,
+   but `models.py` kept the narrower lists, so a schema built from metadata
+   rejected writes the real database accepted. Nothing compared the two, so
+   nothing failed. Fixed, with a parametrized test that reads the migration
+   module and asserts set equality.
+
+## Safety result
+
+Draft-only throughout. Mapping, verbatim transcription and full-answer coverage
+remain three separate teacher confirmations; `text_source` on tiered mappings is
+`tier1_ocr_mapping_pending_transcription`, so approximate OCR text is never
+presented as the answer. Escalation is a pre-authorized ceiling
+(`LOCAL_SCRIPT_MAX_ESCALATIONS` and the request budget) whose exhaustion is a
+hard failure. No grading path changed; grading still dispatches to Qwen3.8.
+
+## Checks run
+
+- `ruff check .` - passed.
+- `pytest tests/test_qwen38_provider.py tests/test_ocr_escalation.py
+  tests/test_local_script_preparation_ocr.py tests/test_migrations.py
+  tests/test_models_metadata.py tests/test_llama_cpp_qwen_provider.py
+  tests/test_ocr_engine_bakeoff.py tests/test_ocr_coverage.py` - 94 passed.
+- `node tests/workflow-ui.test.mjs` - passed.
+- `tsc --noEmit` - passed. `npm run build` - passed.
+- `pytest tests/test_local_script_preparation_tiered.py --collect-only` - 8 collected.
+
+## Not yet verified
+
+The full backend suite and the 8 new tiered integration tests need PostgreSQL,
+which was not running on this host during the task and was not started because
+that is an operational action requiring authorization. Those 8 tests are written
+and collect cleanly but have not been executed. The tiered path has never run
+against a real script.

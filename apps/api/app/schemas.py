@@ -954,8 +954,18 @@ class VisualTranscriptionRejectionRequest(BaseModel):
 
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
-    provider: Literal["deterministic_layout", "llama_cpp_qwen38"] = "deterministic_layout"
+    # "llama_cpp_qwen" is the tiered path: tier-1 OCR locates the answers, Qwen3.6
+    # maps them, and Qwen3.8 vision is called only for pages OCR could not read.
+    # "llama_cpp_qwen38" is the original vision-only path, kept as a fallback the
+    # teacher can select outright.
+    provider: Literal["deterministic_layout", "llama_cpp_qwen38", "llama_cpp_qwen"] = (
+        "deterministic_layout"
+    )
     expected_model: str | None = Field(default=None, max_length=255)
+    # The tiered path uses two models, so it needs both aliases confirmed. The
+    # vision model is only the fallback, but a page that needs it must not
+    # discover mid-run that the alias is wrong.
+    expected_vision_model: str | None = Field(default=None, max_length=255)
     draft_only_confirmed: bool = False
     maximum_visual_calls: int = Field(default=25, ge=1, le=100)
 

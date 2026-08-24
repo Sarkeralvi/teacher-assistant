@@ -214,6 +214,47 @@ def merge_regions(
     return [box.padded(policy.region_padding_px) for box in merged]
 
 
+def evaluate_page_detection_only(
+    reading: OcrPageReading,
+    *,
+    policy: EscalationPolicy | None = None,
+) -> EscalationDecision:
+    """Escalate only when the DETECTOR failed, ignoring recognition quality.
+
+    For a student script, tier-1 OCR supplies geometry, not text: its blocks
+    locate the answers and the vision model reads them later, per confirmed
+    region. So the question here is "did the detector find the ink", not "did it
+    read it correctly", and the text-quality triggers must not fire.
+
+    That distinction is what makes the tiered script path possible at all.
+    Running the reference-phase policy over a handwritten script would escalate
+    every page - correctly, by its own standards, since 94.7% of handwritten
+    lines are misread - and leave the vision model doing exactly the work it was
+    supposed to be spared. Confidence and the stacked-math triggers say the text
+    is wrong, which is already assumed and does not invalidate the box it sits
+    in.
+
+    Two triggers survive, both properties of detection rather than recognition:
+    no boxes at all, and ink lying outside every box.
+    """
+    policy = policy or EscalationPolicy()
+
+    if not reading.lines:
+        return EscalationDecision(
+            decision=DECISION_ESCALATED_PAGE,
+            reason_codes=[REASON_NO_LINES_DETECTED],
+        )
+    if (
+        reading.uncovered_ink_ratio is not None
+        and reading.uncovered_ink_ratio > policy.uncovered_ink_escalate_above
+    ):
+        return EscalationDecision(
+            decision=DECISION_ESCALATED_PAGE,
+            reason_codes=[REASON_UNCOVERED_INK],
+        )
+    return EscalationDecision(decision=DECISION_ACCEPTED, reason_codes=[])
+
+
 def evaluate_page(
     reading: OcrPageReading,
     *,

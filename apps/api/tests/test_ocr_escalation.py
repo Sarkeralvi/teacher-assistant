@@ -16,6 +16,7 @@ from packages.ocr.escalation import (
     EscalationPolicy,
     effective_confidence_threshold,
     evaluate_page,
+    evaluate_page_detection_only,
     merge_regions,
 )
 from packages.ocr.types import BoundingBox, OcrLine, OcrPageReading
@@ -279,3 +280,69 @@ def test_the_decision_is_deterministic() -> None:
     second = evaluate_page(reading)
 
     assert first == second
+
+# ── Detection-only policy (student scripts) ────────────────────────────────
+# Tier-1 supplies geometry here, not text, so recognition quality must not
+# escalate. Without this split the tiered script path buys nothing: every
+# handwritten page would escalate and the vision model would do all the work.
+
+
+def test_detection_only_accepts_a_badly_misread_page_whose_ink_was_found() -> None:
+    # Exactly the real case: confidently wrong handwriting, boxes all correct.
+    reading = _reading(
+        [
+            _line(text="P(D)=03", confidence="0.42", box=(0, 0, 400, 20)),
+            _line(text="P(4W)=010", confidence="0.31", box=(0, 30, 400, 50)),
+        ],
+        uncovered_ink_ratio=Decimal("0.05"),
+    )
+
+    assert evaluate_page_detection_only(reading).decision == DECISION_ACCEPTED
+    # The reference-phase policy escalates the same page, and is right to.
+    assert evaluate_page(reading).decision != DECISION_ACCEPTED
+
+
+def test_detection_only_ignores_stacked_math_and_sparse_decode() -> None:
+    reading = _reading(
+        [
+            _line(text="7", confidence="0.99", box=(100, 0, 140, 60)),
+            _line(text="12", confidence="0.99", box=(100, 62, 140, 122)),
+            _line(text="x", confidence="0.99", box=(0, 200, 900, 220)),
+        ]
+    )
+
+    assert evaluate_page_detection_only(reading).decision == DECISION_ACCEPTED
+
+
+def test_detection_only_escalates_when_no_boxes_were_detected() -> None:
+    decision = evaluate_page_detection_only(_reading([]))
+
+    assert decision.decision == DECISION_ESCALATED_PAGE
+    assert decision.reason_codes == [REASON_NO_LINES_DETECTED]
+
+
+def test_detection_only_escalates_when_ink_sits_outside_every_box() -> None:
+    reading = _reading([_line()], uncovered_ink_ratio=Decimal("0.65"))
+
+    decision = evaluate_page_detection_only(reading)
+
+    assert decision.decision == DECISION_ESCALATED_PAGE
+    assert decision.reason_codes == [REASON_UNCOVERED_INK]
+
+
+def test_detection_only_honours_the_configured_uncovered_ink_threshold() -> None:
+    reading = _reading([_line()], uncovered_ink_ratio=Decimal("0.30"))
+    lenient = EscalationPolicy(uncovered_ink_escalate_above=Decimal("0.50"))
+    strict = EscalationPolicy(uncovered_ink_escalate_above=Decimal("0.20"))
+
+    assert evaluate_page_detection_only(reading, policy=lenient).decision == DECISION_ACCEPTED
+    assert (
+        evaluate_page_detection_only(reading, policy=strict).decision == DECISION_ESCALATED_PAGE
+    )
+
+
+def test_detection_only_does_not_treat_a_missing_ink_measurement_as_clean_or_dirty() -> None:
+    # None means "not measured", which must not be read as either verdict.
+    reading = _reading([_line()], uncovered_ink_ratio=None)
+
+    assert evaluate_page_detection_only(reading).decision == DECISION_ACCEPTED

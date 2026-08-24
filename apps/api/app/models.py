@@ -349,9 +349,13 @@ class ExtractionRun(TimestampMixin, Base):
             "extraction_type in ('question_paper', 'rubric')",
             name="ck_extraction_runs_type",
         ),
+        # Must stay in step with 0024_model_lease_page_evidence, which widened
+        # this constraint in the database. Metadata that disagrees with the
+        # migration builds a schema that rejects writes the real database
+        # accepts, so the two lists are one fact in two places.
         CheckConstraint(
             "provider in ('host_bridge_codex', 'mock', 'disabled', 'gemini', "
-            "'local_paddle_qwen', 'llama_cpp_qwen38')",
+            "'local_paddle_qwen', 'llama_cpp_qwen38', 'llama_cpp_qwen')",
             name="ck_extraction_runs_provider",
         ),
         CheckConstraint(
@@ -677,8 +681,11 @@ class AnswerRegionOcrBand(TimestampMixin, Base):
 class AnswerRegionOcrCandidate(TimestampMixin, Base):
     __tablename__ = "answer_region_ocr_candidates"
     __table_args__ = (
+        # Also widened by 0024; the retired Paddle engines stay listed so
+        # existing rows remain valid. See the note on ck_extraction_runs_provider.
         CheckConstraint(
-            "engine in ('ppocr_v6', 'paddleocr_vl', 'paddle_ensemble')",
+            "engine in ('ppocr_v6', 'paddleocr_vl', 'paddle_ensemble', "
+            "'rapidocr_ppocr', 'tesseract', 'llama_cpp_qwen38')",
             name="ck_ocr_candidate_engine",
         ),
         Index("ix_answer_region_ocr_candidates_band_id", "band_id"),
