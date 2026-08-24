@@ -241,6 +241,57 @@ def _unlimited_ocr_binary() -> str | None:
     return None
 
 
+def _run_focr(
+    binary: str, image_bytes: bytes, mime: str, extra_args: list[str]
+) -> tuple[Any, int]:
+    """Shell out to the focr CLI and return its parsed JSON payload plus latency.
+
+    Shared by every focr-backed arm (unlimited-ocr, got-ocr2, ...) so the
+    subprocess/tempfile/error-handling shape is written once. ``extra_args``
+    carries what differs between them: got-ocr2 needs ``--model`` and
+    ``--task``, the default unlimited-ocr run needs nothing extra.
+
+    A resident warm-model daemon (focr's own, not this bake-off's) keeps
+    weights loaded between invocations, so only the first call per model pays
+    load time; that is a property of the real deployment shape, not a
+    measurement artefact to correct for.
+    """
+    import json as _json  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    suffix = ".png" if "png" in mime else ".jpg"
+    with tempfile.TemporaryDirectory(prefix="focr-bakeoff-") as directory:
+        image_path = Path(directory) / f"page{suffix}"
+        image_path.write_bytes(image_bytes)
+        start = time.perf_counter()
+        try:
+            completed = subprocess.run(  # noqa: S603
+                [binary, "ocr", str(image_path), *extra_args, "--json"],
+                capture_output=True,
+                timeout=_UNLIMITED_OCR_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise OcrBakeoffError(
+                f"focr did not finish within {_UNLIMITED_OCR_TIMEOUT_SECONDS}s"
+            ) from exc
+        latency_ms = int((time.perf_counter() - start) * 1000)
+
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()[:400]
+        raise OcrBakeoffError(f"focr exited {completed.returncode}: {detail}")
+    raw = completed.stdout.decode("utf-8", "replace").strip()
+    if not raw:
+        raise OcrBakeoffError("focr produced no output")
+    try:
+        payload = _json.loads(raw)
+    except ValueError as exc:
+        raise OcrBakeoffError(f"focr output was not JSON: {raw[:200]!r}") from exc
+    return payload, latency_ms
+
+
 def _unlimited_ocr_adapter() -> EngineAdapter:
     """Baidu Unlimited-OCR via the franken_ocr CPU-only Rust CLI.
 
@@ -260,49 +311,58 @@ def _unlimited_ocr_adapter() -> EngineAdapter:
     """
 
     def run(image_bytes: bytes, mime: str) -> EngineReading:
-        import json as _json  # noqa: PLC0415
-        import subprocess  # noqa: PLC0415
-        import tempfile  # noqa: PLC0415
-        from pathlib import Path  # noqa: PLC0415
-
         binary = _unlimited_ocr_binary()
         if binary is None:
             raise OcrBakeoffError(
                 "the focr CLI is not installed; install franken_ocr or set "
                 f"{UNLIMITED_OCR_ENV_VAR} to run this arm"
             )
-        suffix = ".png" if "png" in mime else ".jpg"
-        with tempfile.TemporaryDirectory(prefix="focr-bakeoff-") as directory:
-            image_path = Path(directory) / f"page{suffix}"
-            image_path.write_bytes(image_bytes)
-            start = time.perf_counter()
-            try:
-                completed = subprocess.run(  # noqa: S603
-                    [binary, "ocr", str(image_path), "--json"],
-                    capture_output=True,
-                    timeout=_UNLIMITED_OCR_TIMEOUT_SECONDS,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise OcrBakeoffError(
-                    f"focr did not finish within {_UNLIMITED_OCR_TIMEOUT_SECONDS}s"
-                ) from exc
-            latency_ms = int((time.perf_counter() - start) * 1000)
-
-        if completed.returncode != 0:
-            detail = completed.stderr.decode("utf-8", "replace").strip()[:400]
-            raise OcrBakeoffError(f"focr exited {completed.returncode}: {detail}")
-        raw = completed.stdout.decode("utf-8", "replace").strip()
-        if not raw:
-            raise OcrBakeoffError("focr produced no output")
-        try:
-            payload = _json.loads(raw)
-        except ValueError as exc:
-            raise OcrBakeoffError(f"focr output was not JSON: {raw[:200]!r}") from exc
-
+        payload, latency_ms = _run_focr(binary, image_bytes, mime, [])
         lines = _unlimited_ocr_lines(payload)
         return EngineReading(
             engine="unlimited_ocr",
+            text=_unlimited_ocr_text(payload, lines),
+            lines=lines,
+            latency_ms=latency_ms,
+            warnings=["engine_reports_no_per_line_confidence"],
+        )
+
+    return run
+
+
+def _got_ocr2_formula_adapter() -> EngineAdapter:
+    """GOT-OCR2.0 in formula mode: math/formulas -> LaTeX, via the same CLI.
+
+    A second tier-1 candidate, specifically for the failure Unlimited-OCR's
+    "FAST plain-text OCR" framing does not claim to solve: typeset and
+    handwritten mathematics shredded into confident fragments, which is
+    RapidOCR's own measured weak point (0.215 CER, 0.771 math-token recall on
+    typeset math; worse on handwriting). ``--task formula`` routes to
+    got-ocr2's structured "OCR with format" mode, which emits inline LaTeX
+    rather than plain text, so a correctly-read fraction survives as
+    ``\\frac{...}{...}`` instead of being flattened into digits.
+
+    Needs ``focr pull got-ocr2`` in addition to the default model. Apache-2.0,
+    so no licence blocker if it is ever adopted for the reference phase's
+    typeset-math pages specifically, distinct from the tier-1 decision here.
+    """
+
+    def run(image_bytes: bytes, mime: str) -> EngineReading:
+        binary = _unlimited_ocr_binary()
+        if binary is None:
+            raise OcrBakeoffError(
+                "the focr CLI is not installed; install franken_ocr or set "
+                f"{UNLIMITED_OCR_ENV_VAR} to run this arm"
+            )
+        payload, latency_ms = _run_focr(
+            binary,
+            image_bytes,
+            mime,
+            ["--model", "got-ocr2.int8.focrq", "--task", "formula"],
+        )
+        lines = _unlimited_ocr_lines(payload)
+        return EngineReading(
+            engine="got_ocr2_formula",
             text=_unlimited_ocr_text(payload, lines),
             lines=lines,
             latency_ms=latency_ms,
@@ -478,9 +538,10 @@ def build_engine_adapters(budget: ProviderCallBudget) -> dict[str, EngineAdapter
     return {
         "rapidocr": _rapidocr_adapter(),
         "tesseract": _tesseract_adapter(),
-        # Candidate tier-1 replacement. Local CPU subprocess, so it needs no
-        # provider budget and never touches the GPU model slot.
+        # Candidate tier-1 replacements. Local CPU subprocess, so neither needs
+        # a provider budget and neither touches the GPU model slot.
         "unlimited_ocr": _unlimited_ocr_adapter(),
+        "got_ocr2_formula": _got_ocr2_formula_adapter(),
         "qwen38_vision": _qwen38_vision_adapter(budget=budget),
     }
 
@@ -750,7 +811,7 @@ def build_parser() -> argparse.ArgumentParser:
         # The previous default named rapidocr_ppocrv5/v6, which
         # build_engine_adapters does not provide, so the CLI exited on its own
         # defaults with "Unknown engine arms".
-        default="rapidocr,tesseract,unlimited_ocr",
+        default="rapidocr,tesseract,unlimited_ocr,got_ocr2_formula",
         help="Comma-separated arms. qwen38_vision makes real provider calls.",
     )
     parser.add_argument("--i-authorize-provider-calls", action="store_true")

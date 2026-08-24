@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -360,3 +361,58 @@ def test_a_missing_focr_binary_reports_how_to_enable_the_arm(
 
     with pytest.raises(OcrBakeoffError, match="focr CLI is not installed"):
         adapters["unlimited_ocr"](b"\x89PNG\r\n\x1a\n", "image/png")
+
+
+def test_got_ocr2_arm_is_also_offered_without_a_provider_budget() -> None:
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    assert "got_ocr2_formula" in adapters
+
+
+def test_a_missing_focr_binary_blocks_the_got_ocr2_arm_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(UNLIMITED_OCR_ENV_VAR, str(tmp_path / "definitely-absent.exe"))
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+
+    with pytest.raises(OcrBakeoffError, match="focr CLI is not installed"):
+        adapters["got_ocr2_formula"](b"\x89PNG\r\n\x1a\n", "image/png")
+
+
+def test_got_ocr2_invokes_focr_with_the_formula_task_and_explicit_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The arm exists specifically to route to got-ocr2's structured LaTeX
+    mode; a wrong invocation would silently fall back to plain-text unlimited-ocr
+    and the whole point of measuring this arm separately would be lost."""
+    import subprocess as _subprocess
+
+    fake_binary = tmp_path / "focr.exe"
+    fake_binary.write_bytes(b"")
+    monkeypatch.setenv(UNLIMITED_OCR_ENV_VAR, str(fake_binary))
+
+    captured: dict[str, Any] = {}
+
+    class _FakeCompleted:
+        returncode = 0
+        stdout = b'{"markdown": "\\\\frac{1}{2}", "layout": []}'
+        stderr = b""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted()
+
+    monkeypatch.setattr(_subprocess, "run", fake_run)
+
+    adapters = build_engine_adapters(ProviderCallBudget(authorized=False, maximum=0))
+    reading = adapters["got_ocr2_formula"](b"\x89PNG\r\n\x1a\n", "image/png")
+
+    cmd = captured["cmd"]
+    assert cmd[0] == str(fake_binary)
+    assert cmd[1] == "ocr"
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == "got-ocr2.int8.focrq"
+    assert "--task" in cmd
+    assert cmd[cmd.index("--task") + 1] == "formula"
+    assert reading.engine == "got_ocr2_formula"
+    assert reading.text == "\\frac{1}{2}"
