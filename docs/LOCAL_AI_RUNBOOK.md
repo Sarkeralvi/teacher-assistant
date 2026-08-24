@@ -112,17 +112,23 @@ Two paths exist. The UI uses the tiered one; the vision-only path stays selectab
 
 ### OCR engine bake-off — final result (2026-08-24)
 
-Measured on all 10 teacher-verified fixtures (`data/evaluation/ocr_bakeoff_20260821`), mean CER by material and average latency per page:
+Measured on all 10 teacher-verified fixtures (`data/evaluation/ocr_bakeoff_20260821`), mean CER by material and average latency per page. Two runs: the first four engines together, PaddleOCR-VL-1.6 and Qwen3.8 vision added in a second pass once VRAM allowed both to run.
 
 | Engine | Printed | Typeset math | Handwriting | Overall | Avg latency |
 |---|---:|---:|---:|---:|---:|
 | **RapidOCR** | 0.000 | 0.215 | **0.628** | 0.482 | **0.6 s** |
 | Tesseract | 0.011 | 0.181 | 0.832 | 0.619 | 0.5 s |
 | Unlimited-OCR | 0.021 | 0.449 | 1.461 | 1.114 | 20.7 s |
-| GOT-OCR2 (CPU) | 0.016 | 0.135 | 0.816 | 0.600 | 10.3 s |
+| GOT-OCR2 (CPU) | 0.016 | 0.135 | 0.825 | 0.606 | 9.8 s |
 | GOT-OCR2 (GPU) | 0.011 | **0.122** | 0.828 | 0.605 | 3.3 s |
+| PaddleOCR-VL-1.6 | 0.084 | 0.585 | 0.939 | 0.783 | 0.4 s |
+| Qwen3.8 vision | 0.009 | 0.235 | 0.657 | 0.508 | 87.0 s |
 
-**Decision: RapidOCR stays the tier-1 engine.** It wins handwriting decisively — the material tier-1 must actually be good at, since it dominates the escalation decision. Neither candidate came close (0.816–0.828 CER against RapidOCR's 0.628).
+**Decision unchanged and now more decisive: RapidOCR stays the tier-1 engine.** It wins handwriting outright against every candidate measured, including the two added in this pass.
+
+**PaddleOCR-VL-1.6 — genuinely strong content, an unresolved reliability problem.** Hand-tested on the rubric fixture before being wired in, it recovered 6 of 7 exact mark values in one attempt — the best single reading of any engine on that page. But across the full 7-fixture handwriting set it does not reliably know when to stop: greedy decode does not always reach its own `</s>` token on a hard page and runs on into a repeating tail (`"(ii) — (1)"` forever, or counting up integers once `repeat_penalty` forbids the exact repeat). 3 of 10 fixtures hit this in the scored run (`hit_token_budget_without_a_clean_stop`), and a long garbage tail inflates CER heavily via insertions — the same failure shape that put Unlimited-OCR's CER above 1.0. Net: 0.939 mean CER on handwriting, worse than RapidOCR, Tesseract, and GOT-OCR2. Not adopted. If revisited, the open question is a real stopping-condition fix (grammar-constrained decoding, or a stop-string on the model's actual repetition pattern) rather than more `repeat_penalty` tuning, which was tried at 1.1/1.15/1.2/1.3 and never closed the gap without trading it for noisier content.
+
+**Qwen3.8 vision's raw number needs a caveat before it means anything.** Its worst-scoring fixture (CER 1.25, ground truth is 14 characters: `"= 28/67\n\nAns."`) turned out, on direct inspection of the actual output, to be `"n = \frac{28}{67}"` — the content is correct, it is LaTeX-formatted instead of plain-text and drops the "Ans." label. CER punishes that notation difference severely against such a short ground truth. **This is a metric artifact, not evidence that the current escalation model underperforms tier-1** — do not cite the 0.657 handwriting figure as "Qwen3.8 loses to RapidOCR" without this context. A fair comparison would need ground truth in matching notation, or a metric that treats `\frac{a}{b}` and `a/b` as equal. Not attempted here; flagging the confound is as far as this bake-off goes. Its 87 s/page latency is undisputed and unsurprising (4.35 tok/s, previously measured) and is exactly why it is the escalation target, not the default.
 
 **Unlimited-OCR is not viable as any part of this pipeline.** Worst engine measured on every material, by a wide margin, and the only one whose CER exceeds 1.0 — on 4 of 7 handwriting fixtures it hallucinates content beyond the ground truth rather than just misreading it, consistent with its `document parsing.` prompt trying to structure the whole page (early manual testing saw it emit 17 `![](images/N.jpg)` placeholders for a single handwritten page instead of transcribing the ink). It is also by far the slowest (20.7 s/page average, CPU). Ruled out; not revisited unless the underlying model changes.
 

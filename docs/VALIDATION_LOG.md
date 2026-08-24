@@ -1964,3 +1964,114 @@ Full detail and interpretation recorded in `docs/LOCAL_AI_RUNBOOK.md` under
   worse than everything else - but noted so it is not mistaken for verified.
 - The narrower "GOT-OCR2 as a typeset-math vision-escalation alternative"
   idea in the runbook is a proposal, not a plan; not scoped or estimated.
+
+# TA-LOCAL-008 - PaddleOCR-VL-1.6 and Qwen3.8-vision-vs-tier1 measurement (2026-08-24)
+
+- Recorded at: 2026-08-24
+- Baseline commit: `499c114`
+- Workflow type: measurement only; no production code path changed
+- Provider/model calls: 10 real Qwen3.8 vision calls (qwen38_vision arm),
+  authorized (--i-authorize-provider-calls --max-provider-calls 10), bounded
+  to exactly the 10-fixture set, matching the pattern already used for every
+  other provider-call arm in this bake-off. Plus one further read-only
+  diagnostic call (probe_qwen38_transcribe.py) to inspect a specific raw
+  output, same lease/authorization path, no side effects.
+- GradeSuggestion/FinalGrade/GradingJob created: 0
+- Private files/artifacts used: no
+
+## Requested directly
+
+Two follow-ups from the prior session: measure PaddleOCR-VL-1.6 (the
+newer VLM-based PaddleOCR release, distinct from the PP-OCR pipeline
+RapidOCR already wraps), and include Qwen3.8 vision - the project's actual
+expert/escalation model - as an accuracy ceiling in the same comparison.
+
+## Result
+
+| Engine | Printed | Typeset math | Handwriting | Overall | Avg latency |
+|---|---:|---:|---:|---:|---:|
+| RapidOCR | 0.000 | 0.215 | 0.628 | 0.482 | 0.6s |
+| Tesseract | 0.011 | 0.181 | 0.832 | 0.619 | 0.5s |
+| Unlimited-OCR | 0.021 | 0.449 | 1.461 | 1.114 | 20.7s |
+| GOT-OCR2 (CPU) | 0.016 | 0.135 | 0.825 | 0.606 | 9.8s |
+| GOT-OCR2 (GPU) | 0.011 | 0.122 | 0.828 | 0.605 | 3.3s |
+| PaddleOCR-VL-1.6 | 0.084 | 0.585 | 0.939 | 0.783 | 0.4s |
+| Qwen3.8 vision | 0.009 | 0.235 | 0.657 | 0.508 | 87.0s |
+
+**RapidOCR stays tier-1, more decisively.** Full interpretation, including
+two important caveats, in `docs/LOCAL_AI_RUNBOOK.md`:
+
+1. PaddleOCR-VL-1.6's content quality was the best of any engine on a
+   hand-tested single fixture (6 of 7 exact rubric marks recovered), but 3 of
+   10 fixtures in the scored run hit an unresolved decode-termination
+   failure (does not reliably reach its own stop token, runs on into a
+   repeating tail), which inflates its CER above RapidOCR/Tesseract/GOT-OCR2
+   despite the underlying reads often being good. Not adopted.
+2. Qwen3.8 vision's raw 0.657 handwriting CER is NOT safe to read as
+   "loses to RapidOCR." Direct inspection of its worst-scoring reading
+   (against a 14-character ground truth) showed correct content
+   (`\frac{28}{67}` for ground truth `28/67`) marked wrong purely by
+   LaTeX-vs-plain-text notation. This is a metric artifact on short
+   fixtures, not a real accuracy finding, and is documented as such so it
+   cannot be mis-cited later.
+
+## An operational hazard found and worked around, not fixed in code
+
+Before this run could proceed, discovered that the user's own Qwen3.6
+coding-assistant bridge (port 8080, per their global CLAUDE.md, exact tuned
+flags matched: `--n-cpu-moe 26 -c 32768 --cache-type-k/v q8_0 --no-mmap
+--jinja`) was already resident on the GPU, leaving no VRAM for Qwen3.8. Did
+not touch it - asked the user, who stopped it themselves. This is the exact
+hazard the project's own `Stop-LocalAi.ps1` docs already warn about (it can
+force-kill a listener on the same binary); no code change was made here,
+just an operational near-miss worth recording.
+
+## A second harness robustness defect found and fixed
+
+The first attempt at this run crashed entirely: `run_bakeoff` only caught
+`OcrBakeoffError`, but the qwen38_vision arm's call into
+`LocalAiPhaseManager.switch()` raised `LocalAiPhaseError` (because the
+ad-hoc runner script never loaded `.env.local-ai`, so
+`LOCAL_AI_PHASE_SWITCH_ENABLED` defaulted false). The uncaught exception
+took down the whole process after 5 of 6 arms had already completed - real
+CPU time and real GPU inference thrown away, nothing written to the report.
+`run_bakeoff` now catches `Exception` broadly around each adapter call, and
+the runner script loads `.env.local-ai` the same way `probe_grading.py`
+already did. Re-run afterward completed cleanly: `skipped_engines: {}`,
+`failed_fixtures: {}`, `provider_calls_used: 10`.
+
+## Infrastructure added
+
+- PaddleOCR-VL-1.6 GGUF + mmproj (~1.7 GB) downloaded to
+  `E:\ai\llama-cpp\models\PaddleOCR-VL-1.6\`, served by a standalone
+  llama-server on port 8087 - deliberately NOT wired into
+  `local_model_leases`/Settings, since it is a one-time measurement server,
+  not one of the two models that infrastructure protects.
+- New env var `PADDLEOCR_VL_BASE_URL` (default
+  `http://127.0.0.1:8087/v1`) for the bake-off's `paddleocr_vl` arm.
+- `scripts/local-ai/Test-UnlimitedOcr.ps1` and `Test-GotOcr2.ps1` (with a
+  reusable `got_ocr2_gpu.py`): direct, unscored launchers so the operator
+  can run either candidate on any image and see raw output, independent of
+  the bake-off's aggregate numbers. Both verified working end to end during
+  this session.
+
+## Checks run
+
+- `ruff check .` - passed throughout.
+- `pytest tests/test_ocr_engine_bakeoff.py` - 31 passed, 1 skipped
+  (CUDA-availability-dependent, environment skip on this CUDA-equipped
+  host) after each change.
+- The bake-off script itself: first attempt crashed (see above, root-caused
+  and fixed); second attempt completed with zero skips and zero failures
+  across all 60 (6 engines x 10 fixtures) readings in this pass.
+
+## Not done
+
+- PaddleOCR-VL-1.6's decode-termination failure is not fixed, only
+  characterized and bounded (max_tokens=400, repeat_penalty=1.15). A real
+  fix (grammar-constrained decoding, or a stop-string matched to its actual
+  repetition pattern) was not attempted.
+- No metric exists yet that treats LaTeX and plain-text notation as
+  equivalent for scoring purposes, which the Qwen3.8 caveat above depends
+  on. CER as currently computed remains a fair comparison only between
+  engines using compatible output conventions.
