@@ -1037,6 +1037,14 @@ def run_submission_question_node_mappings(
     submission = get_submission_or_404(submission_id, db)
     get_owned_assessment_or_404(submission.assessment_id, db, current_user)
     request = payload or AnswerRegionMappingRunRequest()
+    if request.provider == "local_paddle_qwen":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "PaddleOCR and Qwen3.6 script preparation is retired and cannot run. "
+                "Use the explicit local_qwen38_visual provider."
+            ),
+        )
     if request.provider in {"local_paddle_qwen", "local_qwen38_visual"} and not (
         request.draft_only_confirmed
     ):
@@ -1073,45 +1081,6 @@ def run_submission_question_node_mappings(
             message=(
                 "Qwen3.8 visually remapped unresolved answer boundaries. Compare every "
                 "rectangle with the complete source page before confirmation."
-            ),
-            created_count=len(mappings),
-            mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),
-            uncertain_count=sum(1 for item in mappings if item.mapping_status == "uncertain"),
-            blocked_count=sum(1 for item in mappings if item.mapping_status == "blocked"),
-            mappings=mappings,
-        )
-    if request.provider == "local_paddle_qwen":
-        service = LocalScriptPreparationService(db)
-        try:
-            mappings = service.prepare_from_paddle_ocr(
-                submission=submission,
-                teacher=current_user,
-                expected_text_model=request.expected_model or "",
-                expected_ocr_model=request.expected_ocr_model or "",
-                expected_layout_model=request.expected_layout_model or "",
-                replace_existing=request.replace_existing,
-                repair_unconfirmed_only=request.repair_unconfirmed_only,
-                maximum_ocr_calls=request.maximum_ocr_calls,
-                maximum_text_mapping_calls=request.maximum_text_mapping_calls,
-            )
-        except LocalScriptPreparationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
-            ) from exc
-        except Exception as exc:
-            logger.exception(
-                "Local script preparation failed safely: %s",
-                sanitize_provider_error(str(exc)),
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Local PaddleOCR and Qwen3.6 script preparation failed",
-            ) from exc
-        return AnswerRegionMappingRunResponse(
-            message=(
-                "PaddleOCR located answer blocks and Qwen3.6 mapped them. Confirm the "
-                "regions, then confirm exact evidence before grading."
             ),
             created_count=len(mappings),
             mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),

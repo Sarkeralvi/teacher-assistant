@@ -18,20 +18,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\pilot\Start-Te
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\pilot\Get-TeacherPilotStatus.ps1 -RequireAll
 ```
 
-Run all three local preflights from `docs/LOCAL_AI_RUNBOOK.md`.
+Run the Qwen3.8 local preflight from `docs/LOCAL_AI_RUNBOOK.md`.
 
 ## Rehearsal sequence
 
 1. Start a Custom Controlled run.
 2. Upload question, solution/model-answer, and rubric once.
-3. Authorize local draft extraction. The managed worker must run PaddleOCR first and Qwen3.6 second.
+3. Authorize one thinking-disabled local Qwen3.8 visual reference extraction.
 4. Compare every extracted question, solution, mark, and rubric criterion with the source. Confirm only accurate canonical references.
 5. Upload one complete answer script. Do not crop answers.
-6. Choose **Prepare scripts locally**. Review every Paddle-derived region and continuation, then confirm geometry only.
-7. Choose **Create direct PaddleOCR transcript** for one confirmed region. Compare the exact displayed draft with the source image.
-8. If faithful, confirm its hash. If not, reject it and choose **Request Qwen3.8 vision rescue**. Confirm a rescue only if it is verbatim; otherwise stop and upload a clearer page.
+6. Choose **Prepare scripts with Qwen3.8 vision**. Review every region and continuation, then confirm geometry only.
+7. Choose **Transcribe complete answer with Qwen3.8 vision** for one confirmed region. Compare the exact displayed draft with the source image.
+8. If faithful, confirm its hash. If not, reject it and upload a clearer complete page.
 9. Separately confirm the displayed image contains the full answer.
-10. Choose **Grade confirmed answer with local Qwen**. Qwen3.6 must receive text only and create one pending draft suggestion.
+10. Choose **Grade confirmed answer with local Qwen3.8**. A fresh context must receive text only and create one pending draft suggestion.
 11. Review and approve, edit, or reject the suggestion manually.
 12. Export approved-only XLSX and verify pending/rejected rows are absent.
 
@@ -39,9 +39,8 @@ Record assessment/submission/question/region/run/job IDs, commit hash, source/ev
 
 ## Required observations
 
-- PaddleOCR, Qwen3.6, and Qwen3.8 are never resident concurrently.
-- Normal references and mapping make zero Qwen3.8 calls.
-- Qwen3.8 runs only after a teacher rejection and explicit rescue action.
+- PaddleOCR and Qwen3.6 remain disabled; only Qwen3.8 may become resident.
+- Reference extraction, mapping, transcription, and grading are separate explicit Qwen3.8 tasks with fresh context.
 - Mapping confirmation does not confirm transcript text.
 - Transcript confirmation does not confirm full-answer coverage.
 - Grading stays disabled until both evidence gates pass.

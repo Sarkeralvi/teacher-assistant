@@ -66,4 +66,4 @@ preserved.
 
 ## Safety gate
 
-The runtime intentionally honors `COHORT_MODEL_GRADING_ENABLED=false`. Starting healthy services does not authorize a provider call. PaddleOCR remains draft-only until hash confirmation; Qwen3.8 is explicit transcription rescue only; Qwen3.6 consumes confirmed text only; and every AI grade remains a pending suggestion until teacher review.
+The runtime intentionally honors `COHORT_MODEL_GRADING_ENABLED=false`. Starting healthy services does not authorize a provider call. PaddleOCR and Qwen3.6 are disabled in the active workflow. Qwen3.8 mapping, verbatim transcription, and text-only grading each require a separate teacher action and valid model lease; every AI grade remains a pending suggestion until teacher review.

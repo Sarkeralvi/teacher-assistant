@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,7 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from app.schemas import LocalQwenGradeRequest
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 
 CLEANUP_MODELS = (
@@ -42,6 +44,54 @@ CLEANUP_MODELS = (
     Course,
     User,
 )
+
+
+def test_local_single_grade_contract_allows_only_qwen38() -> None:
+    request = LocalQwenGradeRequest.model_validate(
+        {
+            "grading_run_id": 1,
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+        }
+    )
+    assert request.provider == "llama_cpp_qwen38"
+
+    with pytest.raises(ValidationError):
+        LocalQwenGradeRequest.model_validate(
+            {
+                "grading_run_id": 1,
+                "provider": "llama_cpp_qwen",
+                "expected_model": "qwen3.6-35b-a3b-q4km",
+                "draft_only_confirmed": True,
+            }
+        )
+
+
+def test_local_qwen38_grade_route_honors_model_specific_kill_switch(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("LOCAL_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_GRADING_ENABLED", "false")
+    monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "local-test-key")
+    get_settings.cache_clear()
+
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-local-qwen38",
+        headers=region["_auth_headers"],
+        json={
+            "grading_run_id": 1,
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Local Qwen3.8 grading is disabled"
 
 
 @pytest.fixture()

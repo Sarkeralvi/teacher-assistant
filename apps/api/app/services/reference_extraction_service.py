@@ -186,7 +186,7 @@ class ReferenceExtractionService:
         self.db.commit()
 
         try:
-            self._assert_enabled(self.settings.local_qwen_model)
+            self._assert_enabled(self.settings.local_qwen38_model)
             paths = self._material_paths(grading_run)
             self._assert_material_hashes(grading_run, paths)
             self._set_stage(grading_run, "rendering_reference_pages")
@@ -194,10 +194,9 @@ class ReferenceExtractionService:
             documents: dict[str, list[tuple[bytes, str, int]]] = {}
             name_map = {"question_paper": "QUESTION", "solution": "SOLUTION", "rubric": "RUBRIC"}
             total_pages = 0
-            # The rescued primary workflow always uses native PaddleOCR. Its
-            # configured render DPI must not depend on the dormant RapidOCR
-            # diagnostic flag; doing so silently reduced real Paddle input to
-            # the legacy vision default whenever LOCAL_OCR_ENABLED was false.
+            # Render once at the established high-detail local reference DPI.
+            # Qwen3.8 receives only these local page images; no OCR sidecar or
+            # text model is started in this workflow.
             render_dpi = self.settings.local_ocr_render_dpi
             for source_name, document_name in name_map.items():
                 rendered = extractor.render_pages(
@@ -206,7 +205,7 @@ class ReferenceExtractionService:
                 total_pages += len(rendered)
                 if total_pages > self.settings.local_reference_max_ocr_calls:
                     raise ReferenceExtractionError(
-                        "Reference pages exceed the authorized PaddleOCR call limit"
+                        "Reference pages exceed the authorized local visual input limit"
                     )
                 documents[document_name] = [
                     (image_bytes, mime_type, page_no)
@@ -215,7 +214,7 @@ class ReferenceExtractionService:
             grading_run.reference_ocr_call_count = total_pages
 
             lease_holder_id = self._lease_holder_id(grading_run.id)
-            provider_result = self._run_paddle_qwen36_extraction(
+            provider_result = self._run_qwen38_extraction(
                 grading_run,
                 documents,
                 render_dpi=render_dpi,
@@ -233,9 +232,9 @@ class ReferenceExtractionService:
                 "reference_extraction_succeeded",
                 actor_type="worker",
                 payload={
-                    "paddle_ocr_page_count": total_pages,
+                    "visual_page_count": total_pages,
                     "qwen_call_count": grading_run.reference_qwen_call_count,
-                    "provider": "local_paddle_qwen",
+                    "provider": "llama_cpp_qwen38",
                 },
             )
             self.db.commit()
@@ -326,6 +325,42 @@ class ReferenceExtractionService:
         result["warnings"] = list(result.get("warnings") or []) + [
             "Draft references were read by local PaddleOCR and correlated by Qwen3.6; "
             "teacher confirmation is required."
+        ]
+        return result
+
+    def _run_qwen38_extraction(
+        self,
+        grading_run: GradingRun,
+        documents: dict[str, list[tuple[bytes, str, int]]],
+        *,
+        render_dpi: int,
+        lease_holder_id: str,
+    ) -> dict[str, Any]:
+        """Extract one teacher-reviewable reference bundle with Qwen3.8 vision."""
+
+        del render_dpi  # Rendering is completed and hash-checked before this call.
+        self._set_stage(grading_run, "qwen38_visual_reference_extraction")
+        lease = LocalModelLeaseService(self.db)
+        with lease.hold(
+            model_phase="Qwen38",
+            holder_kind="reference_extraction",
+            holder_id=lease_holder_id,
+        ):
+            self._switch_phase("Qwen38", lease_holder_id=lease_holder_id)
+            adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
+            adapter.verify_available_model()
+            extract = getattr(adapter.provider, "extract_reference_bundle_from_images", None)
+            if extract is None:
+                raise ReferenceExtractionError(
+                    "The configured Qwen3.8 provider cannot extract reference images"
+                )
+            lease.heartbeat(holder_id=lease_holder_id)
+            result = extract(documents=documents)
+            lease.heartbeat(holder_id=lease_holder_id)
+        grading_run.reference_qwen_call_count = 1
+        result["warnings"] = list(result.get("warnings") or []) + [
+            "Draft references were extracted directly by local Qwen3.8 vision with "
+            "thinking disabled; teacher confirmation is required."
         ]
         return result
 
@@ -735,6 +770,24 @@ class ReferenceExtractionService:
         self.db.commit()
 
     def serialize(self, grading_run: GradingRun) -> dict[str, Any]:
+        extraction_run = (
+            self.db.get(ExtractionRun, grading_run.reference_question_run_id)
+            if grading_run.reference_question_run_id is not None
+            else None
+        )
+        recorded_provider = (
+            extraction_run.provider if extraction_run is not None else LOCAL_REFERENCE_PROVIDER
+        )
+        recorded_model = (
+            self.settings.local_qwen_model
+            if recorded_provider == "local_paddle_qwen"
+            else self.settings.local_qwen38_model
+        )
+        recorded_device = (
+            "legacy_paddle_qwen_exclusive_phases"
+            if recorded_provider == "local_paddle_qwen"
+            else "qwen38_local_vision"
+        )
         nodes: list[QuestionNode] = []
         criteria: list[RubricExtractionCriterion] = []
         if grading_run.reference_question_run_id is not None:
@@ -791,9 +844,9 @@ class ReferenceExtractionService:
             "grading_run_id": grading_run.id,
             "status": grading_run.reference_extraction_status,
             "stage": grading_run.reference_extraction_stage,
-            "provider": LOCAL_REFERENCE_PROVIDER,
-            "model": self.settings.local_qwen_model,
-            "ocr_device": "paddleocr_gpu_exclusive_phase",
+            "provider": recorded_provider,
+            "model": recorded_model,
+            "ocr_device": recorded_device,
             "question_run_id": grading_run.reference_question_run_id,
             "rubric_run_id": grading_run.reference_rubric_run_id,
             "ocr_call_count": grading_run.reference_ocr_call_count,
@@ -897,12 +950,14 @@ class ReferenceExtractionService:
             raise ReferenceExtractionError("Real local providers are safety-disabled")
         if not self.settings.local_reference_extraction_enabled:
             raise ReferenceExtractionError("Local reference extraction is disabled")
-        if not self.settings.local_paddle_ocr_enabled:
-            raise ReferenceExtractionError("Local PaddleOCR must be enabled")
-        if not self.settings.local_qwen_enabled:
-            raise ReferenceExtractionError("Local Qwen3.6 must be enabled")
-        if expected_model != self.settings.local_qwen_model:
-            raise ReferenceExtractionError("Expected Qwen model alias does not match configuration")
+        if not self.settings.local_qwen38_enabled:
+            raise ReferenceExtractionError("Local Qwen3.8 must be enabled")
+        if not self.settings.local_qwen38_visual_preparation_enabled:
+            raise ReferenceExtractionError("Qwen3.8 visual preparation is disabled")
+        if expected_model != self.settings.local_qwen38_model:
+            raise ReferenceExtractionError(
+                "Expected Qwen3.8 model alias does not match configuration"
+            )
 
     def _material_paths(self, grading_run: GradingRun) -> dict[str, Path]:
         storage_root = Path(self.settings.local_storage_root).resolve()

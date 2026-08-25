@@ -21,15 +21,14 @@ import {
   type ReferenceQuestionConfirmation,
 } from "../lib/api";
 
-const EXPECTED_MODEL = "qwen3.6-35b-a3b-q4km";
+const EXPECTED_MODEL = "qwen3.8-27b-q4km";
 
 const stageLabels: Record<string, string> = {
   not_started: "Not started",
   queued: "Waiting for the local worker",
   validating_materials: "Checking the three uploaded files",
   rendering_reference_pages: "Rendering the three uploaded reference files",
-  paddle_ocr_reference_pages: "PaddleOCR is reading reference pages",
-  qwen36_reference_correlation: "Qwen3.6 is linking questions, solutions, and rubric",
+  qwen38_visual_reference_extraction: "Qwen3.8 vision is drafting questions, solutions, and rubric links",
   teacher_review_required: "Drafts ready for teacher review",
   teacher_confirmed: "Teacher confirmed",
   failed: "Extraction stopped",
@@ -306,7 +305,7 @@ export function CustomControlledGradingRunClient({
       <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 px-5 py-4 text-sm text-amber-100">
         <p className="font-semibold">Teacher control is mandatory</p>
         <p className="mt-1 text-amber-100/80">
-          OCR and Qwen create drafts only. This screen cannot grade students, approve marks, or create final grades.
+          Qwen3.8 creates review-only drafts. This screen cannot grade students, approve marks, or create final grades.
         </p>
       </div>
 
@@ -373,7 +372,7 @@ export function CustomControlledGradingRunClient({
           <SectionHeading
             number="2"
             title="Confirm files and extract drafts"
-            description="The worker renders each page, reads it with local PaddleOCR, then uses Qwen3.6 once to link questions, solutions, and rubric. No cloud provider or retry is allowed."
+            description="The worker renders each local page and uses one thinking-disabled Qwen3.8 vision task to draft questions, solutions, and rubric links. No cloud provider or retry is allowed."
             complete={extraction?.status === "succeeded"}
           />
 
@@ -391,7 +390,7 @@ export function CustomControlledGradingRunClient({
                   onChange={(event) => setMaterialsConfirmed(event.target.checked)}
                 />
                 <span>
-                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize draft-only PaddleOCR extraction followed by local Qwen3.6 correlation ({EXPECTED_MODEL}).
+                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize one draft-only, thinking-disabled local Qwen3.8 visual extraction ({EXPECTED_MODEL}).
                 </span>
               </label>
               <div className="flex flex-wrap items-center gap-3">
@@ -417,7 +416,7 @@ export function CustomControlledGradingRunClient({
           <SectionHeading
             number="3"
             title="Review questions, model answers, and rubric"
-            description="Edit anything OCR or Qwen got wrong. Confirmation creates the canonical grading references, but still does not grade a student."
+            description="Edit anything Qwen3.8 read or linked incorrectly. Confirmation creates the canonical grading references, but still does not grade a student."
             complete={referencesConfirmed}
           />
 
@@ -551,7 +550,7 @@ export function CustomControlledGradingRunClient({
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Next</p>
             <h2 className="mt-2 text-xl font-semibold">Upload student scripts and confirm answer evidence</h2>
-            <p className="mt-1 text-sm text-slate-300">Student grading remains blocked until each answer region and OCR text is teacher-confirmed.</p>
+            <p className="mt-1 text-sm text-slate-300">Student grading remains blocked until each answer region and verbatim visual transcript is teacher-confirmed.</p>
           </div>
           <Link className={buttonClass} href={`/assessments/${assessmentId}`}>
             Continue to student evidence
@@ -655,8 +654,8 @@ function ExtractionStatus({ extraction }: Readonly<{ extraction: ReferenceExtrac
         {!failed && !complete ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" aria-label="Working" /> : null}
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400">
-        <span>PaddleOCR page calls: {extraction.ocr_call_count}</span>
-        <span>Qwen3.6 correlation calls: {extraction.qwen_call_count} / 1</span>
+        <span>Local page images: {extraction.ocr_call_count}</span>
+        <span>Qwen3.8 visual calls: {extraction.qwen_call_count} / 1</span>
         <span>Provider: local only</span>
       </div>
     </div>
@@ -672,13 +671,13 @@ function friendlyExtractionError(error: string | null): string {
 }
 
 function RuntimeBadge({ status }: Readonly<{ status: LocalAiStatus | null }>) {
-  const phase = status?.paddle_ocr.available
-    ? `PaddleOCR active · ${status.paddle_ocr.device}`
-    : status?.qwen.available
-      ? `Qwen3.6 active · ${status.qwen.device}`
+  const phase = status?.qwen38.available
+    ? `Qwen3.8 active · ${status.qwen38.device}`
       : "Local models load on demand";
   const configured = Boolean(
-    status?.real_providers_allowed && status.paddle_ocr.enabled && status.qwen.enabled,
+    status?.real_providers_allowed &&
+    status.qwen38.enabled &&
+    status.qwen38.visual_preparation_enabled,
   );
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${configured ? "border-emerald-800 bg-emerald-950/30 text-emerald-200" : "border-amber-800 bg-amber-950/30 text-amber-200"}`}>

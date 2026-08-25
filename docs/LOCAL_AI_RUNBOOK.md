@@ -2,24 +2,22 @@
 
 This runbook is the canonical operator guide for the supervised Custom Controlled workflow. Local AI is disabled by default, binds only to loopback, and starts only after an explicit teacher/operator action. Application startup and page loads never load a model.
 
-## Active hybrid architecture
+## Active Qwen3.8 standalone architecture
 
 | Phase | Service | Port | Normal role |
 |---|---|---:|---|
-| `PaddleOcr` | PaddleOCR-VL-1.6 + PP-DocLayoutV3 | 8090 | Page OCR, block geometry, and direct draft transcription |
-| `Qwen` | Qwen3.6-35B-A3B via llama.cpp | 8086 | Reference correlation, block-to-question mapping, and text-only draft grading |
-| `Qwen38` | Qwen3.8-27B vision via llama.cpp | 8085 | Explicit non-thinking transcription rescue only |
+| `Qwen38` | Qwen3.8-27B vision via llama.cpp | 8085 | Reference drafts, answer-region mapping, verbatim transcription, and text-only draft grading |
 
-The RTX 5070 has one model slot. A durable database lease plus a process-local call guard is mandatory for every Paddle/Qwen request. Switching phases unloads the other two services before loading the requested one. Missing, expired, busy, or wrong-phase leases fail before inference HTTP is sent.
+The RTX 5070 has one model slot. A durable database lease plus a process-local call guard is mandatory for every Qwen3.8 request. Missing, expired, busy, or wrong-phase leases fail before inference HTTP is sent. PaddleOCR and Qwen3.6 remain installed only as rollback assets and are disabled in `.env.local-ai`.
 
 Normal workflows are deliberately ordered:
 
-1. PaddleOCR reads all source pages or script pages.
-2. PaddleOCR is stopped.
-3. Qwen3.6 correlates or maps the OCR output.
-4. A teacher confirms region geometry and exact evidence separately.
-5. Qwen3.8 may run only after the teacher rejects a Paddle transcript and explicitly requests rescue.
-6. Qwen3.6 grades only teacher-confirmed text; it receives no student image.
+1. Qwen3.8 vision drafts references from the three teacher-uploaded files with thinking disabled.
+2. A fresh Qwen3.8 vision task maps complete answer regions from full script pages.
+3. A teacher confirms region geometry and every continuation segment.
+4. A fresh thinking-disabled Qwen3.8 task transcribes the confirmed region verbatim.
+5. The teacher confirms transcript fidelity and full-answer coverage separately.
+6. A fresh text-only Qwen3.8 task grades only the teacher-confirmed transcript.
 
 There is no cloud, Codex, mock, provider fallback, automatic retry, or automatic final-grade path in this workflow. Cohort grading remains disabled for the supervised rehearsal.
 
@@ -76,7 +74,7 @@ The scripts verify loopback binding, PID/executable ownership, authenticated hea
 
 Qwen3.6 uses `LOCAL_QWEN_CPU_MOE_LAYERS=28` by default for safer VRAM headroom. Qwen3.8 uses 34 GPU layers for the same reason. Performance is secondary to stable sequential operation during a teacher rehearsal.
 
-For an explicitly authorized engineering smoke, use the bounded launcher below. It makes one synthetic Paddle call, one synthetic text-only Qwen3.6 draft-grading call, and—only when the final switch is supplied—one synthetic Qwen3.8 rescue call. It uses production leases/phase switching, creates no assessment or grade row, and stops all three services in a `finally` block.
+The older rescued-hybrid smoke remains only for rollback diagnostics. It is not part of the active teacher workflow and must not be used as pilot evidence while PaddleOCR and Qwen3.6 are disabled.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\local-ai\Test-RescuedHybridSmoke.ps1 `
@@ -87,26 +85,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\local-ai\Test-
 
 ### References
 
-The teacher uploads the question, solution/model answer, and rubric once and authorizes draft-only extraction. PaddleOCR processes rendered pages in page order. Qwen3.6 receives only normalized OCR text and immutable page/block references, then drafts questions, answers, marks, and rubric criteria. The teacher must review and confirm these drafts before they become canonical.
-
-No Qwen3.8 call is part of normal reference extraction. The run stops on Paddle or Qwen failure; it does not retry or fall back.
+The teacher uploads the question, solution/model answer, and rubric once and authorizes one draft-only Qwen3.8 visual extraction. The task runs with thinking disabled and drafts questions, answers, marks, and rubric criteria. The teacher must review and confirm these drafts before they become canonical. Failure stops the run; there is no retry or fallback.
 
 ### Script mapping and evidence
 
 1. Upload a complete script; the teacher does not crop or enter coordinates.
-2. PaddleOCR locates ordered blocks on each page.
-3. Qwen3.6 selects block identifiers for each finalized question. Coordinates remain Paddle-derived.
-4. The teacher confirms each mapped image region and continuation.
-5. PaddleOCR creates one direct transcript from the confirmed region segments.
-6. If faithful, the teacher confirms its exact SHA-256. This copies the unedited draft into `manual_answer_text` with partial evidence status.
-7. If unfaithful, the teacher rejects it with a reason and explicitly requests Qwen3.8 rescue. Qwen3.8 runs non-thinking forensic transcription only; it may not calculate, correct, reconcile, map, or grade.
-8. The teacher separately confirms that displayed images contain the complete answer. Text confirmation alone never makes evidence grading-ready.
+2. Qwen3.8 maps ordered regions and continuation segments from full pages.
+3. The teacher confirms each mapped image region and continuation.
+4. A fresh Qwen3.8 task creates one thinking-disabled verbatim transcript from all confirmed segments.
+5. If faithful, the teacher confirms its exact SHA-256. This copies the unedited draft into `manual_answer_text` with partial evidence status.
+6. If unfaithful, the teacher rejects it and uploads a clearer complete page; no inferred correction is substituted.
+7. The teacher separately confirms that displayed images contain the complete answer. Text confirmation alone never makes evidence grading-ready.
 
 If neither transcript is faithful, grading stays blocked and the teacher uploads a clearer complete page. There is no manual-crop or replacement-transcription box.
 
 ### Grading
 
-Qwen3.6 receives only the canonical question, canonical model answer, pinned active rubric, marking policy, and teacher-confirmed transcript. Every output is a pending suggestion with `teacher_review_required`, `image_input_disabled`, and `local_provider`. A `FinalGrade` can exist only after explicit teacher review/approval. Approved-only export excludes pending/rejected suggestions.
+Qwen3.8 receives only the canonical question, canonical model answer, pinned active rubric, marking policy, and teacher-confirmed transcript in a fresh text-only context. Every output is a pending suggestion with `teacher_review_required`, `image_input_disabled`, and `local_provider`. A `FinalGrade` can exist only after explicit teacher review/approval. Approved-only export excludes pending/rejected suggestions.
 
 ## Hard-stop conditions
 

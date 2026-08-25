@@ -244,10 +244,9 @@ def test_reference_extraction_route_uses_confirmed_bundle_and_enqueues_once(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
-    monkeypatch.setenv("LOCAL_QWEN_ENABLED", "true")
-    monkeypatch.setenv("LOCAL_QWEN_API_KEY", "key-local-test")
-    monkeypatch.setenv("LOCAL_PADDLE_OCR_ENABLED", "true")
-    monkeypatch.setenv("LOCAL_PADDLE_OCR_API_KEY", "key-paddle-test")
+    monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "key-local-test")
+    monkeypatch.setenv("LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED", "true")
     monkeypatch.setenv("LOCAL_REFERENCE_EXTRACTION_ENABLED", "true")
     get_settings.cache_clear()
     queue = CapturingQueue()
@@ -277,7 +276,7 @@ def test_reference_extraction_route_uses_confirmed_bundle_and_enqueues_once(
         f"/grading-runs/{run['id']}/reference-extraction",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "provider": "local_paddle_qwen",
+            "provider": "llama_cpp_qwen38",
             "expected_model": "wrong-model",
             "materials_confirmed": True,
             "draft_only_confirmed": True,
@@ -290,8 +289,8 @@ def test_reference_extraction_route_uses_confirmed_bundle_and_enqueues_once(
         f"/grading-runs/{run['id']}/reference-extraction",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "provider": "local_paddle_qwen",
-            "expected_model": "qwen3.6-35b-a3b-q4km",
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
             "materials_confirmed": True,
             "draft_only_confirmed": True,
         },

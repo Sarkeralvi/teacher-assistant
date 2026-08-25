@@ -10,7 +10,7 @@ from app.core.config import Settings, get_settings
 # The provider recorded on reference extraction runs. Named for its role rather
 # than an engine: it previously read "PADDLE_QWEN" while holding the Qwen3.8
 # value, which invites picking the wrong provider when more than one exists.
-LOCAL_REFERENCE_PROVIDER = "local_paddle_qwen"
+LOCAL_REFERENCE_PROVIDER = "llama_cpp_qwen38"
 _IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg"}
 
 # 300 DPI clears the 146-320 DPI range of the reference scans seen in practice,

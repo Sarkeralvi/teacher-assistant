@@ -370,7 +370,7 @@ export type ReferenceExtraction = {
   grading_run_id: number;
   status: "not_started" | "queued" | "running" | "succeeded" | "failed";
   stage: string;
-  provider: "local_paddle_qwen";
+  provider: "local_paddle_qwen" | "llama_cpp_qwen38";
   model: string;
   ocr_device: string;
   question_run_id: number | null;
@@ -1417,7 +1417,6 @@ export function suggestAnswerRegionMappings(
 
 export type ScriptMappingProvider =
   | "deterministic_layout"
-  | "local_paddle_qwen"
   | "local_qwen38_visual";
 
 export function runSubmissionQuestionNodeMappings(
@@ -1528,8 +1527,8 @@ export function startReferenceExtraction(gradingRunId: number) {
   return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
     method: "POST",
     body: {
-      provider: "local_paddle_qwen",
-      expected_model: "qwen3.6-35b-a3b-q4km",
+      provider: "llama_cpp_qwen38",
+      expected_model: "qwen3.8-27b-q4km",
       materials_confirmed: true,
       draft_only_confirmed: true,
     },
@@ -1538,41 +1537,8 @@ export function startReferenceExtraction(gradingRunId: number) {
   });
 }
 
-export function createPaddleOcrRun(
-  answerRegionId: number,
-  expectedModel: string,
-  expectedLayoutModel: string,
-) {
-  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs`, {
-    method: "POST",
-    body: {
-      expected_model: expectedModel,
-      expected_layout_model: expectedLayoutModel,
-      draft_only_confirmed: true,
-    },
-  });
-}
-
 export function listAnswerRegionTranscriptionRuns(answerRegionId: number) {
   return apiRequest<AnswerRegionOcrRun[]>(`/answer-regions/${answerRegionId}/ocr-runs`);
-}
-
-export function confirmPaddleOcrRun(
-  answerRegionId: number,
-  runId: number,
-  draftTextSha256: string,
-) {
-  return apiRequest<AnswerRegionOcrRun>(
-    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/confirm`,
-    { method: "POST", body: { teacher_confirmed: true, draft_text_sha256: draftTextSha256 } },
-  );
-}
-
-export function rejectPaddleOcrRun(answerRegionId: number, runId: number, reason: string) {
-  return apiRequest<AnswerRegionOcrRun>(
-    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/reject`,
-    { method: "POST", body: { reason } },
-  );
 }
 
 export function getReferenceExtraction(gradingRunId: number) {
@@ -1750,17 +1716,17 @@ export function gradeAnswerRegion(answerRegionId: number) {
   });
 }
 
-export function gradeAnswerRegionWithLocalQwen(
+export function gradeAnswerRegionWithLocalQwen38(
   answerRegionId: number,
   payload: {
     grading_run_id: number;
-    provider: "llama_cpp_qwen";
+    provider: "llama_cpp_qwen38";
     expected_model: string;
     draft_only_confirmed: true;
   },
 ) {
   return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(
-    `/answer-regions/${answerRegionId}/grade-local-qwen`,
+    `/answer-regions/${answerRegionId}/grade-local-qwen38`,
     {
       method: "POST",
       body: payload,

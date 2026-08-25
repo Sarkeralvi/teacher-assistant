@@ -763,7 +763,7 @@ class AnswerRegionRead(ORMBase):
 
 
 class ReferenceExtractionStartRequest(BaseModel):
-    provider: Literal["local_paddle_qwen"]
+    provider: Literal["llama_cpp_qwen38"]
     expected_model: str = Field(min_length=1, max_length=255)
     materials_confirmed: Literal[True]
     draft_only_confirmed: Literal[True]
@@ -794,7 +794,7 @@ class ReferenceExtractionRead(BaseModel):
     grading_run_id: int
     status: str
     stage: str
-    provider: Literal["local_paddle_qwen"]
+    provider: Literal["local_paddle_qwen", "llama_cpp_qwen38"]
     model: str
     ocr_device: str
     question_run_id: int | None
@@ -983,10 +983,9 @@ class AnswerRegionMappingRunRequest(BaseModel):
     # A repair preserves previously teacher-confirmed mappings and replaces only
     # unresolved drafts. It remains an explicit teacher-authorized operation.
     repair_unconfirmed_only: bool = False
-    # The normal local path uses PaddleOCR for page/block geometry and Qwen3.6
-    # only to associate those immutable block identifiers with locked questions.
-    # Qwen3.8 visual mapping is a separate, explicit rescue when OCR text cannot
-    # establish faithful question boundaries. It is never an automatic fallback.
+    # Qwen3.8 vision is the only active local-model mapping provider. The retired
+    # Paddle/Qwen3.6 value remains accepted by the schema solely so the API can
+    # return an explicit fail-closed retirement message to stale clients.
     provider: Literal[
         "deterministic_layout", "local_paddle_qwen", "local_qwen38_visual"
     ] = "deterministic_layout"
@@ -1290,7 +1289,7 @@ class GradeAnswerRegionResponse(BaseModel):
 
 class LocalQwenGradeRequest(BaseModel):
     grading_run_id: int = Field(gt=0)
-    provider: Literal["llama_cpp_qwen"]
+    provider: Literal["llama_cpp_qwen38"]
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
 

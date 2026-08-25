@@ -1,6 +1,6 @@
 # Brain Adapter provider configuration
 
-TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default. The supervised local workflow uses loopback-only `llama_cpp_qwen` for Qwen3.6 text tasks and `llama_cpp_qwen38` only for explicit visual-transcription rescue. PaddleOCR is a separate loopback sidecar and never grades.
+TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default. The active supervised workflow uses loopback-only `llama_cpp_qwen38` for three separately authorized tasks: thinking-disabled visual preparation, thinking-disabled verbatim transcription, and fresh-context text-only draft grading. PaddleOCR and Qwen3.6 remain historical/rollback assets but are disabled and cannot be selected by the teacher workflow.
 
 ## Environment variables
 

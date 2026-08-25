@@ -97,8 +97,7 @@ for (const marker of [
   "Rubric",
   "You do not need to upload the question paper anywhere else.",
   "Confirm files and extract drafts",
-  "local PaddleOCR",
-  "Qwen3.6 is linking questions, solutions, and rubric",
+  "thinking-disabled Qwen3.8 vision task",
   "Confirm and extract drafts",
   "Review questions, model answers, and rubric",
   "Confirm grading references",
@@ -135,19 +134,18 @@ for (const marker of [
   "Manual reference editing (advanced)",
   "Upload submission",
   "Upload script ZIP",
-  "PaddleOCR + Qwen3.6 mapping",
+  "Qwen3.8 visual mapping and grading",
   "AuthenticatedAnswerRegionImage",
   "AuthenticatedAnswerRegionSegmentImage",
   "Loading every source page and answer segment...",
-  "Retry boundaries with PaddleOCR + Qwen3.6",
+  "Repair unconfirmed boundaries with Qwen3.8 vision",
   "Confirmed mappings are protected.",
   "Required: compare the crop boundary with the complete source page",
   "Compare and acknowledge the full-page boundary first",
   "Complete prepared answer",
   "Review every segment below in order.",
   "Incomplete mapping suspected",
-  "Create direct PaddleOCR transcript",
-  "Use Qwen3.8 vision rescue",
+  "Transcribe complete answer with Qwen3.8 vision",
   "Confirm faithful transcription",
   "Create answer region",
   "Confirm displayed image is the full answer",
@@ -159,9 +157,9 @@ for (const marker of [
   }
 }
 
-// The old multi-pass/candidate Paddle rescue surface remains retired. The active
-// hybrid workflow has one direct Paddle draft and one explicit Qwen3.8 rescue;
-// it must never resurrect teacher cropping or candidate synthesis.
+// Every Paddle transcription and candidate surface is retired from the active
+// teacher workflow. Qwen3.8 handles mapping, verbatim transcription, and draft
+// grading as three separately authorized calls.
 for (const retired of [
   "Draft text with local PaddleOCR",
   "PaddleOCR evidence review",
@@ -170,6 +168,9 @@ for (const retired of [
   "createAnswerRegionOcrRescueRun",
   "confirmAnswerRegionOcrCandidates",
   "getAnswerRegionOcrBandImageUrl",
+  "createPaddleOcrRun",
+  "confirmPaddleOcrRun",
+  "rejectPaddleOcrRun",
 ]) {
   if (assessment.includes(retired)) {
     throw new Error(`Assessment evidence UI still exposes retired PaddleOCR surface: ${retired}`);
@@ -180,15 +181,14 @@ for (const retired of [
 }
 
 for (const marker of [
-  "createPaddleOcrRun",
-  "confirmPaddleOcrRun",
-  "rejectPaddleOcrRun",
-  'provider: "local_paddle_qwen"',
   '"local_qwen38_visual"',
+  'provider: "llama_cpp_qwen38"',
+  "gradeAnswerRegionWithLocalQwen38",
+  "/grade-local-qwen38",
   "getAnswerRegionSegmentImageUrl",
 ]) {
   if (!api.includes(marker)) {
-    throw new Error(`API client missing active hybrid OCR marker: ${marker}`);
+    throw new Error(`API client missing active Qwen3.8 workflow marker: ${marker}`);
   }
 }
 

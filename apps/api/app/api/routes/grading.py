@@ -120,11 +120,11 @@ def grade_answer_region(
 
 
 @router.post(
-    "/answer-regions/{answer_region_id}/grade-local-qwen",
+    "/answer-regions/{answer_region_id}/grade-local-qwen38",
     response_model=GradeAnswerRegionResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def grade_answer_region_with_local_qwen(
+def grade_answer_region_with_local_qwen38(
     answer_region_id: int,
     payload: LocalQwenGradeRequest,
     db: DbSession,
@@ -136,13 +136,15 @@ def grade_answer_region_with_local_qwen(
         raise HTTPException(status_code=409, detail="Real local providers are disabled")
     if not settings.local_single_answer_grading_enabled:
         raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
-    enabled = settings.local_qwen_enabled
-    expected_model = settings.local_qwen_model
+    if not settings.local_qwen38_grading_enabled:
+        raise HTTPException(status_code=409, detail="Local Qwen3.8 grading is disabled")
+    enabled = settings.local_qwen38_enabled
+    expected_model = settings.local_qwen38_model
     if not enabled:
-        raise HTTPException(status_code=409, detail="Requested local Qwen provider is disabled")
+        raise HTTPException(status_code=409, detail="Local Qwen3.8 provider is disabled")
     if payload.expected_model != expected_model:
         raise HTTPException(
-            status_code=409, detail="Expected local Qwen model alias does not match"
+            status_code=409, detail="Expected local Qwen3.8 model alias does not match"
         )
     grading_run = db.get(GradingRun, payload.grading_run_id)
     if (
@@ -167,7 +169,7 @@ def grade_answer_region_with_local_qwen(
         AuditLog(
             actor_type="teacher",
             actor_id=current_user.id,
-            event_type="local_qwen_single_grade_requested",
+            event_type="local_qwen38_single_grade_requested",
             entity_type="answer_region",
             entity_id=region.id,
             payload_json={
@@ -185,7 +187,7 @@ def grade_answer_region_with_local_qwen(
     except BrainProviderConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Local Qwen could not be prepared with the expected model",
+            detail="Local Qwen3.8 could not be prepared with the expected model",
         ) from exc
 
     region = assert_teacher_owns_answer_region(answer_region_id, db, current_user)
@@ -194,7 +196,7 @@ def grade_answer_region_with_local_qwen(
     if canonical_json_hash(after_packet) != before_hash:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Grading evidence changed while local Qwen was starting",
+            detail="Grading evidence changed while local Qwen3.8 was starting",
         )
     rubric = db.scalars(
         select(Rubric)
@@ -216,7 +218,7 @@ def grade_answer_region_with_local_qwen(
         AuditLog(
             actor_type="teacher",
             actor_id=current_user.id,
-            event_type="local_qwen_single_grade_succeeded",
+            event_type="local_qwen38_single_grade_succeeded",
             entity_type="grading_job",
             entity_id=job.id,
             payload_json={
