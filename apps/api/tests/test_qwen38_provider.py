@@ -370,6 +370,9 @@ def test_page_mapping_uses_question_identity_without_grading_student_work() -> N
     assert "Find the conditional probability." in prompt
     assert "judge correctness" in prompt
     assert "Wrong, partial, irrelevant" in prompt
+    assert "last line of an open continuation" in prompt
+    assert "include shared setup" in prompt
+    assert "Do not return only the final formula" in prompt
     assert "0.38" not in prompt
     assert "rubric" not in prompt.casefold()
 

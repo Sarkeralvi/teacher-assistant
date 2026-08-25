@@ -239,7 +239,10 @@ class LocalScriptPreparationService:
         for question in questions_to_persist:
             segments = segments_by_question[question.id]
             draft = {
-                "status": "mapped" if segments else "not_found",
+                # A visual boundary is always review-only. A geometrically
+                # plausible box is not authoritative until the teacher compares
+                # it with the complete page overlay.
+                "status": "uncertain" if segments else "not_found",
                 "confidence": str(min(confidence_by_question[question.id], default=Decimal("0"))),
                 "warnings": list(dict.fromkeys(warning_by_question[question.id])),
             }

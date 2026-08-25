@@ -948,6 +948,7 @@ def test_visual_boundary_rescue_preserves_confirmed_mapping_and_replaces_only_un
     assert preserved.teacher_confirmed is True
     assert replacement.id != unresolved_id
     assert replacement.provider == "llama_cpp_qwen38"
+    assert replacement.mapping_status == "uncertain"
     audit = (
         db_session.query(AuditLog)
         .filter(AuditLog.event_type == "submission_script_draft_prepared")
