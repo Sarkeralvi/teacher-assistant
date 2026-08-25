@@ -135,7 +135,20 @@ if ($StartLocalAi) {
     & (Join-Path $paths.RepositoryRoot "scripts\local-ai\Switch-LocalAiPhase.ps1") `
         -HealthTimeoutSeconds $HealthTimeoutSeconds -Phase $LocalAiMode
 } else {
-    Write-Host "Local AI is on demand and was not started by this pilot command."
+    # "On demand" must mean no phase is resident, not merely that this
+    # invocation declined to launch one.  Stop repository-owned phases and
+    # fail closed when a listener on a reserved phase port has unknown
+    # ownership; leaving it running would make later teacher actions appear to
+    # have loaded a model when they did not.
+    $stopScript = Join-Path $paths.RepositoryRoot "scripts\local-ai\Stop-LocalAi.ps1"
+    foreach ($mode in @("PaddleOcr", "Qwen", "Qwen38")) {
+        try {
+            & $stopScript -ConfigPath (Join-Path $paths.RepositoryRoot ".env.local-ai") -Mode $mode
+        } catch {
+            throw "Local AI phase $mode could not be verified stopped; refusing ordinary pilot startup."
+        }
+    }
+    Write-Host "Local AI is on demand and all managed phases are stopped."
 }
 
 $backendSourceTimestamp = Get-NewestSourceWriteTimeUtc -SourcePaths @(
