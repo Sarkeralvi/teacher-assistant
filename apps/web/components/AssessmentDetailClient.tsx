@@ -5,6 +5,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import { AuthenticatedAnswerRegionImage, type AnswerRegionImageLoadState } from "./AuthenticatedAnswerRegionImage";
+import { AuthenticatedMappedSourcePage } from "./AuthenticatedMappedSourcePage";
 import {
   acceptAnswerRegionMappingSuggestion,
   acceptQuestionImportDrafts,
@@ -214,6 +215,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
   const [confirmingVisualRunId, setConfirmingVisualRunId] = useState<number | null>(null);
   const [answerRegionImageStates, setAnswerRegionImageStates] = useState<Record<number, AnswerRegionImageLoadState>>({});
+  const [sourcePageImageStates, setSourcePageImageStates] = useState<Record<number, Record<number, AnswerRegionImageLoadState>>>({});
+  const [sourceBoundaryReviewed, setSourceBoundaryReviewed] = useState<Record<number, boolean>>({});
   const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
@@ -264,6 +267,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   const handleAnswerRegionImageStateChange = useCallback((answerRegionId: number, state: AnswerRegionImageLoadState) => {
     setAnswerRegionImageStates((current) => current[answerRegionId] === state ? current : { ...current, [answerRegionId]: state });
+  }, []);
+
+  const handleSourcePageImageStateChange = useCallback((answerRegionId: number, segmentId: number, state: AnswerRegionImageLoadState) => {
+    setSourcePageImageStates((current) => {
+      const regionStates = current[answerRegionId] ?? {};
+      if (regionStates[segmentId] === state) return current;
+      return { ...current, [answerRegionId]: { ...regionStates, [segmentId]: state } };
+    });
   }, []);
 
   const pages = submissions.flatMap((submission) => submission.pages);
@@ -1751,6 +1762,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 const imageState = mapping.answer_region_id == null
                   ? null
                   : answerRegionImageStates[mapping.answer_region_id] ?? "loading";
+                const sourceSegments = mapping.answer_region?.segments ?? [];
+                const sourceStates = mapping.answer_region_id == null
+                  ? {}
+                  : sourcePageImageStates[mapping.answer_region_id] ?? {};
+                const sourcePagesState: AnswerRegionImageLoadState = sourceSegments.length === 0
+                  ? "error"
+                  : sourceSegments.some((segment) => sourceStates[segment.id] === "error")
+                    ? "error"
+                    : sourceSegments.every((segment) => sourceStates[segment.id] === "loaded")
+                      ? "loaded"
+                      : "loading";
+                const boundaryReviewed = mapping.answer_region_id == null
+                  ? false
+                  : Boolean(sourceBoundaryReviewed[mapping.answer_region_id]);
                 return (
                   <article key={mapping.id} className="grid gap-3 rounded border border-slate-700 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1771,11 +1796,39 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       </p>
                     ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
                     {mapping.answer_region_id ? (
-                      <AuthenticatedAnswerRegionImage
-                        answerRegionId={mapping.answer_region_id}
-                        alt={`Prepared answer region for ${group.question_node.label}, submission ${mapping.submission_id}`}
-                        onLoadStateChange={handleAnswerRegionImageStateChange}
-                      />
+                      <>
+                        <details className="rounded border border-red-800 bg-red-950/20 p-3">
+                          <summary className="cursor-pointer font-semibold text-red-100">Required: compare the crop boundary with the complete source page</summary>
+                          <div className="mt-3 grid gap-3">
+                            {sourceSegments.map((segment) => (
+                              <AuthenticatedMappedSourcePage
+                                key={segment.id}
+                                answerRegionId={mapping.answer_region_id!}
+                                segment={segment}
+                                label={`Complete source page for ${group.question_node.label}, segment ${segment.order_index}`}
+                                onLoadStateChange={handleSourcePageImageStateChange}
+                              />
+                            ))}
+                            <label className="flex items-start gap-2 text-sm text-red-100">
+                              <input
+                                type="checkbox"
+                                checked={boundaryReviewed}
+                                disabled={sourcePagesState !== "loaded"}
+                                onChange={(event) => setSourceBoundaryReviewed((current) => ({
+                                  ...current,
+                                  [mapping.answer_region_id!]: event.target.checked,
+                                }))}
+                              />
+                              <span>I compared every red rectangle with the complete page and it contains the full answer without another question.</span>
+                            </label>
+                          </div>
+                        </details>
+                        <AuthenticatedAnswerRegionImage
+                          answerRegionId={mapping.answer_region_id}
+                          alt={`Prepared answer region for ${group.question_node.label}, submission ${mapping.submission_id}`}
+                          onLoadStateChange={handleAnswerRegionImageStateChange}
+                        />
+                      </>
                     ) : null}
                     {isLocalPreparedMapping(mapping) && mapping.answer_region_id ? (
                       <section className="grid gap-3 rounded border border-cyan-700 bg-slate-950/50 p-3 text-sm">
@@ -1786,8 +1839,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm a full answer; use “Repair unresolved mappings locally”.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
-                          <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || imageState !== "loaded"} onClick={() => void handleConfirmMapping(mapping)}>
-                            {confirmingMappingId === mapping.id ? "Confirming region..." : imageState === "error" ? "Answer image must load before confirmation" : imageState !== "loaded" ? "Loading answer image..." : "Confirm displayed answer region"}
+                          <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || imageState !== "loaded" || sourcePagesState !== "loaded" || !boundaryReviewed} onClick={() => void handleConfirmMapping(mapping)}>
+                            {confirmingMappingId === mapping.id ? "Confirming region..." : imageState === "error" || sourcePagesState === "error" ? "All evidence images must load before confirmation" : imageState !== "loaded" || sourcePagesState !== "loaded" ? "Loading source and crop images..." : !boundaryReviewed ? "Compare and acknowledge the full-page boundary first" : "Confirm displayed answer region"}
                           </button>
                         ) : null}
                         {mapping.teacher_confirmed && !paddleRun ? (

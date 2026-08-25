@@ -588,7 +588,25 @@ class LlamaCppQwenProvider(BrainProvider):
         if not questions:
             raise ValueError("Finalized questions are required for answer mapping")
         page_context = _submission_ocr_block_context(pages)
-        reference_context = json.dumps(questions, ensure_ascii=False, separators=(",", ":"))
+        # Mapping is a geometry/identity task. Expected answers, marks, and
+        # rubric content would bias the model toward correct-looking lines and
+        # caused real handwritten setup and wrong work to be cropped away.
+        mapping_references = [
+            {
+                "question_id": question["question_id"],
+                "question_no": question["question_no"],
+                "question_text": question.get("question_text") or "",
+                **(
+                    {"mapping_scope": question["mapping_scope"]}
+                    if question.get("mapping_scope")
+                    else {}
+                ),
+            }
+            for question in questions
+        ]
+        reference_context = json.dumps(
+            mapping_references, ensure_ascii=False, separators=(",", ":")
+        )
         additional_only = all(
             str(question.get("mapping_scope") or "") == "additional_unassigned_blocks_only"
             for question in questions
@@ -608,7 +626,11 @@ class LlamaCppQwenProvider(BrainProvider):
                 "content": (
                     "Map OCR blocks from a student's complete answer script to finalized "
                     "question IDs. Use only supplied block IDs. Do not grade, transcribe, "
-                    "rewrite, infer missing answer text, or create coordinates. Return every "
+                    "rewrite, infer missing answer text, judge correctness, compare numerical "
+                    "results with an expected answer, or create coordinates. A wrong, partial, "
+                    "irrelevant, or crossed-out response still belongs to its physical question "
+                    "region. Map by visible question labels, page order, spatial boundaries, and "
+                    "continuation only. Return every "
                     "finalized question exactly once. Every mapping needs teacher review. "
                     "An OCR block may belong to AT MOST ONE question: never repeat the same "
                     "(page_no, block_order) in two mappings. If a block could plausibly sit "
@@ -622,7 +644,10 @@ class LlamaCppQwenProvider(BrainProvider):
                 "content": (
                     "For each supplied question, select all and only the ordered OCR blocks "
                     "that belong to that student's answer, including continuation blocks on "
-                    "later pages. Question labels may help locate boundaries. Use status "
+                    "later pages. Include headings, written setup, intermediate work, crossed-out "
+                    "student work, and the final line; never select only the lines that look "
+                    "mathematically useful. Question labels and physical reading order define "
+                    "boundaries. Use status "
                     "not_found with no blocks when there is no visible answer in the supplied "
                     "block set. Use uncertain when a boundary or question link is ambiguous. "
                     "Preserve exact question_id and question_no values.\n\nFINALIZED REFERENCES\n"

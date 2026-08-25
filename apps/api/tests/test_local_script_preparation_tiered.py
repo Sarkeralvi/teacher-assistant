@@ -149,7 +149,7 @@ class SequencedFakeTextProvider(FakeTextProvider):
         return {"mappings": self._mapping_passes.pop(0)}
 
 
-def test_duplicate_block_claims_are_withheld_not_assigned_to_either_answer() -> None:
+def test_duplicate_boundary_block_prefers_the_only_otherwise_missing_answer() -> None:
     drafts = [
         {
             "question_id": 1,
@@ -175,10 +175,91 @@ def test_duplicate_block_claims_are_withheld_not_assigned_to_either_answer() -> 
 
     assert sanitized[0]["status"] == "uncertain"
     assert sanitized[0]["block_references"] == [{"page_no": 1, "block_orders": [1]}]
-    assert sanitized[1]["status"] == "not_found"
-    assert sanitized[1]["block_references"] == []
-    assert sanitized[1]["confidence"] == "0"
-    assert all("withheld from every answer" in item["warnings"][0] for item in sanitized)
+    assert sanitized[1]["status"] == "uncertain"
+    assert sanitized[1]["block_references"] == [{"page_no": 1, "block_orders": [2]}]
+    assert sanitized[1]["confidence"] == "0.35"
+    assert "otherwise-missing answer" in sanitized[1]["warnings"][0]
+
+
+def test_duplicate_block_is_withheld_from_all_when_no_safe_owner_exists() -> None:
+    drafts = [
+        {
+            "question_id": question_id,
+            "question_no": str(question_id),
+            "status": "mapped",
+            "block_references": [{"page_no": 1, "block_orders": [2]}],
+            "confidence": "0.8",
+            "warnings": [],
+        }
+        for question_id in (1, 2)
+    ]
+
+    sanitized = LocalScriptPreparationService._with_duplicate_block_claims_withheld(drafts)
+
+    assert all(item["status"] == "not_found" for item in sanitized)
+    assert all(item["block_references"] == [] for item in sanitized)
+    assert all("withheld from this answer" in item["warnings"][0] for item in sanitized)
+
+
+def test_sparse_qwen_anchors_expand_to_complete_non_overlapping_answer_bands() -> None:
+    questions = [Question(id=1), Question(id=2)]
+    blocks = {
+        (1, order): {"order": order, "bbox": [0, order * 10, 100, order * 10 + 5]}
+        for order in range(1, 11)
+    }
+    drafts = [
+        {
+            "question_id": 1,
+            "status": "mapped",
+            "confidence": "0.9",
+            "warnings": [],
+            "block_references": [{"page_no": 1, "block_orders": [1]}],
+        },
+        {
+            "question_id": 2,
+            "status": "mapped",
+            "confidence": "0.9",
+            "warnings": [],
+            "block_references": [{"page_no": 1, "block_orders": [4, 6, 10]}],
+        },
+    ]
+
+    expanded = LocalScriptPreparationService._expand_contiguous_block_evidence(
+        drafts=drafts,
+        block_index=blocks,
+        questions=questions,
+    )
+
+    assert expanded[0]["block_references"] == [{"page_no": 1, "block_orders": [1]}]
+    assert expanded[1]["block_references"] == [
+        {"page_no": 1, "block_orders": list(range(2, 11))}
+    ]
+    assert expanded[1]["status"] == "uncertain"
+    assert "expanded from sparse Qwen anchors" in expanded[1]["warnings"][0]
+
+
+def test_first_page_answer_expands_upward_to_include_omitted_setup() -> None:
+    draft = {
+        "question_id": 1,
+        "status": "mapped",
+        "confidence": "0.8",
+        "warnings": [],
+        "block_references": [{"page_no": 1, "block_orders": [3, 5, 6, 8]}],
+    }
+    blocks = {
+        (1, order): {"order": order, "bbox": [0, order * 10, 100, order * 10 + 5]}
+        for order in range(1, 9)
+    }
+
+    expanded = LocalScriptPreparationService._expand_contiguous_block_evidence(
+        drafts=[draft],
+        block_index=blocks,
+        questions=[Question(id=1)],
+    )
+
+    assert expanded[0]["block_references"] == [
+        {"page_no": 1, "block_orders": list(range(1, 9))}
+    ]
 
 
 class FakeVisionProvider:
@@ -492,6 +573,10 @@ def test_hybrid_path_batches_paddle_then_qwen36_and_never_calls_qwen38(
     assert paddle.health_calls == 1
     assert paddle.calls == 2
     assert len(text_provider.calls) == 1
+    assert all(
+        "model_answer" not in reference and "rubric" not in reference
+        for reference in text_provider.calls[0]["questions"]
+    )
     assert vision.calls == 0
     assert switches.phases == ["PaddleOcr", "Qwen"]
     assert {item.provider for item in mappings} == {"local_paddle_qwen"}
@@ -529,7 +614,7 @@ def test_hybrid_path_refuses_page_count_above_explicit_paddle_budget(
     assert paddle.calls == 0
 
 
-def test_hybrid_duplicate_claim_persists_safe_blocker_and_continues_coverage(
+def test_hybrid_duplicate_boundary_claim_keeps_both_regions_reviewable(
     db_session: Session, tmp_path: Path, storage: LocalStorage
 ) -> None:
     submission, teacher = _seed(db_session, tmp_path)
@@ -546,22 +631,10 @@ def test_hybrid_duplicate_claim_persists_safe_blocker_and_continues_coverage(
             [{"order": 1, "text": "blank", "bbox": [40, 40, 200, 70]}],
         ]
     )
-    provider = SequencedFakeTextProvider(
+    provider = FakeTextProvider(
         [
-            [
-                _draft(questions[0].id, LABELS[0], 1, [1]),
-                _draft(questions[1].id, LABELS[1], 1, [1, 2]),
-            ],
-            [
-                {
-                    "question_id": questions[0].id,
-                    "question_no": LABELS[0],
-                    "status": "not_found",
-                    "confidence": "0",
-                    "warnings": [],
-                    "block_references": [],
-                }
-            ],
+            _draft(questions[0].id, LABELS[0], 1, [1]),
+            _draft(questions[1].id, LABELS[1], 1, [1, 2]),
         ]
     )
     service = LocalScriptPreparationService(
@@ -584,16 +657,16 @@ def test_hybrid_duplicate_claim_persists_safe_blocker_and_continues_coverage(
         maximum_text_mapping_calls=2,
     )
 
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 1
     first = next(mapping for mapping in mappings if mapping.question_id == questions[0].id)
     second = next(mapping for mapping in mappings if mapping.question_id == questions[1].id)
-    assert first.mapping_status == "blocked"
-    assert first.answer_region is None
+    assert first.mapping_status == "uncertain"
+    assert first.answer_region is not None
     assert second.mapping_status == "uncertain"
     assert second.answer_region is not None
     assert any(
-        "withheld from every answer" in warning
-        for warning in second.source_reference["warnings"]
+        "otherwise-missing answer" in warning
+        for warning in first.source_reference["warnings"]
     )
 
 

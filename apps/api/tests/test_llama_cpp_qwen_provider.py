@@ -272,7 +272,11 @@ def test_qwen_maps_only_supplied_submission_ocr_block_ids() -> None:
     request = client.post_calls[0][1]["json"]
     prompt = request["messages"][1]["content"]
     assert "[page=1 block=2] 1(a) working" in prompt
+    assert '"model_answer"' not in prompt
+    assert '"rubric"' not in prompt
     assert "Do not grade" in request["messages"][0]["content"]
+    assert "judge correctness" in request["messages"][0]["content"]
+    assert "wrong, partial" in request["messages"][0]["content"]
     assert "AT MOST ONE question" in request["messages"][0]["content"]
     assert request["response_format"]["json_schema"]["name"] == ("submission_answer_mapping")
 

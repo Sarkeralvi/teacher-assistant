@@ -769,6 +769,11 @@ class LocalScriptPreparationService:
             list(result.get("mappings") or [])
         )
         self._validate_draft_set(drafts, questions)
+        drafts = self._expand_contiguous_block_evidence(
+            drafts=drafts,
+            block_index=block_index,
+            questions=questions,
+        )
         pages_by_no = [item.page for item in accepted]
         used_blocks: set[tuple[int, int]] = set()
         for draft in drafts:
@@ -898,6 +903,11 @@ class LocalScriptPreparationService:
             list(result.get("mappings") or [])
         )
         self._validate_draft_set(drafts, targets)
+        drafts = self._expand_contiguous_block_evidence(
+            drafts=drafts,
+            block_index=all_blocks,
+            questions=questions,
+        )
         for draft in drafts:
             question_id = int(draft["question_id"])
             segments, draft_text = self._resolve_draft(
@@ -1217,9 +1227,6 @@ class LocalScriptPreparationService:
                     "question_id": question.id,
                     "question_no": question.question_no,
                     "question_text": question.question_text,
-                    "model_answer": question.model_answer,
-                    "total_marks": str(question.total_marks),
-                    "rubric": rubric.rubric_json,
                 }
             )
         return questions, node_by_question, references
@@ -1341,52 +1348,93 @@ class LocalScriptPreparationService:
     def _with_duplicate_block_claims_withheld(
         drafts: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Withhold ambiguous OCR blocks rather than losing the whole run.
+        """Resolve only the safe subset of duplicate OCR-block claims.
 
         Qwen3.6 maps block identifiers; it does not own their geometry. A
         duplicate claim is ambiguous evidence, not a reason to discard every
-        other answer on the script. The block is withheld from every claimant,
-        leaving the affected answer blocked or uncertain for the teacher's
-        explicit repair or visual-rescue path.
+        other answer on the script. When exactly one claimant has no other
+        visible block while the others already have evidence, provisionally
+        give the disputed block to that otherwise-missing answer. This is the
+        common page-continuation boundary case and remains uncertain for
+        teacher review. In every other case, withhold it from all claimants.
         """
         claims: dict[tuple[int, int], set[int]] = {}
+        keys_by_question: dict[int, set[tuple[int, int]]] = {}
         for draft in drafts:
             question_id = int(draft.get("question_id") or 0)
             for reference in draft.get("block_references") or []:
                 page_no = int(reference.get("page_no") or 0)
                 for order in reference.get("block_orders") or []:
-                    claims.setdefault((page_no, int(order)), set()).add(question_id)
+                    key = (page_no, int(order))
+                    claims.setdefault(key, set()).add(question_id)
+                    keys_by_question.setdefault(question_id, set()).add(key)
         ambiguous = {key for key, question_ids in claims.items() if len(question_ids) > 1}
         if not ambiguous:
             return drafts
 
+        unambiguous_by_question = {
+            question_id: keys.difference(ambiguous)
+            for question_id, keys in keys_by_question.items()
+        }
+        provisional_owner: dict[tuple[int, int], int] = {}
+        for key in ambiguous:
+            claimants = claims[key]
+            otherwise_missing = [
+                question_id
+                for question_id in claimants
+                if not unambiguous_by_question.get(question_id)
+            ]
+            already_located = [
+                question_id
+                for question_id in claimants
+                if unambiguous_by_question.get(question_id)
+            ]
+            if len(otherwise_missing) == 1 and already_located:
+                provisional_owner[key] = otherwise_missing[0]
+
         sanitized: list[dict[str, Any]] = []
         for draft in drafts:
             copy = dict(draft)
+            question_id = int(copy.get("question_id") or 0)
             filtered_references: list[dict[str, Any]] = []
             withheld: list[tuple[int, int]] = []
+            provisionally_owned: list[tuple[int, int]] = []
             for reference in copy.get("block_references") or []:
                 page_no = int(reference.get("page_no") or 0)
                 retained_orders: list[int] = []
                 for order in reference.get("block_orders") or []:
                     key = (page_no, int(order))
-                    if key in ambiguous:
+                    owner = provisional_owner.get(key)
+                    if key in ambiguous and owner != question_id:
                         withheld.append(key)
                     else:
                         retained_orders.append(int(order))
+                        if owner == question_id:
+                            provisionally_owned.append(key)
                 if retained_orders:
                     filtered = dict(reference)
                     filtered["block_orders"] = retained_orders
                     filtered_references.append(filtered)
-            if withheld:
+            if withheld or provisionally_owned:
                 warnings = list(copy.get("warnings") or [])
-                locations = ", ".join(
-                    f"page {page_no}, block {order}" for page_no, order in sorted(set(withheld))
-                )
-                warnings.append(
-                    "ambiguous OCR block claim was withheld from every answer "
-                    f"({locations}); it must be repaired or visually rescued before grading"
-                )
+                if withheld:
+                    locations = ", ".join(
+                        f"page {page_no}, block {order}"
+                        for page_no, order in sorted(set(withheld))
+                    )
+                    warnings.append(
+                        "ambiguous OCR block claim was withheld from this answer "
+                        f"({locations}); teacher review is required"
+                    )
+                if provisionally_owned:
+                    locations = ", ".join(
+                        f"page {page_no}, block {order}"
+                        for page_no, order in sorted(set(provisionally_owned))
+                    )
+                    warnings.append(
+                        "ambiguous boundary block was assigned only to this otherwise-missing "
+                        f"answer ({locations}); verify it against the full source page"
+                    )
                 copy["warnings"] = list(dict.fromkeys(warnings))
                 copy["block_references"] = filtered_references
                 if not filtered_references:
@@ -1397,10 +1445,145 @@ class LocalScriptPreparationService:
                 else:
                     copy["status"] = "uncertain"
                     copy["confidence"] = str(
-                        min(Decimal(str(copy.get("confidence") or 0)), Decimal("0.5"))
+                        min(Decimal(str(copy.get("confidence") or 0)), Decimal("0.35"))
                     )
             sanitized.append(copy)
         return sanitized
+
+    @staticmethod
+    def _expand_contiguous_block_evidence(
+        *,
+        drafts: list[dict[str, Any]],
+        block_index: dict[tuple[int, int], dict[str, Any]],
+        questions: list[Question],
+    ) -> list[dict[str, Any]]:
+        """Turn sparse model anchors into complete, non-overlapping answer bands.
+
+        The text model is useful for identifying question anchors, but it can
+        select only formula lines and omit headings, setup, or incorrect work.
+        Cropping directly around those sparse anchors truncated real answers in
+        rehearsal. Geometry therefore follows deterministic reading order:
+
+        * fill holes between a question's own first and last selected block;
+        * include leading blocks before the first mapped answer on each page;
+        * give gaps between adjacent canonical questions to the following
+          question, where its heading and setup physically occur;
+        * never bridge over an unresolved canonical question or steal a block
+          explicitly selected by another answer.
+
+        Any expansion remains uncertain until the teacher sees the full-page
+        boundary preview and confirms it.
+        """
+        question_order = {question.id: index for index, question in enumerate(questions)}
+        copies = [{**draft, "warnings": list(draft.get("warnings") or [])} for draft in drafts]
+        by_question = {int(draft.get("question_id") or 0): draft for draft in copies}
+
+        selected: dict[tuple[int, int], set[int]] = {}
+        selected_owner: dict[tuple[int, int], int | None] = {}
+        for draft in copies:
+            question_id = int(draft.get("question_id") or 0)
+            for reference in draft.get("block_references") or []:
+                page_no = int(reference.get("page_no") or 0)
+                for raw_order in reference.get("block_orders") or []:
+                    order = int(raw_order)
+                    key = (page_no, order)
+                    selected.setdefault((question_id, page_no), set()).add(order)
+                    previous_owner = selected_owner.get(key)
+                    if previous_owner is None and key not in selected_owner:
+                        selected_owner[key] = question_id
+                    elif previous_owner != question_id:
+                        selected_owner[key] = None
+
+        expanded = {key: set(orders) for key, orders in selected.items()}
+        page_orders: dict[int, list[int]] = {}
+        for page_no, order in block_index:
+            page_orders.setdefault(page_no, []).append(order)
+        for orders in page_orders.values():
+            orders.sort()
+
+        additions: dict[int, set[tuple[int, int]]] = {}
+        for page_no, available_orders in page_orders.items():
+            owners: list[tuple[int, int, int]] = []
+            for (question_id, selected_page), orders in selected.items():
+                if selected_page == page_no and orders:
+                    owners.append((question_id, min(orders), max(orders)))
+            owners.sort(key=lambda item: (item[1], question_order.get(item[0], 10**9)))
+            if not owners:
+                continue
+
+            def add_if_unclaimed(
+                question_id: int, order: int, *, selected_page_no: int = page_no
+            ) -> None:
+                key = (selected_page_no, order)
+                owner = selected_owner.get(key)
+                if key not in block_index or owner not in {None, question_id}:
+                    return
+                # ``None`` can mean either unclaimed or conflicting. A key
+                # present in selected_owner with value None is a conflict and
+                # must not be expanded into a region.
+                if key in selected_owner and owner is None:
+                    return
+                expanded.setdefault((question_id, selected_page_no), set()).add(order)
+                if order not in selected.get((question_id, selected_page_no), set()):
+                    additions.setdefault(question_id, set()).add(key)
+
+            # Keep every detected line between this question's sparse anchors.
+            for question_id, first_order, last_order in owners:
+                for order in available_orders:
+                    if first_order <= order <= last_order:
+                        add_if_unclaimed(question_id, order)
+
+            # The first mapped answer owns leading page content. This restores
+            # omitted headings and setup without crossing another answer.
+            first_question_id, first_order, _last_order = owners[0]
+            for order in available_orders:
+                if order < first_order:
+                    add_if_unclaimed(first_question_id, order)
+
+            # A gap between adjacent canonical questions belongs to the next
+            # question. Do not bridge a missing question in the canonical list.
+            for previous, current in zip(owners, owners[1:], strict=False):
+                previous_question_id, _previous_first, previous_last = previous
+                current_question_id, current_first, _current_last = current
+                if question_order.get(current_question_id) != question_order.get(
+                    previous_question_id, -2
+                ) + 1:
+                    continue
+                for order in available_orders:
+                    if previous_last < order < current_first:
+                        add_if_unclaimed(current_question_id, order)
+
+        for (question_id, page_no), orders in expanded.items():
+            draft = by_question.get(question_id)
+            if draft is None or not orders:
+                continue
+            references_by_page = {
+                int(reference.get("page_no") or 0): dict(reference)
+                for reference in draft.get("block_references") or []
+            }
+            reference = references_by_page.get(page_no, {"page_no": page_no})
+            reference["block_orders"] = sorted(orders)
+            references_by_page[page_no] = reference
+            draft["block_references"] = [
+                references_by_page[key] for key in sorted(references_by_page)
+            ]
+
+        for question_id, added in additions.items():
+            if not added:
+                continue
+            draft = by_question[question_id]
+            locations = ", ".join(
+                f"page {page_no}, block {order}" for page_no, order in sorted(added)
+            )
+            draft["warnings"].append(
+                "crop geometry was expanded from sparse Qwen anchors to include contiguous "
+                f"PaddleOCR evidence ({locations}); verify the full-page boundary before approval"
+            )
+            draft["status"] = "uncertain"
+            draft["confidence"] = str(
+                min(Decimal(str(draft.get("confidence") or 0)), Decimal("0.5"))
+            )
+        return copies
 
     def _validate_draft_set(self, drafts: list[dict[str, Any]], questions: list[Question]) -> None:
         expected = {question.id for question in questions}
