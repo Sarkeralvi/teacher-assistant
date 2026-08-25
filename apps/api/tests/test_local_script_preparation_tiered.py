@@ -810,6 +810,53 @@ def test_no_vision_call_when_tier1_read_every_page(
     assert all(item.teacher_confirmed is False for item in mappings)
 
 
+def test_mapped_ocr_text_is_persisted_for_teacher_review(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    """A real gap: _resolve_draft returns the matched block text, but every
+    caller discarded it and every mapping persisted with ocr_draft_text="".
+    A teacher reviewing a mapping had no way to see what the OCR actually
+    read, on either script-mapping path (this one and the PaddleOCR path,
+    which share _persist_prepared_mappings)."""
+    submission, teacher = _seed(db_session, tmp_path, page_count=1)
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+    engine = FakeEngine([_good_page(LABELS[0], 40)])
+    text_provider = FakeTextProvider(
+        [
+            _draft(questions[0].id, LABELS[0], 1, [1, 2]),
+            {
+                "question_id": questions[1].id,
+                "question_no": LABELS[1],
+                "status": "not_found",
+                "confidence": "0",
+                "warnings": [],
+                "block_references": [],
+            },
+        ]
+    )
+    service = _service(
+        db_session, tmp_path, storage, engine=engine, text_provider=text_provider
+    )
+
+    mappings = service.prepare_from_tier1_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_vision_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_visual_calls=5,
+    )
+
+    mapped = next(item for item in mappings if item.question_id == questions[0].id)
+    ocr_text = mapped.source_reference["ocr_draft_text"]
+    assert ocr_text != ""
+    assert LABELS[0] in ocr_text
+    assert "working here" in ocr_text
+
+
 def test_geometry_comes_from_the_ocr_boxes_not_from_the_model(
     db_session: Session, tmp_path: Path, storage: LocalStorage
 ) -> None:

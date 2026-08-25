@@ -340,6 +340,7 @@ class LocalScriptPreparationService:
         segments_by_question: dict[int, list[PreparedSegment]] = {q.id: [] for q in questions}
         warning_by_question: dict[int, list[str]] = {q.id: [] for q in questions}
         confidence_by_question: dict[int, list[Decimal]] = {q.id: [] for q in questions}
+        draft_text_by_question: dict[int, str] = {}
         warnings: list[str] = []
         visual_calls = 0
         text_calls = 0
@@ -372,6 +373,7 @@ class LocalScriptPreparationService:
                     segments_by_question=segments_by_question,
                     warning_by_question=warning_by_question,
                     confidence_by_question=confidence_by_question,
+                    draft_text_by_question=draft_text_by_question,
                     lease=lease,
                     holder=holder,
                 )
@@ -395,6 +397,7 @@ class LocalScriptPreparationService:
             segments_by_question=segments_by_question,
             warning_by_question=warning_by_question,
             confidence_by_question=confidence_by_question,
+            draft_text_by_question=draft_text_by_question,
             run_warnings=warnings,
             provider="llama_cpp_qwen",
             audit_payload={
@@ -522,6 +525,7 @@ class LocalScriptPreparationService:
         segments_by_question: dict[int, list[PreparedSegment]] = {q.id: [] for q in questions}
         warning_by_question: dict[int, list[str]] = {q.id: [] for q in questions}
         confidence_by_question: dict[int, list[Decimal]] = {q.id: [] for q in questions}
+        draft_text_by_question: dict[int, str] = {}
         try:
             text_calls, used_blocks = self._map_accepted_pages_with_text_model(
                 accepted=accepted,
@@ -530,6 +534,7 @@ class LocalScriptPreparationService:
                 segments_by_question=segments_by_question,
                 warning_by_question=warning_by_question,
                 confidence_by_question=confidence_by_question,
+                draft_text_by_question=draft_text_by_question,
                 lease=lease,
                 holder=holder,
             )
@@ -551,6 +556,7 @@ class LocalScriptPreparationService:
                     segments_by_question=segments_by_question,
                     warning_by_question=warning_by_question,
                     confidence_by_question=confidence_by_question,
+                    draft_text_by_question=draft_text_by_question,
                     used_blocks=used_blocks,
                     excluded_question_ids={
                         mapping.question_id
@@ -575,6 +581,7 @@ class LocalScriptPreparationService:
             segments_by_question=segments_by_question,
             warning_by_question=warning_by_question,
             confidence_by_question=confidence_by_question,
+            draft_text_by_question=draft_text_by_question,
             run_warnings=[
                 "PaddleOCR located answer blocks; Qwen3.6 mapped block IDs only. "
                 "Confirm every region before transcription."
@@ -723,6 +730,7 @@ class LocalScriptPreparationService:
         segments_by_question: dict[int, list[PreparedSegment]],
         warning_by_question: dict[int, list[str]],
         confidence_by_question: dict[int, list[Decimal]],
+        draft_text_by_question: dict[int, str],
         lease: LocalModelLeaseService,
         holder: str,
     ) -> tuple[int, set[tuple[int, int]]]:
@@ -787,6 +795,7 @@ class LocalScriptPreparationService:
                     "first-pass OCR text is approximate and is used only to locate this answer; "
                     "the verbatim reading is a separate confirmation"
                 )
+                draft_text_by_question[question_id] = draft_text
             confidence = draft.get("confidence")
             if confidence is not None:
                 confidence_by_question[question_id].append(Decimal(str(confidence)))
@@ -801,6 +810,7 @@ class LocalScriptPreparationService:
         segments_by_question: dict[int, list[PreparedSegment]],
         warning_by_question: dict[int, list[str]],
         confidence_by_question: dict[int, list[Decimal]],
+        draft_text_by_question: dict[int, str],
         used_blocks: set[tuple[int, int]],
         excluded_question_ids: set[int],
         lease: LocalModelLeaseService,
@@ -890,7 +900,7 @@ class LocalScriptPreparationService:
         self._validate_draft_set(drafts, targets)
         for draft in drafts:
             question_id = int(draft["question_id"])
-            segments, _draft_text = self._resolve_draft(
+            segments, draft_text = self._resolve_draft(
                 draft=draft,
                 pages=[item.page for item in accepted],
                 block_index=all_blocks,
@@ -909,6 +919,14 @@ class LocalScriptPreparationService:
             if draft.get("status") == "uncertain":
                 warning_by_question[question_id].append(
                     "Qwen3.6 marked this block mapping uncertain; teacher approval is required"
+                )
+            if draft_text:
+                # This pass can extend an already-mapped answer with a
+                # continuation segment; append rather than overwrite so the
+                # first pass's text is not silently dropped.
+                existing_text = draft_text_by_question.get(question_id, "")
+                draft_text_by_question[question_id] = (
+                    f"{existing_text}\n{draft_text}" if existing_text else draft_text
                 )
             confidence = draft.get("confidence")
             if confidence is not None:
@@ -939,6 +957,7 @@ class LocalScriptPreparationService:
         segments_by_question: dict[int, list[PreparedSegment]],
         warning_by_question: dict[int, list[str]],
         confidence_by_question: dict[int, list[Decimal]],
+        draft_text_by_question: dict[int, str],
         run_warnings: list[str],
         provider: str,
         audit_payload: dict[str, Any],
@@ -1022,7 +1041,7 @@ class LocalScriptPreparationService:
                     node=nodes[question.id],
                     draft=draft,
                     segments=segments,
-                    draft_text="",
+                    draft_text=draft_text_by_question.get(question.id, ""),
                     ocr_warnings=[],
                     qwen_warnings=page_warnings,
                     provider=provider,
