@@ -300,9 +300,11 @@ class FakeVisionProvider:
     def __init__(self, regions_per_call: list[list[VisualPageRegion]]) -> None:
         self._regions = list(regions_per_call)
         self.calls = 0
+        self.inputs: list[dict[str, Any]] = []
 
-    def map_page_answer_regions(self, **_kwargs: Any) -> VisualPageMappingOutput:
+    def map_page_answer_regions(self, **kwargs: Any) -> VisualPageMappingOutput:
         self.calls += 1
+        self.inputs.append(kwargs)
         return VisualPageMappingOutput(regions=self._regions.pop(0), needs_review=True)
 
 
@@ -957,6 +959,55 @@ def test_visual_boundary_rescue_preserves_confirmed_mapping_and_replaces_only_un
     )
     assert audit.payload_json["repair_unconfirmed_only"] is True
     assert audit.payload_json["preserved_mapping_count"] == 1
+
+
+def test_visual_mapping_carries_bottom_region_as_open_continuation_even_if_model_omits_flag(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path)
+    vision = FakeVisionProvider(
+        [
+            [
+                VisualPageRegion(
+                    question_label=LABELS[0],
+                    bbox=[50, 100, 900, 950],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                )
+            ],
+            [
+                VisualPageRegion(
+                    question_label=LABELS[1],
+                    bbox=[50, 100, 900, 500],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                )
+            ],
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(vision),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+    )
+
+    assert vision.inputs[1]["open_continuations"] == [LABELS[0]]
+    first = next(item for item in mappings if item.source_page == 1)
+    assert "continuation was carried" in " ".join(first.source_reference["warnings"])
 
 
 def test_no_vision_call_when_tier1_read_every_page(

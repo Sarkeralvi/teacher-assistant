@@ -227,7 +227,15 @@ class LocalScriptPreparationService:
                         )
                         confidence_by_question[question.id].append(region.confidence)
                         warning_by_question[question.id].extend(region.warnings)
-                        if region.continues_to_next:
+                        reaches_page_bottom = (
+                            int(y2) >= 850 and page.page_no < pages[-1].page_no
+                        )
+                        if reaches_page_bottom and not region.continues_to_next:
+                            warning_by_question[question.id].append(
+                                "continuation was carried to the next page because this region "
+                                "reaches the page bottom; verify both page segments together"
+                            )
+                        if region.continues_to_next or reaches_page_bottom:
                             next_continuations.append(question.question_no)
                     open_continuations = next_continuations
         except LocalModelLeaseError as exc:
