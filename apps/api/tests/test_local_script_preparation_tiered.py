@@ -1007,7 +1007,7 @@ def test_visual_mapping_carries_bottom_region_as_open_continuation_even_if_model
 
     assert vision.inputs[1]["open_continuations"] == [LABELS[0]]
     first = next(item for item in mappings if item.source_page == 1)
-    assert "continuation was carried" in " ".join(first.source_reference["warnings"])
+    assert "next page was checked" in " ".join(first.source_reference["warnings"])
 
 
 def test_visual_mapping_splits_lower_continuation_band_to_missing_next_question(

@@ -232,8 +232,8 @@ class LocalScriptPreparationService:
                         )
                         if reaches_page_bottom and not region.continues_to_next:
                             warning_by_question[question.id].append(
-                                "continuation was carried to the next page because this region "
-                                "reaches the page bottom; verify both page segments together"
+                                "this region reaches the page bottom, so the next page was checked "
+                                "for a continuation; verify the page transition before approval"
                             )
                         if region.continues_to_next or reaches_page_bottom:
                             next_continuations.append(question.question_no)
