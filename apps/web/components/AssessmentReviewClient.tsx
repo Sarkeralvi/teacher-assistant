@@ -363,6 +363,50 @@ function SummaryPanel({ summary, assessmentId }: Readonly<{ summary: AssessmentS
         <SummaryMetric label="Rejected" value={summary.rejected_count} />
         <SummaryMetric label="Average final score" value={summary.average_final_score ?? "—"} />
       </div>
+      <div className="mt-5 overflow-x-auto">
+        <h3 className="text-lg font-semibold">Submission totals</h3>
+        <p className="mt-1 text-sm text-slate-400">
+          Totals use teacher-approved grades only. Incomplete totals stay visibly blocked instead of treating an unreviewed answer as zero.
+        </p>
+        <table className="mt-3 min-w-full border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-slate-700 text-slate-300">
+              <th className="px-3 py-2">Submission</th>
+              <th className="px-3 py-2">Student</th>
+              <th className="px-3 py-2">Approved total</th>
+              <th className="px-3 py-2">Coverage</th>
+              <th className="px-3 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summary.submission_totals.map((total) => (
+              <tr key={total.submission_id} className="border-b border-slate-800">
+                <td className="px-3 py-3">#{total.submission_id}</td>
+                <td className="px-3 py-3">
+                  <span className="block font-medium">{total.student_identifier}</span>
+                  {total.student_name ? <span className="text-xs text-slate-400">{total.student_name}</span> : null}
+                </td>
+                <td className="px-3 py-3 font-semibold">
+                  {total.approved_score} / {total.assessment_max_score}
+                  {!total.is_complete ? (
+                    <span className="block text-xs font-normal text-slate-400">
+                      Approved questions currently cover {total.approved_max_score} marks.
+                    </span>
+                  ) : null}
+                </td>
+                <td className="px-3 py-3">
+                  {total.approved_question_count} / {total.expected_question_count} questions
+                </td>
+                <td className="px-3 py-3">
+                  <span className={total.is_complete ? "text-emerald-300" : "text-amber-300"}>
+                    {total.is_complete ? "Complete" : "Incomplete"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

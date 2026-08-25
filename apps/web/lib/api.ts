@@ -982,7 +982,20 @@ export type AssessmentSummary = {
   pending_review_count: number;
   average_final_score: string | number | null;
   max_possible_score: string | number | null;
+  submission_totals: SubmissionGradeTotal[];
   generated_at: string;
+};
+
+export type SubmissionGradeTotal = {
+  submission_id: number;
+  student_identifier: string;
+  student_name: string | null;
+  approved_score: string | number;
+  approved_max_score: string | number;
+  assessment_max_score: string | number;
+  approved_question_count: number;
+  expected_question_count: number;
+  is_complete: boolean;
 };
 
 type RequestOptions = {

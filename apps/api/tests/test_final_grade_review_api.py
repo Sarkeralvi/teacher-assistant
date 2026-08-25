@@ -632,6 +632,19 @@ def test_assessment_summary_returns_review_counts(client: TestClient, tmp_path: 
     assert payload["pending_review_count"] == 1
     assert payload["average_final_score"] == "1.00"
     assert payload["max_possible_score"] == "20.00"
+    assert payload["submission_totals"] == [
+        {
+            "submission_id": data["submission"]["id"],
+            "student_identifier": "S-001",
+            "student_name": "Student One",
+            "approved_score": "0.00",
+            "approved_max_score": "5.00",
+            "assessment_max_score": "5.00",
+            "approved_question_count": 1,
+            "expected_question_count": 1,
+            "is_complete": True,
+        }
+    ]
     assert "generated_at" in payload
 
 
@@ -667,6 +680,7 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     workbook = load_workbook(BytesIO(response.content))
+    assert workbook.sheetnames == ["Final Grades", "Submission Totals"]
     sheet = workbook.active
     rows = list(sheet.iter_rows(values_only=True))
     headers = list(rows[0])
@@ -704,6 +718,60 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
     assert "rejected" not in exported_text
     assert "raw_response_json" not in exported_text
     assert "password_hash" not in exported_text
+    totals_rows = list(workbook["Submission Totals"].iter_rows(values_only=True))
+    assert totals_rows[0] == (
+        "assessment_id",
+        "course_id",
+        "submission_id",
+        "student_identifier",
+        "student_name",
+        "approved_score",
+        "approved_max_score",
+        "assessment_max_score",
+        "approved_question_count",
+        "expected_question_count",
+        "is_complete",
+    )
+    assert totals_rows[1][2] == data["submission"]["id"]
+    assert totals_rows[1][5:11] == (0, 5, 5, 1, 1, True)
+
+
+def test_assessment_summary_keeps_new_ungraded_submission_separate(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    assert client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/approve",
+        headers=data["headers"],
+        json={"teacher_id": data["teacher"]["id"]},
+    ).status_code == 201
+
+    image_path = tmp_path / "second-submission.png"
+    make_png(image_path)
+    with image_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{data['assessment']['id']}/submissions/upload",
+            headers=data["headers"],
+            data={"student_identifier": "S-002", "student_name": "Student Two"},
+            files={"file": ("second.png", file_obj, "image/png")},
+        )
+    assert response.status_code == 201
+    second_submission_id = response.json()["id"]
+
+    summary_response = client.get(
+        f"/assessments/{data['assessment']['id']}/summary", headers=data["headers"]
+    )
+    assert summary_response.status_code == 200
+    totals = {
+        item["submission_id"]: item
+        for item in summary_response.json()["submission_totals"]
+    }
+    assert totals[data["submission"]["id"]]["approved_score"] == "0.00"
+    assert totals[data["submission"]["id"]]["is_complete"] is True
+    assert totals[second_submission_id]["approved_score"] == "0.00"
+    assert totals[second_submission_id]["approved_question_count"] == 0
+    assert totals[second_submission_id]["expected_question_count"] == 1
+    assert totals[second_submission_id]["is_complete"] is False
 
 
 def test_export_xlsx_excludes_pending_region_without_final_grade(

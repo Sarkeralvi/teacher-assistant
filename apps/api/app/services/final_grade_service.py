@@ -13,6 +13,7 @@ from app.models import (
     AuditLog,
     FinalGrade,
     GradeSuggestion,
+    Question,
     Submission,
     User,
 )
@@ -23,6 +24,7 @@ from app.schemas import (
     ReviewQueueItem,
     ReviewQueueQuestion,
     ReviewQueueSubmission,
+    SubmissionGradeTotalRead,
 )
 
 
@@ -289,9 +291,16 @@ class FinalGradeService:
         items = self.get_review_queue(assessment_id)
         final_grades = [item.final_grade for item in items if item.final_grade is not None]
         final_scores = [final_grade.final_score for final_grade in final_grades]
-        total_submissions = len(
+        submissions = list(
             self.db.scalars(
-                select(Submission.id).where(Submission.assessment_id == assessment_id)
+                select(Submission)
+                .where(Submission.assessment_id == assessment_id)
+                .order_by(Submission.id)
+            ).all()
+        )
+        expected_question_ids = set(
+            self.db.scalars(
+                select(Question.id).where(Question.assessment_id == assessment_id)
             ).all()
         )
         total_grade_suggestions = len(
@@ -316,7 +325,7 @@ class FinalGradeService:
         return AssessmentSummaryRead(
             assessment_id=assessment.id,
             course_id=assessment.course_id,
-            total_submissions=total_submissions,
+            total_submissions=len(submissions),
             total_answer_regions=len(items),
             total_grade_suggestions=total_grade_suggestions,
             total_final_grades=len(final_grades),
@@ -332,6 +341,12 @@ class FinalGradeService:
             pending_review_count=sum(1 for item in items if item.final_grade is None),
             average_final_score=average_final_score,
             max_possible_score=max_possible_score,
+            submission_totals=self._build_submission_totals(
+                assessment=assessment,
+                submissions=submissions,
+                items=items,
+                expected_question_ids=expected_question_ids,
+            ),
             generated_at=datetime.now(UTC),
         )
 
@@ -397,9 +412,102 @@ class FinalGradeService:
                     suggestion.feedback if suggestion else None,
                 ]
             )
+        totals_sheet = workbook.create_sheet("Submission Totals")
+        totals_sheet.append(
+            [
+                "assessment_id",
+                "course_id",
+                "submission_id",
+                "student_identifier",
+                "student_name",
+                "approved_score",
+                "approved_max_score",
+                "assessment_max_score",
+                "approved_question_count",
+                "expected_question_count",
+                "is_complete",
+            ]
+        )
+        summary = self.get_assessment_summary(assessment_id)
+        for total in summary.submission_totals:
+            totals_sheet.append(
+                [
+                    assessment.id,
+                    assessment.course_id,
+                    total.submission_id,
+                    total.student_identifier,
+                    total.student_name,
+                    total.approved_score,
+                    total.approved_max_score,
+                    total.assessment_max_score,
+                    total.approved_question_count,
+                    total.expected_question_count,
+                    total.is_complete,
+                ]
+            )
         buffer = BytesIO()
         workbook.save(buffer)
         return buffer.getvalue()
+
+    @staticmethod
+    def _build_submission_totals(
+        *,
+        assessment: Assessment,
+        submissions: list[Submission],
+        items: list[ReviewQueueItem],
+        expected_question_ids: set[int],
+    ) -> list[SubmissionGradeTotalRead]:
+        items_by_submission: dict[int, list[ReviewQueueItem]] = {}
+        for item in items:
+            items_by_submission.setdefault(item.submission.id, []).append(item)
+
+        totals: list[SubmissionGradeTotalRead] = []
+        for submission in submissions:
+            approved_by_question: dict[int, ReviewQueueItem] = {}
+            duplicate_approved_question = False
+            for item in items_by_submission.get(submission.id, []):
+                final_grade = item.final_grade
+                if final_grade is None or final_grade.approval_status != "approved":
+                    continue
+                previous = approved_by_question.get(item.question.id)
+                if previous is not None:
+                    duplicate_approved_question = True
+                    previous_grade = previous.final_grade
+                    if previous_grade is not None and previous_grade.id >= final_grade.id:
+                        continue
+                approved_by_question[item.question.id] = item
+
+            approved_score = sum(
+                (
+                    item.final_grade.final_score
+                    for item in approved_by_question.values()
+                    if item.final_grade is not None
+                ),
+                Decimal("0"),
+            ).quantize(Decimal("0.01"))
+            approved_max_score = sum(
+                (item.question.total_marks for item in approved_by_question.values()),
+                Decimal("0"),
+            ).quantize(Decimal("0.01"))
+            approved_question_ids = set(approved_by_question)
+            totals.append(
+                SubmissionGradeTotalRead(
+                    submission_id=submission.id,
+                    student_identifier=submission.student_identifier,
+                    student_name=submission.student_name,
+                    approved_score=approved_score,
+                    approved_max_score=approved_max_score,
+                    assessment_max_score=assessment.total_marks.quantize(Decimal("0.01")),
+                    approved_question_count=len(approved_question_ids),
+                    expected_question_count=len(expected_question_ids),
+                    is_complete=(
+                        bool(expected_question_ids)
+                        and approved_question_ids == expected_question_ids
+                        and not duplicate_approved_question
+                    ),
+                )
+            )
+        return totals
 
     def _get_assessment(self, assessment_id: int) -> Assessment:
         assessment = self.db.get(Assessment, assessment_id)

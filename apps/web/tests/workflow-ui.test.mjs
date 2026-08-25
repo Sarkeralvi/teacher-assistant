@@ -139,6 +139,8 @@ for (const marker of [
   "AuthenticatedAnswerRegionSegmentImage",
   "Loading every source page and answer segment...",
   "Repair unconfirmed boundaries with Qwen3.8 vision",
+  "Prepare submission #",
+  "Existing submissions and approved grades were not changed.",
   "Confirmed mappings are protected.",
   "Required: compare the crop boundary with the complete source page",
   "Compare and acknowledge the full-page boundary first",
@@ -154,6 +156,18 @@ for (const marker of [
 ]) {
   if (!assessment.includes(marker)) {
     throw new Error(`Assessment evidence UI missing marker: ${marker}`);
+  }
+}
+
+const reviewTotals = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
+for (const marker of [
+  "Submission totals",
+  "Totals use teacher-approved grades only.",
+  "Approved total",
+  "Incomplete",
+]) {
+  if (!reviewTotals.includes(marker)) {
+    throw new Error(`Assessment review UI missing total marker: ${marker}`);
   }
 }
 

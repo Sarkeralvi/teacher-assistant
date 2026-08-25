@@ -370,6 +370,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         .map((mapping) => mapping.submission_id),
     ),
   ).sort((left, right) => left - right);
+  const preparedSubmissionIds = new Set(flatMappings.map((mapping) => mapping.submission_id));
+  const unpreparedSubmissions = submissions.filter(
+    (submission) => !preparedSubmissionIds.has(submission.id),
+  );
   const localSingleGradeAuthorized = Boolean(
     localAiStatus?.real_providers_allowed &&
     localAiStatus.local_single_answer_grading_enabled &&
@@ -491,9 +495,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         }
         return next;
       });
-      const rubricEntries = await Promise.all(
-        questionData.map(async (question) => [question.id, await listRubrics(question.id)] as const),
-      );
+      // The Windows pilot browser can intermittently refuse a burst of
+      // loopback requests after all CORS preflights complete. Keep these small
+      // reads sequential so one dropped connection cannot falsely relock the
+      // entire teacher workflow while the backend is healthy.
+      const rubricEntries: Array<readonly [number, Rubric[]]> = [];
+      for (const question of questionData) {
+        rubricEntries.push([question.id, await listRubrics(question.id)] as const);
+      }
       setRubricsByQuestionId(Object.fromEntries(rubricEntries));
       setManualSetupDrafts((current) => {
         const next = { ...current };
@@ -510,9 +519,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       if (!selectedPreviewRegionId && answerRegionData[0]) {
         setSelectedPreviewRegionId(String(answerRegionData[0].id));
       }
-      const evidenceEntries = await Promise.all(
-        answerRegionData.map(async (region) => [region.id, await getGradingEvidencePacket(region.id)] as const),
-      );
+      const evidenceEntries: Array<readonly [number, GradingEvidencePacket]> = [];
+      for (const region of answerRegionData) {
+        evidenceEntries.push([region.id, await getGradingEvidencePacket(region.id)] as const);
+      }
       setEvidencePackets(Object.fromEntries(evidenceEntries));
       const transcriptionEntries = await Promise.all(
         answerRegionData.map(async (region) => [
@@ -919,6 +929,31 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to repair answer boundaries with local Qwen3.8");
+    } finally {
+      setRunningMappings(false);
+    }
+  }
+
+  async function handlePrepareSubmissionWithQwen38(submissionId: number) {
+    setRunningMappings(true);
+    setError(null);
+    setScriptPreparationMessage(null);
+    try {
+      const submission = submissions.find((item) => item.id === submissionId);
+      const response = await runSubmissionQuestionNodeMappings(submissionId, {
+        replace_existing: false,
+        repair_unconfirmed_only: false,
+        provider: "local_qwen38_visual",
+        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        draft_only_confirmed: true,
+        maximum_ocr_calls: Math.min(Math.max(submission?.pages.length ?? 1, 1), 25),
+      });
+      setScriptPreparationMessage(
+        `Qwen3.8 prepared submission #${submissionId}: ${response.mappings.filter((mapping) => mapping.answer_region_id != null).length} review-only answer regions. Existing submissions and approved grades were not changed.`,
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to prepare this answer script with local Qwen3.8");
     } finally {
       setRunningMappings(false);
     }
@@ -1683,14 +1718,26 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               Review the prepared image and evidence, then approve or reject it. The finalized question, solution, and rubric are reused automatically and remain read-only here.
             </p>
           </div>
-          <button
-            className={buttonClass}
-            type="button"
-            disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0 || flatMappings.length > 0}
-            onClick={() => void handleRunAutomaticMappings()}
-          >
-            {runningMappings ? "Qwen3.8 vision is preparing scripts..." : flatMappings.length > 0 ? "Scripts already prepared" : "Prepare scripts with Qwen3.8 vision"}
-          </button>
+          <div className="grid gap-2">
+            {unpreparedSubmissions.map((submission) => (
+              <button
+                key={`prepare-submission-${submission.id}`}
+                className={buttonClass}
+                type="button"
+                disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || submission.pages.length === 0}
+                onClick={() => void handlePrepareSubmissionWithQwen38(submission.id)}
+              >
+                {runningMappings
+                  ? "Qwen3.8 vision is preparing a script..."
+                  : `Prepare submission #${submission.id} with Qwen3.8 vision`}
+              </button>
+            ))}
+            {unpreparedSubmissions.length === 0 ? (
+              <p className="rounded border border-emerald-900 px-3 py-2 text-sm text-emerald-200">
+                Every uploaded submission has preparation records. Existing submissions remain protected.
+              </p>
+            ) : null}
+          </div>
           {flatMappings.some((mapping) => !mapping.teacher_confirmed) ? (
             <button
               className="rounded border border-amber-700 px-3 py-2 text-sm text-amber-100 hover:border-amber-500"
@@ -1726,7 +1773,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             Confirmed mappings are protected. Use Qwen3.8 boundary repair only for unconfirmed regions; it cannot replace confirmed evidence and creates no transcript or grade.
           </p>
         ) : null}
-        {unresolvedMappingSubmissionIds.length > 0 && !localVisualMappingAuthorized ? (
+        {(unresolvedMappingSubmissionIds.length > 0 || unpreparedSubmissions.length > 0) && !localVisualMappingAuthorized ? (
           <p className="rounded border border-violet-900 bg-violet-950/20 p-3 text-sm text-violet-100">
             Qwen3.8 visual mapping is disabled in the host configuration. It must be explicitly enabled before scripts can be prepared or repaired.
           </p>

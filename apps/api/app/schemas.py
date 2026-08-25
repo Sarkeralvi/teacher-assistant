@@ -1500,6 +1500,18 @@ class ReviewQueueItem(BaseModel):
     review_status: Literal["ungraded", "suggested", "finalized"]
 
 
+class SubmissionGradeTotalRead(BaseModel):
+    submission_id: int
+    student_identifier: str
+    student_name: str | None
+    approved_score: Decimal
+    approved_max_score: Decimal
+    assessment_max_score: Decimal
+    approved_question_count: int
+    expected_question_count: int
+    is_complete: bool
+
+
 class AssessmentSummaryRead(BaseModel):
     assessment_id: int
     course_id: int
@@ -1513,4 +1525,5 @@ class AssessmentSummaryRead(BaseModel):
     pending_review_count: int
     average_final_score: Decimal | None
     max_possible_score: Decimal | None
+    submission_totals: list[SubmissionGradeTotalRead]
     generated_at: datetime
