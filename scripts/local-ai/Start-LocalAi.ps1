@@ -77,6 +77,7 @@ if ($Mode -eq "PaddleOcr") {
     $key = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_API_KEY"
     $expectedModelHash = $env:LOCAL_QWEN38_MODEL_SHA256
     $expectedMmprojHash = $env:LOCAL_QWEN38_MMPROJ_SHA256
+    $launchConfig = Get-Qwen38LaunchConfiguration
     $contextTokens = if ($env:LOCAL_QWEN38_CONTEXT_TOKENS) {
         [int]$env:LOCAL_QWEN38_CONTEXT_TOKENS
     } else {
@@ -101,18 +102,45 @@ if ($Mode -eq "PaddleOcr") {
         "--port", "$port",
         "--offline",
         "--reasoning", "off",
-        # 34 is the conservative host setting for the explicit visual rescue
-        # phase. It leaves more margin than the earlier single-model workflow.
-        "-ngl", "34",
         "-c", "$contextTokens",
         "--image-min-tokens", "1024",
         "--image-max-tokens", "1280",
         "--parallel", "1",
         "--flash-attn", "on",
-        "--batch-size", "256",
-        "--ubatch-size", "256",
-        "--threads", "12"
+        "--batch-size", "$($launchConfig.BatchSize)",
+        "--ubatch-size", "$($launchConfig.UbatchSize)",
+        "--threads", "$($launchConfig.Threads)",
+        "--threads-batch", "$($launchConfig.ThreadsBatch)"
     )
+    if ($launchConfig.GpuLayers -eq "auto") {
+        $args += @(
+            "-ngl", "auto",
+            "--fit", "on",
+            "--fit-target", "$($launchConfig.FitTargetMib)"
+        )
+    } else {
+        # Explicit placement is the measured build-10249 rollback profile.
+        # Disable auto-fit explicitly so llama.cpp does not emit a misleading
+        # warning that fitting was aborted by the operator's fixed -ngl value.
+        $args += @("-ngl", "$($launchConfig.GpuLayers)", "--fit", "off")
+    }
+    if ($launchConfig.CpuMask) {
+        $args += @("--cpu-mask", $launchConfig.CpuMask, "--cpu-strict", "1")
+    }
+    if ($launchConfig.CpuMaskBatch) {
+        $args += @(
+            "--cpu-mask-batch", $launchConfig.CpuMaskBatch,
+            "--cpu-strict-batch", "1"
+        )
+    }
+    if ($launchConfig.SpecDraftTokens -gt 0) {
+        $args += @(
+            "--spec-draft-model", ('"' + $launchConfig.MtpModelPath + '"'),
+            "--spec-type", "draft-mtp",
+            "--spec-draft-n-max", "$($launchConfig.SpecDraftTokens)",
+            "--spec-draft-ngl", "auto"
+        )
+    }
     $workingDirectory = $runtimeDirectory
 }
 
@@ -254,6 +282,17 @@ try {
     }
     Write-Host "$Mode is healthy on loopback (Port $port)."
     Write-Host "$Mode PID: $($proc.Id)"
+    if ($Mode -eq "Qwen38") {
+        $mtpLabel = if ($launchConfig.SpecDraftTokens -gt 0) {
+            "MTP-$($launchConfig.SpecDraftTokens)"
+        } else {
+            "off"
+        }
+        Write-Host ("Qwen38 performance profile: gpu-layers=$($launchConfig.GpuLayers); " +
+            "fit-target=$($launchConfig.FitTargetMib) MiB; MTP=$mtpLabel; " +
+            "threads=$($launchConfig.Threads)/$($launchConfig.ThreadsBatch); " +
+            "batch=$($launchConfig.BatchSize)/$($launchConfig.UbatchSize).")
+    }
 
     # Informational only: this machine has a documented GPU-instability history,
     # so low VRAM headroom is worth surfacing at every startup rather than only
@@ -267,7 +306,7 @@ try {
         if ($vramFreeMib -lt 1000) {
             Write-Warning ("$Mode is leaving only $vramFreeMib MiB of VRAM headroom. " +
                 "This machine has a documented GPU-instability history; low headroom raises " +
-                "OOM/crash risk under load. Consider a lower -ngl value if this recurs.")
+                "OOM/crash risk under load. Use automatic fitting or a lower GPU-layer value if this recurs.")
         }
     } catch {
         Write-Host "VRAM check skipped (nvidia-smi unavailable)." -ForegroundColor DarkGray

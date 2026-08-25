@@ -2083,3 +2083,51 @@ already did. Re-run afterward completed cleanly: `skipped_engines: {}`,
 - Identity result: the Qwen3.8 disk hash was repinned only after it exactly matched the publisher's current Q4_K_M SHA-256. The mmproj pin also matched. API keys and paths remained in ignored local configuration.
 - Diagnostic attempts before the clean run were manual engineering reruns, never automatic provider retries. They included additional completed Paddle/Qwen calls, one interrupted/uncertain Qwen3.6 request, and no hidden provider calls. Failures exposed and fixed a stale model hash, two smoke-harness interface mistakes, and a Qwen reference contract that allowed a null model answer; provider safety checks failed closed throughout.
 - Engineering result at this checkpoint: 507 backend tests passed, 3 skipped; the signed curated quality gate and signed supervised teacher rehearsal remain outstanding and are not implied by this synthetic acceptance.
+
+# TA-LOCAL-010 - Qwen3.8 RTX 5070 runtime/MTP optimization (2026-08-25)
+
+## Scope and admission
+
+- Preserved the publisher-pinned Qwen3.8-27B Q4_K_M main model, Q8 vision projector, exact `qwen3.8-27b-q4km` alias, 12,288-token context, f16 KV cache, reasoning off, and one slot.
+- Before interruption, the durable model lease was free; waiting, started, deferred, and scheduled worker queues were all zero; port 8085 was loopback-only and owned by the PID recorded by the repository. The server was stopped only with `Stop-LocalAi.ps1 -Mode Qwen38`, without a forced port sweep.
+- The matrix used exactly 24 authorized synthetic text-only requests: one discarded warm-up and three temperature-zero measurements for each of six configurations. It made no image, student-data, grading, application-provider, or external provider calls and persisted no prompts or completions.
+- The vision projector remained loaded for representative memory use. Every server reported vision and video enabled, audio disabled, API-key enforcement, one slot, the exact alias, 12,288 context tokens, and reasoning off.
+
+## Pinned assets
+
+| Asset | Identity |
+|---|---|
+| Main Q4_K_M GGUF | 18,973,870,432 bytes; SHA-256 `31629f53165ab6a7dad8c9847dcfd1fdf55829dac1e6e748f4a68581b0033d34` |
+| Q8 vision projector | 629,247,008 bytes; SHA-256 `2e968a6af97ce35d8971890b257b9b7edabf20ad91450501fa53162a19ee33eb` |
+| Publisher MTP Q4_0 GGUF | 1,680,271,648 bytes; GGUF magic valid; SHA-256 `051a1764cff8c4f3ee6ae8b00593a0364c7539c67fa50ffc58f3f96509fca38e` |
+| Retained runtime | b10249, commit `99111b19c`; server SHA-256 `99434357001f83ebea348297cdbf48abe8744584a8e2b7c0d0c8c26d629c90ca` |
+| Accepted runtime | b10622, commit `3737e4137`; server SHA-256 `1e9a71599c64de5e8a1ec473da4dbb23caac39d2bdc2bf7cf9267a529611fc24` |
+| b10622 Windows CUDA archive | SHA-256 `f9f1b4afdf972a41f0437c6cbcc72a069bd511311271191876aaf2d965c21902` |
+| b10622 CUDA dependency archive | SHA-256 `1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e` |
+
+The new runtime was installed side by side. Build 10249 and its ignored configuration backup were retained for immediate rollback.
+
+## Bounded matrix
+
+All three measured outputs in every configuration passed the fixed JSON schema and matched the corresponding baseline completion hash. No CUDA allocation, shared-memory spill, slot-corruption, model/projector compatibility, or non-consecutive-token warning occurred.
+
+The pre-change managed workload baseline was approximately 6.24 decode tok/s. The fixed-schema matrix baseline below was 5.44 tok/s because it used a different, deliberately identical synthetic workload for every candidate; all promotion percentages use that controlled baseline. None of configurations 1 through 3 cleared every final gate, so configuration 4 used configuration 3—the fastest deterministic non-MTP result—only to isolate the runtime change.
+
+| # | Runtime/profile | Decode tok/s | vs baseline | Prompt tok/s | Prompt change | MTP acceptance | Min free VRAM MiB | Min free RAM MiB | Max commit | Pagefile growth MiB | GPU avg/max | Power avg/max W | Gate |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | b10249, `-ngl 34`, 12/12, no MTP | 5.44 | baseline | 282.5 | baseline | n/a | 89 | 1,587 | 73.7% | 0.0 | 31.7% / 99% | 70.5 / 127.4 | Fail: memory headroom |
+| 2 | b10249, auto-fit 1,024 MiB | 5.60 | +2.94% | 312.1 | +10.48% | n/a | 1,140 | 1,859 | 73.1% | 0.0 | 19.1% / 83% | 61.6 / 127.8 | Fail: speed and RAM |
+| 3 | b10249, `-ngl 34`, physical-core affinity, 24 prompt threads | 5.85 | +7.46% | 341.6 | +20.92% | n/a | 165 | 4,584 | 66.1% | 0.0 | 25.4% / 98% | 69.8 / 133.1 | Fail: speed and VRAM |
+| 4 | b10622 with profile 3 | 5.89 | +8.26% | 294.3 | +4.19% | n/a | 300 | 4,542 | 66.2% | 16.8 | 26.7% / 79% | 70.4 / 128.6 | Fail: speed and VRAM |
+| 5 | b10622, auto-fit, MTP length 2 | 9.68 | +77.72% | 257.0 | -9.04% | 90.28% | 1,822 | 3,347 | 69.0% | 0.2 | 25.9% / 89% | 67.6 / 122.3 | Pass |
+| 6 | b10622, auto-fit, MTP length 3 | **10.52** | **+93.16%** | 255.6 | -9.52% | 85.49% | 1,759 | 3,398 | 68.9% | 0.0 | 23.6% / 75% | 66.0 / 118.4 | **Pass; selected** |
+
+For the same 303 measured output tokens and 4,414 prompt tokens, average decode latency fell from 18.55 seconds to 9.60 seconds per request. Average prompt-processing latency rose from 5.21 seconds to 5.76 seconds; the weighted prompt-throughput regression remained inside the 10% limit.
+
+## Promotion, rollback, and safety result
+
+- Promoted b10622 with automatic main/draft placement, a 1,024 MiB fit target, publisher MTP length 3, 12/12 threads, 256/256 batch, f16 KV, and no CPU masks. The managed service restarted healthy with 2,139 MiB idle free VRAM.
+- Live verification returned HTTP 401 without the API key, the exact model alias with authentication, loopback-only ownership, and `{vision: true, video: true, audio: false}` modalities. The live command line retained context 12,288, parallel 1, reasoning off, auto-fit, and MTP length 3.
+- The benchmark finally path attempted to restore b10249 before releasing its lease. That attempt encountered an inherited legacy-Windows-PowerShell module-path issue (`Get-FileHash` was unavailable); the normal managed PowerShell path immediately restored b10249 successfully before result evaluation or promotion. The benchmark runner was corrected to use PowerShell 7 for managed commands. This was a harness-shell defect, not a llama.cpp or repository startup failure.
+- Rollback: run the managed stop command, restore the ignored pre-promotion `.env.local-ai` backup, run Qwen38 preflight, and run the managed start command. Build 10249 was not overwritten or deleted.
+- Cohort grading remained disabled. The lease was released, all worker queues remained idle, and no student data, grade, suggestion, or final-grade artifact was created.

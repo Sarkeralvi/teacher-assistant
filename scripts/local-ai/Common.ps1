@@ -32,6 +32,132 @@ function Assert-RequiredEnvironmentValue {
     return $value
 }
 
+function Get-Qwen38LaunchConfiguration {
+    <#
+    .SYNOPSIS
+        Parse and validate the host-specific Qwen3.8 performance settings.
+
+    .DESCRIPTION
+        The publisher-pinned model, projector, context, loopback binding and
+        single-slot safety contract are not configurable here. These settings
+        only control CPU/GPU placement and the optional publisher MTP draft
+        head. Defaults preserve the measured build-10249 launch profile.
+    #>
+
+    $gpuLayers = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_GPU_LAYERS")
+    if ([string]::IsNullOrWhiteSpace($gpuLayers)) { $gpuLayers = "34" }
+    $gpuLayers = $gpuLayers.Trim().ToLowerInvariant()
+    if ($gpuLayers -ne "auto") {
+        $parsedGpuLayers = 0
+        if (-not [int]::TryParse($gpuLayers, [ref]$parsedGpuLayers) -or
+            $parsedGpuLayers -lt 1 -or $parsedGpuLayers -gt 65) {
+            throw "LOCAL_QWEN38_GPU_LAYERS must be 'auto' or an integer between 1 and 65."
+        }
+        $gpuLayers = [string]$parsedGpuLayers
+    }
+
+    $fitTargetRaw = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_FIT_TARGET_MIB")
+    $fitTargetExplicit = -not [string]::IsNullOrWhiteSpace($fitTargetRaw)
+    if (-not $fitTargetExplicit) { $fitTargetRaw = "1024" }
+    $fitTargetMib = 0
+    if (-not [int]::TryParse($fitTargetRaw, [ref]$fitTargetMib) -or
+        $fitTargetMib -lt 768 -or $fitTargetMib -gt 4096) {
+        throw "LOCAL_QWEN38_FIT_TARGET_MIB must be between 768 and 4096."
+    }
+    if ($gpuLayers -ne "auto" -and $fitTargetExplicit) {
+        throw "LOCAL_QWEN38_FIT_TARGET_MIB is only valid when LOCAL_QWEN38_GPU_LAYERS=auto."
+    }
+
+    $specDraftRaw = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_SPEC_DRAFT_TOKENS")
+    if ([string]::IsNullOrWhiteSpace($specDraftRaw)) { $specDraftRaw = "0" }
+    $specDraftTokens = 0
+    if (-not [int]::TryParse($specDraftRaw, [ref]$specDraftTokens) -or
+        $specDraftTokens -notin @(0, 2, 3)) {
+        throw "LOCAL_QWEN38_SPEC_DRAFT_TOKENS must be 0, 2, or 3."
+    }
+
+    $mtpModelPath = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_MTP_MODEL_PATH")
+    $mtpSha256 = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_MTP_SHA256")
+    $hasMtpPath = -not [string]::IsNullOrWhiteSpace($mtpModelPath)
+    $hasMtpHash = -not [string]::IsNullOrWhiteSpace($mtpSha256)
+    if ($hasMtpPath -xor $hasMtpHash) {
+        throw "LOCAL_QWEN38_MTP_MODEL_PATH and LOCAL_QWEN38_MTP_SHA256 must be configured together."
+    }
+    if ($hasMtpPath) {
+        $mtpModelPath = $mtpModelPath.Trim()
+        $mtpSha256 = $mtpSha256.Trim().ToLowerInvariant()
+        if (-not (Test-Path -LiteralPath $mtpModelPath -PathType Leaf)) {
+            throw "Qwen3.8 MTP model file is missing: $mtpModelPath"
+        }
+        if ($mtpSha256 -notmatch '^[0-9a-f]{64}$') {
+            throw "LOCAL_QWEN38_MTP_SHA256 must be a 64-character hexadecimal SHA-256."
+        }
+        $publisherMtpSha256 = '051a1764cff8c4f3ee6ae8b00593a0364c7539c67fa50ffc58f3f96509fca38e'
+        if ($mtpSha256 -ne $publisherMtpSha256) {
+            throw "LOCAL_QWEN38_MTP_SHA256 must match the publisher-pinned Qwen3.8 MTP Q4_0 SHA-256."
+        }
+    }
+    if ($specDraftTokens -gt 0) {
+        if (-not $hasMtpPath) {
+            throw "Qwen3.8 MTP is enabled but its model path and SHA-256 are not configured."
+        }
+        if ($gpuLayers -ne "auto") {
+            throw "Qwen3.8 MTP requires LOCAL_QWEN38_GPU_LAYERS=auto so llama.cpp can fit both models safely."
+        }
+    }
+
+    function Get-BoundedIntegerSetting {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][int]$Default,
+            [Parameter(Mandatory = $true)][int]$Minimum,
+            [Parameter(Mandatory = $true)][int]$Maximum
+        )
+        $raw = [Environment]::GetEnvironmentVariable($Name)
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $Default }
+        $parsed = 0
+        if (-not [int]::TryParse($raw, [ref]$parsed) -or
+            $parsed -lt $Minimum -or $parsed -gt $Maximum) {
+            throw "$Name must be between $Minimum and $Maximum."
+        }
+        return $parsed
+    }
+
+    $threads = Get-BoundedIntegerSetting -Name "LOCAL_QWEN38_THREADS" -Default 12 -Minimum 1 -Maximum 256
+    $threadsBatch = Get-BoundedIntegerSetting -Name "LOCAL_QWEN38_THREADS_BATCH" -Default $threads -Minimum 1 -Maximum 256
+    $batchSize = Get-BoundedIntegerSetting -Name "LOCAL_QWEN38_BATCH_SIZE" -Default 256 -Minimum 32 -Maximum 2048
+    $ubatchSize = Get-BoundedIntegerSetting -Name "LOCAL_QWEN38_UBATCH_SIZE" -Default 256 -Minimum 32 -Maximum 2048
+    if ($ubatchSize -gt $batchSize) {
+        throw "LOCAL_QWEN38_UBATCH_SIZE cannot exceed LOCAL_QWEN38_BATCH_SIZE."
+    }
+
+    $cpuMask = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_CPU_MASK")
+    $cpuMaskBatch = [Environment]::GetEnvironmentVariable("LOCAL_QWEN38_CPU_MASK_BATCH")
+    foreach ($maskSetting in @(
+        @{ Name = "LOCAL_QWEN38_CPU_MASK"; Value = $cpuMask },
+        @{ Name = "LOCAL_QWEN38_CPU_MASK_BATCH"; Value = $cpuMaskBatch }
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($maskSetting.Value) -and
+            $maskSetting.Value.Trim() -notmatch '^(?:0x)?[0-9a-fA-F]+(?:,(?:0x)?[0-9a-fA-F]+)*$') {
+            throw "$($maskSetting.Name) must be a hexadecimal CPU mask."
+        }
+    }
+
+    return [pscustomobject]@{
+        GpuLayers = $gpuLayers
+        FitTargetMib = $fitTargetMib
+        MtpModelPath = if ($hasMtpPath) { $mtpModelPath } else { $null }
+        MtpSha256 = if ($hasMtpHash) { $mtpSha256 } else { $null }
+        SpecDraftTokens = $specDraftTokens
+        Threads = $threads
+        ThreadsBatch = $threadsBatch
+        BatchSize = $batchSize
+        UbatchSize = $ubatchSize
+        CpuMask = if ([string]::IsNullOrWhiteSpace($cpuMask)) { $null } else { $cpuMask.Trim() }
+        CpuMaskBatch = if ([string]::IsNullOrWhiteSpace($cpuMaskBatch)) { $null } else { $cpuMaskBatch.Trim() }
+    }
+}
+
 function Get-RepositoryRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }

@@ -72,7 +72,39 @@ Stop only a repository-managed process:
 
 The scripts verify loopback binding, PID/executable ownership, authenticated health, exact model aliases, offline Paddle mode, concurrency one, and safe port ownership. Do not use `-ForcePortSweep` unless intentionally recovering a known stale listener; it can stop another llama.cpp process.
 
-Qwen3.6 uses `LOCAL_QWEN_CPU_MOE_LAYERS=28` by default for safer VRAM headroom. Qwen3.8 uses 34 GPU layers for the same reason. Performance is secondary to stable sequential operation during a teacher rehearsal.
+Qwen3.6 uses `LOCAL_QWEN_CPU_MOE_LAYERS=28` by default for safer VRAM headroom. The committed Qwen3.8 defaults remain the build-10249 rollback profile: 34 GPU layers, 12/12 threads, 256/256 batch, and no MTP. Performance is secondary to stable sequential operation during a teacher rehearsal.
+
+### Qwen3.8 host performance profile
+
+The accepted RTX 5070 profile is stored only in ignored `.env.local-ai`; model paths and runtime paths must never be committed. Its settings are:
+
+| Setting | Accepted value |
+|---|---:|
+| Runtime | llama.cpp b10622, commit `3737e4137` |
+| `LOCAL_QWEN38_GPU_LAYERS` | `auto` |
+| `LOCAL_QWEN38_FIT_TARGET_MIB` | `1024` |
+| `LOCAL_QWEN38_THREADS` / `LOCAL_QWEN38_THREADS_BATCH` | `12` / `12` |
+| `LOCAL_QWEN38_BATCH_SIZE` / `LOCAL_QWEN38_UBATCH_SIZE` | `256` / `256` |
+| `LOCAL_QWEN38_SPEC_DRAFT_TOKENS` | `3` |
+
+Automatic fitting is accepted only when free VRAM stays at least 768 MiB. Fixed placement accepts an integer from 1 through 65; automatic placement uses `auto`. MTP is off when the draft-token value is `0` and may be enabled only with `2` or `3`, the publisher Q4_0 draft file, and its pinned SHA-256 `051a1764cff8c4f3ee6ae8b00593a0364c7539c67fa50ffc58f3f96509fca38e`. Preflight checks its exact 1,680,271,648-byte size, GGUF magic, hash, and runtime support.
+
+Download and verify that optional draft head beside the configured main model with:
+
+```powershell
+.\scripts\local-ai\Download-Qwen38Mtp.ps1
+```
+
+The pre-change managed workload logged approximately 6.24 decode tok/s. The 2026-08-25 controlled acceptance produced 10.52 weighted decode tok/s versus 5.44 tok/s for its more demanding fixed-schema baseline. All measured JSON and completion hashes matched, prompt throughput changed by -9.52%, and the selected run kept 1,759 MiB VRAM and 3,398 MiB physical RAM free. The complete matrix and binary hashes are in `docs/VALIDATION_LOG.md`.
+
+For immediate rollback, stop only the managed server, restore the ignored pre-promotion `.env.local-ai` backup, preflight, and restart. Do not use a forced port sweep:
+
+```powershell
+.\scripts\local-ai\Stop-LocalAi.ps1 -Mode Qwen38
+Copy-Item -LiteralPath '<ignored pre-promotion backup>' -Destination .\.env.local-ai
+.\scripts\local-ai\Test-LocalAiPreflight.ps1 -Mode Qwen38
+.\scripts\local-ai\Start-LocalAi.ps1 -Mode Qwen38
+```
 
 The older rescued-hybrid smoke remains only for rollback diagnostics. It is not part of the active teacher workflow and must not be used as pilot evidence while PaddleOCR and Qwen3.6 are disabled.
 

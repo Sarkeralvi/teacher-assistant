@@ -26,6 +26,33 @@ foreach ($requiredFile in $requiredFiles) {
     }
 }
 
+$qwen38LaunchConfig = $null
+if ($Mode -eq "Qwen38") {
+    $qwen38LaunchConfig = Get-Qwen38LaunchConfiguration
+    if ($qwen38LaunchConfig.MtpModelPath) {
+        $mtpFile = Get-Item -LiteralPath $qwen38LaunchConfig.MtpModelPath
+        if ($mtpFile.Length -ne 1680271648) {
+            throw "Qwen3.8 MTP byte size does not match the publisher-pinned Q4_0 file."
+        }
+        $mtpHeader = [byte[]]::new(4)
+        $mtpStream = [IO.File]::OpenRead($qwen38LaunchConfig.MtpModelPath)
+        try {
+            [void]$mtpStream.Read($mtpHeader, 0, $mtpHeader.Length)
+        } finally {
+            $mtpStream.Dispose()
+        }
+        if ([Text.Encoding]::ASCII.GetString($mtpHeader) -ne 'GGUF') {
+            throw "Qwen3.8 MTP file does not have GGUF magic bytes."
+        }
+        $actualMtpHash = (Get-FileHash `
+            -LiteralPath $qwen38LaunchConfig.MtpModelPath `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualMtpHash -ne $qwen38LaunchConfig.MtpSha256) {
+            throw "Qwen3.8 MTP SHA256 does not match LOCAL_QWEN38_MTP_SHA256."
+        }
+    }
+}
+
 if ($Mode -eq "PaddleOcr") {
     $layoutModel = Assert-RequiredEnvironmentValue -Name $definition.LayoutModelVariable
     if (-not (Test-Path -LiteralPath $qwenModel -PathType Container)) {
@@ -55,6 +82,14 @@ if ($Mode -eq "PaddleOcr") {
     $ErrorActionPreference = "Continue"
     $versionOutput = & $qwenBinary --version 2>&1 | ForEach-Object { $_.ToString() }
     $versionExitCode = $LASTEXITCODE
+    if ($versionExitCode -eq 0 -and $Mode -eq "Qwen38" -and
+        $qwen38LaunchConfig.SpecDraftTokens -gt 0) {
+        $helpOutput = & $qwenBinary --help 2>&1 | ForEach-Object { $_.ToString() }
+        $versionExitCode = $LASTEXITCODE
+        if ($versionExitCode -eq 0 -and ($helpOutput -join "`n") -notmatch 'draft-mtp') {
+            throw "The configured llama.cpp runtime does not support Qwen3.8 MTP draft decoding."
+        }
+    }
     $ErrorActionPreference = $previousErrorActionPreference
 }
 if ($versionExitCode -ne 0) {
@@ -106,4 +141,9 @@ if ($Mode -eq "PaddleOcr") {
 } else {
     Write-Host "llama.cpp: $($versionOutput | Select-Object -First 1)"
     Write-Host "Qwen model alias: $alias"
+    if ($Mode -eq "Qwen38") {
+        Write-Host ("Qwen38 launch profile: gpu-layers=$($qwen38LaunchConfig.GpuLayers); " +
+            "fit-target=$($qwen38LaunchConfig.FitTargetMib) MiB; " +
+            "MTP draft tokens=$($qwen38LaunchConfig.SpecDraftTokens).")
+    }
 }
