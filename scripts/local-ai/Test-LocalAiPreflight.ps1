@@ -61,6 +61,25 @@ if ($versionExitCode -ne 0) {
     throw "$Mode runtime version check failed."
 }
 
+# A separately launched Qwen coding bridge normally occupies 8080. It is not
+# repository-owned and must never be killed by this workflow, but on this host
+# it consumes enough RAM/VRAM that PaddleOCR, Qwen3.6, or Qwen3.8 can fail while
+# loading (Windows error 1455) or destabilize PostgreSQL. Refuse before loading
+# any second model and give the operator an actionable, non-destructive reason.
+$codingBridgeListeners = @(Get-LocalAiListenerInfo -Port 8080)
+foreach ($listener in $codingBridgeListeners) {
+    $codingBridgeProcess = Get-CimInstance Win32_Process `
+        -Filter "ProcessId=$($listener.ProcessId)" `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $codingBridgeProcess -and `
+        [IO.Path]::GetFileName($codingBridgeProcess.ExecutablePath) -ieq "llama-server.exe") {
+        throw (
+            "A separate Qwen coding server is running on port 8080. Pause that server before " +
+            "teacher local-AI work. This project will not terminate an unmanaged process."
+        )
+    }
+}
+
 foreach ($port in @($port)) {
     $listeners = @(Get-LocalAiListenerInfo -Port $port)
     if ($listeners.Count -gt 0) {
