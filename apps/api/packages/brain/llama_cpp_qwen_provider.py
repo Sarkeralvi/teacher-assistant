@@ -610,28 +610,22 @@ class LlamaCppQwenProvider(BrainProvider):
                     "question IDs. Use only supplied block IDs. Do not grade, transcribe, "
                     "rewrite, infer missing answer text, or create coordinates. Return every "
                     "finalized question exactly once. Every mapping needs teacher review. "
+                    "An OCR block may belong to AT MOST ONE question: never repeat the same "
+                    "(page_no, block_order) in two mappings. If a block could plausibly sit "
+                    "on either side of a question boundary, leave it unassigned and return "
+                    "not_found for the affected question rather than guessing or sharing it. "
                     + mapping_scope
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "that belong to that student's answer, including continuation blocks on "
-                    "later pages. Question labels may help locate boundaries. Use status "
-                    "not_found with no blocks when there is no visible answer. Use uncertain "
-                    "when a boundary or question link is ambiguous. Preserve exact question_id "
-                    "and question_no values.\n\nFINALIZED REFERENCES\n"
                     "For each supplied question, select all and only the ordered OCR blocks "
                     "that belong to that student's answer, including continuation blocks on "
                     "later pages. Question labels may help locate boundaries. Use status "
                     "not_found with no blocks when there is no visible answer in the supplied "
                     "block set. Use uncertain when a boundary or question link is ambiguous. "
                     "Preserve exact question_id and question_no values.\n\nFINALIZED REFERENCES\n"
-                    "that belong to that student's answer, including continuation blocks on "
-                    "later pages. Question labels may help locate boundaries. Use status "
-                    "not_found with no blocks when there is no visible answer. Use uncertain "
-                    "when a boundary or question link is ambiguous. Preserve exact question_id "
-                    "and question_no values.\n\nFINALIZED REFERENCES\n"
                     + reference_context
                     + "\n\nSCRIPT OCR BLOCKS\n"
                     + page_context

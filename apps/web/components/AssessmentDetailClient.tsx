@@ -1692,10 +1692,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <button
             className={buttonClass}
             type="button"
-            disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
+            disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0 || flatMappings.length > 0}
             onClick={() => void handleRunAutomaticMappings()}
           >
-            {runningMappings ? "PaddleOCR and Qwen3.6 are preparing scripts..." : "Prepare scripts locally"}
+            {runningMappings ? "PaddleOCR and Qwen3.6 are preparing scripts..." : flatMappings.length > 0 ? "Scripts already prepared" : "Prepare scripts locally"}
           </button>
           {flatMappings.some((mapping) => !mapping.teacher_confirmed) ? (
             <button
@@ -1716,6 +1716,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p>Qwen3.8 rescue: {localAiStatus?.qwen38.available ? "ready" : localAiStatus?.qwen38.transcription_enabled ? "configured · explicit rescue only" : "disabled"}</p>
         </div>
         <p className="text-xs text-amber-200">Repair preserves teacher-confirmed or graded evidence. It authorizes at most two Qwen3.6 mapping passes: initial block mapping plus one unassigned-block coverage pass; it never retries or grades.</p>
+        {flatMappings.length > 0 ? (
+          <p className="text-xs text-slate-300">
+            Existing mappings are protected. Use <span className="font-medium text-amber-100">Repair unresolved mappings locally</span> for incomplete, blocked, or uncertain answers; it cannot replace confirmed evidence.
+          </p>
+        ) : null}
         {!localScriptPreparationAuthorized ? (
           <p className="rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-100">
             Local script preparation is disabled in the host configuration. It must be explicitly enabled for this supervised rehearsal.

@@ -757,7 +757,9 @@ class LocalScriptPreparationService:
                     f"Qwen3.6 answer mapping failed safely: {exc}"
                 ) from exc
 
-        drafts = list(result.get("mappings") or [])
+        drafts = self._with_duplicate_block_claims_withheld(
+            list(result.get("mappings") or [])
+        )
         self._validate_draft_set(drafts, questions)
         pages_by_no = [item.page for item in accepted]
         used_blocks: set[tuple[int, int]] = set()
@@ -776,6 +778,10 @@ class LocalScriptPreparationService:
             )
             segments_by_question[question_id].extend(segments)
             warning_by_question[question_id].extend(list(draft.get("warnings") or []))
+            if draft.get("status") == "uncertain":
+                warning_by_question[question_id].append(
+                    "Qwen3.6 marked this block mapping uncertain; teacher approval is required"
+                )
             if draft_text:
                 warning_by_question[question_id].append(
                     "first-pass OCR text is approximate and is used only to locate this answer; "
@@ -878,7 +884,9 @@ class LocalScriptPreparationService:
                     f"Qwen3.6 coverage mapping failed safely: {exc}"
                 ) from exc
 
-        drafts = list(result.get("mappings") or [])
+        drafts = self._with_duplicate_block_claims_withheld(
+            list(result.get("mappings") or [])
+        )
         self._validate_draft_set(drafts, targets)
         for draft in drafts:
             question_id = int(draft["question_id"])
@@ -898,6 +906,10 @@ class LocalScriptPreparationService:
                     *list(draft.get("warnings") or []),
                 ]
             )
+            if draft.get("status") == "uncertain":
+                warning_by_question[question_id].append(
+                    "Qwen3.6 marked this block mapping uncertain; teacher approval is required"
+                )
             confidence = draft.get("confidence")
             if confidence is not None:
                 confidence_by_question[question_id].append(Decimal(str(confidence)))
@@ -964,8 +976,19 @@ class LocalScriptPreparationService:
             segments = sorted(
                 segments_by_question[question.id], key=lambda item: (item.page_no, item.y)
             )
+            is_uncertain = any(
+                warning.startswith("Qwen3.6 marked this block mapping uncertain")
+                or warning.startswith("ambiguous OCR block claim was withheld")
+                for warning in warning_by_question[question.id]
+            )
             draft = {
-                "status": "mapped" if segments else "not_found",
+                "status": (
+                    "uncertain"
+                    if segments and is_uncertain
+                    else "mapped"
+                    if segments
+                    else "not_found"
+                ),
                 "confidence": str(min(confidence_by_question[question.id], default=Decimal("0"))),
                 "warnings": list(dict.fromkeys(warning_by_question[question.id])),
             }
@@ -1294,6 +1317,71 @@ class LocalScriptPreparationService:
                     raise LocalScriptPreparationError("OCR block identifiers are duplicated")
                 index[key] = block
         return index
+
+    @staticmethod
+    def _with_duplicate_block_claims_withheld(
+        drafts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Withhold ambiguous OCR blocks rather than losing the whole run.
+
+        Qwen3.6 maps block identifiers; it does not own their geometry. A
+        duplicate claim is ambiguous evidence, not a reason to discard every
+        other answer on the script. The block is withheld from every claimant,
+        leaving the affected answer blocked or uncertain for the teacher's
+        explicit repair or visual-rescue path.
+        """
+        claims: dict[tuple[int, int], set[int]] = {}
+        for draft in drafts:
+            question_id = int(draft.get("question_id") or 0)
+            for reference in draft.get("block_references") or []:
+                page_no = int(reference.get("page_no") or 0)
+                for order in reference.get("block_orders") or []:
+                    claims.setdefault((page_no, int(order)), set()).add(question_id)
+        ambiguous = {key for key, question_ids in claims.items() if len(question_ids) > 1}
+        if not ambiguous:
+            return drafts
+
+        sanitized: list[dict[str, Any]] = []
+        for draft in drafts:
+            copy = dict(draft)
+            filtered_references: list[dict[str, Any]] = []
+            withheld: list[tuple[int, int]] = []
+            for reference in copy.get("block_references") or []:
+                page_no = int(reference.get("page_no") or 0)
+                retained_orders: list[int] = []
+                for order in reference.get("block_orders") or []:
+                    key = (page_no, int(order))
+                    if key in ambiguous:
+                        withheld.append(key)
+                    else:
+                        retained_orders.append(int(order))
+                if retained_orders:
+                    filtered = dict(reference)
+                    filtered["block_orders"] = retained_orders
+                    filtered_references.append(filtered)
+            if withheld:
+                warnings = list(copy.get("warnings") or [])
+                locations = ", ".join(
+                    f"page {page_no}, block {order}" for page_no, order in sorted(set(withheld))
+                )
+                warnings.append(
+                    "ambiguous OCR block claim was withheld from every answer "
+                    f"({locations}); it must be repaired or visually rescued before grading"
+                )
+                copy["warnings"] = list(dict.fromkeys(warnings))
+                copy["block_references"] = filtered_references
+                if not filtered_references:
+                    # Preserve the provider-schema invariant that a mapped or
+                    # uncertain draft always has at least one block reference.
+                    copy["status"] = "not_found"
+                    copy["confidence"] = "0"
+                else:
+                    copy["status"] = "uncertain"
+                    copy["confidence"] = str(
+                        min(Decimal(str(copy.get("confidence") or 0)), Decimal("0.5"))
+                    )
+            sanitized.append(copy)
+        return sanitized
 
     def _validate_draft_set(self, drafts: list[dict[str, Any]], questions: list[Question]) -> None:
         expected = {question.id for question in questions}

@@ -138,6 +138,7 @@ for (const marker of [
   "AuthenticatedAnswerRegionImage",
   "Loading answer image...",
   "Repair unresolved mappings locally",
+  "Existing mappings are protected.",
   "Incomplete mapping suspected",
   "Create direct PaddleOCR transcript",
   "Use Qwen3.8 vision rescue",

@@ -149,6 +149,38 @@ class SequencedFakeTextProvider(FakeTextProvider):
         return {"mappings": self._mapping_passes.pop(0)}
 
 
+def test_duplicate_block_claims_are_withheld_not_assigned_to_either_answer() -> None:
+    drafts = [
+        {
+            "question_id": 1,
+            "question_no": "1(a)(i)",
+            "status": "mapped",
+            "block_references": [{"page_no": 1, "block_orders": [1, 2]}],
+            "confidence": "0.9",
+            "warnings": [],
+            "needs_review": True,
+        },
+        {
+            "question_id": 2,
+            "question_no": "1(a)(ii)",
+            "status": "mapped",
+            "block_references": [{"page_no": 1, "block_orders": [2]}],
+            "confidence": "0.8",
+            "warnings": [],
+            "needs_review": True,
+        },
+    ]
+
+    sanitized = LocalScriptPreparationService._with_duplicate_block_claims_withheld(drafts)
+
+    assert sanitized[0]["status"] == "uncertain"
+    assert sanitized[0]["block_references"] == [{"page_no": 1, "block_orders": [1]}]
+    assert sanitized[1]["status"] == "not_found"
+    assert sanitized[1]["block_references"] == []
+    assert sanitized[1]["confidence"] == "0"
+    assert all("withheld from every answer" in item["warnings"][0] for item in sanitized)
+
+
 class FakeVisionProvider:
     provider_name = "llama_cpp_qwen38"
 
@@ -495,6 +527,74 @@ def test_hybrid_path_refuses_page_count_above_explicit_paddle_budget(
         )
 
     assert paddle.calls == 0
+
+
+def test_hybrid_duplicate_claim_persists_safe_blocker_and_continues_coverage(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path)
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+    paddle = FakePaddleClient(
+        [
+            [
+                {"order": 1, "text": LABELS[0], "bbox": [40, 40, 200, 70]},
+                {"order": 2, "text": "working one", "bbox": [40, 80, 420, 120]},
+            ],
+            [{"order": 1, "text": "blank", "bbox": [40, 40, 200, 70]}],
+        ]
+    )
+    provider = SequencedFakeTextProvider(
+        [
+            [
+                _draft(questions[0].id, LABELS[0], 1, [1]),
+                _draft(questions[1].id, LABELS[1], 1, [1, 2]),
+            ],
+            [
+                {
+                    "question_id": questions[0].id,
+                    "question_no": LABELS[0],
+                    "status": "not_found",
+                    "confidence": "0",
+                    "warnings": [],
+                    "block_references": [],
+                }
+            ],
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        text_adapter=FakeAdapter(provider),  # type: ignore[arg-type]
+        paddle_client_factory=lambda: paddle,
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare_from_paddle_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_ocr_model="PaddleOCR-VL-1.6",
+        expected_layout_model="PP-DocLayoutV3",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+        maximum_text_mapping_calls=2,
+    )
+
+    assert len(provider.calls) == 2
+    first = next(mapping for mapping in mappings if mapping.question_id == questions[0].id)
+    second = next(mapping for mapping in mappings if mapping.question_id == questions[1].id)
+    assert first.mapping_status == "blocked"
+    assert first.answer_region is None
+    assert second.mapping_status == "uncertain"
+    assert second.answer_region is not None
+    assert any(
+        "withheld from every answer" in warning
+        for warning in second.source_reference["warnings"]
+    )
 
 
 def test_hybrid_coverage_pass_adds_bottom_continuation_and_unmapped_question(
