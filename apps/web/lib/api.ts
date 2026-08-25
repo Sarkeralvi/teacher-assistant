@@ -1411,7 +1411,10 @@ export function suggestAnswerRegionMappings(
   );
 }
 
-export type ScriptMappingProvider = "deterministic_layout" | "local_paddle_qwen";
+export type ScriptMappingProvider =
+  | "deterministic_layout"
+  | "local_paddle_qwen"
+  | "local_qwen38_visual";
 
 export function runSubmissionQuestionNodeMappings(
   submissionId: number,

@@ -138,8 +138,8 @@ for (const marker of [
   "PaddleOCR + Qwen3.6 mapping",
   "AuthenticatedAnswerRegionImage",
   "Loading source and crop images...",
-  "Repair unresolved mappings locally",
-  "Existing mappings are protected.",
+  "Retry boundaries with PaddleOCR + Qwen3.6",
+  "Confirmed mappings are protected.",
   "Required: compare the crop boundary with the complete source page",
   "Compare and acknowledge the full-page boundary first",
   "Incomplete mapping suspected",
@@ -181,9 +181,21 @@ for (const marker of [
   "confirmPaddleOcrRun",
   "rejectPaddleOcrRun",
   'provider: "local_paddle_qwen"',
+  '"local_qwen38_visual"',
 ]) {
   if (!api.includes(marker)) {
     throw new Error(`API client missing active hybrid OCR marker: ${marker}`);
+  }
+}
+
+for (const marker of [
+  "Repair submission #",
+  "boundaries with Qwen3.8 vision",
+  "no transcription or grade was created",
+  "localVisualMappingAuthorized",
+]) {
+  if (!assessment.includes(marker)) {
+    throw new Error(`Assessment UI missing explicit visual boundary rescue marker: ${marker}`);
   }
 }
 

@@ -262,6 +262,38 @@ def test_first_page_answer_expands_upward_to_include_omitted_setup() -> None:
     ]
 
 
+def test_later_question_cannot_absorb_leading_page_when_earlier_question_is_missing() -> None:
+    drafts = [
+        {
+            "question_id": 1,
+            "status": "not_found",
+            "confidence": "0",
+            "warnings": [],
+            "block_references": [],
+        },
+        {
+            "question_id": 2,
+            "status": "uncertain",
+            "confidence": "0.4",
+            "warnings": [],
+            "block_references": [{"page_no": 1, "block_orders": [8]}],
+        },
+    ]
+    blocks = {
+        (1, order): {"order": order, "bbox": [0, order * 10, 100, order * 10 + 5]}
+        for order in range(1, 9)
+    }
+
+    expanded = LocalScriptPreparationService._expand_contiguous_block_evidence(
+        drafts=drafts,
+        block_index=blocks,
+        questions=[Question(id=1), Question(id=2)],
+    )
+
+    assert expanded[0]["block_references"] == []
+    assert expanded[1]["block_references"] == [{"page_no": 1, "block_orders": [8]}]
+
+
 class FakeVisionProvider:
     provider_name = "llama_cpp_qwen38"
 
@@ -834,6 +866,96 @@ def test_hybrid_repair_preserves_confirmed_mapping_and_replaces_only_unresolved(
     assert preserved.id == confirmed_id
     assert preserved.teacher_confirmed is True
     assert any(item.question_id == questions[1].id for item in repaired)
+
+
+def test_visual_boundary_rescue_preserves_confirmed_mapping_and_replaces_only_unresolved(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path)
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+
+    def visual_provider() -> FakeVisionProvider:
+        return FakeVisionProvider(
+            [
+                [
+                    VisualPageRegion(
+                        question_label=LABELS[0],
+                        bbox=[50, 50, 900, 850],
+                        continues_from_previous=False,
+                        continues_to_next=False,
+                        confidence=Decimal("0.8"),
+                        warnings=[],
+                    )
+                ],
+                [
+                    VisualPageRegion(
+                        question_label=LABELS[1],
+                        bbox=[50, 50, 900, 850],
+                        continues_from_previous=False,
+                        continues_to_next=False,
+                        confidence=Decimal("0.8"),
+                        warnings=[],
+                    )
+                ],
+            ]
+        )
+
+    first = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(visual_provider()),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+    initial = first.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+    )
+    confirmed = next(item for item in initial if item.question_id == questions[0].id)
+    unresolved = next(item for item in initial if item.question_id == questions[1].id)
+    confirmed_id = confirmed.id
+    unresolved_id = unresolved.id
+    confirmed.teacher_confirmed = True
+    for segment in confirmed.answer_region.segments:
+        segment.confirmed = True
+    db_session.commit()
+
+    rescue = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(visual_provider()),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+    repaired = rescue.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=False,
+        repair_unconfirmed_only=True,
+        maximum_ocr_calls=2,
+    )
+
+    preserved = next(item for item in repaired if item.question_id == questions[0].id)
+    replacement = next(item for item in repaired if item.question_id == questions[1].id)
+    assert preserved.id == confirmed_id
+    assert preserved.teacher_confirmed is True
+    assert replacement.id != unresolved_id
+    assert replacement.provider == "llama_cpp_qwen38"
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.event_type == "submission_script_draft_prepared")
+        .order_by(AuditLog.id.desc())
+        .first()
+    )
+    assert audit.payload_json["repair_unconfirmed_only"] is True
+    assert audit.payload_json["preserved_mapping_count"] == 1
 
 
 def test_no_vision_call_when_tier1_read_every_page(

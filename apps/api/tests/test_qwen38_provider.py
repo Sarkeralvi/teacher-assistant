@@ -340,6 +340,40 @@ def test_page_mapping_request_carries_the_scaled_budget() -> None:
     assert client.requests[0]["chat_template_kwargs"]["enable_thinking"] is False
 
 
+def test_page_mapping_uses_question_identity_without_grading_student_work() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": '{"regions": [], "needs_review": true}'},
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 12},
+    }
+    provider, client = provider_with(completion)
+
+    provider.map_page_answer_regions(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+        question_labels=["1(a)(i)"],
+        question_references=[
+            {
+                "question_no": "1(a)(i)",
+                "question_text": "Find the conditional probability.",
+                "model_answer": "0.38",
+                "rubric": {"secret": "must not enter mapping"},
+            }
+        ],
+    )
+
+    prompt = client.requests[0]["messages"][1]["content"][0]["text"]
+    assert "Find the conditional probability." in prompt
+    assert "judge correctness" in prompt
+    assert "Wrong, partial, irrelevant" in prompt
+    assert "0.38" not in prompt
+    assert "rubric" not in prompt.casefold()
+
+
 def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
     completion = {
         "choices": [

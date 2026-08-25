@@ -983,10 +983,13 @@ class AnswerRegionMappingRunRequest(BaseModel):
     # A repair preserves previously teacher-confirmed mappings and replaces only
     # unresolved drafts. It remains an explicit teacher-authorized operation.
     repair_unconfirmed_only: bool = False
-    # The local hybrid path uses PaddleOCR for page/block geometry and Qwen3.6
+    # The normal local path uses PaddleOCR for page/block geometry and Qwen3.6
     # only to associate those immutable block identifiers with locked questions.
-    # Qwen3.8 is reserved for explicit, teacher-authorized transcription rescue.
-    provider: Literal["deterministic_layout", "local_paddle_qwen"] = "deterministic_layout"
+    # Qwen3.8 visual mapping is a separate, explicit rescue when OCR text cannot
+    # establish faithful question boundaries. It is never an automatic fallback.
+    provider: Literal[
+        "deterministic_layout", "local_paddle_qwen", "local_qwen38_visual"
+    ] = "deterministic_layout"
     expected_model: str | None = Field(default=None, max_length=255)
     expected_ocr_model: str | None = Field(default=None, max_length=255)
     expected_layout_model: str | None = Field(default=None, max_length=255)

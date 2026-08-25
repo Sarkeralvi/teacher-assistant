@@ -103,6 +103,7 @@ class LocalScriptPreparationService:
         teacher: User,
         expected_model: str,
         replace_existing: bool,
+        repair_unconfirmed_only: bool = False,
         maximum_ocr_calls: int,
     ) -> list[AnswerRegionMapping]:
         """Create review-only Qwen3.8 visual mappings from complete script pages.
@@ -118,13 +119,32 @@ class LocalScriptPreparationService:
             raise LocalScriptPreparationError(
                 "Script page count exceeds the explicitly authorized visual call limit"
             )
-        questions, nodes, _references = self._load_finalized_references(submission)
+        questions, nodes, references = self._load_finalized_references(submission)
         existing = self._load_existing(submission.id)
-        if existing and not replace_existing:
+        if repair_unconfirmed_only:
+            preserved_existing, replaceable_existing = self._split_preserved_mappings(existing)
+            preserved_question_ids = {
+                mapping.question_id
+                for mapping in preserved_existing
+                if mapping.question_id is not None
+            }
+            questions_to_persist = [
+                question for question in questions if question.id not in preserved_question_ids
+            ]
+            if not questions_to_persist:
+                raise LocalScriptPreparationError(
+                    "No unresolved mappings remain; confirmed or graded evidence is preserved"
+                )
+        else:
+            preserved_existing = []
+            replaceable_existing = existing
+            questions_to_persist = questions
+        if existing and not replace_existing and not repair_unconfirmed_only:
             raise LocalScriptPreparationError(
                 "Draft mappings already exist; explicitly replace them to prepare again"
             )
-        self._assert_replace_is_safe(existing)
+        if not repair_unconfirmed_only:
+            self._assert_replace_is_safe(existing)
 
         labels = [question.question_no for question in questions]
         question_by_label = {question.question_no.casefold(): question for question in questions}
@@ -166,6 +186,7 @@ class LocalScriptPreparationService:
                             image_bytes=image_bytes,
                             mime_type=_image_content_type(image_path),
                             question_labels=labels,
+                            question_references=references,
                             open_continuations=open_continuations,
                         )
                         lease.heartbeat(holder_id=lease_holder_id)
@@ -215,7 +236,7 @@ class LocalScriptPreparationService:
         unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
 
         created: list[AnswerRegionMapping] = []
-        for question in questions:
+        for question in questions_to_persist:
             segments = segments_by_question[question.id]
             draft = {
                 "status": "mapped" if segments else "not_found",
@@ -247,7 +268,7 @@ class LocalScriptPreparationService:
             )
             created.append(mapping)
 
-        for mapping in existing:
+        for mapping in replaceable_existing:
             region = mapping.answer_region
             self.db.delete(mapping)
             if region is not None:
@@ -267,6 +288,8 @@ class LocalScriptPreparationService:
                     "provider": "llama_cpp_qwen38",
                     "expected_qwen_model": expected_model,
                     "visual_mapping_call_count": calls_used,
+                    "repair_unconfirmed_only": repair_unconfirmed_only,
+                    "preserved_mapping_count": len(preserved_existing),
                     "mapping_count": len(created),
                     "mapped_count": sum(1 for item in created if item.answer_region is not None),
                     "pages_with_unassigned_ink": [
@@ -1533,12 +1556,23 @@ class LocalScriptPreparationService:
                     if first_order <= order <= last_order:
                         add_if_unclaimed(question_id, order)
 
-            # The first mapped answer owns leading page content. This restores
-            # omitted headings and setup without crossing another answer.
+            # The first mapped answer owns leading page content only when every
+            # earlier canonical question has evidence somewhere. Otherwise a
+            # later question could absorb the complete answer of an unresolved
+            # earlier question (the exact failure seen on submission 42).
             first_question_id, first_order, _last_order = owners[0]
-            for order in available_orders:
-                if order < first_order:
-                    add_if_unclaimed(first_question_id, order)
+            first_question_index = question_order.get(first_question_id, 10**9)
+            earlier_questions_resolved = all(
+                any(
+                    selected_question_id == earlier_question.id
+                    for selected_question_id, _selected_page in selected
+                )
+                for earlier_question in questions[:first_question_index]
+            )
+            if earlier_questions_resolved:
+                for order in available_orders:
+                    if order < first_order:
+                        add_if_unclaimed(first_question_id, order)
 
             # A gap between adjacent canonical questions belongs to the next
             # question. Do not bridge a missing question in the canonical list.

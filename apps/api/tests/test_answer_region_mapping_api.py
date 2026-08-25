@@ -637,3 +637,32 @@ def test_workflow_state_blocks_unconfirmed_or_uncertain_mappings(
     assert workflow_state["mappings_ready"] is False
     assert workflow_state["uncertain_mapping_count"] >= 1
     assert any("mapping" in blocker.lower() for blocker in workflow_state["blockers"])
+
+
+@pytest.mark.parametrize("provider", ["local_paddle_qwen", "local_qwen38_visual"])
+def test_local_mapping_provider_requires_explicit_draft_only_authorization(
+    client: TestClient, tmp_path: Path, provider: str
+) -> None:
+    teacher, token = register_teacher(client, f"mapping-auth-{provider}")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    pdf_path = tmp_path / f"{provider}.pdf"
+    make_text_pdf(pdf_path, ["Visible student answer"])
+    submission = upload_submission_pdf(
+        client, int(assessment["id"]), pdf_path, token, f"S-{provider}"
+    )
+
+    response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": provider,
+            "replace_existing": False,
+            "repair_unconfirmed_only": True,
+            "draft_only_confirmed": False,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Local model mapping requires explicit draft-only confirmation"
+    )

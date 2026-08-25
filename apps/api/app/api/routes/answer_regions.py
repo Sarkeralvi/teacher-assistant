@@ -1037,6 +1037,49 @@ def run_submission_question_node_mappings(
     submission = get_submission_or_404(submission_id, db)
     get_owned_assessment_or_404(submission.assessment_id, db, current_user)
     request = payload or AnswerRegionMappingRunRequest()
+    if request.provider in {"local_paddle_qwen", "local_qwen38_visual"} and not (
+        request.draft_only_confirmed
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Local model mapping requires explicit draft-only confirmation",
+        )
+    if request.provider == "local_qwen38_visual":
+        service = LocalScriptPreparationService(db)
+        try:
+            mappings = service.prepare(
+                submission=submission,
+                teacher=current_user,
+                expected_model=request.expected_model or "",
+                replace_existing=request.replace_existing,
+                repair_unconfirmed_only=request.repair_unconfirmed_only,
+                maximum_ocr_calls=request.maximum_ocr_calls,
+            )
+        except LocalScriptPreparationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except Exception as exc:
+            logger.exception(
+                "Local Qwen3.8 visual mapping rescue failed safely: %s",
+                sanitize_provider_error(str(exc)),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Local Qwen3.8 visual mapping rescue failed",
+            ) from exc
+        return AnswerRegionMappingRunResponse(
+            message=(
+                "Qwen3.8 visually remapped unresolved answer boundaries. Compare every "
+                "rectangle with the complete source page before confirmation."
+            ),
+            created_count=len(mappings),
+            mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),
+            uncertain_count=sum(1 for item in mappings if item.mapping_status == "uncertain"),
+            blocked_count=sum(1 for item in mappings if item.mapping_status == "blocked"),
+            mappings=mappings,
+        )
     if request.provider == "local_paddle_qwen":
         service = LocalScriptPreparationService(db)
         try:

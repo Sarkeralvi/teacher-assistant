@@ -48,6 +48,7 @@ import {
   rejectPaddleOcrRun,
   reorderAnswerRegionSegments,
   runAssessmentQuestionNodeMappings,
+  runSubmissionQuestionNodeMappings,
   suggestAnswerRegionMappings,
   updateQuestion,
   updateQuestionNode,
@@ -179,7 +180,7 @@ function localMappingWarnings(mapping: AnswerRegionMapping): string[] {
 // which one did — gating on the vision provider alone hid the panel for tiered
 // mappings and left the teacher no way to confirm or grade them.
 function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
-  return mapping.provider === "local_paddle_qwen";
+  return mapping.provider === "local_paddle_qwen" || mapping.provider === "llama_cpp_qwen38";
 }
 
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
@@ -347,6 +348,18 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     localAiStatus.paddle_ocr.enabled &&
     localAiStatus.qwen.enabled,
   );
+  const localVisualMappingAuthorized = Boolean(
+    localAiStatus?.real_providers_allowed &&
+    localAiStatus.qwen38.enabled &&
+    localAiStatus.qwen38.visual_preparation_enabled,
+  );
+  const unresolvedMappingSubmissionIds = Array.from(
+    new Set(
+      flatMappings
+        .filter((mapping) => !mapping.teacher_confirmed)
+        .map((mapping) => mapping.submission_id),
+    ),
+  ).sort((left, right) => left - right);
   const localSingleGradeAuthorized = Boolean(
     localAiStatus?.real_providers_allowed &&
     localAiStatus.local_single_answer_grading_enabled &&
@@ -873,6 +886,31 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to prepare the answer script with local AI");
+    } finally {
+      setRunningMappings(false);
+    }
+  }
+
+  async function handleRunVisualMappingRescue(submissionId: number) {
+    setRunningMappings(true);
+    setError(null);
+    setScriptPreparationMessage(null);
+    try {
+      const submission = submissions.find((item) => item.id === submissionId);
+      const response = await runSubmissionQuestionNodeMappings(submissionId, {
+        replace_existing: false,
+        repair_unconfirmed_only: true,
+        provider: "local_qwen38_visual",
+        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        draft_only_confirmed: true,
+        maximum_ocr_calls: Math.min(Math.max(submission?.pages.length ?? 1, 1), 25),
+      });
+      setScriptPreparationMessage(
+        `Qwen3.8 visually repaired submission #${submissionId}: ${response.mappings.filter((mapping) => mapping.answer_region_id != null).length} review-only regions. Compare every red boundary with the complete page; no transcription or grade was created.`,
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to repair answer boundaries with local Qwen3.8");
     } finally {
       setRunningMappings(false);
     }
@@ -1715,9 +1753,22 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
               onClick={() => void handleRunAutomaticMappings(true)}
             >
-              {runningMappings ? "Repairing unresolved mappings..." : "Repair unresolved mappings locally"}
+              {runningMappings ? "Repairing unresolved mappings..." : "Retry boundaries with PaddleOCR + Qwen3.6"}
             </button>
           ) : null}
+          {unresolvedMappingSubmissionIds.map((submissionId) => (
+            <button
+              key={`visual-mapping-rescue-${submissionId}`}
+              className="rounded border border-violet-600 px-3 py-2 text-sm text-violet-100 hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={runningMappings || !localVisualMappingAuthorized}
+              onClick={() => void handleRunVisualMappingRescue(submissionId)}
+            >
+              {runningMappings
+                ? "Visual boundary rescue running..."
+                : `Repair submission #${submissionId} boundaries with Qwen3.8 vision`}
+            </button>
+          ))}
         </div>
         <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-5">
           <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
@@ -1729,7 +1780,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <p className="text-xs text-amber-200">Repair preserves teacher-confirmed or graded evidence. It authorizes at most two Qwen3.6 mapping passes: initial block mapping plus one unassigned-block coverage pass; it never retries or grades.</p>
         {flatMappings.length > 0 ? (
           <p className="text-xs text-slate-300">
-            Existing mappings are protected. Use <span className="font-medium text-amber-100">Repair unresolved mappings locally</span> for incomplete, blocked, or uncertain answers; it cannot replace confirmed evidence.
+            Confirmed mappings are protected. Retry PaddleOCR + Qwen3.6 when block assignment is incomplete. If OCR text confuses question boundaries, explicitly use the Qwen3.8 visual boundary rescue for that submission; it cannot replace confirmed evidence and creates no transcript or grade.
+          </p>
+        ) : null}
+        {unresolvedMappingSubmissionIds.length > 0 && !localVisualMappingAuthorized ? (
+          <p className="rounded border border-violet-900 bg-violet-950/20 p-3 text-sm text-violet-100">
+            Qwen3.8 visual boundary rescue is disabled in the host configuration. It must be explicitly enabled before a visually ambiguous mapping can be repaired.
           </p>
         ) : null}
         {!localScriptPreparationAuthorized ? (
@@ -1833,10 +1889,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     {isLocalPreparedMapping(mapping) && mapping.answer_region_id ? (
                       <section className="grid gap-3 rounded border border-cyan-700 bg-slate-950/50 p-3 text-sm">
                         <div>
-                          <p className="font-semibold text-slate-100">PaddleOCR + Qwen3.6 mapping</p>
+                          <p className="font-semibold text-slate-100">
+                            {mapping.provider === "llama_cpp_qwen38"
+                              ? "Qwen3.8 visual boundary rescue"
+                              : "PaddleOCR + Qwen3.6 mapping"}
+                          </p>
                           <p className="text-xs text-amber-200">Mapping, verbatim transcription, and full-answer coverage are three separate teacher confirmations.</p>
                           <p className="text-xs text-slate-300">PaddleOCR text is a direct draft. If it is wrong, reject it and explicitly request Qwen3.8 vision rescue.</p>
-                          {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm a full answer; use “Repair unresolved mappings locally”.</p> : null}
+                          {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm it; use the explicit Qwen3.8 visual boundary rescue for this submission.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
                           <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || imageState !== "loaded" || sourcePagesState !== "loaded" || !boundaryReviewed} onClick={() => void handleConfirmMapping(mapping)}>

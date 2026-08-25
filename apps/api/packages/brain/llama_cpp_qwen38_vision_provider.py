@@ -611,6 +611,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         image_bytes: bytes,
         mime_type: str,
         question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
         open_continuations: list[str] | None = None,
     ) -> VisualPageMappingOutput:
         """Locate one union box per visible finalized answer label on a page.
@@ -621,6 +622,18 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             raise ValueError("Finalized question labels are required for visual mapping")
         image_part, _digest = self._image_part(image_bytes, mime_type)
         labels = ", ".join(question_labels)
+        allowed_labels = {label.casefold() for label in question_labels}
+        references = [
+            {
+                "question_no": str(item.get("question_no") or "").strip(),
+                "question_text": str(item.get("question_text") or "").strip(),
+            }
+            for item in (question_references or [])
+            if str(item.get("question_no") or "").strip().casefold() in allowed_labels
+        ]
+        reference_text = "\n".join(
+            f"- {item['question_no']}: {item['question_text']}" for item in references
+        )
         continuation_hint = ", ".join(open_continuations or []) or "none"
         prompt = (
             "This is a complete exam-script page. Map only visible student answer segments to "
@@ -628,9 +641,13 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "this page, never one box per line. Boxes use normalized [x1,y1,x2,y2] coordinates "
             "from 0 to 1000 and must include all handwriting for the visible segment. Exclude "
             "blank margins, borders, bleed-through, and colored teacher marks. Do not transcribe, "
-            "solve, grade, or use a handwritten header as the identity. Mark continuation flags "
+            "solve, grade, judge correctness, or compare a numerical result with an expected "
+            "answer. Wrong, partial, irrelevant, and crossed-out student work still belongs to "
+            "its physical question region. Use page order, visible headings, and the finalized "
+            "question text only to establish identity and boundaries. Mark continuation flags "
             "when the answer visibly continues between pages. Every result needs review.\n\n"
             f"FINALIZED LABELS: {labels}\n"
+            f"FINALIZED QUESTIONS (identity only):\n{reference_text or '[labels only]'}\n"
             f"OPEN CONTINUATIONS FROM PREVIOUS PAGE: {continuation_hint}\n\n"
             "Return exactly this JSON shape with no extra keys: "
             '{"regions":[{"question_label":"one supplied label","bbox":[0,0,1000,1000],'
