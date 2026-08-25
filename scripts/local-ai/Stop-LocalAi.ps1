@@ -1,6 +1,6 @@
 ﻿param(
     [string]$ConfigPath,
-    [ValidateSet("Qwen", "Qwen38")]
+    [ValidateSet("PaddleOcr", "Qwen", "Qwen38")]
     [string]$Mode = "Qwen",
     # Off by default: without it this script only stops the process whose PID
     # this repository recorded. The port sweep it enables will kill ANY matching
@@ -21,9 +21,11 @@ Import-LocalAiEnvironment -Path $ConfigPath
 $runtimeDirectory = Join-Path $repositoryRoot ".local-ai"
 $definition = Get-LocalAiServiceDefinition -Mode $Mode
 $apiKeyFile = Join-Path $runtimeDirectory "$($Mode.ToLower()).api-key"
+$paddleEnvironmentFile = Join-Path $runtimeDirectory "paddleocr.runtime.env"
 $services = @(
     @{
         Name = $definition.Name
+        Mode = $Mode
         PidPath = Join-Path $runtimeDirectory $definition.PidFileName
         ExpectedExecutable = (Assert-RequiredEnvironmentValue -Name $definition.BinaryVariable)
         Port = $definition.Port
@@ -40,9 +42,14 @@ foreach ($service in $services) {
         }
         $process = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
         if ($null -ne $process) {
-            if (-not (Test-LocalAiExecutablePath `
-                -ActualPath $process.ExecutablePath `
-                -ExpectedPath $service.ExpectedExecutable)) {
+            $managedProcess = if ($service.Mode -eq "PaddleOcr") {
+                Test-PaddleOcrManagedProcess -Process $process -ExpectedLauncher $service.ExpectedExecutable
+            } else {
+                Test-LocalAiExecutablePath `
+                    -ActualPath $process.ExecutablePath `
+                    -ExpectedPath $service.ExpectedExecutable
+            }
+            if (-not $managedProcess) {
                 throw "$($service.Name) PID now belongs to a different executable; refusing to stop it."
             }
             Stop-Process -Id $processId -Force
@@ -64,9 +71,19 @@ foreach ($service in $services) {
 
     if ($ForcePortSweep) {
         foreach ($listener in @(Get-LocalAiListenerInfo -Port $service.Port)) {
-            if (-not (Test-LocalAiExecutablePath `
-                -ActualPath $listener.ExecutablePath `
-                -ExpectedPath $service.ExpectedExecutable)) {
+            $listenerProcess = Get-CimInstance Win32_Process `
+                -Filter "ProcessId=$($listener.ProcessId)" `
+                -ErrorAction SilentlyContinue
+            $managedListener = if ($service.Mode -eq "PaddleOcr") {
+                $null -ne $listenerProcess -and (Test-PaddleOcrManagedProcess `
+                    -Process $listenerProcess `
+                    -ExpectedLauncher $service.ExpectedExecutable)
+            } else {
+                Test-LocalAiExecutablePath `
+                    -ActualPath $listener.ExecutablePath `
+                    -ExpectedPath $service.ExpectedExecutable
+            }
+            if (-not $managedListener) {
                 throw "$($service.Name) port belongs to an unexpected executable; refusing to stop it."
             }
             Stop-Process -Id $listener.ProcessId -Force
@@ -93,4 +110,7 @@ foreach ($service in $services) {
         Write-Host "$($service.Name) is already stopped."
     }
     Remove-Item -LiteralPath $apiKeyFile -Force -ErrorAction SilentlyContinue
+    if ($service.Mode -eq "PaddleOcr") {
+        Remove-Item -LiteralPath $paddleEnvironmentFile -Force -ErrorAction SilentlyContinue
+    }
 }

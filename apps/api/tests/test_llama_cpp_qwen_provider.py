@@ -458,8 +458,10 @@ def test_qwen_links_three_ocr_documents_in_one_strict_draft_call() -> None:
     assert "criteria" in question_schema["required"]
     assert question_schema["properties"]["criteria"]["minItems"] == 1
     assert question_schema["properties"]["criteria"]["maxItems"] == 8
-    model_answer_options = question_schema["properties"]["model_answer"]["anyOf"]
-    assert any(option.get("maxLength") == 1800 for option in model_answer_options)
+    model_answer_schema = question_schema["properties"]["model_answer"]
+    assert model_answer_schema["type"] == "string"
+    assert model_answer_schema["minLength"] == 1
+    assert model_answer_schema["maxLength"] == 1800
     assert "exactly one object per gradable leaf" in prompt
     assert "successive worked-answer blocks" in prompt
     assert "[RUBRIC HANDWRITING FOCUS]" in prompt
@@ -469,6 +471,22 @@ def test_qwen_reference_bundle_rejects_a_leaf_without_rubric_criteria() -> None:
     completion = valid_reference_completion()
     body = json.loads(completion["choices"][0]["message"]["content"])
     body["questions"][0]["criteria"] = []
+    completion["choices"][0]["message"]["content"] = json.dumps(body)
+
+    with pytest.raises(ValueError, match="invalid structured output"):
+        make_provider(FakeClient(completion)).extract_reference_bundle_from_ocr_documents(
+            {
+                "question_paper": [{"page": 1, "text": "QUESTION OCR"}],
+                "solution": [{"page": 1, "text": "SOLUTION OCR"}],
+                "rubric": [{"page": 1, "text": "RUBRIC OCR"}],
+            }
+        )
+
+
+def test_qwen_reference_bundle_rejects_a_missing_model_answer() -> None:
+    completion = valid_reference_completion()
+    body = json.loads(completion["choices"][0]["message"]["content"])
+    body["questions"][0]["model_answer"] = None
     completion["choices"][0]["message"]["content"] = json.dumps(body)
 
     with pytest.raises(ValueError, match="invalid structured output"):

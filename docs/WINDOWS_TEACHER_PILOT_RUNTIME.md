@@ -37,7 +37,7 @@ For an operator health-check session, explicitly request one local phase (normal
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\pilot\Start-TeacherPilot.ps1 -StartLocalAi -LocalAiMode Qwen
 ```
 
-Use `-LocalAiMode Qwen` to load the Qwen3.6 text model instead of Qwen3.8; tier-1 OCR needs no phase because it runs on the CPU. The local models can also be started and stopped directly through `scripts\local-ai\Start-LocalAi.ps1` and `Stop-LocalAi.ps1` using the same process-local execution-policy override.
+Use `-LocalAiMode PaddleOcr` for an OCR health-check session or `-LocalAiMode Qwen` for Qwen3.6. Only one of `PaddleOcr`, `Qwen`, or `Qwen38` may be loaded. The services can also be started/stopped through `scripts\local-ai\Start-LocalAi.ps1` and `Stop-LocalAi.ps1` using the same process-local execution-policy override.
 
 To rebuild the frontend before startup:
 
@@ -66,4 +66,4 @@ preserved.
 
 ## Safety gate
 
-The runtime intentionally honors `COHORT_MODEL_GRADING_ENABLED=false`. Starting healthy services does not authorize a provider call. Real cohort grading may be enabled only after the locked 20-case curated evaluation produces `PASS`, and every dispatch still requires explicit teacher authorization. OCR remains draft-only until teacher confirmation, Qwen consumes confirmed text only, and every AI grade remains a pending suggestion until teacher review.
+The runtime intentionally honors `COHORT_MODEL_GRADING_ENABLED=false`. Starting healthy services does not authorize a provider call. PaddleOCR remains draft-only until hash confirmation; Qwen3.8 is explicit transcription rescue only; Qwen3.6 consumes confirmed text only; and every AI grade remains a pending suggestion until teacher review.

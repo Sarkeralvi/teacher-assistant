@@ -725,7 +725,7 @@ class LocalModelLease(TimestampMixin, Base):
     __tablename__ = "local_model_leases"
     __table_args__ = (
         CheckConstraint(
-            "model_phase is null or model_phase in ('Qwen', 'Qwen38')",
+            "model_phase is null or model_phase in ('PaddleOcr', 'Qwen', 'Qwen38')",
             name="ck_local_model_lease_phase",
         ),
         CheckConstraint(

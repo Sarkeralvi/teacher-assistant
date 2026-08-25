@@ -88,6 +88,67 @@ function Test-LocalAiExecutablePath {
     )
 }
 
+function Test-PaddleOcrManagedProcess {
+    param(
+        [Parameter(Mandatory = $true)]$Process,
+        [Parameter(Mandatory = $true)][string]$ExpectedLauncher
+    )
+
+    $modulePattern = '(?i)(?:^|\s)-m\s+packages\.local_ocr_sidecar\.server(?:\s|$)'
+    if ([string]::IsNullOrWhiteSpace([string]$Process.CommandLine) -or
+        [string]$Process.CommandLine -notmatch $modulePattern) {
+        return $false
+    }
+
+    # Windows venv launchers normally remain as a small parent process while
+    # the base Python interpreter owns the listening socket. Accept either
+    # shape, but only when the exact venv launcher is the process itself or its
+    # immediate parent and the command line names this repository's sidecar.
+    if (Test-LocalAiExecutablePath `
+        -ActualPath ([string]$Process.ExecutablePath) `
+        -ExpectedPath $ExpectedLauncher) {
+        return $true
+    }
+    $parent = Get-CimInstance Win32_Process `
+        -Filter "ProcessId=$([int]$Process.ParentProcessId)" `
+        -ErrorAction SilentlyContinue
+    return (
+        $null -ne $parent -and
+        (Test-LocalAiExecutablePath `
+            -ActualPath ([string]$parent.ExecutablePath) `
+            -ExpectedPath $ExpectedLauncher)
+    )
+}
+
+function Assert-PaddleOcrListenerOwnership {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$ExpectedLauncher,
+        [Parameter(Mandatory = $true)][int]$ExpectedProcessId
+    )
+
+    $listeners = @(Get-LocalAiListenerInfo -Port $Port)
+    if ($listeners.Count -eq 0) {
+        throw "PaddleOCR did not create a listener on port $Port."
+    }
+    foreach ($listener in $listeners) {
+        if (-not $listener.IsLoopback) {
+            throw "PaddleOCR on port $Port is not loopback-only."
+        }
+        if ($listener.ProcessId -ne $ExpectedProcessId) {
+            throw "PaddleOCR listener on port $Port is not owned by the recorded service process."
+        }
+        $process = Get-CimInstance Win32_Process `
+            -Filter "ProcessId=$($listener.ProcessId)" `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $process -or -not (Test-PaddleOcrManagedProcess `
+            -Process $process `
+            -ExpectedLauncher $ExpectedLauncher)) {
+            throw "PaddleOCR listener on port $Port belongs to an unexpected process."
+        }
+    }
+}
+
 function Get-LocalAiServiceDefinition {
     <#
     .SYNOPSIS
@@ -103,9 +164,21 @@ function Get-LocalAiServiceDefinition {
         llama-server.exe, and Stop-LocalAi's port sweep would match its
         executable and force-kill it.
     #>
-    param([Parameter(Mandatory = $true)][ValidateSet("Qwen", "Qwen38")][string]$Mode)
+    param([Parameter(Mandatory = $true)][ValidateSet("PaddleOcr", "Qwen", "Qwen38")][string]$Mode)
 
-    if ($Mode -eq "Qwen") {
+    if ($Mode -eq "PaddleOcr") {
+        $baseUrlName = "LOCAL_PADDLE_OCR_BASE_URL"
+        $defaultPort = 8090
+        $definition = @{
+            Name = "PaddleOcr"
+            Alias = "PaddleOCR-VL-1.6"
+            PidFileName = "paddleocr.pid"
+            BinaryVariable = "LOCAL_PADDLE_OCR_PYTHON_PATH"
+            ModelVariable = "LOCAL_PADDLE_OCR_VL_MODEL_PATH"
+            LayoutModelVariable = "LOCAL_PADDLE_OCR_LAYOUT_MODEL_PATH"
+            KeyVariable = "LOCAL_PADDLE_OCR_API_KEY"
+        }
+    } elseif ($Mode -eq "Qwen") {
         $baseUrlName = "LOCAL_QWEN_BASE_URL"
         $defaultPort = 8086
         $definition = @{

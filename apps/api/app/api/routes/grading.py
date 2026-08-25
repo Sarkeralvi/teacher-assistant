@@ -134,14 +134,10 @@ def grade_answer_region_with_local_qwen(
     settings = get_settings()
     if not settings.brain_allow_real_providers:
         raise HTTPException(status_code=409, detail="Real local providers are disabled")
-    if not (settings.local_single_answer_grading_enabled or settings.local_qwen38_grading_enabled):
+    if not settings.local_single_answer_grading_enabled:
         raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
-    if payload.provider == "llama_cpp_qwen38":
-        enabled = settings.local_qwen38_enabled and settings.local_qwen38_grading_enabled
-        expected_model = settings.local_qwen38_model
-    else:
-        enabled = settings.local_qwen_enabled
-        expected_model = settings.local_qwen_model
+    enabled = settings.local_qwen_enabled
+    expected_model = settings.local_qwen_model
     if not enabled:
         raise HTTPException(status_code=409, detail="Requested local Qwen provider is disabled")
     if payload.expected_model != expected_model:

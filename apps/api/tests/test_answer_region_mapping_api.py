@@ -15,8 +15,11 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
+    AnswerRegion,
     AnswerRegionMapping,
+    AnswerRegionOcrRun,
     Assessment,
+    AuditLog,
     Course,
     ExtractionRun,
     FinalGrade,
@@ -30,11 +33,13 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from app.services.local_ocr_client import LocalOcrResult
 
 CLEANUP_MODELS = (
     FinalGrade,
     GradeSuggestion,
     GradingJob,
+    AnswerRegionOcrRun,
     AnswerRegionMapping,
     SubmissionPage,
     Submission,
@@ -46,6 +51,46 @@ CLEANUP_MODELS = (
     Course,
     User,
 )
+
+
+class FakePaddleClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def health(self) -> dict[str, object]:
+        return {
+            "status": "ready",
+            "model": "PaddleOCR-VL-1.6",
+            "layout_model": "PP-DocLayoutV3",
+        }
+
+    def ocr_image(self, **_kwargs: object) -> LocalOcrResult:
+        self.calls += 1
+        return LocalOcrResult.model_validate(
+            {
+                "request_id": f"fake-{self.calls}",
+                "mode": "answer_region",
+                "text": "P(X)=7/12",
+                "normalized_text": "P(X)=7/12",
+                "markdown": "$P(X)=7/12$",
+                "blocks": [
+                    {
+                        "page": 1,
+                        "order": 1,
+                        "label": "formula",
+                        "text": "P(X)=7/12",
+                        "bbox": [0, 0, 50, 20],
+                    }
+                ],
+                "warnings": [],
+                "provider": "local_paddle_qwen",
+                "model": "PaddleOCR-VL-1.6",
+                "layout_model": "PP-DocLayoutV3",
+                "version": "3.7.0",
+                "device": "gpu:0",
+                "latency_ms": 10,
+            }
+        )
 
 
 @pytest.fixture()
@@ -384,7 +429,7 @@ def test_teacher_correction_and_confirmation_persist(
     assert confirmed["teacher_confirmed"] is True
 
 
-def test_teacher_can_select_hashed_model_prepared_transcription_without_typing(
+def test_hybrid_mapping_confirmation_cannot_accept_transcription_text(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
     teacher, token = register_teacher(client, "map-local-choice")
@@ -428,9 +473,9 @@ def test_teacher_can_select_hashed_model_prepared_transcription_without_typing(
             "selected_prepared_text_sha256": "0" * 64,
         },
     )
-    assert stale.status_code == 409
+    assert stale.status_code == 400
 
-    confirmed = client.post(
+    rejected_text = client.post(
         f"/question-node-mappings/{mapping_id}/confirm",
         headers={"Authorization": f"Bearer {token}"},
         json={
@@ -439,10 +484,127 @@ def test_teacher_can_select_hashed_model_prepared_transcription_without_typing(
             "selected_prepared_text_sha256": alternative_hash,
         },
     )
+    assert rejected_text.status_code == 400
+
+    confirmed = client.post(
+        f"/question-node-mappings/{mapping_id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True},
+    )
     assert confirmed.status_code == 200, confirmed.text
     body = confirmed.json()
     assert body["teacher_confirmed"] is True
-    assert body["answer_region"]["manual_answer_text"] == alternative
+    assert body["answer_region"]["manual_answer_text"] in {None, ""}
+
+
+def test_direct_paddle_draft_is_hash_confirmed_and_never_finalizes_grade(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    teacher, token = register_teacher(client, "paddle-evidence")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    seed_confirmed_question_nodes(db_session, int(assessment["id"]))
+    pdf_path = tmp_path / "paddle-evidence.pdf"
+    make_text_pdf(pdf_path, ["Q1(a) P(X)=7/12"])
+    submission = upload_submission_pdf(
+        client, int(assessment["id"]), pdf_path, token, "S-PADDLE"
+    )
+    run_response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"replace_existing": True},
+    )
+    assert run_response.status_code == 200, run_response.text
+    mapping_payload = next(
+        item for item in run_response.json()["mappings"] if item["answer_region_id"] is not None
+    )
+    mapping = db_session.get(AnswerRegionMapping, int(mapping_payload["id"]))
+    assert mapping is not None
+    mapping.provider = "local_paddle_qwen"
+    db_session.commit()
+    confirm_mapping = client.post(
+        f"/question-node-mappings/{mapping.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True},
+    )
+    assert confirm_mapping.status_code == 200, confirm_mapping.text
+    region_id = int(confirm_mapping.json()["answer_region_id"])
+
+    fake = FakePaddleClient()
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("LOCAL_PADDLE_OCR_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_PADDLE_OCR_API_KEY", "test-key")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.services.answer_region_ocr_service.LocalOcrClient.from_settings",
+        classmethod(lambda _cls, _settings=None: fake),
+    )
+    enqueue_options: list[dict[str, object]] = []
+
+    class InlineQueue:
+        def enqueue(self, function: object, *args: object, **kwargs: object) -> None:
+            enqueue_options.append(kwargs)
+            function(*args)  # type: ignore[operator]
+
+    monkeypatch.setattr("app.api.routes.ocr.get_default_queue", lambda: InlineQueue())
+
+    draft_response = client.post(
+        f"/answer-regions/{region_id}/ocr-runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "expected_model": "PaddleOCR-VL-1.6",
+            "expected_layout_model": "PP-DocLayoutV3",
+            "draft_only_confirmed": True,
+        },
+    )
+    assert draft_response.status_code == 202, draft_response.text
+    draft = draft_response.json()
+    assert draft["status"] == "succeeded"
+    assert draft["draft_text"] == "P(X)=7/12"
+    assert fake.calls == 1
+    assert enqueue_options[0]["retry"] is None
+
+    _, intruder_token = register_teacher(client, "paddle-intruder")
+    hidden = client.get(
+        f"/answer-region-ocr-runs/{draft['id']}",
+        headers={"Authorization": f"Bearer {intruder_token}"},
+    )
+    assert hidden.status_code == 404
+
+    stale = client.post(
+        f"/answer-regions/{region_id}/ocr-runs/{draft['id']}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True, "draft_text_sha256": "0" * 64},
+    )
+    assert stale.status_code == 409
+
+    confirmed = client.post(
+        f"/answer-regions/{region_id}/ocr-runs/{draft['id']}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "teacher_confirmed": True,
+            "draft_text_sha256": hashlib.sha256(b"P(X)=7/12").hexdigest(),
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "confirmed"
+    refreshed_region = db_session.get(AnswerRegion, region_id)
+    assert refreshed_region is not None
+    db_session.refresh(refreshed_region)
+    assert refreshed_region.manual_answer_text == "P(X)=7/12"
+    assert refreshed_region.evidence_status == "partial"
+    assert int(db_session.query(FinalGrade).count()) == 0
+    audit_payloads = [
+        str(row.payload_json)
+        for row in db_session.query(AuditLog)
+        .filter(AuditLog.entity_type == "answer_region_ocr_run")
+        .all()
+    ]
+    assert audit_payloads
+    assert all("P(X)=7/12" not in payload for payload in audit_payloads)
 
 
 def test_workflow_state_blocks_unconfirmed_or_uncertain_mappings(

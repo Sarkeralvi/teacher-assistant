@@ -286,9 +286,9 @@ class Qwen38VisualTranscriptionService:
             raise VisualTranscriptionError("Real local providers are disabled")
         if (
             not self.settings.local_qwen38_enabled
-            or not self.settings.local_qwen38_visual_preparation_enabled
+            or not self.settings.local_qwen38_transcription_enabled
         ):
-            raise VisualTranscriptionError("Qwen3.8 visual preparation is disabled")
+            raise VisualTranscriptionError("Qwen3.8 visual transcription rescue is disabled")
         if expected_model != self.settings.local_qwen38_model:
             raise VisualTranscriptionError("Expected Qwen3.8 model alias does not match")
 

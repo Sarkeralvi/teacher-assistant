@@ -556,17 +556,22 @@ def test_real_stage_kill_switches_caps_and_model_alias_refuse_before_calls(
             expected_model="wrong-model",
             database_url="",
         )
-    # Both candidate aliases are accepted while the grading-model bake-off runs;
-    # they fail later on run state, not on the alias check.
-    for candidate in ("qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"):
-        with pytest.raises(LocalCuratedEvaluationError, match="confirmed OCR evidence"):
-            run_grading_stage(
-                run_dir,
-                allow_local_qwen=True,
-                max_qwen_calls=18,
-                expected_model=candidate,
-                database_url="",
-            )
+    with pytest.raises(LocalCuratedEvaluationError, match="confirmed OCR evidence"):
+        run_grading_stage(
+            run_dir,
+            allow_local_qwen=True,
+            max_qwen_calls=18,
+            expected_model="qwen3.6-35b-a3b-q4km",
+            database_url="",
+        )
+    with pytest.raises(LocalCuratedEvaluationError, match="supported grading models"):
+        run_grading_stage(
+            run_dir,
+            allow_local_qwen=True,
+            max_qwen_calls=18,
+            expected_model="qwen3.8-27b-q4km",
+            database_url="",
+        )
 
 
 def test_local_ai_environment_loader_includes_qwen38_and_phase_settings(

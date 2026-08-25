@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Qwen", "Qwen38")]
+    [ValidateSet("PaddleOcr", "Qwen", "Qwen38")]
     [string]$Phase,
     [string]$ConfigPath,
     [int]$HealthTimeoutSeconds = 600
@@ -14,14 +14,11 @@ if (-not $ConfigPath) {
 }
 Import-LocalAiEnvironment -Path $ConfigPath
 
-$otherPhase = if ($Phase -eq "Qwen") { "Qwen38" } else { "Qwen" }
-
-# Stop the other phase if running to prevent VRAM or port conflicts
-$stopOtherArgs = @{
-    Mode = $otherPhase
-    ConfigPath = $ConfigPath
+# Stop every other phase before loading the requested runtime. Keeping this as
+# an explicit finite set prevents Paddle and llama.cpp contending for VRAM.
+foreach ($otherPhase in @("PaddleOcr", "Qwen", "Qwen38") | Where-Object { $_ -ne $Phase }) {
+    & (Join-Path $PSScriptRoot "Stop-LocalAi.ps1") -Mode $otherPhase -ConfigPath $ConfigPath
 }
-& (Join-Path $PSScriptRoot "Stop-LocalAi.ps1") @stopOtherArgs
 
 $targetDefinition = Get-LocalAiServiceDefinition -Mode $Phase
 $targetPort = $targetDefinition.Port
@@ -31,9 +28,12 @@ $targetKey = [Environment]::GetEnvironmentVariable($targetDefinition.KeyVariable
 # If target phase is already healthy on loopback, return immediately
 $alreadyHealthy = $false
 try {
-    $models = Invoke-RestMethod -Uri "http://127.0.0.1:$targetPort/v1/models" -Headers @{ Authorization = "Bearer $targetKey" } -TimeoutSec 3
-    if (@($models.data.id) -contains $targetAlias) {
-        $alreadyHealthy = $true
+    if ($Phase -eq "PaddleOcr") {
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$targetPort/health" -Headers @{ Authorization = "Bearer $targetKey" } -TimeoutSec 3
+        $alreadyHealthy = ($health.status -eq "ready" -and $health.model -eq $targetAlias)
+    } else {
+        $models = Invoke-RestMethod -Uri "http://127.0.0.1:$targetPort/v1/models" -Headers @{ Authorization = "Bearer $targetKey" } -TimeoutSec 3
+        $alreadyHealthy = @($models.data.id) -contains $targetAlias
     }
 } catch {
     $alreadyHealthy = $false

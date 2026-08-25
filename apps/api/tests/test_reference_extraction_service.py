@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import delete
@@ -26,6 +27,70 @@ from app.services.reference_extraction_service import (
     ReferenceExtractionError,
     ReferenceExtractionService,
 )
+
+
+class FakePaddleBlock:
+    def __init__(self, text: str) -> None:
+        self.page = 1
+        self.order = 1
+        self.label = "text"
+        self.text = text
+        self.bbox = [10.0, 10.0, 200.0, 80.0]
+
+    def model_dump(self, **_kwargs):
+        return {
+            "page": self.page,
+            "order": self.order,
+            "label": self.label,
+            "text": self.text,
+            "bbox": self.bbox,
+        }
+
+
+class FakePaddleClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def health(self):
+        return {"status": "ready"}
+
+    def ocr_image(self, **kwargs):
+        self.calls += 1
+        text = f"OCR {kwargs['request_id']}"
+        return SimpleNamespace(
+            normalized_text=text,
+            markdown=text,
+            blocks=[FakePaddleBlock(text)],
+            warnings=[],
+            version="3.7.0",
+            latency_ms=10,
+        )
+
+
+class FakeTextProvider:
+    def extract_reference_bundle_from_ocr_documents(self, *, documents):
+        assert set(documents) == {"question_paper", "solution", "rubric"}
+        return FakeExtractor().extract_reference_bundle(
+            {"QUESTION": [], "SOLUTION": [], "RUBRIC": []}
+        )
+
+
+@pytest.fixture(autouse=True)
+def fake_local_hybrid_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.services.reference_extraction_service as module
+
+    paddle = FakePaddleClient()
+    monkeypatch.setattr(
+        module.LocalOcrClient,
+        "from_settings",
+        classmethod(lambda cls, settings=None: paddle),
+    )
+    adapter = SimpleNamespace(provider=FakeTextProvider(), verify_available_model=lambda: None)
+    monkeypatch.setattr(
+        module.BrainAdapter,
+        "for_provider",
+        classmethod(lambda cls, settings, provider: adapter),
+    )
 
 
 class FakePhaseManager:
@@ -173,17 +238,19 @@ def seed_run(db: Session, storage_root: Path) -> GradingRun:
 def enabled_settings(storage_root: Path) -> Settings:
     return Settings(
         BRAIN_ALLOW_REAL_PROVIDERS=True,
-        LOCAL_QWEN38_ENABLED=True,
-        LOCAL_QWEN38_API_KEY="key-local-test",
-        LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=True,
+        LOCAL_QWEN_ENABLED=True,
+        LOCAL_QWEN_API_KEY="key-local-test",
+        LOCAL_PADDLE_OCR_ENABLED=True,
+        LOCAL_PADDLE_OCR_API_KEY="paddle-key-local-test",
         LOCAL_REFERENCE_EXTRACTION_ENABLED=True,
+        LOCAL_AI_PHASE_SWITCH_ENABLED=True,
         LOCAL_STORAGE_ROOT=str(storage_root),
         UPLOADS_DIR=str(storage_root / "uploads"),
         ARTIFACTS_DIR=str(storage_root / "artifacts"),
     )
 
 
-def test_reference_bundle_runs_with_qwen38_visual_extraction(
+def test_reference_bundle_runs_with_paddle_and_qwen36(
     db_session: Session, tmp_path: Path
 ) -> None:
     storage_root = tmp_path / "storage"
@@ -200,7 +267,7 @@ def test_reference_bundle_runs_with_qwen38_visual_extraction(
     queued = service.create(
         run,
         teacher_id=run.created_by_teacher_id,
-        expected_model="qwen3.8-27b-q4km",
+        expected_model="qwen3.6-35b-a3b-q4km",
     )
     assert queued["status"] == "queued"
     service.run(run.id)
@@ -211,7 +278,7 @@ def test_reference_bundle_runs_with_qwen38_visual_extraction(
     assert run.reference_extraction_status == "succeeded"
     assert run.reference_ocr_call_count == 3
     assert run.reference_qwen_call_count == 1
-    assert extractor.qwen_calls == 1
+    assert phases.phases == ["PaddleOcr", "Qwen"]
 
 
 def test_reference_bundle_fails_before_switching_or_calling_when_model_slot_is_busy(
@@ -230,7 +297,7 @@ def test_reference_bundle_fails_before_switching_or_calling_when_model_slot_is_b
     service.create(
         run,
         teacher_id=run.created_by_teacher_id,
-        expected_model="qwen3.8-27b-q4km",
+        expected_model="qwen3.6-35b-a3b-q4km",
     )
     lease = LocalModelLeaseService(db_session)
     lease.acquire(
@@ -269,7 +336,7 @@ def test_reference_bundle_detects_material_tampering_before_any_model_call(
     service.create(
         run,
         teacher_id=run.created_by_teacher_id,
-        expected_model="qwen3.8-27b-q4km",
+        expected_model="qwen3.6-35b-a3b-q4km",
     )
     (storage_root / run.question_pdf_path).write_bytes(b"changed")
 
@@ -304,7 +371,7 @@ def test_reference_bundle_kill_switch_and_model_alias_are_enforced(
         service.create(
             run,
             teacher_id=run.created_by_teacher_id,
-            expected_model="qwen3.8-27b-q4km",
+            expected_model="qwen3.6-35b-a3b-q4km",
         )
 
     settings.local_reference_extraction_enabled = True
@@ -352,6 +419,8 @@ def tiered_settings(storage_root: Path, **overrides) -> Settings:
         LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=True,
         LOCAL_QWEN_ENABLED=True,
         LOCAL_QWEN_API_KEY="key-local-test",
+        LOCAL_PADDLE_OCR_ENABLED=True,
+        LOCAL_PADDLE_OCR_API_KEY="paddle-key-local-test",
         LOCAL_REFERENCE_EXTRACTION_ENABLED=True,
         LOCAL_OCR_ENABLED=True,
         LOCAL_AI_PHASE_SWITCH_ENABLED=True,
@@ -453,7 +522,9 @@ def test_confident_pages_never_reach_the_vision_model(
         phase_manager=phases,
         extractor_factory=lambda: FakeExtractor(),
     )
-    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+    service.create(
+        run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.6-35b-a3b-q4km"
+    )
 
     service.run(run.id)
 
@@ -461,13 +532,9 @@ def test_confident_pages_never_reach_the_vision_model(
     refreshed = db_session.get(GradingRun, run.id)
     assert refreshed is not None
     assert refreshed.reference_extraction_status == "succeeded"
-    assert calls["tier1"] == 3
-    # Only the rubric escalates, and by document role rather than by score:
-    # measured, 94.7% of handwritten lines are wrong even when confidently read,
-    # so a declared-handwritten document is never accepted on confidence alone.
-    # The confident question and solution pages are not sent.
-    assert calls["vision"] == 1
-    assert phases.phases == ["Qwen38", "Qwen"]
+    assert calls["tier1"] == 0
+    assert calls["vision"] == 0
+    assert phases.phases == ["PaddleOcr", "Qwen"]
 
 
 def test_a_fully_confident_typed_bundle_skips_the_vision_model_entirely(
@@ -491,7 +558,9 @@ def test_a_fully_confident_typed_bundle_skips_the_vision_model_entirely(
         phase_manager=phases,
         extractor_factory=lambda: FakeExtractor(),
     )
-    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+    service.create(
+        run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.6-35b-a3b-q4km"
+    )
 
     service.run(run.id)
 
@@ -500,10 +569,10 @@ def test_a_fully_confident_typed_bundle_skips_the_vision_model_entirely(
     assert refreshed is not None
     assert refreshed.reference_extraction_status == "succeeded"
     assert calls["vision"] == 0
-    assert phases.phases == ["Qwen"]
+    assert phases.phases == ["PaddleOcr", "Qwen"]
 
 
-def test_unconfident_pages_escalate_in_one_batched_window(
+def test_rapidocr_confidence_cannot_route_reference_pages_to_qwen38(
     db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     storage_root = tmp_path / "storage"
@@ -516,7 +585,9 @@ def test_unconfident_pages_escalate_in_one_batched_window(
         phase_manager=phases,
         extractor_factory=lambda: FakeExtractor(),
     )
-    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+    service.create(
+        run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.6-35b-a3b-q4km"
+    )
 
     service.run(run.id)
 
@@ -524,13 +595,11 @@ def test_unconfident_pages_escalate_in_one_batched_window(
     refreshed = db_session.get(GradingRun, run.id)
     assert refreshed is not None
     assert refreshed.reference_extraction_status == "succeeded"
-    assert calls["vision"] == 3
-    # Exactly one switch to the vision model then one to the text model. Any
-    # interleaving would cost a 30-90 second reload per page.
-    assert phases.phases == ["Qwen38", "Qwen"]
+    assert calls["vision"] == 0
+    assert phases.phases == ["PaddleOcr", "Qwen"]
 
 
-def test_exceeding_the_escalation_budget_is_a_hard_failure(
+def test_exceeding_the_paddle_call_budget_is_a_hard_failure(
     db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     storage_root = tmp_path / "storage"
@@ -538,11 +607,13 @@ def test_exceeding_the_escalation_budget_is_a_hard_failure(
     calls = install_fakes(monkeypatch, confidence="0.10")
     service = ReferenceExtractionService(
         db_session,
-        settings=tiered_settings(storage_root, LOCAL_REFERENCE_MAX_ESCALATIONS=1),
+        settings=tiered_settings(storage_root, LOCAL_REFERENCE_MAX_OCR_CALLS=1),
         phase_manager=FakePhaseManager(),
         extractor_factory=lambda: FakeExtractor(),
     )
-    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+    service.create(
+        run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.6-35b-a3b-q4km"
+    )
 
     service.run(run.id)
 
@@ -568,7 +639,9 @@ def test_per_page_evidence_is_recorded_for_audit(
         phase_manager=FakePhaseManager(),
         extractor_factory=lambda: FakeExtractor(),
     )
-    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+    service.create(
+        run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.6-35b-a3b-q4km"
+    )
 
     service.run(run.id)
 
@@ -576,13 +649,13 @@ def test_per_page_evidence_is_recorded_for_audit(
     assert len(rows) == 3
     assert {row.document_role for row in rows} == {"question_paper", "solution", "rubric"}
     for row in rows:
-        assert row.escalated is True
-        assert row.engine == "fake_tier1"
-        assert row.reason_codes  # which trigger fired must be recorded, not just that one did
+        assert row.escalated is False
+        assert row.engine == "paddleocr_vl"
+        assert row.reason_codes == ["primary_local_paddle_workflow"]
         assert row.page_image_sha256
 
 
-def test_the_teacher_is_told_which_pages_took_the_hard_path(
+def test_teacher_is_told_the_hybrid_draft_needs_confirmation(
     db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     storage_root = tmp_path / "storage"
@@ -594,7 +667,9 @@ def test_the_teacher_is_told_which_pages_took_the_hard_path(
         phase_manager=FakePhaseManager(),
         extractor_factory=lambda: FakeExtractor(),
     )
-    service.create(run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.8-27b-q4km")
+    service.create(
+        run, teacher_id=run.created_by_teacher_id, expected_model="qwen3.6-35b-a3b-q4km"
+    )
 
     service.run(run.id)
 
@@ -602,4 +677,5 @@ def test_the_teacher_is_told_which_pages_took_the_hard_path(
     refreshed = db_session.get(GradingRun, run.id)
     assert refreshed is not None
     warnings = " ".join(refreshed.reference_extraction_warnings or [])
-    assert "read by the vision model" in warnings
+    assert "PaddleOCR" in warnings
+    assert "Qwen3.6" in warnings

@@ -27,6 +27,7 @@ from app.models import (
 from app.services.answer_region_processing import crop_answer_region_image
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
+from app.services.local_ocr_client import LocalOcrClient
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
 
@@ -60,6 +61,11 @@ class _ScriptPageReading:
         return bool(self.decision.escalated)
 
 
+@dataclass(frozen=True)
+class _PaddleDecision:
+    escalated: bool = False
+
+
 class LocalScriptPreparationService:
     """Prepare draft answer regions from full script pages without manual cropping."""
 
@@ -73,6 +79,7 @@ class LocalScriptPreparationService:
         phase_manager: LocalAiPhaseManager | None = None,
         ocr_engine: Any | None = None,
         text_adapter: BrainAdapter | None = None,
+        paddle_client_factory: Any | None = None,
     ) -> None:
         self.db = db
         self.settings = settings or get_settings()
@@ -82,6 +89,9 @@ class LocalScriptPreparationService:
         # installed or a model resident. See TierOneOcrEngine in packages.ocr.types.
         self._ocr_engine = ocr_engine
         self._text_adapter = text_adapter
+        self._paddle_client_factory = paddle_client_factory or (
+            lambda: LocalOcrClient.from_settings(self.settings)
+        )
         self.phase_manager = phase_manager or LocalAiPhaseManager(
             settings=self.settings, db=self.db
         )
@@ -398,6 +408,154 @@ class LocalScriptPreparationService:
                 ),
             },
         )
+
+    def prepare_from_paddle_ocr(
+        self,
+        *,
+        submission: Submission,
+        teacher: User,
+        expected_text_model: str,
+        expected_ocr_model: str,
+        expected_layout_model: str,
+        replace_existing: bool,
+        maximum_ocr_calls: int,
+    ) -> list[AnswerRegionMapping]:
+        """Paddle locates ordered blocks; Qwen3.6 maps only their identifiers."""
+
+        self._validate_paddle_authorization(
+            expected_text_model=expected_text_model,
+            expected_ocr_model=expected_ocr_model,
+            expected_layout_model=expected_layout_model,
+        )
+        pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
+        if not pages:
+            raise LocalScriptPreparationError("The uploaded script has no rendered pages")
+        if len(pages) > min(maximum_ocr_calls, self.settings.local_script_max_ocr_calls):
+            raise LocalScriptPreparationError("Script pages exceed the authorized OCR call limit")
+        questions, nodes, references = self._load_finalized_references(submission)
+        existing = self._load_existing(submission.id)
+        if existing and not replace_existing:
+            raise LocalScriptPreparationError(
+                "Draft mappings already exist; explicitly replace them to prepare again"
+            )
+        self._assert_replace_is_safe(existing)
+
+        readings: list[_ScriptPageReading] = []
+        lease = LocalModelLeaseService(self.db)
+        holder = f"script_paddle_preparation:{submission.id}:{uuid4().hex}"
+        try:
+            with lease.hold(
+                model_phase="PaddleOcr",
+                holder_kind="script_preparation",
+                holder_id=holder,
+            ):
+                if self.settings.local_ai_phase_switch_enabled:
+                    self.phase_manager.switch("PaddleOcr", lease_holder_id=holder)
+                client = self._paddle_client_factory()
+                client.health()
+                for page in pages:
+                    path = self.storage.resolve_relative(page.image_path)
+                    lease.heartbeat(holder_id=holder)
+                    result = client.ocr_image(
+                        image_bytes=path.read_bytes(),
+                        content_type=_image_content_type(path),
+                        request_id=f"script-{submission.id}-page-{page.page_no}",
+                        mode="document",
+                    )
+                    lease.heartbeat(holder_id=holder)
+                    blocks = [
+                        {
+                            "order": block.order,
+                            "text": block.text,
+                            "bbox": block.bbox,
+                            "confidence": None,
+                        }
+                        for block in result.blocks
+                        if block.text.strip() and block.bbox is not None
+                    ]
+                    readings.append(
+                        _ScriptPageReading(
+                            page=page,
+                            blocks=blocks,
+                            reading=result,
+                            decision=_PaddleDecision(),
+                        )
+                    )
+        except LocalModelLeaseError as exc:
+            raise LocalScriptPreparationError(str(exc)) from exc
+        except Exception as exc:
+            raise LocalScriptPreparationError(
+                f"PaddleOCR script reading failed safely: {exc}"
+            ) from exc
+
+        accepted = [item for item in readings if item.blocks]
+        if not accepted:
+            raise LocalScriptPreparationError(
+                "PaddleOCR found no locatable answer blocks; upload a clearer complete script"
+            )
+        segments_by_question: dict[int, list[PreparedSegment]] = {q.id: [] for q in questions}
+        warning_by_question: dict[int, list[str]] = {q.id: [] for q in questions}
+        confidence_by_question: dict[int, list[Decimal]] = {q.id: [] for q in questions}
+        try:
+            text_calls = self._map_accepted_pages_with_text_model(
+                accepted=accepted,
+                questions=questions,
+                references=references,
+                segments_by_question=segments_by_question,
+                warning_by_question=warning_by_question,
+                confidence_by_question=confidence_by_question,
+                lease=lease,
+                holder=holder,
+            )
+        except LocalModelLeaseError as exc:
+            raise LocalScriptPreparationError(str(exc)) from exc
+
+        return self._persist_prepared_mappings(
+            submission=submission,
+            teacher=teacher,
+            questions=questions,
+            nodes=nodes,
+            pages=pages,
+            existing=existing,
+            segments_by_question=segments_by_question,
+            warning_by_question=warning_by_question,
+            confidence_by_question=confidence_by_question,
+            run_warnings=[
+                "PaddleOCR located answer blocks; Qwen3.6 mapped block IDs only. "
+                "Confirm every region before transcription."
+            ],
+            provider="local_paddle_qwen",
+            audit_payload={
+                "expected_text_model": expected_text_model,
+                "expected_ocr_model": expected_ocr_model,
+                "expected_layout_model": expected_layout_model,
+                "paddle_ocr_call_count": len(readings),
+                "text_mapping_call_count": text_calls,
+                "qwen38_call_count": 0,
+            },
+        )
+
+    def _validate_paddle_authorization(
+        self,
+        *,
+        expected_text_model: str,
+        expected_ocr_model: str,
+        expected_layout_model: str,
+    ) -> None:
+        if not self.settings.brain_allow_real_providers:
+            raise LocalScriptPreparationError("Real local providers are disabled")
+        if not self.settings.local_script_preparation_enabled:
+            raise LocalScriptPreparationError("Local script preparation is disabled")
+        if not self.settings.local_paddle_ocr_enabled:
+            raise LocalScriptPreparationError("Local PaddleOCR must be enabled")
+        if not self.settings.local_qwen_enabled:
+            raise LocalScriptPreparationError("Local Qwen3.6 must be enabled")
+        if expected_text_model != self.settings.local_qwen_model:
+            raise LocalScriptPreparationError("Expected Qwen3.6 model alias does not match")
+        if expected_ocr_model != self.settings.local_paddle_ocr_model:
+            raise LocalScriptPreparationError("Expected PaddleOCR model alias does not match")
+        if expected_layout_model != self.settings.local_paddle_ocr_layout_model:
+            raise LocalScriptPreparationError("Expected Paddle layout model alias does not match")
 
     def _map_escalated_pages_with_vision(
         self,

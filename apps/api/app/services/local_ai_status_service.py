@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.services.local_ocr_client import LocalOcrClient
 from packages.brain.adapter import BrainAdapter
 
 
@@ -19,11 +20,43 @@ class LocalAiStatusService:
             "local_script_preparation_enabled": (self.settings.local_script_preparation_enabled),
             "local_single_answer_grading_enabled": (
                 self.settings.local_single_answer_grading_enabled
-                or self.settings.local_qwen38_grading_enabled
             ),
+            "paddle_ocr": self._paddle_ocr_status(),
             "qwen": self._qwen_status(),
             "qwen38": self._qwen38_status(),
         }
+
+    def _paddle_ocr_status(self) -> dict[str, Any]:
+        base = {
+            "enabled": self.settings.local_paddle_ocr_enabled,
+            "available": False,
+            "provider": "local_paddle_qwen",
+            "model": self.settings.local_paddle_ocr_model,
+            "layout_model": self.settings.local_paddle_ocr_layout_model,
+            "device": "gpu_exclusive_phase",
+            "detail": None,
+            "models": [
+                self.settings.local_paddle_ocr_model,
+                self.settings.local_paddle_ocr_layout_model,
+            ],
+        }
+        if not self.settings.local_paddle_ocr_enabled:
+            base["detail"] = "disabled"
+            return base
+        if not self.settings.brain_allow_real_providers:
+            base["detail"] = "blocked_by_provider_kill_switch"
+            return base
+        if not self.settings.local_paddle_ocr_api_key:
+            base["detail"] = "missing_api_key"
+            return base
+        try:
+            LocalOcrClient.from_settings(self.settings).health()
+        except Exception:
+            base["detail"] = "unavailable_or_model_mismatch"
+            return base
+        base["available"] = True
+        base["detail"] = "ready"
+        return base
 
     def _qwen_status(self) -> dict[str, Any]:
         base = {
@@ -73,6 +106,7 @@ class LocalAiStatusService:
             "detail": None,
             "models": [self.settings.local_qwen38_model],
             "visual_preparation_enabled": self.settings.local_qwen38_visual_preparation_enabled,
+            "transcription_enabled": self.settings.local_qwen38_transcription_enabled,
             "grading_enabled": self.settings.local_qwen38_grading_enabled,
         }
         if not self.settings.local_qwen38_enabled:
@@ -98,13 +132,11 @@ class LocalAiStatusService:
             base["detail"] = "unavailable_or_model_mismatch"
             return base
         base["available"] = True
-        if (
-            not self.settings.local_qwen38_visual_preparation_enabled
-            and not self.settings.local_qwen38_grading_enabled
+        if not (
+            self.settings.local_qwen38_transcription_enabled
+            or self.settings.local_qwen38_visual_preparation_enabled
         ):
             base["detail"] = "ready_features_disabled"
-        elif self.settings.local_qwen38_visual_preparation_enabled:
-            base["detail"] = "ready"
         else:
-            base["detail"] = "ready_grading_only"
+            base["detail"] = "ready"
         return base

@@ -1,6 +1,6 @@
 # Brain Adapter provider configuration
 
-TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default and requires no keys. OpenAI-compatible chat completions and `codex_cli` remain available when explicitly configured. The local-first milestone adds loopback-only `llama_cpp_qwen` (text-only, for correlating reference text) and `llama_cpp_qwen38` (vision, for reading pages that CPU OCR could not read confidently). Tier-1 OCR runs in-process on the CPU and is not a provider.
+TA Agent keeps grading and language-model extraction access behind `packages/brain` and `BrainAdapter`. The mock provider remains the default. The supervised local workflow uses loopback-only `llama_cpp_qwen` for Qwen3.6 text tasks and `llama_cpp_qwen38` only for explicit visual-transcription rescue. PaddleOCR is a separate loopback sidecar and never grades.
 
 ## Environment variables
 
@@ -14,6 +14,17 @@ LOCAL_QWEN_ENABLED=false
 LOCAL_QWEN_BASE_URL=http://127.0.0.1:8086/v1
 LOCAL_QWEN_MODEL=qwen3.6-35b-a3b-q4km
 LOCAL_QWEN_API_KEY=
+
+LOCAL_PADDLE_OCR_ENABLED=false
+LOCAL_PADDLE_OCR_BASE_URL=http://127.0.0.1:8090
+LOCAL_PADDLE_OCR_API_KEY=
+LOCAL_PADDLE_OCR_MODEL=PaddleOCR-VL-1.6
+LOCAL_PADDLE_OCR_LAYOUT_MODEL=PP-DocLayoutV3
+
+LOCAL_QWEN38_ENABLED=false
+LOCAL_QWEN38_TRANSCRIPTION_ENABLED=false
+LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=false
+LOCAL_QWEN38_GRADING_ENABLED=false
 
 OPENAI_API_KEY=
 OPENAI_MODEL=
@@ -40,6 +51,8 @@ Behavior:
 - `BRAIN_PROVIDER=codex_cli` enables local Codex CLI execution and does **not** require `OPENAI_API_KEY`.
 - `BRAIN_PROVIDER=llama_cpp_qwen` additionally requires `LOCAL_QWEN_ENABLED=true`, a loopback HTTP URL, and `LOCAL_QWEN_API_KEY`.
 - `llama_cpp_qwen` verifies the exact configured alias through `/v1/models` before completion, sends strict JSON-schema requests with reasoning disabled, records token/latency metadata and zero monetary cost, and never sends answer image bytes or paths.
+- `LOCAL_PADDLE_OCR_ENABLED=true` enables only the authenticated loopback client. Every OCR request requires the exclusive `PaddleOcr` database lease and exact OCR/layout model identities.
+- `llama_cpp_qwen38` is unavailable to the normal reference, mapping, and grading contracts. It requires its separate transcription-rescue switch and a matching `Qwen38` lease.
 - `CODEX_CLI_COMMAND` defaults to `codex`; it must exist on `PATH` or provider preflight fails clearly.
 - `CODEX_CLI_MODEL` defaults to `gpt-5.5`; keep it explicit so host dev runs do not fall back to an unsupported Codex CLI default model.
 - `CODEX_CLI_TIMEOUT_SECONDS` controls subprocess timeout for preflight/execution.
@@ -94,5 +107,6 @@ Image input is optional and disabled by default.
 - Image base64 is never stored in the database and should never be logged.
 - Real provider output is still only a `GradeSuggestion`; teacher review and `FinalGrade` remain required.
 - Local Qwen cohort dispatch has no provider fallback or automatic retry and is capped at 25 sequential calls.
-- Tier-1 OCR runs in-process on the CPU (RapidOCR/PP-OCRv6 ONNX), not through a provider or a sidecar. Its output remains draft evidence until teacher confirmation, and pages it could not read confidently are escalated to `llama_cpp_qwen38`.
+- PaddleOCR output remains draft evidence until exact hash confirmation. A teacher rejection may authorize a separate Qwen3.8 forensic transcription; there is no automatic escalation or reconciliation.
+- Every PaddleOCR/Qwen3.6/Qwen3.8 inference request fails before HTTP unless the current execution context owns the matching durable model lease.
 - No provider implements automatic answer mapping or autonomous final grading.

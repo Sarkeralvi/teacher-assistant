@@ -52,10 +52,37 @@ class Settings(BaseSettings):
     local_reference_job_timeout_seconds: int = Field(
         default=2400, alias="LOCAL_REFERENCE_JOB_TIMEOUT_SECONDS", ge=300, le=3600
     )
+    local_reference_max_ocr_calls: int = Field(
+        default=20, alias="LOCAL_REFERENCE_MAX_OCR_CALLS", ge=1, le=50
+    )
 
     # Tier-1 OCR. Disabled by default: enabling it changes which model reads a
     # teacher's reference material, so it is an explicit operator decision.
     local_ocr_enabled: bool = Field(default=False, alias="LOCAL_OCR_ENABLED")
+    # Native PaddleOCR sidecar used by the rescued production workflow.  This
+    # is intentionally separate from LOCAL_OCR_ENABLED, which controls the
+    # lightweight RapidOCR calibration/tier-1 path retained for diagnostics.
+    local_paddle_ocr_enabled: bool = Field(
+        default=False, alias="LOCAL_PADDLE_OCR_ENABLED"
+    )
+    local_paddle_ocr_base_url: str = Field(
+        default="http://127.0.0.1:8090", alias="LOCAL_PADDLE_OCR_BASE_URL"
+    )
+    local_paddle_ocr_api_key: str = Field(default="", alias="LOCAL_PADDLE_OCR_API_KEY")
+    local_paddle_ocr_timeout_seconds: float = Field(
+        default=900.0, alias="LOCAL_PADDLE_OCR_TIMEOUT_SECONDS", gt=0
+    )
+    local_paddle_ocr_max_image_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        alias="LOCAL_PADDLE_OCR_MAX_IMAGE_BYTES",
+        ge=1024,
+    )
+    local_paddle_ocr_model: str = Field(
+        default="PaddleOCR-VL-1.6", alias="LOCAL_PADDLE_OCR_MODEL"
+    )
+    local_paddle_ocr_layout_model: str = Field(
+        default="PP-DocLayoutV3", alias="LOCAL_PADDLE_OCR_LAYOUT_MODEL"
+    )
     local_ocr_render_dpi: int = Field(
         default=300, alias="LOCAL_OCR_RENDER_DPI", ge=72, le=600
     )
@@ -105,6 +132,9 @@ class Settings(BaseSettings):
     # exceeding it stops the run rather than quietly reading less.
     local_script_max_escalations: int = Field(
         default=6, alias="LOCAL_SCRIPT_MAX_ESCALATIONS", ge=0, le=40
+    )
+    local_script_max_ocr_calls: int = Field(
+        default=25, alias="LOCAL_SCRIPT_MAX_OCR_CALLS", ge=1, le=100
     )
     cohort_model_grading_enabled: bool = Field(default=False, alias="COHORT_MODEL_GRADING_ENABLED")
     cohort_max_provider_calls: int = Field(
@@ -196,6 +226,9 @@ class Settings(BaseSettings):
     )
     local_qwen38_visual_preparation_enabled: bool = Field(
         default=False, alias="LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED"
+    )
+    local_qwen38_transcription_enabled: bool = Field(
+        default=False, alias="LOCAL_QWEN38_TRANSCRIPTION_ENABLED"
     )
     local_qwen38_grading_enabled: bool = Field(default=False, alias="LOCAL_QWEN38_GRADING_ENABLED")
     local_qwen38_grading_reasoning_mode: str = Field(

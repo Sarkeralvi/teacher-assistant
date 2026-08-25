@@ -32,8 +32,8 @@ from app.services.document_extraction import (
 )
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseService
+from app.services.local_ocr_client import LocalOcrClient
 from app.services.local_reference_extraction import (
-    DEFAULT_RENDER_DPI,
     LOCAL_REFERENCE_PROVIDER,
     LocalReferenceExtractor,
 )
@@ -65,6 +65,7 @@ class ReferenceExtractionService:
         settings: Settings | None = None,
         phase_manager: LocalAiPhaseManager | None = None,
         extractor_factory: Any | None = None,
+        ocr_client_factory: Any | None = None,
     ) -> None:
         self.db = db
         self.settings = settings or get_settings()
@@ -73,6 +74,9 @@ class ReferenceExtractionService:
         )
         self.extractor_factory = extractor_factory or (
             lambda: LocalReferenceExtractor(settings=self.settings)
+        )
+        self.ocr_client_factory = ocr_client_factory or (
+            lambda: LocalOcrClient.from_settings(self.settings)
         )
 
     def create(
@@ -182,7 +186,7 @@ class ReferenceExtractionService:
         self.db.commit()
 
         try:
-            self._assert_enabled(self.settings.local_qwen38_model)
+            self._assert_enabled(self.settings.local_qwen_model)
             paths = self._material_paths(grading_run)
             self._assert_material_hashes(grading_run, paths)
             self._set_stage(grading_run, "rendering_reference_pages")
@@ -190,19 +194,19 @@ class ReferenceExtractionService:
             documents: dict[str, list[tuple[bytes, str, int]]] = {}
             name_map = {"question_paper": "QUESTION", "solution": "SOLUTION", "rubric": "RUBRIC"}
             total_pages = 0
-            render_dpi = (
-                self.settings.local_ocr_render_dpi
-                if self.settings.local_ocr_enabled
-                else DEFAULT_RENDER_DPI
-            )
+            # The rescued primary workflow always uses native PaddleOCR. Its
+            # configured render DPI must not depend on the dormant RapidOCR
+            # diagnostic flag; doing so silently reduced real Paddle input to
+            # the legacy vision default whenever LOCAL_OCR_ENABLED was false.
+            render_dpi = self.settings.local_ocr_render_dpi
             for source_name, document_name in name_map.items():
                 rendered = extractor.render_pages(
                     paths[source_name], "application/pdf", target_dpi=render_dpi
                 )
                 total_pages += len(rendered)
-                if total_pages > self.settings.local_qwen38_max_visual_calls:
+                if total_pages > self.settings.local_reference_max_ocr_calls:
                     raise ReferenceExtractionError(
-                        "Reference pages exceed the authorized visual call limit"
+                        "Reference pages exceed the authorized PaddleOCR call limit"
                     )
                 documents[document_name] = [
                     (image_bytes, mime_type, page_no)
@@ -211,28 +215,12 @@ class ReferenceExtractionService:
             grading_run.reference_ocr_call_count = total_pages
 
             lease_holder_id = self._lease_holder_id(grading_run.id)
-            if self.settings.local_ocr_enabled:
-                provider_result = self._run_tiered_extraction(
-                    grading_run,
-                    documents,
-                    render_dpi=render_dpi,
-                    lease_holder_id=lease_holder_id,
-                )
-            else:
-                # Legacy single-call path: every page goes to the vision model.
-                self._set_stage(grading_run, "qwen38_visual_reference_extraction")
-                lease = LocalModelLeaseService(self.db)
-                with lease.hold(
-                    model_phase="Qwen38",
-                    holder_kind="reference_extraction",
-                    holder_id=lease_holder_id,
-                ):
-                    self._switch_phase("Qwen38", lease_holder_id=lease_holder_id)
-                    extractor.qwen_adapter.verify_available_model()
-                    lease.heartbeat(holder_id=lease_holder_id)
-                    provider_result = extractor.extract_reference_bundle(documents)
-                    lease.heartbeat(holder_id=lease_holder_id)
-                grading_run.reference_qwen_call_count = 1
+            provider_result = self._run_paddle_qwen36_extraction(
+                grading_run,
+                documents,
+                render_dpi=render_dpi,
+                lease_holder_id=lease_holder_id,
+            )
 
             self._assert_material_hashes(grading_run, paths)
             self._apply_provider_result(grading_run, provider_result)
@@ -245,9 +233,9 @@ class ReferenceExtractionService:
                 "reference_extraction_succeeded",
                 actor_type="worker",
                 payload={
-                    "visual_page_count": total_pages,
+                    "paddle_ocr_page_count": total_pages,
                     "qwen_call_count": grading_run.reference_qwen_call_count,
-                    "tier1_enabled": self.settings.local_ocr_enabled,
+                    "provider": "local_paddle_qwen",
                 },
             )
             self.db.commit()
@@ -257,6 +245,137 @@ class ReferenceExtractionService:
             if grading_run is not None:
                 self._mark_failed(grading_run, str(exc))
                 self.db.commit()
+
+    def _run_paddle_qwen36_extraction(
+        self,
+        grading_run: GradingRun,
+        documents: dict[str, list[tuple[bytes, str, int]]],
+        *,
+        render_dpi: int,
+        lease_holder_id: str,
+    ) -> dict[str, Any]:
+        """Read every reference page with Paddle, then correlate once with Qwen3.6."""
+
+        role_by_document = {
+            "QUESTION": "question_paper",
+            "SOLUTION": "solution",
+            "RUBRIC": "rubric",
+        }
+        text_documents: dict[str, list[dict[str, Any]]] = {
+            "question_paper": [],
+            "solution": [],
+            "rubric": [],
+        }
+        self._set_stage(grading_run, "paddle_ocr_reference_pages")
+        lease = LocalModelLeaseService(self.db)
+        with lease.hold(
+            model_phase="PaddleOcr",
+            holder_kind="reference_extraction",
+            holder_id=lease_holder_id,
+        ):
+            self._switch_phase("PaddleOcr", lease_holder_id=lease_holder_id)
+            client = self.ocr_client_factory()
+            client.health()
+            call_count = 0
+            for document_name, pages in documents.items():
+                role = role_by_document[document_name]
+                for image_bytes, mime_type, page_no in pages:
+                    lease.heartbeat(holder_id=lease_holder_id)
+                    result = client.ocr_image(
+                        image_bytes=image_bytes,
+                        content_type=mime_type,
+                        request_id=f"reference-{grading_run.id}-{role}-{page_no}",
+                        mode="document",
+                    )
+                    call_count += 1
+                    lease.heartbeat(holder_id=lease_holder_id)
+                    text_documents[role].append(
+                        {
+                            "page": page_no,
+                            "text": result.normalized_text,
+                            "markdown": result.markdown,
+                            "blocks": [block.model_dump(mode="json") for block in result.blocks],
+                        }
+                    )
+                    self._record_paddle_page_evidence(
+                        grading_run,
+                        document_role=role,
+                        page_no=page_no,
+                        image_bytes=image_bytes,
+                        result=result,
+                        render_dpi=render_dpi,
+                    )
+                    grading_run.reference_ocr_call_count = call_count
+                    self.db.commit()
+
+        self._set_stage(grading_run, "qwen36_reference_correlation")
+        with lease.hold(
+            model_phase="Qwen",
+            holder_kind="reference_extraction",
+            holder_id=lease_holder_id,
+        ):
+            self._switch_phase("Qwen", lease_holder_id=lease_holder_id)
+            adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen")
+            adapter.verify_available_model()
+            lease.heartbeat(holder_id=lease_holder_id)
+            result = adapter.provider.extract_reference_bundle_from_ocr_documents(
+                documents=text_documents
+            )
+            lease.heartbeat(holder_id=lease_holder_id)
+        grading_run.reference_qwen_call_count = 1
+        result["warnings"] = list(result.get("warnings") or []) + [
+            "Draft references were read by local PaddleOCR and correlated by Qwen3.6; "
+            "teacher confirmation is required."
+        ]
+        return result
+
+    def _record_paddle_page_evidence(
+        self,
+        grading_run: GradingRun,
+        *,
+        document_role: str,
+        page_no: int,
+        image_bytes: bytes,
+        result: Any,
+        render_dpi: int,
+    ) -> None:
+        existing = self.db.scalar(
+            select(ReferencePageOcrRun).where(
+                ReferencePageOcrRun.grading_run_id == grading_run.id,
+                ReferencePageOcrRun.document_role == document_role,
+                ReferencePageOcrRun.page_no == page_no,
+            )
+        )
+        if existing is not None:
+            self.db.delete(existing)
+            self.db.flush()
+        text = result.normalized_text
+        self.db.add(
+            ReferencePageOcrRun(
+                grading_run_id=grading_run.id,
+                document_role=document_role,
+                page_no=page_no,
+                render_dpi=render_dpi,
+                page_image_sha256=hashlib.sha256(image_bytes).hexdigest(),
+                engine="paddleocr_vl",
+                engine_version=result.version,
+                decision="tier1_accepted",
+                reason_codes=["primary_local_paddle_workflow"],
+                lines=[
+                    {
+                        "text": block.text,
+                        "bbox": block.bbox,
+                        "label": block.label,
+                        "order": block.order,
+                    }
+                    for block in result.blocks
+                ],
+                escalated=False,
+                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                latency_ms=result.latency_ms,
+            )
+        )
+        self.db.flush()
 
     def _run_tiered_extraction(
         self,
@@ -673,8 +792,8 @@ class ReferenceExtractionService:
             "status": grading_run.reference_extraction_status,
             "stage": grading_run.reference_extraction_stage,
             "provider": LOCAL_REFERENCE_PROVIDER,
-            "model": self.settings.local_qwen38_model,
-            "ocr_device": "qwen38_gpu_single_slot",
+            "model": self.settings.local_qwen_model,
+            "ocr_device": "paddleocr_gpu_exclusive_phase",
             "question_run_id": grading_run.reference_question_run_id,
             "rubric_run_id": grading_run.reference_rubric_run_id,
             "ocr_call_count": grading_run.reference_ocr_call_count,
@@ -776,14 +895,13 @@ class ReferenceExtractionService:
     def _assert_enabled(self, expected_model: str) -> None:
         if not self.settings.brain_allow_real_providers:
             raise ReferenceExtractionError("Real local providers are safety-disabled")
-        if not (
-            self.settings.local_reference_extraction_enabled
-            and self.settings.local_qwen38_visual_preparation_enabled
-        ):
-            raise ReferenceExtractionError("Qwen3.8 reference extraction is disabled")
-        if not self.settings.local_qwen38_enabled:
-            raise ReferenceExtractionError("Qwen3.8 must be enabled")
-        if expected_model != self.settings.local_qwen38_model:
+        if not self.settings.local_reference_extraction_enabled:
+            raise ReferenceExtractionError("Local reference extraction is disabled")
+        if not self.settings.local_paddle_ocr_enabled:
+            raise ReferenceExtractionError("Local PaddleOCR must be enabled")
+        if not self.settings.local_qwen_enabled:
+            raise ReferenceExtractionError("Local Qwen3.6 must be enabled")
+        if expected_model != self.settings.local_qwen_model:
             raise ReferenceExtractionError("Expected Qwen model alias does not match configuration")
 
     def _material_paths(self, grading_run: GradingRun) -> dict[str, Path]:

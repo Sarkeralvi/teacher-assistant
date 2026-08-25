@@ -30,7 +30,11 @@ SCHEMA_VERSION = 2
 # The grading model is not settled: Qwen3.6 and Qwen3.8 are being compared on
 # measured mark accuracy before one is pinned. Until that decision lands, a run
 # must name which alias it used rather than the harness assuming one.
-SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km")
+SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km",)
+# Old signed bake-off artifacts remain readable after Qwen3.8 grading was
+# retired from executable contracts. This does not authorize a new Qwen3.8
+# grading run; run_grading_stage accepts SUPPORTED_GRADING_MODELS only.
+HISTORICAL_GRADING_MODELS = (*SUPPORTED_GRADING_MODELS, "qwen3.8-27b-q4km")
 EXPECTED_LLAMA_CPP_BUILD = "10249"
 EXPECTED_PROMPT_VERSION = "real-grading-v2"
 OCR_CALL_LIMIT = 20
@@ -519,7 +523,7 @@ class GradingCaseResult(BaseModel):
             }
             if (
                 self.model_provider not in {"llama_cpp_qwen", "llama_cpp_qwen38"}
-                or self.model_name not in SUPPORTED_GRADING_MODELS
+                or self.model_name not in HISTORICAL_GRADING_MODELS
                 or self.prompt_version != EXPECTED_PROMPT_VERSION
                 or self.marking_policy != "general"
                 or self.needs_review is not True
@@ -2147,8 +2151,8 @@ def _database_is_migrated_and_empty(session_factory: Any) -> None:
             raise LocalCuratedEvaluationError(
                 "Evaluation database is not migrated to the application schema"
             ) from exc
-        if revision != "0024_model_lease_page_evidence":
-            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0024")
+        if revision != "0025_paddle_ocr_model_phase":
+            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0025")
         populated_models = [
             model.__name__
             for model in (

@@ -2075,3 +2075,11 @@ already did. Re-run afterward completed cleanly: `skipped_engines: {}`,
   equivalent for scoring purposes, which the Qwen3.8 caveat above depends
   on. CER as currently computed remains a fair comparison only between
   engines using compatible output conventions.
+# TA-LOCAL-009 - rescued hybrid bounded host acceptance (2026-08-25)
+
+- Architecture exercised: native `PaddleOCR-VL-1.6` + `PP-DocLayoutV3` on GPU, then text-only `qwen3.6-35b-a3b-q4km`, then explicit non-thinking `qwen3.8-27b-q4km` transcription rescue. The three phases were mutually exclusive and protected by the production database lease.
+- Clean acceptance run: exactly one completed Paddle call, three Qwen3.6 calls (reference correlation, answer mapping, and text-only draft grading), and one Qwen3.8 call. Paddle returned nonblank hashed text in 1.360 s; Qwen3.6 returned one reference with a nonblank model answer, one review-required mapping, and a `5/5` draft with `needs_review=true` and image input disabled in 9.388 s; Qwen3.8 returned a nonblank hashed draft with `needs_review=true` and reasoning off in 14.955 s.
+- Safety result: no assessment, `GradeSuggestion`, grading job, or `FinalGrade` was created; cohort grading remained disabled; the lease was released; ports 8090, 8086, and 8085 were all closed after the run; raw OCR/transcription text was not written to the smoke report.
+- Identity result: the Qwen3.8 disk hash was repinned only after it exactly matched the publisher's current Q4_K_M SHA-256. The mmproj pin also matched. API keys and paths remained in ignored local configuration.
+- Diagnostic attempts before the clean run were manual engineering reruns, never automatic provider retries. They included additional completed Paddle/Qwen calls, one interrupted/uncertain Qwen3.6 request, and no hidden provider calls. Failures exposed and fixed a stale model hash, two smoke-harness interface mistakes, and a Qwen reference contract that allowed a null model answer; provider safety checks failed closed throughout.
+- Engineering result at this checkpoint: 507 backend tests passed, 3 skipped; the signed curated quality gate and signed supervised teacher rehearsal remain outstanding and are not implied by this synthetic acceptance.

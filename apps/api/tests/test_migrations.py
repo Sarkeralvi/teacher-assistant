@@ -8,7 +8,8 @@ from sqlalchemy import CheckConstraint
 
 from app.models import Base
 
-EXPECTED_REVISION_ID = "0024_model_lease_page_evidence"
+EXPECTED_REVISION_ID = "0025_paddle_ocr_model_phase"
+WIDENING_REVISION_ID = "0024_model_lease_page_evidence"
 
 
 def _script_directory() -> ScriptDirectory:
@@ -65,7 +66,7 @@ def test_widened_check_constraints_match_the_migration_that_widened_them(
     narrower list, so a schema built from metadata rejected writes the real
     database accepted. Nothing compared the two, so nothing failed.
     """
-    module = _script_directory().get_revision(EXPECTED_REVISION_ID).module
+    module = _script_directory().get_revision(WIDENING_REVISION_ID).module
     migration_values = _quoted_values(getattr(module, migration_attribute))
     metadata_values = _quoted_values(_metadata_constraint(table_name, constraint_name))
 

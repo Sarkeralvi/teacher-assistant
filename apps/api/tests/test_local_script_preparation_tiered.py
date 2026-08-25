@@ -47,6 +47,7 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from app.services.local_ocr_client import LocalOcrResult
 from app.services.local_script_preparation import (
     LocalScriptPreparationError,
     LocalScriptPreparationService,
@@ -148,6 +149,48 @@ class FakeVisionProvider:
         return VisualPageMappingOutput(regions=self._regions.pop(0), needs_review=True)
 
 
+class FakePaddleClient:
+    def __init__(self, pages: list[list[dict[str, Any]]]) -> None:
+        self._pages = list(pages)
+        self.calls = 0
+        self.health_calls = 0
+
+    def health(self) -> dict[str, Any]:
+        self.health_calls += 1
+        return {"status": "ready"}
+
+    def ocr_image(self, **kwargs: Any) -> LocalOcrResult:
+        self.calls += 1
+        blocks = self._pages.pop(0)
+        text = "\n".join(block["text"] for block in blocks)
+        return LocalOcrResult.model_validate(
+            {
+                "request_id": kwargs["request_id"],
+                "mode": kwargs["mode"],
+                "text": text,
+                "normalized_text": text,
+                "markdown": text,
+                "blocks": [
+                    {
+                        "page": 1,
+                        "order": block["order"],
+                        "label": "text",
+                        "text": block["text"],
+                        "bbox": block["bbox"],
+                    }
+                    for block in blocks
+                ],
+                "warnings": [],
+                "provider": "local_paddle_qwen",
+                "model": "PaddleOCR-VL-1.6",
+                "layout_model": "PP-DocLayoutV3",
+                "version": "3.7.0",
+                "device": "gpu:0",
+                "latency_ms": 10,
+            }
+        )
+
+
 class FakeAdapter:
     def __init__(self, provider: Any) -> None:
         self.provider = provider
@@ -184,6 +227,10 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     values: dict[str, Any] = {
         "BRAIN_ALLOW_REAL_PROVIDERS": True,
         "LOCAL_OCR_ENABLED": True,
+        "LOCAL_PADDLE_OCR_ENABLED": True,
+        "LOCAL_PADDLE_OCR_MODEL": "PaddleOCR-VL-1.6",
+        "LOCAL_PADDLE_OCR_LAYOUT_MODEL": "PP-DocLayoutV3",
+        "LOCAL_SCRIPT_PREPARATION_ENABLED": True,
         "LOCAL_QWEN_ENABLED": True,
         "LOCAL_QWEN_MODEL": "qwen3.6-35b-a3b-q4km",
         "LOCAL_QWEN38_ENABLED": True,
@@ -348,6 +395,94 @@ def _draft(question_id: int, label: str, page_no: int, orders: list[int]) -> dic
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────
+
+
+def test_hybrid_path_batches_paddle_then_qwen36_and_never_calls_qwen38(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path)
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+    paddle = FakePaddleClient(
+        [
+            [
+                {"order": 1, "text": LABELS[0], "bbox": [40, 40, 200, 70]},
+                {"order": 2, "text": "working one", "bbox": [40, 80, 420, 120]},
+            ],
+            [
+                {"order": 1, "text": LABELS[1], "bbox": [40, 40, 200, 70]},
+                {"order": 2, "text": "working two", "bbox": [40, 80, 420, 120]},
+            ],
+        ]
+    )
+    text_provider = FakeTextProvider(
+        [
+            _draft(questions[0].id, LABELS[0], 1, [1, 2]),
+            _draft(questions[1].id, LABELS[1], 2, [1, 2]),
+        ]
+    )
+    vision = FakeVisionProvider([])
+    switches = SwitchLog([])
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(vision),  # type: ignore[arg-type]
+        text_adapter=FakeAdapter(text_provider),  # type: ignore[arg-type]
+        paddle_client_factory=lambda: paddle,
+        phase_manager=FakePhaseManager(switches),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare_from_paddle_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_ocr_model="PaddleOCR-VL-1.6",
+        expected_layout_model="PP-DocLayoutV3",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+    )
+
+    assert paddle.health_calls == 1
+    assert paddle.calls == 2
+    assert len(text_provider.calls) == 1
+    assert vision.calls == 0
+    assert switches.phases == ["PaddleOcr", "Qwen"]
+    assert {item.provider for item in mappings} == {"local_paddle_qwen"}
+    assert {item.mapping_status for item in mappings} == {"mapped"}
+    audit = db_session.query(AuditLog).filter(
+        AuditLog.event_type == "submission_script_draft_prepared"
+    ).one()
+    assert audit.payload_json["paddle_ocr_call_count"] == 2
+    assert audit.payload_json["qwen38_call_count"] == 0
+
+
+def test_hybrid_path_refuses_page_count_above_explicit_paddle_budget(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path, page_count=2)
+    paddle = FakePaddleClient([])
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        paddle_client_factory=lambda: paddle,
+    )
+
+    with pytest.raises(LocalScriptPreparationError, match="authorized OCR call limit"):
+        service.prepare_from_paddle_ocr(
+            submission=submission,
+            teacher=teacher,
+            expected_text_model="qwen3.6-35b-a3b-q4km",
+            expected_ocr_model="PaddleOCR-VL-1.6",
+            expected_layout_model="PP-DocLayoutV3",
+            replace_existing=True,
+            maximum_ocr_calls=1,
+        )
+
+    assert paddle.calls == 0
 
 
 def test_no_vision_call_when_tier1_read_every_page(

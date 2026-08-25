@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-LocalModelPhase = Literal["Qwen", "Qwen38"]
+LocalModelPhase = Literal["PaddleOcr", "Qwen", "Qwen38"]
 
 
 class LocalModelCallGuardError(RuntimeError):

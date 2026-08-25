@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { buttonClass, ErrorState, inputClass, LoadingState } from "./AppShell";
 import {
@@ -21,14 +21,15 @@ import {
   type ReferenceQuestionConfirmation,
 } from "../lib/api";
 
-const EXPECTED_MODEL = "qwen3.8-27b-q4km";
+const EXPECTED_MODEL = "qwen3.6-35b-a3b-q4km";
 
 const stageLabels: Record<string, string> = {
   not_started: "Not started",
   queued: "Waiting for the local worker",
   validating_materials: "Checking the three uploaded files",
   rendering_reference_pages: "Rendering the three uploaded reference files",
-  qwen38_visual_reference_extraction: "Qwen3.8 is reading questions, solutions, and rubric",
+  paddle_ocr_reference_pages: "PaddleOCR is reading reference pages",
+  qwen36_reference_correlation: "Qwen3.6 is linking questions, solutions, and rubric",
   teacher_review_required: "Drafts ready for teacher review",
   teacher_confirmed: "Teacher confirmed",
   failed: "Extraction stopped",
@@ -56,12 +57,13 @@ export function CustomControlledGradingRunClient({
     run?.question_pdf_path && run.solution_pdf_path && run.rubric_pdf_path,
   );
   const extractionActive = extraction?.status === "queued" || extraction?.status === "running";
+  const activeRunId = run?.id;
   const referencesConfirmed = Boolean(run?.questions_confirmed_at && run.rubrics_confirmed_at);
   const localProviderConfigured = Boolean(
-    localAi?.real_providers_allowed && localAi.qwen38.enabled,
+    localAi?.real_providers_allowed && localAi.paddle_ocr.enabled && localAi.qwen.enabled,
   );
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -84,18 +86,18 @@ export function CustomControlledGradingRunClient({
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    void load();
   }, [assessmentId]);
 
   useEffect(() => {
-    if (!run || !extractionActive) {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!activeRunId || !extractionActive) {
       return;
     }
     const timer = window.setInterval(() => {
-      void Promise.all([getReferenceExtraction(run.id), getGradingRun(run.id)])
+      void Promise.all([getReferenceExtraction(activeRunId), getGradingRun(activeRunId)])
         .then(([nextExtraction, nextRun]) => {
           setExtraction(nextExtraction);
           setRun(nextRun);
@@ -105,7 +107,7 @@ export function CustomControlledGradingRunClient({
         });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [run?.id, extractionActive]);
+  }, [activeRunId, extractionActive]);
 
   useEffect(() => {
     if (extraction?.status !== "succeeded" || extraction.questions.length === 0) {
@@ -371,7 +373,7 @@ export function CustomControlledGradingRunClient({
           <SectionHeading
             number="2"
             title="Confirm files and extract drafts"
-            description="The worker renders each page and reads it with local Qwen3.8 vision in one pass. No cloud provider or retry is allowed."
+            description="The worker renders each page, reads it with local PaddleOCR, then uses Qwen3.6 once to link questions, solutions, and rubric. No cloud provider or retry is allowed."
             complete={extraction?.status === "succeeded"}
           />
 
@@ -389,7 +391,7 @@ export function CustomControlledGradingRunClient({
                   onChange={(event) => setMaterialsConfirmed(event.target.checked)}
                 />
                 <span>
-                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize draft-only visual extraction with local Qwen3.8 ({EXPECTED_MODEL}).
+                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize draft-only PaddleOCR extraction followed by local Qwen3.6 correlation ({EXPECTED_MODEL}).
                 </span>
               </label>
               <div className="flex flex-wrap items-center gap-3">
@@ -653,8 +655,8 @@ function ExtractionStatus({ extraction }: Readonly<{ extraction: ReferenceExtrac
         {!failed && !complete ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" aria-label="Working" /> : null}
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400">
-        <span>Rendered visual pages: {extraction.ocr_call_count}</span>
-        <span>Qwen3.8 calls: {extraction.qwen_call_count} / 1</span>
+        <span>PaddleOCR page calls: {extraction.ocr_call_count}</span>
+        <span>Qwen3.6 correlation calls: {extraction.qwen_call_count} / 1</span>
         <span>Provider: local only</span>
       </div>
     </div>
@@ -670,12 +672,14 @@ function friendlyExtractionError(error: string | null): string {
 }
 
 function RuntimeBadge({ status }: Readonly<{ status: LocalAiStatus | null }>) {
-  const phase = status?.qwen38.available
-    ? `Qwen3.8 active · ${status.qwen38.device}`
-    : status?.qwen38.available
-      ? "Qwen active"
-      : "Local models on demand";
-  const configured = Boolean(status?.real_providers_allowed && status.qwen38.enabled);
+  const phase = status?.paddle_ocr.available
+    ? `PaddleOCR active · ${status.paddle_ocr.device}`
+    : status?.qwen.available
+      ? `Qwen3.6 active · ${status.qwen.device}`
+      : "Local models load on demand";
+  const configured = Boolean(
+    status?.real_providers_allowed && status.paddle_ocr.enabled && status.qwen.enabled,
+  );
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${configured ? "border-emerald-800 bg-emerald-950/30 text-emerald-200" : "border-amber-800 bg-amber-950/30 text-amber-200"}`}>
       <p className="font-semibold">{configured ? "Local AI configured" : "Local AI unavailable"}</p>

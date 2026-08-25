@@ -1,4 +1,3 @@
-import hashlib
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -1038,27 +1037,18 @@ def run_submission_question_node_mappings(
     submission = get_submission_or_404(submission_id, db)
     get_owned_assessment_or_404(submission.assessment_id, db, current_user)
     request = payload or AnswerRegionMappingRunRequest()
-    if request.provider in {"llama_cpp_qwen38", "llama_cpp_qwen"}:
-        tiered = request.provider == "llama_cpp_qwen"
+    if request.provider == "local_paddle_qwen":
         service = LocalScriptPreparationService(db)
         try:
-            if tiered:
-                mappings = service.prepare_from_tier1_ocr(
-                    submission=submission,
-                    teacher=current_user,
-                    expected_text_model=request.expected_model or "",
-                    expected_vision_model=request.expected_vision_model or "",
-                    replace_existing=request.replace_existing,
-                    maximum_visual_calls=request.maximum_visual_calls,
-                )
-            else:
-                mappings = service.prepare(
-                    submission=submission,
-                    teacher=current_user,
-                    expected_model=request.expected_model or "",
-                    replace_existing=request.replace_existing,
-                    maximum_ocr_calls=request.maximum_visual_calls,
-                )
+            mappings = service.prepare_from_paddle_ocr(
+                submission=submission,
+                teacher=current_user,
+                expected_text_model=request.expected_model or "",
+                expected_ocr_model=request.expected_ocr_model or "",
+                expected_layout_model=request.expected_layout_model or "",
+                replace_existing=request.replace_existing,
+                maximum_ocr_calls=request.maximum_ocr_calls,
+            )
         except LocalScriptPreparationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1071,23 +1061,12 @@ def run_submission_question_node_mappings(
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=(
-                    "Local tiered script preparation failed"
-                    if tiered
-                    else "Local Qwen3.8 visual script preparation failed"
-                ),
+                detail="Local PaddleOCR and Qwen3.6 script preparation failed",
             ) from exc
         return AnswerRegionMappingRunResponse(
             message=(
-                (
-                    "First-pass OCR located the answers and Qwen3.6 mapped them. Confirm the "
-                    "regions, then confirm visual evidence before grading."
-                )
-                if tiered
-                else (
-                    "Qwen3.8 prepared draft answer mappings. Confirm the regions, then "
-                    "confirm visual evidence before grading."
-                )
+                "PaddleOCR located answer blocks and Qwen3.6 mapped them. Confirm the "
+                "regions, then confirm exact evidence before grading."
             ),
             created_count=len(mappings),
             mapped_count=sum(1 for item in mappings if item.mapping_status == "mapped"),
@@ -1354,90 +1333,32 @@ def confirm_question_node_mapping(
                 detail="Only a proposed region can be teacher-confirmed",
             )
         if mapping.provider == "local_paddle_qwen":
-            source_reference = mapping.source_reference or {}
-            if source_reference.get("text_source") == "paddle_ocr_multi_pass_qwen_prepared":
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "Legacy Qwen-reconciled OCR evidence cannot be approved; "
-                        "run enhanced local OCR"
-                    ),
-                )
-            prepared_text = str(
-                source_reference.get("paddle_baseline_text")
-                or source_reference.get("model_prepared_answer_text")
-                or ""
-            ).strip()
-            confirmation_source = "teacher_edited"
-            if request.confirmed_text is not None:
-                confirmed_text = request.confirmed_text.strip()
-            elif request.accept_model_prepared_text:
-                primary_hash = str(
-                    source_reference.get("paddle_baseline_text_sha256")
-                    or source_reference.get("model_prepared_answer_text_sha256")
-                    or ""
-                )
-                approved_choices = {primary_hash: prepared_text} if primary_hash else {}
-                for choice in source_reference.get("model_prepared_answer_alternatives", []):
-                    if not isinstance(choice, dict):
-                        continue
-                    choice_text = str(choice.get("text") or "").strip()
-                    choice_hash = str(choice.get("sha256") or "")
-                    if choice_text and choice_hash:
-                        approved_choices[choice_hash] = choice_text
-                expected_hash = request.selected_prepared_text_sha256 or primary_hash
-                confirmed_text = approved_choices.get(expected_hash, "")
-                confirmation_source = (
-                    "model_prepared_choice" if expected_hash != primary_hash else "model_prepared"
-                )
-                if not confirmed_text:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="The selected prepared evidence is no longer available",
-                    )
-                if (
-                    not expected_hash
-                    or not hashlib.sha256(confirmed_text.encode("utf-8")).hexdigest()
-                    == expected_hash
-                ):
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="Model-prepared answer evidence failed its integrity check",
-                    )
-            else:
+            # Region identity and transcript fidelity are separate gates. This
+            # endpoint confirms only the image geometry; Paddle/Qwen3.8 text is
+            # accepted exclusively by its own hash-confirmation endpoint.
+            if request.confirmed_text is not None or request.accept_model_prepared_text:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
-                        "Explicit approval of the model-prepared answer evidence is required "
-                        "for a local mapping"
+                        "Confirm the answer region here without answer text; "
+                        "transcription has a separate integrity-checked gate"
                     ),
                 )
-            if not confirmed_text:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Model-prepared answer evidence is empty and cannot be approved",
-                )
-            mapping.answer_region.manual_answer_text = confirmed_text
             for segment in mapping.answer_region.segments:
                 segment.confirmed = True
-                db.add(
-                    AuditLog(
-                        actor_type="teacher",
-                        actor_id=current_user.id,
-                        event_type="model_prepared_answer_evidence_approved",
-                        entity_type="answer_region_mapping",
-                        entity_id=mapping.id,
-                        payload_json={
-                            "answer_region_id": mapping.answer_region.id,
-                            "confirmation_source": confirmation_source,
-                            "confirmed_text_sha256": hashlib.sha256(
-                                confirmed_text.encode("utf-8")
-                            ).hexdigest(),
-                            "confirmed_character_count": len(confirmed_text),
-                            "segment_count": len(mapping.answer_region.segments),
-                        },
-                    )
+            db.add(
+                AuditLog(
+                    actor_type="teacher",
+                    actor_id=current_user.id,
+                    event_type="answer_region_mapping_geometry_confirmed",
+                    entity_type="answer_region_mapping",
+                    entity_id=mapping.id,
+                    payload_json={
+                        "answer_region_id": mapping.answer_region.id,
+                        "segment_count": len(mapping.answer_region.segments),
+                    },
                 )
+            )
         elif mapping.provider == "llama_cpp_qwen38":
             # Mapping and visual evidence are intentionally separate gates.
             # The transcript can only be copied by the dedicated hash-checked

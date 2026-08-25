@@ -9,8 +9,10 @@ import {
   acceptQuestionImportDrafts,
   addAnswerRegionSegment,
   confirmAnswerRegionFullAnswer,
+  confirmPaddleOcrRun,
   confirmQuestionNodeMapping,
   createAnswerRegion,
+  createPaddleOcrRun,
   createVisualTranscriptionRun,
   createEvidencePrepRun,
   createGradingQueueRun,
@@ -33,6 +35,7 @@ import {
   listAssessmentAnswerRegions,
   listAssessmentGradingRuns,
   listAssessmentQuestionNodeMappings,
+  listAnswerRegionTranscriptionRuns,
   listQuestionNodes,
   listQuestions,
   listRubricExtractionCriteria,
@@ -41,6 +44,7 @@ import {
   removeAnswerRegionSegment,
   confirmVisualTranscriptionRun,
   rejectVisualTranscriptionRun,
+  rejectPaddleOcrRun,
   reorderAnswerRegionSegments,
   runAssessmentQuestionNodeMappings,
   suggestAnswerRegionMappings,
@@ -174,7 +178,7 @@ function localMappingWarnings(mapping: AnswerRegionMapping): string[] {
 // which one did — gating on the vision provider alone hid the panel for tiered
 // mappings and left the teacher no way to confirm or grade them.
 function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
-  return mapping.provider === "llama_cpp_qwen38" || mapping.provider === "llama_cpp_qwen";
+  return mapping.provider === "local_paddle_qwen";
 }
 
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
@@ -323,12 +327,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     .sort((left, right) => right.id - left.id)[0] ?? null;
   const localScriptPreparationAuthorized = Boolean(
     localAiStatus?.real_providers_allowed &&
-    localAiStatus.qwen38.enabled,
+    localAiStatus.local_script_preparation_enabled &&
+    localAiStatus.paddle_ocr.enabled &&
+    localAiStatus.qwen.enabled,
   );
   const localSingleGradeAuthorized = Boolean(
     localAiStatus?.real_providers_allowed &&
     localAiStatus.local_single_answer_grading_enabled &&
-    localAiStatus.qwen38.enabled,
+    localAiStatus.qwen.enabled,
   );
 
   function statusForRegion(regionId: number): "finalized" | "graded" | "mapped" {
@@ -468,9 +474,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         answerRegionData.map(async (region) => [region.id, await getGradingEvidencePacket(region.id)] as const),
       );
       setEvidencePackets(Object.fromEntries(evidenceEntries));
-      // Visual transcription runs are held in session state only: the backend
-      // exposes a run by id, not a per-region listing, so there is nothing to
-      // rehydrate them from after a reload.
+      const transcriptionEntries = await Promise.all(
+        answerRegionData.map(async (region) => [
+          region.id,
+          await listAnswerRegionTranscriptionRuns(region.id).catch(() => [] as AnswerRegionOcrRun[]),
+        ] as const),
+      );
+      setOcrRunsByRegionId(Object.fromEntries(transcriptionEntries));
       setReviewQueue(reviewQueueData);
       setEvidencePrepSummary(evidencePrepData);
       setGradingQueueSummary(gradingQueueData);
@@ -492,6 +502,30 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   useEffect(() => {
     void load();
   }, [assessmentId]);
+
+  useEffect(() => {
+    const activeRegionIds = Object.entries(ocrRunsByRegionId)
+      .filter(([, runs]) => runs.some((run) => run.status === "queued" || run.status === "running"))
+      .map(([regionId]) => Number(regionId));
+    if (activeRegionIds.length === 0) return;
+    let cancelled = false;
+    const refreshActiveTranscriptions = async () => {
+      const entries = await Promise.all(
+        activeRegionIds.map(async (regionId) => [
+          regionId,
+          await listAnswerRegionTranscriptionRuns(regionId).catch(
+            () => ocrRunsByRegionId[regionId] ?? [],
+          ),
+        ] as const),
+      );
+      if (!cancelled) setOcrRunsByRegionId((current) => ({ ...current, ...Object.fromEntries(entries) }));
+    };
+    const timer = window.setInterval(() => void refreshActiveTranscriptions(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [ocrRunsByRegionId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -808,17 +842,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       const responses = await runAssessmentQuestionNodeMappings(assessmentId, {
         replace_existing: true,
-        // Tiered: first-pass OCR locates the answers on the CPU and Qwen3.6 maps
-        // them in one fast text call. Qwen3.8 vision is spent only on pages the
-        // first-pass reader could not read, instead of on every page.
-        provider: "llama_cpp_qwen",
+        provider: "local_paddle_qwen",
         expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
-        expected_vision_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        expected_ocr_model: localAiStatus?.paddle_ocr.model ?? "PaddleOCR-VL-1.6",
+        expected_layout_model: localAiStatus?.paddle_ocr.layout_model ?? "PP-DocLayoutV3",
         draft_only_confirmed: true,
-        maximum_visual_calls: 25,
+        maximum_ocr_calls: 25,
       });
       setScriptPreparationMessage(
-        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answers prepared. Review each prepared image and the model-prepared evidence; no cropping or transcription is required.`,
+        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answer regions prepared. Confirm each region, then review its direct PaddleOCR transcript.`,
       );
       await load();
     } catch (err) {
@@ -832,9 +864,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setConfirmingMappingId(mapping.id);
     setError(null);
     try {
-      await confirmQuestionNodeMapping(mapping.id, true, {
-        accept_model_prepared_text: false,
-      });
+      await confirmQuestionNodeMapping(mapping.id, true);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to confirm mapping");
@@ -853,8 +883,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       await gradeAnswerRegionWithLocalQwen(answerRegionId, {
         grading_run_id: activeGradingRun.id,
-        provider: "llama_cpp_qwen38",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        provider: "llama_cpp_qwen",
+        expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
         draft_only_confirmed: true,
       });
       await load();
@@ -862,6 +892,69 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Local Qwen grading failed");
     } finally {
       setGradingRegionId(null);
+    }
+  }
+
+  async function handleRunPaddleTranscription(mapping: AnswerRegionMapping) {
+    if (!mapping.answer_region_id) return;
+    const regionId = mapping.answer_region_id;
+    setRunningOcrRegionId(regionId);
+    setError(null);
+    try {
+      const run = await createPaddleOcrRun(
+        regionId,
+        localAiStatus?.paddle_ocr.model ?? "PaddleOCR-VL-1.6",
+        localAiStatus?.paddle_ocr.layout_model ?? "PP-DocLayoutV3",
+      );
+      rememberVisualRun(regionId, run);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PaddleOCR transcription could not start");
+    } finally {
+      setRunningOcrRegionId(null);
+    }
+  }
+
+  async function handleConfirmPaddleTranscription(
+    mapping: AnswerRegionMapping,
+    run: AnswerRegionOcrRun,
+  ) {
+    if (!mapping.answer_region_id || !run.output_sha256) return;
+    setConfirmingVisualRunId(run.id);
+    setError(null);
+    try {
+      const confirmed = await confirmPaddleOcrRun(
+        mapping.answer_region_id,
+        run.id,
+        run.output_sha256,
+      );
+      rememberVisualRun(mapping.answer_region_id, confirmed);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PaddleOCR confirmation failed");
+    } finally {
+      setConfirmingVisualRunId(null);
+    }
+  }
+
+  async function handleRejectPaddleTranscription(
+    mapping: AnswerRegionMapping,
+    run: AnswerRegionOcrRun,
+  ) {
+    if (!mapping.answer_region_id) return;
+    setConfirmingVisualRunId(run.id);
+    setError(null);
+    try {
+      const rejected = await rejectPaddleOcrRun(
+        mapping.answer_region_id,
+        run.id,
+        "other_transcription_error",
+      );
+      rememberVisualRun(mapping.answer_region_id, rejected);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PaddleOCR rejection failed");
+    } finally {
+      setConfirmingVisualRunId(null);
     }
   }
 
@@ -1206,7 +1299,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <h2 className="text-xl font-semibold">Step 2 helper: Import questions from reference paper</h2>
           <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
-          <p className="text-sm text-slate-400">Default extraction is mock/simple. The supervised Qwen3.8 reference workflow is available from the Custom Controlled run screen.</p>
+          <p className="text-sm text-slate-400">Default extraction is mock/simple. The supervised PaddleOCR + Qwen3.6 reference workflow is available from the Custom Controlled run screen.</p>
           <p className="text-sm text-slate-400">Drafts never become canonical until the teacher selects, edits, and accepts them below.</p>
         </div>
         <form onSubmit={handleQuestionImport} className="grid gap-3">
@@ -1583,7 +1676,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <div className="max-w-3xl">
             <h2 className="text-xl font-semibold">Prepare complete answer scripts</h2>
             <p className="mt-1 text-sm text-slate-300">
-              Qwen3.8 maps complete script pages against finalized question labels, then creates a separate verbatim visual transcription. You do not crop, enter coordinates, or retype an answer.
+              PaddleOCR detects answer blocks on each complete script page. Qwen3.6 maps those block IDs to the finalized questions. You do not crop, enter coordinates, or retype an answer.
             </p>
             <p className="mt-1 text-sm text-amber-200">
               Review the prepared image and evidence, then approve or reject it. The finalized question, solution, and rubric are reused automatically and remain read-only here.
@@ -1595,14 +1688,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
             onClick={() => void handleRunAutomaticMappings()}
           >
-            {runningMappings ? "Qwen3.8 is mapping complete pages..." : "Prepare scripts with Qwen3.8"}
+            {runningMappings ? "PaddleOCR and Qwen3.6 are preparing scripts..." : "Prepare scripts locally"}
           </button>
         </div>
-        <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-4">
+        <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-5">
           <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
           <p>Script pages: {pages.length}</p>
-          <p>Visual preparation: {localAiStatus?.qwen38.enabled ? "enabled" : "disabled"}</p>
-          <p>Qwen3.8 server: {localAiStatus?.qwen38.available ? "ready" : localAiStatus?.qwen38.detail ?? "unavailable"}</p>
+          <p>PaddleOCR: {localAiStatus?.paddle_ocr.available ? "ready" : localAiStatus?.paddle_ocr.enabled ? "configured · starts on action" : "disabled"}</p>
+          <p>Qwen3.6: {localAiStatus?.qwen.available ? "ready" : localAiStatus?.qwen.enabled ? "configured · starts on action" : "disabled"}</p>
+          <p>Qwen3.8 rescue: {localAiStatus?.qwen38.available ? "ready" : localAiStatus?.qwen38.transcription_enabled ? "configured · explicit rescue only" : "disabled"}</p>
         </div>
         {!localScriptPreparationAuthorized ? (
           <p className="rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-100">
@@ -1613,17 +1707,23 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p className="rounded border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-100">{scriptPreparationMessage}</p>
         ) : null}
         {flatMappings.length === 0 ? (
-          <EmptyState message="No prepared answer mappings yet. Run Qwen3.8 after uploading the complete script." />
+          <EmptyState message="No prepared answer mappings yet. Upload the complete script, then run local preparation." />
         ) : (
           <div className="grid gap-3">
             {questionNodeMappings.flatMap((group) =>
               group.mappings.map((mapping) => {
                 const warnings = localMappingWarnings(mapping);
+                const paddleRun = mapping.answer_region_id
+                  ? (ocrRunsByRegionId[mapping.answer_region_id] ?? []).find(
+                      (run) => run.profile === "paddle_direct_baseline_v1",
+                    ) ?? null
+                  : null;
                 const visualRun = mapping.answer_region_id
                   ? (ocrRunsByRegionId[mapping.answer_region_id] ?? []).find(
                       (run) => run.profile === "qwen38_verbatim_visual",
                     ) ?? null
                   : null;
+                const confirmedRun = [paddleRun, visualRun].find((run) => run?.status === "confirmed") ?? null;
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
                 return (
                   <article key={mapping.id} className="grid gap-3 rounded border border-slate-700 p-4">
@@ -1635,7 +1735,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         </p>
                       </div>
                       <span className={`rounded-full border px-2 py-1 text-xs ${mapping.teacher_confirmed || blankSafetyGate ? "border-emerald-700 text-emerald-200" : "border-amber-700 text-amber-200"}`}>
-                        {mapping.teacher_confirmed ? "approved evidence" : blankSafetyGate ? "blank safety gate" : "approval required"}
+                        {mapping.teacher_confirmed ? "region confirmed" : blankSafetyGate ? "blank safety gate" : "approval required"}
                       </span>
                     </div>
                     {blankSafetyGate ? (
@@ -1646,18 +1746,34 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     {isLocalPreparedMapping(mapping) && mapping.answer_region_id ? (
                       <section className="grid gap-3 rounded border border-cyan-700 bg-slate-950/50 p-3 text-sm">
                         <div>
-                          <p className="font-semibold text-slate-100">{mapping.provider === "llama_cpp_qwen" ? "First-pass OCR + Qwen3.6 mapping" : "Qwen3.8 visual evidence"}</p>
+                          <p className="font-semibold text-slate-100">PaddleOCR + Qwen3.6 mapping</p>
                           <p className="text-xs text-amber-200">Mapping, verbatim transcription, and full-answer coverage are three separate teacher confirmations.</p>
-                          {mapping.provider === "llama_cpp_qwen" ? <p className="text-xs text-slate-300">This region was located by first-pass OCR, whose text is approximate. The verbatim reading below is produced separately by Qwen3.8.</p> : null}
+                          <p className="text-xs text-slate-300">PaddleOCR text is a direct draft. If it is wrong, reject it and explicitly request Qwen3.8 vision rescue.</p>
                         </div>
                         {!mapping.teacher_confirmed ? (
                           <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id} onClick={() => void handleConfirmMapping(mapping)}>
                             {confirmingMappingId === mapping.id ? "Confirming region..." : "Confirm displayed answer region"}
                           </button>
                         ) : null}
-                        {mapping.teacher_confirmed && !visualRun ? (
-                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id} onClick={() => void handleRunVisualTranscription(mapping)}>
-                            {runningOcrRegionId === mapping.answer_region_id ? "Qwen3.8 is transcribing..." : "Create verbatim visual transcription"}
+                        {mapping.teacher_confirmed && !paddleRun ? (
+                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id} onClick={() => void handleRunPaddleTranscription(mapping)}>
+                            {runningOcrRegionId === mapping.answer_region_id ? "PaddleOCR is transcribing..." : "Create direct PaddleOCR transcript"}
+                          </button>
+                        ) : null}
+                        {paddleRun ? (
+                          <div className="grid gap-2 rounded border border-slate-700 p-3">
+                            <p className="text-xs text-slate-300">PaddleOCR run #{paddleRun.id} · {paddleRun.status} · {paddleRun.calls_used}/{paddleRun.call_limit} calls</p>
+                            {paddleRun.error ? <p className="text-xs text-red-200">{paddleRun.error}</p> : null}
+                            {paddleRun.draft_text != null ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{paddleRun.draft_text || "[blank]"}</pre> : null}
+                            {paddleRun.status === "succeeded" ? <div className="flex flex-wrap gap-2">
+                              <button className={buttonClass} type="button" disabled={confirmingVisualRunId === paddleRun.id} onClick={() => void handleConfirmPaddleTranscription(mapping, paddleRun)}>Confirm faithful PaddleOCR transcript</button>
+                              <button className="rounded border border-amber-700 px-3 py-2 text-xs text-amber-100" type="button" disabled={confirmingVisualRunId === paddleRun.id} onClick={() => void handleRejectPaddleTranscription(mapping, paddleRun)}>This reading is wrong</button>
+                            </div> : null}
+                          </div>
+                        ) : null}
+                        {paddleRun?.status === "rejected" && !visualRun ? (
+                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
+                            {runningOcrRegionId === mapping.answer_region_id ? "Qwen3.8 is transcribing..." : "Use Qwen3.8 vision rescue"}
                           </button>
                         ) : null}
                         {visualRun ? (
@@ -1671,9 +1787,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             </div> : null}
                           </div>
                         ) : null}
-                        {visualRun?.status === "confirmed" ? <div className="flex flex-wrap gap-2">
+                        {confirmedRun ? <div className="flex flex-wrap gap-2">
                           <button className={buttonClass} type="button" disabled={Boolean(mapping.answer_region?.full_answer_confirmed)} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(mapping.answer_region_id!, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm displayed image is the full answer</button>
-                          {mapping.answer_region?.full_answer_confirmed ? <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "Qwen3.8 is grading..." : "Grade confirmed answer with local Qwen3.8"}</button> : null}
+                          {mapping.answer_region?.full_answer_confirmed ? <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id || !localSingleGradeAuthorized} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "Qwen3.6 is grading..." : "Grade confirmed answer with Qwen3.6"}</button> : null}
                         </div> : null}
                       </section>
                     ) : null}

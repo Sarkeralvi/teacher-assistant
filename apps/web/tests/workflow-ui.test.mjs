@@ -96,8 +96,8 @@ for (const marker of [
   "Rubric",
   "You do not need to upload the question paper anywhere else.",
   "Confirm files and extract drafts",
-  "local Qwen3.8 vision",
-  "Qwen3.8 is reading questions, solutions, and rubric",
+  "local PaddleOCR",
+  "Qwen3.6 is linking questions, solutions, and rubric",
   "Confirm and extract drafts",
   "Review questions, model answers, and rubric",
   "Confirm grading references",
@@ -134,8 +134,9 @@ for (const marker of [
   "Manual reference editing (advanced)",
   "Upload submission",
   "Upload script ZIP",
-  "Qwen3.8 visual evidence",
-  "Create verbatim visual transcription",
+  "PaddleOCR + Qwen3.6 mapping",
+  "Create direct PaddleOCR transcript",
+  "Use Qwen3.8 vision rescue",
   "Confirm faithful transcription",
   "Create answer region",
   "Confirm displayed image is the full answer",
@@ -147,14 +148,14 @@ for (const marker of [
   }
 }
 
-// The PaddleOCR recognition stack and its endpoints were removed. Keep its UI from
-// returning: these controls would call routes that no longer exist and 404 for a teacher.
+// The old multi-pass/candidate Paddle rescue surface remains retired. The active
+// hybrid workflow has one direct Paddle draft and one explicit Qwen3.8 rescue;
+// it must never resurrect teacher cropping or candidate synthesis.
 for (const retired of [
   "Draft text with local PaddleOCR",
   "PaddleOCR evidence review",
   "Enhanced local OCR",
   "Confirm selected reading for every band",
-  "createAnswerRegionOcrRun",
   "createAnswerRegionOcrRescueRun",
   "confirmAnswerRegionOcrCandidates",
   "getAnswerRegionOcrBandImageUrl",
@@ -164,6 +165,17 @@ for (const retired of [
   }
   if (api.includes(retired)) {
     throw new Error(`API client still exposes retired PaddleOCR surface: ${retired}`);
+  }
+}
+
+for (const marker of [
+  "createPaddleOcrRun",
+  "confirmPaddleOcrRun",
+  "rejectPaddleOcrRun",
+  'provider: "local_paddle_qwen"',
+]) {
+  if (!api.includes(marker)) {
+    throw new Error(`API client missing active hybrid OCR marker: ${marker}`);
   }
 }
 

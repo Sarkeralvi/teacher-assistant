@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.schemas import LocalAiStatusRead
 from app.services.local_ai_status_service import LocalAiStatusService
 from packages.brain.adapter import BrainAdapter
 
@@ -78,6 +79,11 @@ def test_qwen38_visual_status_is_available_without_grading_enabled(
     assert payload["qwen38"]["detail"] == "ready"
     assert payload["qwen38"]["visual_preparation_enabled"] is True
     assert payload["qwen38"]["grading_enabled"] is False
+
+    public_payload = LocalAiStatusRead.model_validate(payload).model_dump()
+    assert public_payload["qwen38"]["visual_preparation_enabled"] is True
+    assert public_payload["qwen38"]["transcription_enabled"] is False
+    assert public_payload["qwen38"]["grading_enabled"] is False
 
 
 def test_cohort_provider_retry_count_is_fixed_at_zero() -> None:

@@ -345,7 +345,7 @@ def _status(**_kwargs: Any) -> dict[str, Any]:
 
 @pytest.mark.parametrize(
     "grading_model",
-    ["qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"],
+    ["qwen3.6-35b-a3b-q4km"],
 )
 def test_full_harness_rehearsal_uses_only_fake_providers(
     tmp_path: Path,
@@ -380,6 +380,7 @@ def test_full_harness_rehearsal_uses_only_fake_providers(
     monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
     monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "fake-qwen38-key")
     monkeypatch.setenv("LOCAL_QWEN38_MODEL", "qwen3.8-27b-q4km")
+    monkeypatch.setenv("LOCAL_QWEN38_TRANSCRIPTION_ENABLED", "true")
     monkeypatch.setenv("LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED", "true")
     monkeypatch.setenv("LOCAL_QWEN38_GRADING_ENABLED", "true")
     monkeypatch.setenv("LOCAL_AI_PHASE_SWITCH_ENABLED", "false")

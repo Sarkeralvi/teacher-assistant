@@ -3,6 +3,7 @@ separate process from the request that enqueued them.
 """
 
 from app.db.session import SessionLocal
+from app.services.answer_region_ocr_service import AnswerRegionOcrService
 from app.services.grading_dispatch_service import GradingDispatchService
 from app.services.grading_service import GradingService
 from app.services.qwen38_visual_transcription_service import Qwen38VisualTranscriptionService
@@ -29,6 +30,14 @@ def run_reference_extraction_job(grading_run_id: int) -> None:
     db = SessionLocal()
     try:
         ReferenceExtractionService(db).run(grading_run_id)
+    finally:
+        db.close()
+
+
+def run_answer_region_paddle_ocr_job(ocr_run_id: int) -> None:
+    db = SessionLocal()
+    try:
+        AnswerRegionOcrService(db).run(ocr_run_id)
     finally:
         db.close()
 

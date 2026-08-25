@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from app.core.config import Settings, get_settings
 
-LocalAiPhase = Literal["Qwen", "Qwen38"]
+LocalAiPhase = Literal["PaddleOcr", "Qwen", "Qwen38"]
 
 
 class LocalAiPhaseError(RuntimeError):
@@ -55,6 +55,8 @@ class LocalAiPhaseManager:
         if not (
             self.settings.local_reference_extraction_enabled
             or self.settings.local_script_preparation_enabled
+            or self.settings.local_paddle_ocr_enabled
+            or self.settings.local_qwen38_transcription_enabled
             or self.settings.local_qwen38_visual_preparation_enabled
             or self.settings.local_qwen38_grading_enabled
         ):

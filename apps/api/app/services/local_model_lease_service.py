@@ -35,7 +35,7 @@ from app.services.local_model_call_guard import (
     clear_local_model_call_authorization,
 )
 
-LocalModelPhase = Literal["Qwen", "Qwen38"]
+LocalModelPhase = Literal["PaddleOcr", "Qwen", "Qwen38"]
 
 # One slot, one key. A second slot would need a second key and a real scheduler.
 LEASE_KEY = "local_model"
@@ -154,7 +154,7 @@ class LocalModelLeaseService:
         row.heartbeat_at = now
         row.expires_at = now + timedelta(seconds=lease_seconds)
         self.db.commit()
-        if row.model_phase not in {"Qwen", "Qwen38"} or row.expires_at is None:
+        if row.model_phase not in {"PaddleOcr", "Qwen", "Qwen38"} or row.expires_at is None:
             raise LocalModelLeaseError("The local model lease heartbeat is missing its phase")
         activate_local_model_call_authorization(
             model_phase=row.model_phase,

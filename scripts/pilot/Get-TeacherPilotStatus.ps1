@@ -1,4 +1,7 @@
-param([switch]$RequireAll)
+param(
+    [switch]$RequireCore,
+    [switch]$RequireAll
+)
 
 . (Join-Path $PSScriptRoot "Common.ps1")
 . (Join-Path $PSScriptRoot "..\local-ai\Common.ps1")
@@ -144,6 +147,7 @@ if ($unsafeLocalAi) {
     Write-Warning "An unsafe or unmanaged local AI listener was detected."
     exit 1
 }
-if ($RequireAll -and (-not $coreReady -or -not $localPhaseReady)) {
+if (($RequireCore -and -not $coreReady) -or
+    ($RequireAll -and (-not $coreReady -or -not $localPhaseReady))) {
     exit 1
 }

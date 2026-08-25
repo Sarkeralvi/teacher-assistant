@@ -366,7 +366,7 @@ export type ReferenceExtraction = {
   grading_run_id: number;
   status: "not_started" | "queued" | "running" | "succeeded" | "failed";
   stage: string;
-  provider: "llama_cpp_qwen38";
+  provider: "local_paddle_qwen";
   model: string;
   ocr_device: string;
   question_run_id: number | null;
@@ -420,6 +420,7 @@ export type AnswerRegionOcrRun = {
   call_limit: number;
   calls_used: number;
   candidate_set_sha256: string | null;
+  output_sha256: string | null;
   provider: "llama_cpp_qwen38" | string;
   model_name: string;
   layout_model_name: string | null;
@@ -828,6 +829,9 @@ export type LocalAiServiceStatus = {
   device: string;
   detail: string | null;
   models: string[];
+  visual_preparation_enabled: boolean;
+  transcription_enabled: boolean;
+  grading_enabled: boolean;
 };
 
 export type LocalAiStatus = {
@@ -835,11 +839,12 @@ export type LocalAiStatus = {
   cohort_model_grading_enabled: boolean;
   local_script_preparation_enabled: boolean;
   local_single_answer_grading_enabled: boolean;
+  paddle_ocr: LocalAiServiceStatus;
   qwen: LocalAiServiceStatus;
   qwen38: LocalAiServiceStatus;
 };
 
-export type CohortDispatchProvider = "mock" | "llama_cpp_qwen" | "llama_cpp_qwen38";
+export type CohortDispatchProvider = "mock" | "llama_cpp_qwen";
 
 export type CohortDispatchRequest = {
   queue_run_id: number;
@@ -1406,10 +1411,7 @@ export function suggestAnswerRegionMappings(
   );
 }
 
-// "llama_cpp_qwen" is the tiered path: first-pass OCR locates the answers,
-// Qwen3.6 maps them, and Qwen3.8 vision is spent only on pages OCR could not
-// read. "llama_cpp_qwen38" is the vision-only path, kept as a direct fallback.
-export type ScriptMappingProvider = "deterministic_layout" | "llama_cpp_qwen38" | "llama_cpp_qwen";
+export type ScriptMappingProvider = "deterministic_layout" | "local_paddle_qwen";
 
 export function runSubmissionQuestionNodeMappings(
   submissionId: number,
@@ -1417,9 +1419,10 @@ export function runSubmissionQuestionNodeMappings(
     replace_existing?: boolean;
     provider?: ScriptMappingProvider;
     expected_model?: string;
-    expected_vision_model?: string;
+    expected_ocr_model?: string;
+    expected_layout_model?: string;
     draft_only_confirmed?: boolean;
-    maximum_visual_calls?: number;
+    maximum_ocr_calls?: number;
   } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse>(`/submissions/${submissionId}/question-node-mappings/run`, {
@@ -1436,9 +1439,10 @@ export function runAssessmentQuestionNodeMappings(
     replace_existing?: boolean;
     provider?: ScriptMappingProvider;
     expected_model?: string;
-    expected_vision_model?: string;
+    expected_ocr_model?: string;
+    expected_layout_model?: string;
     draft_only_confirmed?: boolean;
-    maximum_visual_calls?: number;
+    maximum_ocr_calls?: number;
   } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse[]>(`/assessments/${assessmentId}/question-node-mappings/run`, {
@@ -1513,14 +1517,51 @@ export function startReferenceExtraction(gradingRunId: number) {
   return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
     method: "POST",
     body: {
-      provider: "llama_cpp_qwen38",
-      expected_model: "qwen3.8-27b-q4km",
+      provider: "local_paddle_qwen",
+      expected_model: "qwen3.6-35b-a3b-q4km",
       materials_confirmed: true,
       draft_only_confirmed: true,
     },
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
   });
+}
+
+export function createPaddleOcrRun(
+  answerRegionId: number,
+  expectedModel: string,
+  expectedLayoutModel: string,
+) {
+  return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/ocr-runs`, {
+    method: "POST",
+    body: {
+      expected_model: expectedModel,
+      expected_layout_model: expectedLayoutModel,
+      draft_only_confirmed: true,
+    },
+  });
+}
+
+export function listAnswerRegionTranscriptionRuns(answerRegionId: number) {
+  return apiRequest<AnswerRegionOcrRun[]>(`/answer-regions/${answerRegionId}/ocr-runs`);
+}
+
+export function confirmPaddleOcrRun(
+  answerRegionId: number,
+  runId: number,
+  draftTextSha256: string,
+) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/confirm`,
+    { method: "POST", body: { teacher_confirmed: true, draft_text_sha256: draftTextSha256 } },
+  );
+}
+
+export function rejectPaddleOcrRun(answerRegionId: number, runId: number, reason: string) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/ocr-runs/${runId}/reject`,
+    { method: "POST", body: { reason } },
+  );
 }
 
 export function getReferenceExtraction(gradingRunId: number) {
@@ -1698,7 +1739,7 @@ export function gradeAnswerRegionWithLocalQwen(
   answerRegionId: number,
   payload: {
     grading_run_id: number;
-    provider: "llama_cpp_qwen" | "llama_cpp_qwen38";
+    provider: "llama_cpp_qwen";
     expected_model: string;
     draft_only_confirmed: true;
   },

@@ -1,7 +1,7 @@
 param(
     [string]$ConfigPath,
     [int]$HealthTimeoutSeconds = 240,
-    [ValidateSet("Qwen", "Qwen38")]
+    [ValidateSet("PaddleOcr", "Qwen", "Qwen38")]
     [string]$Mode = "Qwen"
 )
 
@@ -23,7 +23,14 @@ $port = $service.Port
 $alias = $service.Alias
 $pidFile = $service.PidFileName
 
-if ($Mode -eq "Qwen") {
+if ($Mode -eq "PaddleOcr") {
+    $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_PADDLE_OCR_PYTHON_PATH"
+    $null = Assert-RequiredEnvironmentValue -Name "LOCAL_PADDLE_OCR_VL_MODEL_PATH"
+    $null = Assert-RequiredEnvironmentValue -Name "LOCAL_PADDLE_OCR_LAYOUT_MODEL_PATH"
+    $key = Assert-RequiredEnvironmentValue -Name "LOCAL_PADDLE_OCR_API_KEY"
+    $args = @("-m", "packages.local_ocr_sidecar.server")
+    $workingDirectory = Join-Path $repositoryRoot "apps\api"
+} elseif ($Mode -eq "Qwen") {
     $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_BINARY_PATH"
     $model = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_MODEL_PATH"
     $key = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN_API_KEY"
@@ -35,14 +42,13 @@ if ($Mode -eq "Qwen") {
     # system RAM instead of failing, which is far slower than offloading the
     # same layers deliberately. 24 is the measured peak: 67.6 tok/s sustained
     # with this flag set, against 60.2 at 28. It leaves ~850 MiB of headroom
-    # rather than ~2.9 GB, so the low-VRAM warning below fires -- an explicit
-    # choice of speed over margin on a machine with a documented
-    # GPU-instability history. If instability recurs under load, raise this to
-    # 28 first: it costs about 12% and buys ~2 GB back.
+    # rather than ~2.9 GB. The rescued teacher workflow defaults to 28: it gives
+    # up about 12% decode speed for roughly 2 GiB more safety margin while the
+    # GPU repeatedly switches between PaddleOCR and llama.cpp phases.
     $cpuMoeLayers = if ($env:LOCAL_QWEN_CPU_MOE_LAYERS) {
         [int]$env:LOCAL_QWEN_CPU_MOE_LAYERS
     } else {
-        24
+        28
     }
     if ($cpuMoeLayers -lt 1 -or $cpuMoeLayers -gt 64) {
         throw "LOCAL_QWEN_CPU_MOE_LAYERS must be between 1 and 64."
@@ -64,6 +70,7 @@ if ($Mode -eq "Qwen") {
         "--threads", "12",
         "--batch-size", "512"
     )
+    $workingDirectory = $runtimeDirectory
 } elseif ($Mode -eq "Qwen38") {
     $binary = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_BINARY_PATH"
     $model = Assert-RequiredEnvironmentValue -Name "LOCAL_QWEN38_MODEL_PATH"
@@ -94,7 +101,9 @@ if ($Mode -eq "Qwen") {
         "--port", "$port",
         "--offline",
         "--reasoning", "off",
-        "-ngl", "40",
+        # 34 is the conservative host setting for the explicit visual rescue
+        # phase. It leaves more margin than the earlier single-model workflow.
+        "-ngl", "34",
         "-c", "$contextTokens",
         "--image-min-tokens", "1024",
         "--image-max-tokens", "1280",
@@ -104,6 +113,7 @@ if ($Mode -eq "Qwen") {
         "--ubatch-size", "256",
         "--threads", "12"
     )
+    $workingDirectory = $runtimeDirectory
 }
 
 $proc = $null
@@ -113,27 +123,79 @@ Remove-Item -LiteralPath $pidFullPath -Force -ErrorAction SilentlyContinue
 $stdout = Join-Path $logDirectory "$($Mode.ToLower()).stdout.log"
 $stderr = Join-Path $logDirectory "$($Mode.ToLower()).stderr.log"
 $apiKeyFile = Join-Path $runtimeDirectory "$($Mode.ToLower()).api-key"
+$paddleEnvironmentFile = Join-Path $runtimeDirectory "paddleocr.runtime.env"
 
 # llama-server does not read LLAMA_API_KEY from its environment.  Its supported
 # authentication mechanism is --api-key/--api-key-file.  Keep the secret out of
 # the process command line (which other local processes can inspect) and out of
 # logs by writing a short-lived ignored runtime key file instead.  Stop-LocalAi
 # removes it after the repository-owned server exits.
-[IO.File]::WriteAllText(
-    $apiKeyFile,
-    "$key`n",
-    [System.Text.UTF8Encoding]::new($false)
-)
-$args += @("--api-key-file", ('"' + $apiKeyFile + '"'))
+if ($Mode -ne "PaddleOcr") {
+    [IO.File]::WriteAllText(
+        $apiKeyFile,
+        "$key`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $args += @("--api-key-file", ('"' + $apiKeyFile + '"'))
+} else {
+    # Win32_Process.Create does not reliably inherit the calling PowerShell's
+    # custom environment. Put the minimum sidecar environment in an ignored
+    # runtime file so the API key never appears in a process command line.
+    $paddleNames = @(
+        "LOCAL_PADDLE_OCR_API_KEY",
+        "LOCAL_PADDLE_OCR_VL_MODEL_PATH",
+        "LOCAL_PADDLE_OCR_LAYOUT_MODEL_PATH",
+        "LOCAL_PADDLE_OCR_DEVICE",
+        "LOCAL_PADDLE_OCR_HOST",
+        "LOCAL_PADDLE_OCR_PORT",
+        "LOCAL_PADDLE_OCR_MAX_IMAGE_BYTES"
+    )
+    $paddleLines = foreach ($name in $paddleNames) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) { "$name=$value" }
+    }
+    [IO.File]::WriteAllLines(
+        $paddleEnvironmentFile,
+        $paddleLines,
+        [Text.UTF8Encoding]::new($false)
+    )
+}
 
 $argListFormatted = ($args | ForEach-Object {
     "'" + ($_ -replace "'", "''") + "'"
 }) -join ", "
 
-$launcherScript = @"
-`$p = Start-Process -FilePath '$binary' -ArgumentList @($argListFormatted) -WorkingDirectory '$runtimeDirectory' -WindowStyle Hidden -PassThru -RedirectStandardOutput '$stdout' -RedirectStandardError '$stderr'
+if ($Mode -eq "PaddleOcr") {
+    # A Windows venv python.exe is a launcher. The base interpreter child owns
+    # the socket, so record that child PID rather than the transient launcher
+    # PID. Stop-LocalAi validates both the module command line and parent venv
+    # launcher before it will terminate the child.
+    $launcherScript = @"
+foreach (`$line in Get-Content -LiteralPath '$paddleEnvironmentFile') {
+    `$parts = `$line.Split('=', 2)
+    if (`$parts.Count -eq 2) { Set-Item -LiteralPath "Env:`$(`$parts[0])" -Value `$parts[1] }
+}
+`$p = Start-Process -FilePath '$binary' -ArgumentList @($argListFormatted) -WorkingDirectory '$workingDirectory' -WindowStyle Hidden -PassThru -RedirectStandardOutput '$stdout' -RedirectStandardError '$stderr'
+`$deadline = [DateTime]::UtcNow.AddSeconds(15)
+`$servicePid = 0
+while ([DateTime]::UtcNow -lt `$deadline -and `$servicePid -eq 0) {
+    `$current = Get-CimInstance Win32_Process -Filter "ProcessId=`$(`$p.Id)" -ErrorAction SilentlyContinue
+    `$child = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        `$_.ParentProcessId -eq `$p.Id -and `$_.CommandLine -match '(?i)(?:^|\s)-m\s+packages\.local_ocr_sidecar\.server(?:\s|$)'
+    } | Select-Object -First 1
+    if (`$null -ne `$child) { `$servicePid = [int]`$child.ProcessId }
+    elseif (`$null -ne `$current -and `$current.CommandLine -match '(?i)(?:^|\s)-m\s+packages\.local_ocr_sidecar\.server(?:\s|$)') { `$servicePid = `$p.Id }
+    if (`$servicePid -eq 0) { Start-Sleep -Milliseconds 100 }
+}
+if (`$servicePid -le 0) { throw 'PaddleOCR child process was not created.' }
+[IO.File]::WriteAllText('$pidFullPath', [string]`$servicePid)
+"@
+} else {
+    $launcherScript = @"
+`$p = Start-Process -FilePath '$binary' -ArgumentList @($argListFormatted) -WorkingDirectory '$workingDirectory' -WindowStyle Hidden -PassThru -RedirectStandardOutput '$stdout' -RedirectStandardError '$stderr'
 [IO.File]::WriteAllText('$pidFullPath', [string]`$p.Id)
 "@
+}
 
 $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($launcherScript))
 $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
@@ -161,9 +223,19 @@ try {
             throw "$Mode service exited during startup. Inspect .local-ai/logs."
         }
         try {
-            $null = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 3
-            $models = Invoke-RestMethod -Uri "http://127.0.0.1:$port/v1/models" -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 3
-            $ready = @($models.data.id) -contains $alias
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 3
+            if ($Mode -eq "PaddleOcr") {
+                $ready = (
+                    $health.status -eq "ready" -and
+                    $health.model -eq $alias -and
+                    $health.layout_model -eq "PP-DocLayoutV3" -and
+                    $health.offline -eq $true -and
+                    $health.max_concurrency -eq 1
+                )
+            } else {
+                $models = Invoke-RestMethod -Uri "http://127.0.0.1:$port/v1/models" -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 3
+                $ready = @($models.data.id) -contains $alias
+            }
         } catch {
             $ready = $false
         }
@@ -175,7 +247,11 @@ try {
     if (-not $ready) {
         throw "$Mode did not become healthy. Inspect .local-ai/logs."
     }
-    Assert-LocalAiListenerOwnership -Port $port -ExpectedExecutable $binary -ExpectedProcessId $proc.Id
+    if ($Mode -eq "PaddleOcr") {
+        Assert-PaddleOcrListenerOwnership -Port $port -ExpectedLauncher $binary -ExpectedProcessId $proc.Id
+    } else {
+        Assert-LocalAiListenerOwnership -Port $port -ExpectedExecutable $binary -ExpectedProcessId $proc.Id
+    }
     Write-Host "$Mode is healthy on loopback (Port $port)."
     Write-Host "$Mode PID: $($proc.Id)"
 
@@ -202,5 +278,6 @@ try {
     }
     Remove-Item -LiteralPath (Join-Path $runtimeDirectory $pidFile) -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $apiKeyFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $paddleEnvironmentFile -Force -ErrorAction SilentlyContinue
     throw
 }

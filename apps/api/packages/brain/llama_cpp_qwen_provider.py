@@ -141,7 +141,12 @@ class QwenReferenceQuestionDraft(BaseModel):
     parent_question_number: str | None = Field(default=None, max_length=32)
     node_type: Literal["question", "subquestion"]
     question_text: str = Field(min_length=1, max_length=1800)
-    model_answer: str | None = Field(default=None, max_length=1800)
+    # Custom Controlled always requires a supplied solution/model-answer
+    # document. Allowing null here made the grammar prefer a schema-valid null
+    # even when the worked answer was explicit, leaving an unusable reference
+    # draft with no blocker. Missing/ambiguous source text must fail the call or
+    # be represented in blockers; it must not silently erase the model answer.
+    model_answer: str = Field(min_length=1, max_length=1800)
     marks: Decimal | None = Field(default=None, gt=Decimal("0"))
     source_question_pages: list[int] = Field(min_length=1, max_length=5)
     source_solution_pages: list[int] = Field(default_factory=list, max_length=5)

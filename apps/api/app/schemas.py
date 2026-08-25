@@ -18,6 +18,9 @@ class LocalAiServiceStatusRead(BaseModel):
     device: str
     detail: str | None = None
     models: list[str] = Field(default_factory=list)
+    visual_preparation_enabled: bool = False
+    transcription_enabled: bool = False
+    grading_enabled: bool = False
 
 
 class LocalAiStatusRead(BaseModel):
@@ -25,6 +28,7 @@ class LocalAiStatusRead(BaseModel):
     cohort_model_grading_enabled: bool
     local_script_preparation_enabled: bool = False
     local_single_answer_grading_enabled: bool = False
+    paddle_ocr: LocalAiServiceStatusRead
     qwen: LocalAiServiceStatusRead
     qwen38: LocalAiServiceStatusRead
 
@@ -759,7 +763,7 @@ class AnswerRegionRead(ORMBase):
 
 
 class ReferenceExtractionStartRequest(BaseModel):
-    provider: Literal["llama_cpp_qwen38"]
+    provider: Literal["local_paddle_qwen"]
     expected_model: str = Field(min_length=1, max_length=255)
     materials_confirmed: Literal[True]
     draft_only_confirmed: Literal[True]
@@ -790,7 +794,7 @@ class ReferenceExtractionRead(BaseModel):
     grading_run_id: int
     status: str
     stage: str
-    provider: Literal["llama_cpp_qwen38"]
+    provider: Literal["local_paddle_qwen"]
     model: str
     ocr_device: str
     question_run_id: int | None
@@ -931,6 +935,28 @@ class AnswerRegionOcrRunRead(ORMBase):
     updated_at: datetime
 
 
+class PaddleOcrRunRequest(BaseModel):
+    expected_model: str = Field(min_length=1, max_length=255)
+    expected_layout_model: str = Field(min_length=1, max_length=255)
+    draft_only_confirmed: Literal[True]
+
+
+class PaddleOcrConfirmationRequest(BaseModel):
+    teacher_confirmed: Literal[True]
+    draft_text_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
+class PaddleOcrRejectionRequest(BaseModel):
+    reason: Literal[
+        "critical_digit_wrong",
+        "math_symbol_wrong",
+        "missing_or_extra_line",
+        "wrong_region",
+        "image_quality",
+        "other_transcription_error",
+    ]
+
+
 class VisualTranscriptionRunRequest(BaseModel):
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
@@ -954,20 +980,15 @@ class VisualTranscriptionRejectionRequest(BaseModel):
 
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
-    # "llama_cpp_qwen" is the tiered path: tier-1 OCR locates the answers, Qwen3.6
-    # maps them, and Qwen3.8 vision is called only for pages OCR could not read.
-    # "llama_cpp_qwen38" is the original vision-only path, kept as a fallback the
-    # teacher can select outright.
-    provider: Literal["deterministic_layout", "llama_cpp_qwen38", "llama_cpp_qwen"] = (
-        "deterministic_layout"
-    )
+    # The local hybrid path uses PaddleOCR for page/block geometry and Qwen3.6
+    # only to associate those immutable block identifiers with locked questions.
+    # Qwen3.8 is reserved for explicit, teacher-authorized transcription rescue.
+    provider: Literal["deterministic_layout", "local_paddle_qwen"] = "deterministic_layout"
     expected_model: str | None = Field(default=None, max_length=255)
-    # The tiered path uses two models, so it needs both aliases confirmed. The
-    # vision model is only the fallback, but a page that needs it must not
-    # discover mid-run that the alias is wrong.
-    expected_vision_model: str | None = Field(default=None, max_length=255)
+    expected_ocr_model: str | None = Field(default=None, max_length=255)
+    expected_layout_model: str | None = Field(default=None, max_length=255)
     draft_only_confirmed: bool = False
-    maximum_visual_calls: int = Field(default=25, ge=1, le=100)
+    maximum_ocr_calls: int = Field(default=25, ge=1, le=100)
 
 
 class AnswerRegionMappingUpdate(BaseModel):
@@ -1259,7 +1280,7 @@ class GradeAnswerRegionResponse(BaseModel):
 
 class LocalQwenGradeRequest(BaseModel):
     grading_run_id: int = Field(gt=0)
-    provider: Literal["llama_cpp_qwen", "llama_cpp_qwen38"]
+    provider: Literal["llama_cpp_qwen"]
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
 
@@ -1292,7 +1313,7 @@ class CohortGradeDispatchResponse(BaseModel):
 class CohortDispatchRequest(BaseModel):
     queue_run_id: int = Field(gt=0)
     grading_run_id: int = Field(gt=0)
-    provider: Literal["mock", "llama_cpp_qwen", "llama_cpp_qwen38"]
+    provider: Literal["mock", "llama_cpp_qwen"]
     expected_model: str = Field(min_length=1, max_length=255)
     call_limit: int = Field(ge=1, le=25)
     draft_only_confirmed: Literal[True]

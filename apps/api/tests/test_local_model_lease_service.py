@@ -61,6 +61,21 @@ def test_acquire_takes_the_slot_and_records_the_phase(db_session: Session) -> No
     assert service.read().held is True
 
 
+def test_paddle_lease_is_a_first_class_exclusive_phase(db_session: Session) -> None:
+    service = LocalModelLeaseService(db_session)
+
+    state = service.acquire(
+        model_phase="PaddleOcr", holder_kind="visual_transcription", holder_id="ocr-1"
+    )
+
+    assert state.model_phase == "PaddleOcr"
+    assert_local_model_call_authorized(model_phase="PaddleOcr")
+    with pytest.raises(LocalModelCallGuardError, match="phase does not match"):
+        assert_local_model_call_authorized(model_phase="Qwen")
+    with pytest.raises(LocalModelLeaseError, match="held by"):
+        service.acquire(model_phase="Qwen38", holder_kind="worker_job", holder_id="vision-1")
+
+
 def test_acquire_authorizes_only_the_matching_local_model_phase(db_session: Session) -> None:
     service = LocalModelLeaseService(db_session)
     service.acquire(model_phase="Qwen38", holder_kind="worker_job", holder_id="job-1")
