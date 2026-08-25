@@ -153,6 +153,8 @@ for (const marker of [
   "never repairs the mathematics",
   "cancelled work and excluded it",
   "Unclear correction detected.",
+  "Re-transcribe with final-intent rules",
+  "older include-crossed-out rules",
   "Create answer region",
   "Confirm displayed image is the full answer",
   "This prepares evidence only. It does not grade.",

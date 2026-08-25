@@ -1794,11 +1794,18 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               group.mappings.map((mapping) => {
                 const warnings = localMappingWarnings(mapping);
                 const visualRun = mapping.answer_region_id
-                  ? (ocrRunsByRegionId[mapping.answer_region_id] ?? []).find(
-                      (run) => run.profile === "qwen38_verbatim_visual",
-                    ) ?? null
+                  ? [...(ocrRunsByRegionId[mapping.answer_region_id] ?? [])]
+                      .filter((run) => run.profile === "qwen38_verbatim_visual")
+                      .sort((left, right) => right.id - left.id)[0] ?? null
                   : null;
                 const confirmedRun = visualRun?.status === "confirmed" ? visualRun : null;
+                const legacyUnconfirmedTranscription = Boolean(
+                  visualRun &&
+                  visualRun.prompt_version !== "qwen38-final-intent-structured-v2" &&
+                  visualRun.status !== "confirmed" &&
+                  mapping.answer_region_id &&
+                  !gradedRegionIds.has(mapping.answer_region_id),
+                );
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
                 const sourceSegments = mapping.answer_region?.segments ?? [];
                 const sourceStates = mapping.answer_region_id == null
@@ -1908,14 +1915,23 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             {confirmingMappingId === mapping.id ? "Confirming region..." : segmentCropsState === "error" || sourcePagesState === "error" ? "All evidence images must load before confirmation" : segmentCropsState !== "loaded" || sourcePagesState !== "loaded" ? "Loading every source page and answer segment..." : !boundaryReviewed ? "Compare and acknowledge the full-page boundary first" : `Confirm all ${sourceSegments.length} displayed answer segment${sourceSegments.length === 1 ? "" : "s"}`}
                           </button>
                         ) : null}
-                        {mapping.teacher_confirmed && !visualRun ? (
+                        {mapping.teacher_confirmed && (!visualRun || legacyUnconfirmedTranscription) ? (
                           <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
-                            {runningOcrRegionId === mapping.answer_region_id ? "Qwen3.8 is resolving corrections and transcribing..." : "Transcribe final intended answer with Qwen3.8 vision"}
+                            {runningOcrRegionId === mapping.answer_region_id
+                              ? "Qwen3.8 is resolving corrections and transcribing..."
+                              : legacyUnconfirmedTranscription
+                                ? "Re-transcribe with final-intent rules"
+                                : "Transcribe final intended answer with Qwen3.8 vision"}
                           </button>
                         ) : null}
                         {visualRun ? (
                           <div className="grid gap-2 rounded border border-slate-700 p-3">
-                            <p className="text-xs text-slate-300">Run #{visualRun.id} · {visualRun.status} · {visualRun.calls_used}/{visualRun.call_limit} visual calls</p>
+                            <p className="text-xs text-slate-300">Run #{visualRun.id} · {visualRun.status} · {visualRun.calls_used}/{visualRun.call_limit} visual calls · {visualRun.prompt_version ?? "legacy prompt"}</p>
+                            {legacyUnconfirmedTranscription ? (
+                              <p className="rounded border border-amber-800 bg-amber-950/20 p-2 text-xs text-amber-100">
+                                This unconfirmed transcript used the older include-crossed-out rules. Re-transcribe it before confirmation.
+                              </p>
+                            ) : null}
                             {visualRun.error ? <p className="text-xs text-red-200">{visualRun.error}</p> : null}
                             {visualRun.warnings.includes("cancelled_work_excluded") ? (
                               <p className="rounded border border-violet-800 bg-violet-950/20 p-2 text-xs text-violet-100">
@@ -1931,7 +1947,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               </p>
                             ) : null}
                             {visualRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{visualRun.draft_text}</pre> : null}
-                            {visualRun.status === "succeeded" ? <div className="flex flex-wrap gap-2">
+                            {visualRun.status === "succeeded" && !legacyUnconfirmedTranscription ? <div className="flex flex-wrap gap-2">
                               <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>Confirm faithful final-intent transcription</button>
                               <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleRejectVisualTranscription(mapping, visualRun)}>None matches — block and upload clearer page</button>
                             </div> : null}

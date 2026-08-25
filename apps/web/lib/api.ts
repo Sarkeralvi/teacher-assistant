@@ -416,6 +416,7 @@ export type AnswerRegionOcrRun = {
   request_id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "confirmed" | "rejected" | "uncertain";
   profile: string;
+  prompt_version: string | null;
   source_image_sha256: string | null;
   queued_at: string | null;
   started_at: string | null;

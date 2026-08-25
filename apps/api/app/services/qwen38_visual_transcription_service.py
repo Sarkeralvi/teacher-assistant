@@ -21,6 +21,9 @@ class VisualTranscriptionError(RuntimeError):
     pass
 
 
+FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
+
+
 def _sha256_joined(parts: list[str]) -> str:
     return hashlib.sha256("".join(parts).encode("ascii")).hexdigest()
 
@@ -62,7 +65,7 @@ class Qwen38VisualTranscriptionService:
             profile="qwen38_verbatim_visual",
             task_kind="visual_transcription",
             reasoning_mode="off",
-            prompt_version="qwen38-final-intent-structured-v2",
+            prompt_version=FINAL_INTENT_PROMPT_VERSION,
             source_image_sha256=source_hash,
             source_image_hashes=self._source_hashes(region),
             input_manifest_sha256=source_hash,
@@ -155,7 +158,7 @@ class Qwen38VisualTranscriptionService:
             run.output_sha256 = draft_hash
             run.normalized_result = {
                 "task_kind": "visual_transcription",
-                "prompt_version": "qwen38-final-intent-structured-v2",
+                "prompt_version": FINAL_INTENT_PROMPT_VERSION,
                 "reasoning_mode": "off",
                 "input_image_sha256": image_hashes,
                 "draft_text_sha256": draft_hash,
@@ -242,6 +245,11 @@ class Qwen38VisualTranscriptionService:
         if run.answer_region_id != region.id or run.profile != "qwen38_verbatim_visual":
             raise VisualTranscriptionError(
                 "Visual transcription run does not belong to this answer"
+            )
+        if run.prompt_version != FINAL_INTENT_PROMPT_VERSION:
+            raise VisualTranscriptionError(
+                "This transcript used retired include-crossed-out rules; run final-intent "
+                "transcription before confirmation"
             )
         is_blank = bool((run.normalized_result or {}).get("is_blank"))
         if run.status != "succeeded" or (not run.draft_text and not is_blank):

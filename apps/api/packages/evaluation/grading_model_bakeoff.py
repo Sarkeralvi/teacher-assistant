@@ -501,7 +501,7 @@ def seed_grading_bakeoff_candidate(
                 profile="qwen38_verbatim_visual",
                 task_kind="locked_bakeoff_evidence_replay",
                 reasoning_mode="off",
-                prompt_version="qwen38-forensic-verbatim-v1",
+                prompt_version="qwen38-final-intent-structured-v2",
                 source_image_sha256=source_case.source_image_sha256,
                 source_image_hashes=source_case.source_image_hashes,
                 input_manifest_sha256=source_case.source_image_sha256,
