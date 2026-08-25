@@ -26,7 +26,7 @@ def _sha256_joined(parts: list[str]) -> str:
 
 
 class Qwen38VisualTranscriptionService:
-    """One durable, no-retry visual transcription call per confirmed mapping."""
+    """One durable, no-retry final-intent transcription call per confirmed mapping."""
 
     def __init__(self, db: Session, *, settings: Settings | None = None) -> None:
         self.db = db
@@ -62,7 +62,7 @@ class Qwen38VisualTranscriptionService:
             profile="qwen38_verbatim_visual",
             task_kind="visual_transcription",
             reasoning_mode="off",
-            prompt_version="qwen38-forensic-verbatim-v1",
+            prompt_version="qwen38-final-intent-structured-v2",
             source_image_sha256=source_hash,
             source_image_hashes=self._source_hashes(region),
             input_manifest_sha256=source_hash,
@@ -141,7 +141,8 @@ class Qwen38VisualTranscriptionService:
                     image_hashes.append(hashlib.sha256(image_bytes).hexdigest())
                 lease.heartbeat(holder_id=lease_holder_id)
                 result = provider.transcribe_images(
-                    images=images, label=region.question.question_no
+                    images=images,
+                    label=region.question.question_no,
                 )
                 lease.heartbeat(holder_id=lease_holder_id)
             draft_hash = hashlib.sha256(result.draft_text.encode("utf-8")).hexdigest()
@@ -154,13 +155,21 @@ class Qwen38VisualTranscriptionService:
             run.output_sha256 = draft_hash
             run.normalized_result = {
                 "task_kind": "visual_transcription",
-                "prompt_version": "qwen38-forensic-verbatim-v1",
+                "prompt_version": "qwen38-final-intent-structured-v2",
                 "reasoning_mode": "off",
                 "input_image_sha256": image_hashes,
                 "draft_text_sha256": draft_hash,
                 "uncertain_glyphs": [
                     item.model_dump(mode="json") for item in result.uncertain_glyphs
                 ],
+                "editing_analysis": {
+                    "editing_marks": [
+                        item.model_dump(mode="json") for item in result.editing_marks
+                    ],
+                    "cancellation_detected": result.cancellation_detected,
+                    "replacement_detected": result.replacement_detected,
+                    "uncertain_correction_detected": result.uncertain_correction_detected,
+                },
                 "is_blank": result.is_blank,
                 "is_irrelevant": result.is_irrelevant,
                 "confidence": str(result.confidence),
@@ -169,6 +178,22 @@ class Qwen38VisualTranscriptionService:
             }
             run.warnings = [
                 "teacher_review_required",
+                "final_intent_transcription",
+                *(
+                    ["cancelled_work_excluded"]
+                    if result.cancellation_detected
+                    else []
+                ),
+                *(
+                    ["student_replacement_detected"]
+                    if result.replacement_detected
+                    else []
+                ),
+                *(
+                    ["uncertain_student_correction"]
+                    if result.uncertain_correction_detected
+                    else []
+                ),
                 *(["visual_transcription_uncertain"] if result.uncertain_glyphs else []),
             ]
             run.latency_ms = result.latency_ms
@@ -183,7 +208,12 @@ class Qwen38VisualTranscriptionService:
                     "draft_text_sha256": draft_hash,
                     "segment_count": len(images),
                     "calls_used": 1,
-                    "latency_ms": result.latency_ms,
+                    "latency_ms": run.latency_ms,
+                    "cancellation_detected": result.cancellation_detected,
+                    "replacement_detected": result.replacement_detected,
+                    "uncertain_correction_detected": (
+                        result.uncertain_correction_detected
+                    ),
                 },
             )
             self.db.commit()

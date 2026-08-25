@@ -1899,8 +1899,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           <p className="font-semibold text-slate-100">
                             Qwen3.8 visual mapping and grading
                           </p>
-                          <p className="text-xs text-amber-200">Mapping, verbatim transcription, and full-answer coverage are three separate teacher confirmations.</p>
-                          <p className="text-xs text-slate-300">Qwen3.8 maps the region first. After you confirm every boundary, a separate thinking-disabled visual call produces a verbatim transcript for review.</p>
+                          <p className="text-xs text-amber-200">Mapping, final-intent transcription, and full-answer coverage are three separate teacher confirmations.</p>
+                          <p className="text-xs text-slate-300">After boundary confirmation, Qwen3.8 first identifies cancellations and replacements, then the same thinking-disabled task transcribes only the student’s surviving work. It never repairs the mathematics.</p>
                           {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm it; use the explicit Qwen3.8 visual boundary rescue for this submission.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
@@ -1910,16 +1910,29 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         ) : null}
                         {mapping.teacher_confirmed && !visualRun ? (
                           <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
-                            {runningOcrRegionId === mapping.answer_region_id ? "Qwen3.8 is transcribing..." : "Transcribe complete answer with Qwen3.8 vision"}
+                            {runningOcrRegionId === mapping.answer_region_id ? "Qwen3.8 is resolving corrections and transcribing..." : "Transcribe final intended answer with Qwen3.8 vision"}
                           </button>
                         ) : null}
                         {visualRun ? (
                           <div className="grid gap-2 rounded border border-slate-700 p-3">
                             <p className="text-xs text-slate-300">Run #{visualRun.id} · {visualRun.status} · {visualRun.calls_used}/{visualRun.call_limit} visual calls</p>
                             {visualRun.error ? <p className="text-xs text-red-200">{visualRun.error}</p> : null}
+                            {visualRun.warnings.includes("cancelled_work_excluded") ? (
+                              <p className="rounded border border-violet-800 bg-violet-950/20 p-2 text-xs text-violet-100">
+                                Qwen detected deliberately cancelled work and excluded it from this final-intent transcript. Verify that decision against the image.
+                              </p>
+                            ) : null}
+                            {visualRun.warnings.includes("student_replacement_detected") ? (
+                              <p className="text-xs text-cyan-200">A visible replacement was detected; only the surviving replacement should appear below.</p>
+                            ) : null}
+                            {visualRun.warnings.includes("uncertain_student_correction") || visualRun.draft_text?.includes("[unclear correction]") ? (
+                              <p className="rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">
+                                Unclear correction detected. Do not confirm unless the displayed marker faithfully represents what can be read from the image.
+                              </p>
+                            ) : null}
                             {visualRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{visualRun.draft_text}</pre> : null}
                             {visualRun.status === "succeeded" ? <div className="flex flex-wrap gap-2">
-                              <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>Confirm faithful transcription</button>
+                              <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>Confirm faithful final-intent transcription</button>
                               <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleRejectVisualTranscription(mapping, visualRun)}>None matches — block and upload clearer page</button>
                             </div> : null}
                           </div>

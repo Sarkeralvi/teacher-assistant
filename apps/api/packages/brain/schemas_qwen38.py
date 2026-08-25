@@ -38,6 +38,24 @@ class UncertainGlyph(BaseModel):
         return self
 
 
+class EditingMark(BaseModel):
+    """One image-grounded cancellation/correction event without copied answer text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    page_index: int = Field(ge=1)
+    bbox: list[int] = Field(min_length=4, max_length=4)
+    status: Literal["cancelled", "replacement", "uncertain_correction"]
+    position_hint: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def bbox_is_normalized_box(self) -> EditingMark:
+        x1, y1, x2, y2 = self.bbox
+        if not (0 <= x1 < x2 <= 1000 and 0 <= y1 < y2 <= 1000):
+            raise ValueError("editing bbox must be normalized [x1,y1,x2,y2]")
+        return self
+
+
 class VisualTranscriptionOutput(BaseModel):
     """Draft visual transcription produced by ``LlamaCppQwen38VisionProvider``.
 
@@ -63,6 +81,10 @@ class VisualTranscriptionOutput(BaseModel):
         default_factory=list,
         description="Glyphs the model could not determine unambiguously.",
     )
+    editing_marks: list[EditingMark] = Field(default_factory=list)
+    cancellation_detected: bool = False
+    replacement_detected: bool = False
+    uncertain_correction_detected: bool = False
     is_blank: bool = Field(
         description="True if the answer region contains no student writing.",
     )
@@ -88,6 +110,16 @@ class VisualTranscriptionOutput(BaseModel):
             raise ValueError("blank visual transcriptions must use an empty draft_text")
         if not self.is_blank and not self.draft_text.strip():
             raise ValueError("nonblank visual transcriptions require draft_text")
+        statuses = {mark.status for mark in self.editing_marks}
+        expected = {
+            "cancelled": self.cancellation_detected,
+            "replacement": self.replacement_detected,
+            "uncertain_correction": self.uncertain_correction_detected,
+        }
+        if any((status in statuses) != enabled for status, enabled in expected.items()):
+            raise ValueError("editing-analysis flags must match editing_marks")
+        if self.uncertain_correction_detected and "[unclear correction]" not in self.draft_text:
+            raise ValueError("uncertain correction must remain explicit in draft_text")
         return self
 
 

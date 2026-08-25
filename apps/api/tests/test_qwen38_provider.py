@@ -157,8 +157,125 @@ def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None
     assert "response_format" not in client.requests[0]
     assert client.requests[0]["messages"][0]["role"] == "system"
     assert "exactly one JSON object" in client.requests[0]["messages"][0]["content"]
+    assert "FINAL INTENDED ANSWER" in client.requests[0]["messages"][0]["content"]
+    assert "Cancelled content must not appear" in client.requests[0]["messages"][0]["content"]
+    user_prompt = client.requests[0]["messages"][1]["content"][0]["text"]
+    assert "surviving final work" in user_prompt
+    assert "Preserve every written mistake" not in user_prompt
+    assert client.requests[0]["temperature"] == 0.0
     with pytest.raises(ValueError, match="magic"):
         provider.transcribe_image(image_bytes=b"not-an-image", mime_type="image/png")
+
+
+def test_structured_editing_analysis_precedes_final_intent_transcription() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "x = 5",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 200, 400, 300],
+                                    "status": "cancelled",
+                                    "position_hint": "middle equation line",
+                                },
+                                {
+                                    "page_index": 1,
+                                    "bbox": [420, 180, 520, 260],
+                                    "status": "replacement",
+                                    "position_hint": "replacement above the same line",
+                                },
+                            ],
+                            "cancellation_detected": True,
+                            "replacement_detected": True,
+                            "uncertain_correction_detected": False,
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.9,
+                            "needs_review": True,
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 8},
+    }
+    provider, client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage", mime_type="image/png", label="1(a)"
+    )
+
+    assert result.draft_text == "x = 5"
+    assert result.cancellation_detected is True
+    assert result.replacement_detected is True
+    assert result.uncertain_correction_detected is False
+    assert result.completion_tokens == 8
+    request = client.requests[0]
+    assert request["temperature"] == 0.0
+    assert request["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
+    prompt = request["messages"][1]["content"][0]["text"]
+    assert "editing-interpretation stage" in prompt
+    assert "without copying answer text into position_hint" in prompt
+    assert "surviving final work" in prompt
+
+
+def test_uncertain_correction_must_remain_explicit_in_final_transcript() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"draft_text":"P(X)=7/12","uncertain_glyphs":[],'
+                        '"editing_marks":[{"page_index":1,"bbox":[1,1,2,2],'
+                        '"status":"uncertain_correction","position_hint":"numerator"}],'
+                        '"cancellation_detected":false,"replacement_detected":false,'
+                        '"uncertain_correction_detected":true,"is_blank":false,'
+                        '"is_irrelevant":false,"confidence":0.5,'
+                        '"needs_review":true}'
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(ValueError, match="schema mismatch"):
+        provider.transcribe_image(
+            image_bytes=b"\x89PNG\r\n\x1a\nimage",
+            mime_type="image/png",
+        )
+
+
+def test_unclear_correction_marker_requires_uncertainty_metadata() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        '{"draft_text":"P(X)=[unclear correction]/12",'
+                        '"uncertain_glyphs":[],"is_blank":false,'
+                        '"is_irrelevant":false,"confidence":0.5,"needs_review":true}'
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(ValueError, match="schema mismatch"):
+        provider.transcribe_image(
+            image_bytes=b"\x89PNG\r\n\x1a\nimage", mime_type="image/png"
+        )
 
 
 def test_visual_transcription_keeps_blank_evidence_empty() -> None:

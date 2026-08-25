@@ -17,8 +17,9 @@ FinalGrade exists or is exported.
   module allowed to call grading/extraction language-model providers.
   Providers include `mock` (default), `gemini`, `openai`, `codex_cli`, and
   loopback-only `llama_cpp_qwen` (Qwen3.6 text) and `llama_cpp_qwen38`
-  (Qwen3.8 vision). Qwen3.8 performs non-thinking visual transcription of
-  answer evidence; Qwen3.6/Qwen3.8 grading receives teacher-confirmed text
+  (Qwen3.8 vision). Qwen3.8 performs non-thinking final-intent transcription
+  that excludes deliberately cancelled work while preserving surviving mistakes;
+  Qwen3.6/Qwen3.8 grading receives teacher-confirmed text
   only. The retired PaddleOCR sidecar is not part of the active workflow. All
   real/local providers are off unless explicitly configured.
 

@@ -6,7 +6,7 @@ This runbook is the canonical operator guide for the supervised Custom Controlle
 
 | Phase | Service | Port | Normal role |
 |---|---|---:|---|
-| `Qwen38` | Qwen3.8-27B vision via llama.cpp | 8085 | Reference drafts, answer-region mapping, verbatim transcription, and text-only draft grading |
+| `Qwen38` | Qwen3.8-27B vision via llama.cpp | 8085 | Reference drafts, answer-region mapping, final-intent transcription, and text-only draft grading |
 
 The RTX 5070 has one model slot. A durable database lease plus a process-local call guard is mandatory for every Qwen3.8 request. Missing, expired, busy, or wrong-phase leases fail before inference HTTP is sent. PaddleOCR and Qwen3.6 remain installed only as rollback assets and are disabled in `.env.local-ai`.
 
@@ -15,7 +15,7 @@ Normal workflows are deliberately ordered:
 1. Qwen3.8 vision drafts references from the three teacher-uploaded files with thinking disabled.
 2. A fresh Qwen3.8 vision task maps complete answer regions from full script pages.
 3. A teacher confirms region geometry and every continuation segment.
-4. A fresh thinking-disabled Qwen3.8 task transcribes the confirmed region verbatim.
+4. A fresh thinking-disabled Qwen3.8 task first classifies cancellation/replacement marks, then transcribes only the student's surviving final work.
 5. The teacher confirms transcript fidelity and full-answer coverage separately.
 6. A fresh text-only Qwen3.8 task grades only the teacher-confirmed transcript.
 
@@ -92,10 +92,15 @@ The teacher uploads the question, solution/model answer, and rubric once and aut
 1. Upload a complete script; the teacher does not crop or enter coordinates.
 2. Qwen3.8 maps ordered regions and continuation segments from full pages.
 3. The teacher confirms each mapped image region and continuation.
-4. A fresh Qwen3.8 task creates one thinking-disabled verbatim transcript from all confirmed segments.
+4. A fresh Qwen3.8 task performs structured editing interpretation and final-intent transcription from all confirmed segments in one authorized provider call.
 5. If faithful, the teacher confirms its exact SHA-256. This copies the unedited draft into `manual_answer_text` with partial evidence status.
 6. If unfaithful, the teacher rejects it and uploads a clearer complete page; no inferred correction is substituted.
 7. The teacher separately confirms that displayed images contain the complete answer. Text confirmation alone never makes evidence grading-ready.
+
+Cancelled writing is excluded even when readable. A visible replacement is retained. An
+ambiguous overwrite must remain `[unclear correction]`; the model must never select a symbol
+from arithmetic consistency or the expected answer. Minus signs, fraction/root bars, the
+variable `x`, ordinary underlining, and diagram lines are not cancellation by themselves.
 
 If neither transcript is faithful, grading stays blocked and the teacher uploads a clearer complete page. There is no manual-crop or replacement-transcription box.
 

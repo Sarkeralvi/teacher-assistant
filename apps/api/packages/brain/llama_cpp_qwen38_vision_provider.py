@@ -45,6 +45,7 @@ from packages.brain.llama_cpp_qwen_provider import QwenReferenceBundlePayload
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import (
+    EditingMark,
     UncertainGlyph,
     VisualPageMappingOutput,
     VisualPageRegion,
@@ -169,12 +170,33 @@ class _Qwen38TranscriptionPayload(BaseModel):
 
     draft_text: str
     uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
+    editing_marks: list[EditingMark] = Field(default_factory=list)
+    cancellation_detected: bool = False
+    replacement_detected: bool = False
+    uncertain_correction_detected: bool = False
     is_blank: bool
     is_irrelevant: bool
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     # Review status is authorization metadata, never model authority. The
     # provider accepts either value then forces True on its public output.
     needs_review: bool | None = None
+
+    @model_validator(mode="after")
+    def uncertainty_markers_require_metadata(self) -> _Qwen38TranscriptionPayload:
+        markers = ("[unclear correction]", "[illegible]")
+        if any(marker in self.draft_text for marker in markers) and not self.uncertain_glyphs:
+            raise ValueError("uncertainty markers require uncertain_glyphs metadata")
+        statuses = {mark.status for mark in self.editing_marks}
+        expected = {
+            "cancelled": self.cancellation_detected,
+            "replacement": self.replacement_detected,
+            "uncertain_correction": self.uncertain_correction_detected,
+        }
+        if any((status in statuses) != enabled for status, enabled in expected.items()):
+            raise ValueError("editing-analysis flags must match editing_marks")
+        if self.uncertain_correction_detected and "[unclear correction]" not in self.draft_text:
+            raise ValueError("uncertain correction was not preserved in draft_text")
+        return self
 
 
 class _Qwen38PageMappingPayload(BaseModel):
@@ -492,7 +514,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         label: str = "answer",
         max_tokens: int | None = None,
     ) -> VisualTranscriptionOutput:
-        """Verbatim transcription of a handwritten student answer image.
+        """Final-intent transcription of a handwritten student answer image.
 
         Parameters
         ----------
@@ -517,7 +539,9 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             If the HTTP call fails.
         """
         return self.transcribe_images(
-            images=[(image_bytes, mime_type)], label=label, max_tokens=max_tokens
+            images=[(image_bytes, mime_type)],
+            label=label,
+            max_tokens=max_tokens,
         )
 
     def transcribe_images(
@@ -527,7 +551,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         label: str = "answer",
         max_tokens: int | None = None,
     ) -> VisualTranscriptionOutput:
-        """Transcribe ordered answer segments in one fresh, non-thinking visual call.
+        """Transcribe final active work in one fresh, non-thinking visual call.
 
         ``max_tokens`` overrides the answer-crop default. A whole escalated page
         carries far more text than one answer region: a real reference page hit
@@ -543,27 +567,56 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             image_parts.append(part)
             image_hashes.append(digest)
 
-        _TRANSCRIPTION_PROMPT = (
-            f"Perform strict verbatim transcription of the ordered answer images for {label}.\n"
-            "Do not solve, correct, complete, simplify, summarize, or reinterpret anything.\n"
-            "Preserve every written mistake, line order, numeral, decimal point, fraction,\n"
-            "conditional bar, complement bar, intersection, unit and crossed-out item.\n"
-            "Use LaTeX for mathematics. If a glyph is ambiguous, return bounded alternatives\n"
-            "marked uncertain. Never infer a character from arithmetic consistency.\n\n"
+        final_intent_system_prompt = (
+            "You are a specialized handwritten mathematics exam-script transcriber. Your task "
+            "is not to OCR every visible mark. Transcribe only the student's FINAL INTENDED "
+            "ANSWER. Before transcribing each line, distinguish active writing from material the "
+            "student deliberately cancelled with a strike, diagonal line, X, scratch-out, dense "
+            "scribbling, repeated cancellation strokes, or an overwritten old answer. Cancelled "
+            "content must not appear in draft_text even when it remains readable. When cancelled "
+            "work has a visible replacement, output only the uncancelled replacement in its "
+            "logical position. For a local symbol replacement, retain the active rest of the line "
+            "and use only the replacement. Do not confuse cancellation with minus signs, fraction "
+            "bars, square-root bars, multiplication signs, the variable x, equality or inequality "
+            "symbols, ordinary underlining, brackets, diagram lines, integrals, or sums. Preserve "
+            "the student's surviving mistakes exactly. Never solve, correct, complete, simplify, "
+            "normalize, summarize, or reconstruct from arithmetic or the expected answer. If "
+            "active "
+            "handwriting cannot be read from pixels, write [illegible]. If the final symbol in an "
+            "overwrite or correction is visually uncertain, write [unclear correction]. Record "
+            "bounded visual alternatives in uncertain_glyphs, but never choose one from "
+            "mathematical "
+            "context. Perform cancellation/correction interpretation before producing draft_text."
+        )
+        transcription_prompt = (
+            f"Transcribe the ordered exam-script images for {label} according to the final-intent "
+            "rules. First visually resolve cancellations, overwriting, replacements, and abandoned "
+            "calculations as an editing-interpretation stage, then output only the student's "
+            "surviving final work in draft_text. Record edit-event locations in editing_marks, "
+            "without copying answer text into position_hint. Page indices are one-based; boxes "
+            "are normalized [x1,y1,x2,y2] from 0 to 1000.\n\n"
+            "Preserve active line order, written mistakes, numerals, decimal points, fractions, "
+            "conditional and complement bars, intersections, units, question numbering, and "
+            "readable "
+            "diagram labels. Use LaTeX for mathematics.\n\n"
             "If the answer region is genuinely blank, set is_blank=true and draft_text to an "
             "empty string. Do not use a placeholder such as [blank].\n\n"
             "Return exactly this JSON shape with no extra keys: "
             '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
-            '"alternatives":["option 1","option 2"]}],"is_blank":false,'
+            '"alternatives":["option 1","option 2"]}],"editing_marks":['
+            '{"page_index":1,"bbox":[0,0,1000,1000],"status":"cancelled",'
+            '"position_hint":"location only"}],"cancellation_detected":false,'
+            '"replacement_detected":false,"uncertain_correction_detected":false,"is_blank":false,'
             '"is_irrelevant":false,"confidence":0.0,"needs_review":true}. '
             "Use an empty uncertain_glyphs array when there are no ambiguities."
         )
 
         messages: list[dict[str, Any]] = [
+            {"role": "system", "content": final_intent_system_prompt},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": _TRANSCRIPTION_PROMPT},
+                    {"type": "text", "text": transcription_prompt},
                     *image_parts,
                 ],
             }
@@ -581,7 +634,6 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         latency_ms = int((time.perf_counter() - start) * 1000)
 
         assert isinstance(payload, _Qwen38TranscriptionPayload)
-
         # Build uncertain_glyphs from raw dicts
         uncertain_glyphs: list[UncertainGlyph] = []
         for raw in payload.uncertain_glyphs:
@@ -593,6 +645,10 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         return VisualTranscriptionOutput(
             draft_text=payload.draft_text,
             uncertain_glyphs=uncertain_glyphs,
+            editing_marks=payload.editing_marks,
+            cancellation_detected=payload.cancellation_detected,
+            replacement_detected=payload.replacement_detected,
+            uncertain_correction_detected=payload.uncertain_correction_detected,
             is_blank=payload.is_blank,
             is_irrelevant=payload.is_irrelevant,
             confidence=payload.confidence,
