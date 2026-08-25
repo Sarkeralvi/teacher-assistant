@@ -43,6 +43,10 @@ class Qwen38VisualTranscriptionService:
             raise VisualTranscriptionError(
                 "Confirm the answer mapping before Qwen3.8 visual transcription"
             )
+        if region.grading_jobs or region.grade_suggestions:
+            raise VisualTranscriptionError(
+                "Cannot replace answer evidence after grading has started"
+            )
         if not region.segments:
             raise VisualTranscriptionError("Mapped answer has no image segments")
         active = self.db.scalar(

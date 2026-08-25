@@ -156,6 +156,7 @@ for (const marker of [
   "Re-transcribe with final-intent rules",
   "retired include-crossed-out rules",
   "cannot authorize a new grade",
+  "!finalizedRegionIds.has(mapping.answer_region_id)",
   "Create answer region",
   "Confirm displayed image is the full answer",
   "This prepares evidence only. It does not grade.",

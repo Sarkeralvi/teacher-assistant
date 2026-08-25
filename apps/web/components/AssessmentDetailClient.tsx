@@ -1808,7 +1808,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   visualRun &&
                   !currentFinalIntentRun &&
                   mapping.answer_region_id &&
-                  !gradedRegionIds.has(mapping.answer_region_id),
+                  !gradedRegionIds.has(mapping.answer_region_id) &&
+                  !finalizedRegionIds.has(mapping.answer_region_id),
                 );
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
                 const sourceSegments = mapping.answer_region?.segments ?? [];
