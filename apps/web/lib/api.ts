@@ -1,10 +1,14 @@
 const CONFIGURED_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? null;
 
-export const API_BASE_URL = CONFIGURED_API_BASE_URL ?? "http://localhost:8000";
+export const API_BASE_URL = CONFIGURED_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 function resolveApiBaseUrl() {
   if (typeof window !== "undefined" && window.location.hostname === "host.docker.internal") {
-    if (!CONFIGURED_API_BASE_URL || CONFIGURED_API_BASE_URL.includes("//localhost")) {
+    if (
+      !CONFIGURED_API_BASE_URL ||
+      CONFIGURED_API_BASE_URL.includes("//localhost") ||
+      CONFIGURED_API_BASE_URL.includes("//127.0.0.1")
+    ) {
       return "http://host.docker.internal:8000";
     }
   }
@@ -1617,6 +1621,10 @@ export function rejectVisualTranscriptionRun(answerRegionId: number, runId: numb
 
 export function getAnswerRegionImageUrl(answerRegionId: number) {
   return `${resolveApiBaseUrl()}/answer-regions/${answerRegionId}/image`;
+}
+
+export function getAnswerRegionSegmentImageUrl(answerRegionId: number, segmentId: number) {
+  return `${resolveApiBaseUrl()}/answer-regions/${answerRegionId}/segments/${segmentId}/image`;
 }
 
 export function getGradingEvidencePacket(answerRegionId: number) {

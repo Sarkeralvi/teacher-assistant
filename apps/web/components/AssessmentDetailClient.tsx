@@ -4,7 +4,11 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
-import { AuthenticatedAnswerRegionImage, type AnswerRegionImageLoadState } from "./AuthenticatedAnswerRegionImage";
+import {
+  AuthenticatedAnswerRegionImage,
+  AuthenticatedAnswerRegionSegmentImage,
+  type AnswerRegionImageLoadState,
+} from "./AuthenticatedAnswerRegionImage";
 import { AuthenticatedMappedSourcePage } from "./AuthenticatedMappedSourcePage";
 import {
   acceptAnswerRegionMappingSuggestion,
@@ -217,6 +221,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [confirmingVisualRunId, setConfirmingVisualRunId] = useState<number | null>(null);
   const [answerRegionImageStates, setAnswerRegionImageStates] = useState<Record<number, AnswerRegionImageLoadState>>({});
   const [sourcePageImageStates, setSourcePageImageStates] = useState<Record<number, Record<number, AnswerRegionImageLoadState>>>({});
+  const [segmentCropImageStates, setSegmentCropImageStates] = useState<Record<number, Record<number, AnswerRegionImageLoadState>>>({});
   const [sourceBoundaryReviewed, setSourceBoundaryReviewed] = useState<Record<number, boolean>>({});
   const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
@@ -272,6 +277,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   const handleSourcePageImageStateChange = useCallback((answerRegionId: number, segmentId: number, state: AnswerRegionImageLoadState) => {
     setSourcePageImageStates((current) => {
+      const regionStates = current[answerRegionId] ?? {};
+      if (regionStates[segmentId] === state) return current;
+      return { ...current, [answerRegionId]: { ...regionStates, [segmentId]: state } };
+    });
+  }, []);
+
+  const handleSegmentCropImageStateChange = useCallback((answerRegionId: number, segmentId: number, state: AnswerRegionImageLoadState) => {
+    setSegmentCropImageStates((current) => {
       const regionStates = current[answerRegionId] ?? {};
       if (regionStates[segmentId] === state) return current;
       return { ...current, [answerRegionId]: { ...regionStates, [segmentId]: state } };
@@ -1815,9 +1828,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   : null;
                 const confirmedRun = [paddleRun, visualRun].find((run) => run?.status === "confirmed") ?? null;
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
-                const imageState = mapping.answer_region_id == null
-                  ? null
-                  : answerRegionImageStates[mapping.answer_region_id] ?? "loading";
                 const sourceSegments = mapping.answer_region?.segments ?? [];
                 const sourceStates = mapping.answer_region_id == null
                   ? {}
@@ -1827,6 +1837,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   : sourceSegments.some((segment) => sourceStates[segment.id] === "error")
                     ? "error"
                     : sourceSegments.every((segment) => sourceStates[segment.id] === "loaded")
+                      ? "loaded"
+                      : "loading";
+                const cropStates = mapping.answer_region_id == null
+                  ? {}
+                  : segmentCropImageStates[mapping.answer_region_id] ?? {};
+                const segmentCropsState: AnswerRegionImageLoadState = sourceSegments.length === 0
+                  ? "error"
+                  : sourceSegments.some((segment) => cropStates[segment.id] === "error")
+                    ? "error"
+                    : sourceSegments.every((segment) => cropStates[segment.id] === "loaded")
                       ? "loaded"
                       : "loading";
                 const boundaryReviewed = mapping.answer_region_id == null
@@ -1853,7 +1873,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
                     {mapping.answer_region_id ? (
                       <>
-                        <details className="rounded border border-red-800 bg-red-950/20 p-3">
+                        <details open={sourceSegments.length > 1} className="rounded border border-red-800 bg-red-950/20 p-3">
                           <summary className="cursor-pointer font-semibold text-red-100">Required: compare the crop boundary with the complete source page</summary>
                           <div className="mt-3 grid gap-3">
                             {sourceSegments.map((segment) => (
@@ -1879,11 +1899,26 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             </label>
                           </div>
                         </details>
-                        <AuthenticatedAnswerRegionImage
-                          answerRegionId={mapping.answer_region_id}
-                          alt={`Prepared answer region for ${group.question_node.label}, submission ${mapping.submission_id}`}
-                          onLoadStateChange={handleAnswerRegionImageStateChange}
-                        />
+                        <section className="grid gap-3 rounded border border-cyan-700 bg-cyan-950/10 p-3">
+                          <div>
+                            <p className="font-semibold text-cyan-100">
+                              Complete prepared answer · {sourceSegments.length} segment{sourceSegments.length === 1 ? "" : "s"}
+                            </p>
+                            <p className="text-xs text-cyan-200">
+                              Review every segment below in order. A continuation is part of the answer only when it appears here.
+                            </p>
+                          </div>
+                          {sourceSegments.map((segment) => (
+                            <AuthenticatedAnswerRegionSegmentImage
+                              key={segment.id}
+                              answerRegionId={mapping.answer_region_id!}
+                              segmentId={segment.id}
+                              orderIndex={segment.order_index}
+                              alt={`Prepared answer segment ${segment.order_index} for ${group.question_node.label}, submission ${mapping.submission_id}`}
+                              onLoadStateChange={handleSegmentCropImageStateChange}
+                            />
+                          ))}
+                        </section>
                       </>
                     ) : null}
                     {isLocalPreparedMapping(mapping) && mapping.answer_region_id ? (
@@ -1899,8 +1934,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm it; use the explicit Qwen3.8 visual boundary rescue for this submission.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
-                          <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || imageState !== "loaded" || sourcePagesState !== "loaded" || !boundaryReviewed} onClick={() => void handleConfirmMapping(mapping)}>
-                            {confirmingMappingId === mapping.id ? "Confirming region..." : imageState === "error" || sourcePagesState === "error" ? "All evidence images must load before confirmation" : imageState !== "loaded" || sourcePagesState !== "loaded" ? "Loading source and crop images..." : !boundaryReviewed ? "Compare and acknowledge the full-page boundary first" : "Confirm displayed answer region"}
+                          <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || segmentCropsState !== "loaded" || sourcePagesState !== "loaded" || !boundaryReviewed} onClick={() => void handleConfirmMapping(mapping)}>
+                            {confirmingMappingId === mapping.id ? "Confirming region..." : segmentCropsState === "error" || sourcePagesState === "error" ? "All evidence images must load before confirmation" : segmentCropsState !== "loaded" || sourcePagesState !== "loaded" ? "Loading every source page and answer segment..." : !boundaryReviewed ? "Compare and acknowledge the full-page boundary first" : `Confirm all ${sourceSegments.length} displayed answer segment${sourceSegments.length === 1 ? "" : "s"}`}
                           </button>
                         ) : null}
                         {mapping.teacher_confirmed && !paddleRun ? (
@@ -2228,12 +2263,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             const manualAnswerText = packetAnswer?.manual_answer_text?.trim() ?? region.manual_answer_text?.trim() ?? "";
             const manualAnswerMissing = manualAnswerText.length === 0;
             const readyForRealDraftGrading = Boolean(readiness?.ready_for_grading) && !manualAnswerMissing;
-            const localPreparedMapping = flatMappings.find(
-              (mapping) => mapping.answer_region_id === region.id && mapping.provider === "local_paddle_qwen",
+            const preparedMapping = flatMappings.find(
+              (mapping) => mapping.answer_region_id === region.id && isLocalPreparedMapping(mapping),
             ) ?? null;
-            // Retired-PaddleOCR evidence stays non-approvable: its review controls are gone
-            // and BACKLOG records the unconfirmed readings as legacy and non-approvable.
-            const preparedEvidenceApproved = !localPreparedMapping || localPreparedMapping.teacher_confirmed;
+            const mappingGeometryConfirmed = !preparedMapping || preparedMapping.teacher_confirmed;
+            const fullAnswerConfirmationReady = mappingGeometryConfirmed && !manualAnswerMissing;
             return (
               <article id={`answer-region-${region.id}`} key={region.id} data-testid="answer-region-card" className="grid gap-3 rounded border border-slate-700 p-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
@@ -2245,10 +2279,28 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 <p className="text-xs text-slate-500">
                   {linkedQuestion ? formatQuestionOption(linkedQuestion) : `Question ${region.question_id}`} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
                 </p>
-                <AuthenticatedAnswerRegionImage
-                  answerRegionId={region.id}
-                  alt={`Prepared answer region ${region.id}`}
-                />
+                <section className="grid gap-3 rounded border border-cyan-700 bg-cyan-950/10 p-3">
+                  <div>
+                    <p className="font-semibold text-cyan-100">
+                      Complete answer images · {region.segments.length} segment{region.segments.length === 1 ? "" : "s"}
+                    </p>
+                    <p className="text-xs text-cyan-200">These ordered images—not only the first crop—form the evidence packet.</p>
+                  </div>
+                  {region.segments.length > 0 ? region.segments.map((segment) => (
+                    <AuthenticatedAnswerRegionSegmentImage
+                      key={segment.id}
+                      answerRegionId={region.id}
+                      segmentId={segment.id}
+                      orderIndex={segment.order_index}
+                      alt={`Prepared answer segment ${segment.order_index} for answer region ${region.id}`}
+                    />
+                  )) : (
+                    <AuthenticatedAnswerRegionImage
+                      answerRegionId={region.id}
+                      alt={`Prepared answer region ${region.id}`}
+                    />
+                  )}
+                </section>
 
                 <section className="grid gap-3 rounded border border-cyan-900 bg-slate-950/40 p-3" data-testid="evidence-packet-preview">
                   <div>
@@ -2296,18 +2348,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       Not ready for real draft grading. Approve the prepared answer evidence, then confirm that the displayed image contains the full answer.
                     </p>
                   )}
-                  {!preparedEvidenceApproved ? (
+                  {!mappingGeometryConfirmed ? (
                     <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-100">
-                      This region&apos;s evidence came from the retired local PaddleOCR path and was never
-                      teacher-confirmed. It is not approvable and its review controls have been removed.
-                      Re-prepare this answer once the replacement pipeline is available.
+                      Confirm every displayed mapping segment above before confirming full-answer coverage.
+                    </p>
+                  ) : manualAnswerMissing ? (
+                    <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-100">
+                      Confirm a faithful PaddleOCR or Qwen3.8 transcription before confirming full-answer coverage.
                     </p>
                   ) : null}
                   <div className="flex flex-wrap gap-2">
-                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm displayed image is the full answer</button>
-                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
-                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Reject / needs correction</button>
-                    <button className={buttonClass} type="button" disabled={!preparedEvidenceApproved} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
+                    <button className={buttonClass} type="button" disabled={!fullAnswerConfirmationReady} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm all displayed segments are the full answer</button>
+                    <button className={buttonClass} type="button" disabled={!mappingGeometryConfirmed} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, continuation_not_needed: true, packet_status: "unconfirmed" }))}>Mark continuation not needed</button>
+                    <button className={buttonClass} type="button" disabled={!mappingGeometryConfirmed} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "partial" }))}>Reject / needs correction</button>
+                    <button className={buttonClass} type="button" disabled={!mappingGeometryConfirmed} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
                   </div>
                   <div className="rounded border border-cyan-800 bg-cyan-950/20 p-3">
                     <p className="font-semibold text-cyan-100">Local Qwen draft grading</p>

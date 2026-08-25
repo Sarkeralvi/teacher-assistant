@@ -57,7 +57,10 @@ function Import-PilotEnvironment {
     $env:UPLOADS_DIR = Join-Path $Paths.RepositoryRoot "data\uploads"
     $env:ARTIFACTS_DIR = Join-Path $Paths.RepositoryRoot "data\artifacts"
     $env:CORS_ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
-    $env:NEXT_PUBLIC_API_BASE_URL = "http://localhost:8000"
+    # Uvicorn is bound explicitly to IPv4 loopback.  Using the same literal
+    # address in the browser avoids intermittent localhost IPv6 resolution
+    # failures during the assessment's parallel API requests.
+    $env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8000"
     $env:BRAIN_PROVIDER = "mock"
     $nodeDirectory = Split-Path -Parent $Paths.Node
     if (-not (($env:Path -split ";") -contains $nodeDirectory)) {

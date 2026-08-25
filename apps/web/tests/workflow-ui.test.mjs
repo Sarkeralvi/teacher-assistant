@@ -137,11 +137,14 @@ for (const marker of [
   "Upload script ZIP",
   "PaddleOCR + Qwen3.6 mapping",
   "AuthenticatedAnswerRegionImage",
-  "Loading source and crop images...",
+  "AuthenticatedAnswerRegionSegmentImage",
+  "Loading every source page and answer segment...",
   "Retry boundaries with PaddleOCR + Qwen3.6",
   "Confirmed mappings are protected.",
   "Required: compare the crop boundary with the complete source page",
   "Compare and acknowledge the full-page boundary first",
+  "Complete prepared answer",
+  "Review every segment below in order.",
   "Incomplete mapping suspected",
   "Create direct PaddleOCR transcript",
   "Use Qwen3.8 vision rescue",
@@ -182,6 +185,7 @@ for (const marker of [
   "rejectPaddleOcrRun",
   'provider: "local_paddle_qwen"',
   '"local_qwen38_visual"',
+  "getAnswerRegionSegmentImageUrl",
 ]) {
   if (!api.includes(marker)) {
     throw new Error(`API client missing active hybrid OCR marker: ${marker}`);

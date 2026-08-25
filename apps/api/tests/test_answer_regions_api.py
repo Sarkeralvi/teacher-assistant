@@ -458,6 +458,32 @@ def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
     assert segment["image_path"].endswith(".png")
     assert not segment["image_path"].startswith("/")
 
+    image_response = client.get(
+        f"/answer-regions/{region['id']}/segments/{segment['id']}/image",
+        headers=headers,
+    )
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"] == "image/png"
+    assert image_response.content.startswith(b"\x89PNG")
+
+    intruder_response = client.post(
+        "/auth/register",
+        json={
+            "name": "Other Teacher",
+            "email": f"segment-intruder-{uuid4().hex}@example.com",
+            "password": "regions test password",
+        },
+    )
+    assert intruder_response.status_code == 201
+    intruder_headers = {
+        "Authorization": f"Bearer {intruder_response.json()['access_token']}"
+    }
+    hidden_response = client.get(
+        f"/answer-regions/{region['id']}/segments/{segment['id']}/image",
+        headers=intruder_headers,
+    )
+    assert hidden_response.status_code == 404
+
     detail_response = client.get(f"/answer-regions/{region['id']}", headers=headers)
     assert detail_response.status_code == 200
     detail = detail_response.json()

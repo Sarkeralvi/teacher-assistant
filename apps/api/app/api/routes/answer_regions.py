@@ -1389,21 +1389,6 @@ def confirm_question_node_mapping(
                         "transcription has a separate integrity-checked gate"
                     ),
                 )
-            for segment in mapping.answer_region.segments:
-                segment.confirmed = True
-            db.add(
-                AuditLog(
-                    actor_type="teacher",
-                    actor_id=current_user.id,
-                    event_type="answer_region_mapping_geometry_confirmed",
-                    entity_type="answer_region_mapping",
-                    entity_id=mapping.id,
-                    payload_json={
-                        "answer_region_id": mapping.answer_region.id,
-                        "segment_count": len(mapping.answer_region.segments),
-                    },
-                )
-            )
         elif mapping.provider == "llama_cpp_qwen38":
             # Mapping and visual evidence are intentionally separate gates.
             # The transcript can only be copied by the dedicated hash-checked
@@ -1413,6 +1398,25 @@ def confirm_question_node_mapping(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Visual evidence must be confirmed through its transcription run",
                 )
+        # Mapping confirmation is the teacher's approval of the stored image
+        # geometry, regardless of which local provider proposed it.  Every
+        # ordered segment must therefore become confirmed here.  Transcript
+        # confirmation remains a separate, hash-checked gate.
+        for segment in mapping.answer_region.segments:
+            segment.confirmed = True
+        db.add(
+            AuditLog(
+                actor_type="teacher",
+                actor_id=current_user.id,
+                event_type="answer_region_mapping_geometry_confirmed",
+                entity_type="answer_region_mapping",
+                entity_id=mapping.id,
+                payload_json={
+                    "answer_region_id": mapping.answer_region.id,
+                    "segment_count": len(mapping.answer_region.segments),
+                },
+            )
+        )
         mapping.teacher_confirmed = True
         mapping.mapping_status = "teacher_confirmed"
     else:
@@ -1729,6 +1733,24 @@ def get_answer_region_image(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Answer region image not found",
+        )
+    return FileResponse(path, media_type="image/png")
+
+
+@router.get("/answer-regions/{answer_region_id}/segments/{segment_id}/image")
+def get_answer_region_segment_image(
+    answer_region_id: int,
+    segment_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> FileResponse:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    segment = get_region_segment_or_404(region, segment_id)
+    path = LocalStorage().resolve_relative(segment.image_path)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Answer region segment image not found",
         )
     return FileResponse(path, media_type="image/png")
 

@@ -18,6 +18,7 @@ from app.models import (
     AnswerRegion,
     AnswerRegionMapping,
     AnswerRegionOcrRun,
+    AnswerRegionSegment,
     Assessment,
     AuditLog,
     Course,
@@ -495,6 +496,72 @@ def test_hybrid_mapping_confirmation_cannot_accept_transcription_text(
     body = confirmed.json()
     assert body["teacher_confirmed"] is True
     assert body["answer_region"]["manual_answer_text"] in {None, ""}
+
+
+def test_qwen38_mapping_confirmation_confirms_every_ordered_image_segment(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher, token = register_teacher(client, "map-qwen38-segments")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    seed_confirmed_question_nodes(db_session, int(assessment["id"]))
+    pdf_path = tmp_path / "qwen38-segments.pdf"
+    make_text_pdf(pdf_path, ["Q1(a) first page", "continued answer on page two"])
+    submission = upload_submission_pdf(
+        client, int(assessment["id"]), pdf_path, token, "S-QWEN38-SEGMENTS"
+    )
+    run_response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"replace_existing": True},
+    )
+    assert run_response.status_code == 200, run_response.text
+    mapping_payload = next(
+        item for item in run_response.json()["mappings"] if item["answer_region_id"] is not None
+    )
+    mapping = db_session.get(AnswerRegionMapping, int(mapping_payload["id"]))
+    assert mapping is not None
+    assert mapping.answer_region is not None
+    region = mapping.answer_region
+    first_segment = region.segments[0]
+    first_segment.confirmed = False
+    second_page = submission["pages"][1]
+    region.segments.append(
+        AnswerRegionSegment(
+            submission_page_id=int(second_page["id"]),
+            order_index=2,
+            x=first_segment.x,
+            y=first_segment.y,
+            width=first_segment.width,
+            height=first_segment.height,
+            image_path=first_segment.image_path,
+            source="suggestion",
+            confirmed=False,
+            is_primary=False,
+        )
+    )
+    mapping.provider = "llama_cpp_qwen38"
+    mapping.mapping_status = "uncertain"
+    db_session.commit()
+
+    confirm_response = client.post(
+        f"/question-node-mappings/{mapping.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True},
+    )
+
+    assert confirm_response.status_code == 200, confirm_response.text
+    confirmed_segments = confirm_response.json()["answer_region"]["segments"]
+    assert [segment["order_index"] for segment in confirmed_segments] == [1, 2]
+    assert all(segment["confirmed"] is True for segment in confirmed_segments)
+    audit = db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.event_type == "answer_region_mapping_geometry_confirmed",
+            AuditLog.entity_id == mapping.id,
+        )
+    )
+    assert audit is not None
+    assert audit.payload_json["segment_count"] == 2
 
 
 def test_direct_paddle_draft_is_hash_confirmed_and_never_finalizes_grade(

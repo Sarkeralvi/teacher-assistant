@@ -7,7 +7,10 @@ import {
   getSubmissionPageImageUrl,
   type AnswerRegionSegment,
 } from "../lib/api";
-import { type AnswerRegionImageLoadState } from "./AuthenticatedAnswerRegionImage";
+import {
+  fetchProtectedImageResponse,
+  type AnswerRegionImageLoadState,
+} from "./AuthenticatedAnswerRegionImage";
 
 type AuthenticatedMappedSourcePageProps = {
   answerRegionId: number;
@@ -45,9 +48,10 @@ export function AuthenticatedMappedSourcePage({
       if (!token) {
         throw new Error("Sign in again before reviewing the protected source page.");
       }
-      const response = await fetch(getSubmissionPageImageUrl(segment.page_id), {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await fetchProtectedImageResponse(
+        getSubmissionPageImageUrl(segment.page_id),
+        token,
+      );
       if (!response.ok) {
         throw new Error(`The complete source page could not be loaded (${response.status}).`);
       }
