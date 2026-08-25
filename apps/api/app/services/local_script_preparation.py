@@ -241,6 +241,13 @@ class LocalScriptPreparationService:
         except LocalModelLeaseError as exc:
             raise LocalScriptPreparationError(str(exc)) from exc
 
+        self._apply_visual_adjacent_continuation_boundary_fallback(
+            pages=pages,
+            questions=questions,
+            segments_by_question=segments_by_question,
+            warning_by_question=warning_by_question,
+            confidence_by_question=confidence_by_question,
+        )
         unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
 
         created: list[AnswerRegionMapping] = []
@@ -647,6 +654,72 @@ class LocalScriptPreparationService:
                     (segment.page_no, order) for order in segment.block_orders
                 )
             segments_by_question[question_id] = []
+
+    def _apply_visual_adjacent_continuation_boundary_fallback(
+        self,
+        *,
+        pages: list[Any],
+        questions: list[Question],
+        segments_by_question: dict[int, list[PreparedSegment]],
+        warning_by_question: dict[int, list[str]],
+        confidence_by_question: dict[int, list[Decimal]],
+    ) -> None:
+        """Split a lower-page segment from the preceding answer when needed.
+
+        A vision mapper can correctly see a lower-page band but assign it to an
+        open previous answer because the mathematics is semantically similar.
+        If the preceding answer already reaches the bottom of the prior page,
+        its alleged continuation starts well below the top of the new page, and
+        the immediately following canonical question has no region, preserve the
+        unassigned top strip as the continuation and move the lower band to that
+        following question. Both remain uncertain and require full-page review.
+
+        This uses geometry and canonical order only. It never compares student
+        work with a solution or rubric and never creates evidence or a grade.
+        """
+
+        page_by_no = {page.page_no: page for page in pages}
+        for previous_question, current_question in zip(questions, questions[1:], strict=False):
+            current_segments = segments_by_question[current_question.id]
+            previous_segments = segments_by_question[previous_question.id]
+            if current_segments or len(previous_segments) < 2:
+                continue
+            shared = previous_segments[-1]
+            prior_segments = previous_segments[:-1]
+            if shared.page_no <= max(segment.page_no for segment in prior_segments):
+                continue
+            page = page_by_no.get(shared.page_no)
+            if page is None or not self._last_segment_reaches_page_bottom(
+                prior_segments, page_by_no
+            ):
+                continue
+            with Image.open(self.storage.resolve_relative(page.image_path)) as image:
+                page_width, page_height = image.size
+            if float(shared.y) < page_height * 0.15:
+                continue
+
+            inferred_continuation = PreparedSegment(
+                page_id=page.id,
+                page_no=page.page_no,
+                x=Decimal("0"),
+                y=Decimal("0"),
+                width=Decimal(str(page_width)),
+                height=shared.y,
+                block_orders=[],
+            )
+            segments_by_question[previous_question.id] = [
+                *prior_segments,
+                inferred_continuation,
+            ]
+            segments_by_question[current_question.id] = [shared]
+            warning = (
+                "page-boundary ownership was split from the previous answer using geometry and "
+                "canonical question order; compare both full-page rectangles before approval"
+            )
+            warning_by_question[previous_question.id].append(warning)
+            warning_by_question[current_question.id].append(warning)
+            confidence_by_question[previous_question.id].append(Decimal("0.35"))
+            confidence_by_question[current_question.id].append(Decimal("0.35"))
 
     def _validate_paddle_authorization(
         self,

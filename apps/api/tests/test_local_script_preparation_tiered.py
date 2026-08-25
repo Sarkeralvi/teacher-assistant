@@ -1010,6 +1010,66 @@ def test_visual_mapping_carries_bottom_region_as_open_continuation_even_if_model
     assert "continuation was carried" in " ".join(first.source_reference["warnings"])
 
 
+def test_visual_mapping_splits_lower_continuation_band_to_missing_next_question(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path)
+    vision = FakeVisionProvider(
+        [
+            [
+                VisualPageRegion(
+                    question_label=LABELS[0],
+                    bbox=[50, 100, 900, 980],
+                    continues_from_previous=False,
+                    continues_to_next=True,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                )
+            ],
+            [
+                # The model repeats the previous label on a lower-page band,
+                # even though the next canonical question owns that band.
+                VisualPageRegion(
+                    question_label=LABELS[0],
+                    bbox=[100, 300, 900, 700],
+                    continues_from_previous=True,
+                    continues_to_next=False,
+                    confidence=Decimal("0.7"),
+                    warnings=[],
+                )
+            ],
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(vision),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+    )
+
+    first = next(item for item in mappings if item.source_page == 1)
+    second = next(item for item in mappings if item.question_id != first.question_id)
+    assert first.answer_region is not None
+    assert second.answer_region is not None
+    assert [segment.order_index for segment in first.answer_region.segments] == [1, 2]
+    assert first.answer_region.segments[1].y == Decimal("0")
+    assert second.answer_region.segments[0].y > Decimal("0")
+    assert "page-boundary ownership was split" in " ".join(
+        second.source_reference["warnings"]
+    )
+    assert first.mapping_status == "uncertain"
+    assert second.mapping_status == "uncertain"
+
+
 def test_no_vision_call_when_tier1_read_every_page(
     db_session: Session, tmp_path: Path, storage: LocalStorage
 ) -> None:
