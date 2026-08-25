@@ -137,6 +137,18 @@ class FakeTextProvider:
         return {"mappings": self._mappings}
 
 
+class SequencedFakeTextProvider(FakeTextProvider):
+    def __init__(self, mapping_passes: list[list[dict[str, Any]]]) -> None:
+        super().__init__([])
+        self._mapping_passes = list(mapping_passes)
+
+    def map_submission_answers_from_ocr_pages(
+        self, *, pages: list[dict[str, Any]], questions: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        self.calls.append({"pages": pages, "questions": questions})
+        return {"mappings": self._mapping_passes.pop(0)}
+
+
 class FakeVisionProvider:
     provider_name = "llama_cpp_qwen38"
 
@@ -483,6 +495,172 @@ def test_hybrid_path_refuses_page_count_above_explicit_paddle_budget(
         )
 
     assert paddle.calls == 0
+
+
+def test_hybrid_coverage_pass_adds_bottom_continuation_and_unmapped_question(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    """One bounded second pass repairs only blocks the initial map left behind."""
+    submission, teacher = _seed(db_session, tmp_path, page_count=2)
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+    paddle = FakePaddleClient(
+        [
+            [
+                {"order": 1, "text": LABELS[0], "bbox": [40, 40, 200, 70]},
+                {"order": 2, "text": "continues", "bbox": [40, 720, 420, 790]},
+            ],
+            [
+                {"order": 1, "text": "final line", "bbox": [40, 40, 420, 85]},
+                {"order": 2, "text": LABELS[1], "bbox": [40, 200, 200, 230]},
+                {"order": 3, "text": "working two", "bbox": [40, 240, 420, 290]},
+            ],
+        ]
+    )
+    provider = SequencedFakeTextProvider(
+        [
+            [
+                _draft(questions[0].id, LABELS[0], 1, [1, 2]),
+                {
+                    "question_id": questions[1].id,
+                    "question_no": LABELS[1],
+                    "status": "not_found",
+                    "confidence": "0.10",
+                    "warnings": [],
+                    "block_references": [],
+                },
+            ],
+            [
+                _draft(questions[0].id, LABELS[0], 2, [1]),
+                _draft(questions[1].id, LABELS[1], 2, [2, 3]),
+            ],
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        text_adapter=FakeAdapter(provider),  # type: ignore[arg-type]
+        paddle_client_factory=lambda: paddle,
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare_from_paddle_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_ocr_model="PaddleOCR-VL-1.6",
+        expected_layout_model="PP-DocLayoutV3",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+        maximum_text_mapping_calls=2,
+    )
+
+    assert len(provider.calls) == 2
+    assert {question["question_id"] for question in provider.calls[1]["questions"]} == {
+        questions[0].id,
+        questions[1].id,
+    }
+    first = next(mapping for mapping in mappings if mapping.question_id == questions[0].id)
+    second = next(mapping for mapping in mappings if mapping.question_id == questions[1].id)
+    assert [segment.submission_page_id for segment in first.answer_region.segments] == [
+        submission.pages[0].id,
+        submission.pages[1].id,
+    ]
+    assert second.answer_region is not None
+    audit = db_session.query(AuditLog).filter(
+        AuditLog.event_type == "submission_script_draft_prepared"
+    ).one()
+    assert audit.payload_json["text_mapping_call_count"] == 2
+    assert audit.payload_json["text_mapping_call_limit"] == 2
+
+
+def test_hybrid_repair_preserves_confirmed_mapping_and_replaces_only_unresolved(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    submission, teacher = _seed(db_session, tmp_path)
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+
+    def paddle() -> FakePaddleClient:
+        return FakePaddleClient(
+            [
+                [
+                    {"order": 1, "text": LABELS[0], "bbox": [40, 40, 200, 70]},
+                    {"order": 2, "text": "working one", "bbox": [40, 80, 420, 120]},
+                ],
+                [
+                    {"order": 1, "text": LABELS[1], "bbox": [40, 40, 200, 70]},
+                    {"order": 2, "text": "working two", "bbox": [40, 80, 420, 120]},
+                ],
+            ]
+        )
+
+    first = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        text_adapter=FakeAdapter(
+            FakeTextProvider(
+                [
+                    _draft(questions[0].id, LABELS[0], 1, [1, 2]),
+                    _draft(questions[1].id, LABELS[1], 2, [1, 2]),
+                ]
+            )
+        ),  # type: ignore[arg-type]
+        paddle_client_factory=paddle,
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+    initial = first.prepare_from_paddle_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_ocr_model="PaddleOCR-VL-1.6",
+        expected_layout_model="PP-DocLayoutV3",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+    )
+    confirmed = next(item for item in initial if item.question_id == questions[0].id)
+    confirmed_id = confirmed.id
+    confirmed.teacher_confirmed = True
+    for segment in confirmed.answer_region.segments:
+        segment.confirmed = True
+    db_session.commit()
+
+    repair = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        text_adapter=FakeAdapter(
+            FakeTextProvider(
+                [
+                    _draft(questions[0].id, LABELS[0], 1, [1, 2]),
+                    _draft(questions[1].id, LABELS[1], 2, [1, 2]),
+                ]
+            )
+        ),  # type: ignore[arg-type]
+        paddle_client_factory=paddle,
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+    repaired = repair.prepare_from_paddle_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_ocr_model="PaddleOCR-VL-1.6",
+        expected_layout_model="PP-DocLayoutV3",
+        replace_existing=False,
+        repair_unconfirmed_only=True,
+        maximum_ocr_calls=2,
+    )
+
+    preserved = next(item for item in repaired if item.question_id == questions[0].id)
+    assert preserved.id == confirmed_id
+    assert preserved.teacher_confirmed is True
+    assert any(item.question_id == questions[1].id for item in repaired)
 
 
 def test_no_vision_call_when_tier1_read_every_page(

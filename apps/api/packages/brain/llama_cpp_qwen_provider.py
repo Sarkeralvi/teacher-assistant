@@ -589,6 +589,19 @@ class LlamaCppQwenProvider(BrainProvider):
             raise ValueError("Finalized questions are required for answer mapping")
         page_context = _submission_ocr_block_context(pages)
         reference_context = json.dumps(questions, ensure_ascii=False, separators=(",", ":"))
+        additional_only = all(
+            str(question.get("mapping_scope") or "") == "additional_unassigned_blocks_only"
+            for question in questions
+        )
+        mapping_scope = (
+            "This is a bounded coverage pass over OCR blocks that were left unassigned by "
+            "an earlier mapping. Select only additional blocks belonging to each supplied "
+            "question; do not assume a question is absent merely because its earlier blocks "
+            "are not repeated here. Return not_found only when none of these remaining blocks "
+            "belongs to that question."
+            if additional_only
+            else "This is the initial complete-script mapping pass."
+        )
         messages = [
             {
                 "role": "system",
@@ -596,13 +609,24 @@ class LlamaCppQwenProvider(BrainProvider):
                     "Map OCR blocks from a student's complete answer script to finalized "
                     "question IDs. Use only supplied block IDs. Do not grade, transcribe, "
                     "rewrite, infer missing answer text, or create coordinates. Return every "
-                    "finalized question exactly once. Every mapping needs teacher review."
+                    "finalized question exactly once. Every mapping needs teacher review. "
+                    + mapping_scope
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "For each finalized question, select all and only the ordered OCR blocks "
+                    "that belong to that student's answer, including continuation blocks on "
+                    "later pages. Question labels may help locate boundaries. Use status "
+                    "not_found with no blocks when there is no visible answer. Use uncertain "
+                    "when a boundary or question link is ambiguous. Preserve exact question_id "
+                    "and question_no values.\n\nFINALIZED REFERENCES\n"
+                    "For each supplied question, select all and only the ordered OCR blocks "
+                    "that belong to that student's answer, including continuation blocks on "
+                    "later pages. Question labels may help locate boundaries. Use status "
+                    "not_found with no blocks when there is no visible answer in the supplied "
+                    "block set. Use uncertain when a boundary or question link is ambiguous. "
+                    "Preserve exact question_id and question_no values.\n\nFINALIZED REFERENCES\n"
                     "that belong to that student's answer, including continuation blocks on "
                     "later pages. Question labels may help locate boundaries. Use status "
                     "not_found with no blocks when there is no visible answer. Use uncertain "

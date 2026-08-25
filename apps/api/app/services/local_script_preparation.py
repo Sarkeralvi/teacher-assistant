@@ -365,7 +365,7 @@ class LocalScriptPreparationService:
 
             accepted = [item for item in readings if not item.escalated and item.blocks]
             if accepted:
-                text_calls = self._map_accepted_pages_with_text_model(
+                text_calls, _used_blocks = self._map_accepted_pages_with_text_model(
                     accepted=accepted,
                     questions=questions,
                     references=references,
@@ -387,9 +387,11 @@ class LocalScriptPreparationService:
             submission=submission,
             teacher=teacher,
             questions=questions,
+            questions_to_persist=questions,
             nodes=nodes,
             pages=pages,
             existing=existing,
+            preserved_existing=[],
             segments_by_question=segments_by_question,
             warning_by_question=warning_by_question,
             confidence_by_question=confidence_by_question,
@@ -419,6 +421,8 @@ class LocalScriptPreparationService:
         expected_layout_model: str,
         replace_existing: bool,
         maximum_ocr_calls: int,
+        repair_unconfirmed_only: bool = False,
+        maximum_text_mapping_calls: int = 2,
     ) -> list[AnswerRegionMapping]:
         """Paddle locates ordered blocks; Qwen3.6 maps only their identifiers."""
 
@@ -434,11 +438,33 @@ class LocalScriptPreparationService:
             raise LocalScriptPreparationError("Script pages exceed the authorized OCR call limit")
         questions, nodes, references = self._load_finalized_references(submission)
         existing = self._load_existing(submission.id)
-        if existing and not replace_existing:
+        if existing and not replace_existing and not repair_unconfirmed_only:
             raise LocalScriptPreparationError(
                 "Draft mappings already exist; explicitly replace them to prepare again"
             )
-        self._assert_replace_is_safe(existing)
+        if repair_unconfirmed_only:
+            preserved_existing, replaceable_existing = self._split_preserved_mappings(existing)
+            preserved_question_ids = {
+                mapping.question_id
+                for mapping in preserved_existing
+                if mapping.question_id is not None
+            }
+            questions_to_persist = [
+                question for question in questions if question.id not in preserved_question_ids
+            ]
+            if not questions_to_persist:
+                raise LocalScriptPreparationError(
+                    "No unresolved mappings remain; confirmed or graded evidence is preserved"
+                )
+        else:
+            self._assert_replace_is_safe(existing)
+            preserved_existing = []
+            replaceable_existing = existing
+            questions_to_persist = questions
+        if maximum_text_mapping_calls < 1 or maximum_text_mapping_calls > 2:
+            raise LocalScriptPreparationError(
+                "Text mapping calls must be authorized between 1 and 2"
+            )
 
         readings: list[_ScriptPageReading] = []
         lease = LocalModelLeaseService(self.db)
@@ -497,7 +523,7 @@ class LocalScriptPreparationService:
         warning_by_question: dict[int, list[str]] = {q.id: [] for q in questions}
         confidence_by_question: dict[int, list[Decimal]] = {q.id: [] for q in questions}
         try:
-            text_calls = self._map_accepted_pages_with_text_model(
+            text_calls, used_blocks = self._map_accepted_pages_with_text_model(
                 accepted=accepted,
                 questions=questions,
                 references=references,
@@ -507,6 +533,33 @@ class LocalScriptPreparationService:
                 lease=lease,
                 holder=holder,
             )
+            if repair_unconfirmed_only:
+                self._discard_preserved_draft_assignments(
+                    segments_by_question=segments_by_question,
+                    used_blocks=used_blocks,
+                    preserved_question_ids={
+                        mapping.question_id
+                        for mapping in preserved_existing
+                        if mapping.question_id is not None
+                    },
+                )
+            if maximum_text_mapping_calls == 2:
+                text_calls += self._complete_unassigned_block_coverage(
+                    accepted=accepted,
+                    questions=questions,
+                    references=references,
+                    segments_by_question=segments_by_question,
+                    warning_by_question=warning_by_question,
+                    confidence_by_question=confidence_by_question,
+                    used_blocks=used_blocks,
+                    excluded_question_ids={
+                        mapping.question_id
+                        for mapping in preserved_existing
+                        if mapping.question_id is not None
+                    },
+                    lease=lease,
+                    holder=holder,
+                )
         except LocalModelLeaseError as exc:
             raise LocalScriptPreparationError(str(exc)) from exc
 
@@ -514,9 +567,11 @@ class LocalScriptPreparationService:
             submission=submission,
             teacher=teacher,
             questions=questions,
+            questions_to_persist=questions_to_persist,
             nodes=nodes,
             pages=pages,
-            existing=existing,
+            existing=replaceable_existing,
+            preserved_existing=preserved_existing,
             segments_by_question=segments_by_question,
             warning_by_question=warning_by_question,
             confidence_by_question=confidence_by_question,
@@ -531,9 +586,26 @@ class LocalScriptPreparationService:
                 "expected_layout_model": expected_layout_model,
                 "paddle_ocr_call_count": len(readings),
                 "text_mapping_call_count": text_calls,
+                "text_mapping_call_limit": maximum_text_mapping_calls,
+                "repair_unconfirmed_only": repair_unconfirmed_only,
                 "qwen38_call_count": 0,
             },
         )
+
+    def _discard_preserved_draft_assignments(
+        self,
+        *,
+        segments_by_question: dict[int, list[PreparedSegment]],
+        used_blocks: set[tuple[int, int]],
+        preserved_question_ids: set[int],
+    ) -> None:
+        """Do not let a repair's fresh draft alter or hide immutable evidence."""
+        for question_id in preserved_question_ids:
+            for segment in segments_by_question.get(question_id, []):
+                used_blocks.difference_update(
+                    (segment.page_no, order) for order in segment.block_orders
+                )
+            segments_by_question[question_id] = []
 
     def _validate_paddle_authorization(
         self,
@@ -653,7 +725,7 @@ class LocalScriptPreparationService:
         confidence_by_question: dict[int, list[Decimal]],
         lease: LocalModelLeaseService,
         holder: str,
-    ) -> int:
+    ) -> tuple[int, set[tuple[int, int]]]:
         """Map tier-1 blocks to locked questions with Qwen3.6, in one text call.
 
         Qwen3.6 selects block identifiers; it never produces coordinates. The
@@ -712,7 +784,134 @@ class LocalScriptPreparationService:
             confidence = draft.get("confidence")
             if confidence is not None:
                 confidence_by_question[question_id].append(Decimal(str(confidence)))
+        return 1, used_blocks
+
+    def _complete_unassigned_block_coverage(
+        self,
+        *,
+        accepted: list[_ScriptPageReading],
+        questions: list[Question],
+        references: list[dict[str, Any]],
+        segments_by_question: dict[int, list[PreparedSegment]],
+        warning_by_question: dict[int, list[str]],
+        confidence_by_question: dict[int, list[Decimal]],
+        used_blocks: set[tuple[int, int]],
+        excluded_question_ids: set[int],
+        lease: LocalModelLeaseService,
+        holder: str,
+    ) -> int:
+        """Run one bounded coverage pass over blocks omitted by the initial map.
+
+        This is not a provider retry: it has a different, explicitly limited
+        job.  It may attach a continuation to an already mapped answer or map
+        a question left ``not_found``.  It can only select block IDs that the
+        first pass left unassigned, so it cannot rewrite confirmed geometry.
+        """
+        all_blocks = self._block_index(
+            [{"page": item.page.page_no, "blocks": item.blocks} for item in accepted]
+        )
+        unused_keys = set(all_blocks).difference(used_blocks)
+        if not unused_keys:
+            return 0
+
+        page_by_no = {item.page.page_no: item.page for item in accepted}
+        unresolved = [
+            question
+            for question in questions
+            if question.id not in excluded_question_ids and not segments_by_question[question.id]
+        ]
+        continuations = [
+            question
+            for question in questions
+            if question.id not in excluded_question_ids
+            and segments_by_question[question.id]
+            and self._last_segment_reaches_page_bottom(
+                segments_by_question[question.id], page_by_no
+            )
+        ]
+        targets = list(
+            {question.id: question for question in [*unresolved, *continuations]}.values()
+        )
+        if not targets:
+            return 0
+
+        unused_pages: list[dict[str, Any]] = []
+        for page_no in sorted(page_by_no):
+            blocks = [
+                block
+                for key, block in all_blocks.items()
+                if key[0] == page_no and key in unused_keys
+            ]
+            if blocks:
+                unused_pages.append({"page": page_no, "blocks": blocks})
+        if not unused_pages:
+            return 0
+
+        target_ids = {question.id for question in targets}
+        coverage_references = [
+            {**reference, "mapping_scope": "additional_unassigned_blocks_only"}
+            for reference in references
+            if int(reference["question_id"]) in target_ids
+        ]
+        with lease.hold(
+            model_phase="Qwen", holder_kind="script_mapping_coverage", holder_id=holder
+        ):
+            if self.settings.local_ai_phase_switch_enabled:
+                self.phase_manager.switch("Qwen", lease_holder_id=holder)
+            adapter = self._text_adapter or BrainAdapter.for_provider(
+                self.settings, "llama_cpp_qwen"
+            )
+            adapter.verify_available_model()
+            provider = adapter.provider
+            if not hasattr(provider, "map_submission_answers_from_ocr_pages"):
+                raise LocalScriptPreparationError(
+                    "Configured local provider cannot complete unassigned script blocks"
+                )
+            try:
+                lease.heartbeat(holder_id=holder)
+                result = provider.map_submission_answers_from_ocr_pages(
+                    pages=unused_pages, questions=coverage_references
+                )
+                lease.heartbeat(holder_id=holder)
+            except Exception as exc:
+                raise LocalScriptPreparationError(
+                    f"Qwen3.6 coverage mapping failed safely: {exc}"
+                ) from exc
+
+        drafts = list(result.get("mappings") or [])
+        self._validate_draft_set(drafts, targets)
+        for draft in drafts:
+            question_id = int(draft["question_id"])
+            segments, _draft_text = self._resolve_draft(
+                draft=draft,
+                pages=[item.page for item in accepted],
+                block_index=all_blocks,
+                used_blocks=used_blocks,
+            )
+            if not segments:
+                continue
+            segments_by_question[question_id].extend(segments)
+            warning_by_question[question_id].extend(
+                [
+                    "additional unassigned OCR blocks were mapped by the bounded coverage pass; "
+                    "review every segment before transcription",
+                    *list(draft.get("warnings") or []),
+                ]
+            )
+            confidence = draft.get("confidence")
+            if confidence is not None:
+                confidence_by_question[question_id].append(Decimal(str(confidence)))
         return 1
+
+    def _last_segment_reaches_page_bottom(
+        self, segments: list[PreparedSegment], page_by_no: dict[int, Any]
+    ) -> bool:
+        last = max(segments, key=lambda item: (item.page_no, item.y + item.height))
+        page = page_by_no.get(last.page_no)
+        if page is None:
+            return False
+        with Image.open(self.storage.resolve_relative(page.image_path)) as image:
+            return float(last.y + last.height) >= image.height * 0.88
 
     def _persist_prepared_mappings(
         self,
@@ -720,9 +919,11 @@ class LocalScriptPreparationService:
         submission: Submission,
         teacher: User,
         questions: list[Question],
+        questions_to_persist: list[Question],
         nodes: dict[int, QuestionNode],
         pages: list[Any],
         existing: list[AnswerRegionMapping],
+        preserved_existing: list[AnswerRegionMapping],
         segments_by_question: dict[int, list[PreparedSegment]],
         warning_by_question: dict[int, list[str]],
         confidence_by_question: dict[int, list[Decimal]],
@@ -730,10 +931,36 @@ class LocalScriptPreparationService:
         provider: str,
         audit_payload: dict[str, Any],
     ) -> list[AnswerRegionMapping]:
-        unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
+        coverage_segments = {
+            question_id: list(segments)
+            for question_id, segments in segments_by_question.items()
+        }
+        for mapping in preserved_existing:
+            region = mapping.answer_region
+            if region is None or mapping.question_id is None:
+                continue
+            coverage_segments.setdefault(mapping.question_id, []).extend(
+                PreparedSegment(
+                    page_id=segment.submission_page_id,
+                    page_no=segment.page.page_no,
+                    x=segment.x,
+                    y=segment.y,
+                    width=segment.width,
+                    height=segment.height,
+                    block_orders=[],
+                )
+                for segment in region.segments
+            )
+        unassigned_pages = self._detect_unassigned_content(pages, coverage_segments)
+        unassigned_page_numbers = {
+            int(finding["page_no"])
+            for finding in unassigned_pages
+            if not finding["blank"]
+        }
+        page_by_no = {page.page_no: page for page in pages}
 
         created: list[AnswerRegionMapping] = []
-        for question in questions:
+        for question in questions_to_persist:
             segments = sorted(
                 segments_by_question[question.id], key=lambda item: (item.page_no, item.y)
             )
@@ -742,6 +969,17 @@ class LocalScriptPreparationService:
                 "confidence": str(min(confidence_by_question[question.id], default=Decimal("0"))),
                 "warnings": list(dict.fromkeys(warning_by_question[question.id])),
             }
+            possible_continuation = bool(
+                segments
+                and self._last_segment_reaches_page_bottom(segments, page_by_no)
+                and max(segment.page_no for segment in segments) + 1 in unassigned_page_numbers
+            )
+            if possible_continuation:
+                draft["status"] = "uncertain"
+                draft["warnings"].append(
+                    "answer reaches the page bottom and the next page contains unassigned "
+                    "handwriting; continuation is required before full-answer confirmation"
+                )
             page_warnings = list(run_warnings)
             # Attach the unassigned-content warning to questions that were NOT
             # placed. Those are the ones the missed ink might belong to, and
@@ -766,6 +1004,7 @@ class LocalScriptPreparationService:
                     qwen_warnings=page_warnings,
                     provider=provider,
                     text_source="tier1_ocr_mapping_pending_transcription",
+                    possible_continuation=possible_continuation,
                 )
             )
 
@@ -788,6 +1027,7 @@ class LocalScriptPreparationService:
                     "assessment_id": submission.assessment_id,
                     "provider": provider,
                     "mapping_count": len(created),
+                    "preserved_mapping_count": len(preserved_existing),
                     "mapped_count": sum(1 for item in created if item.answer_region is not None),
                     "pages_with_unassigned_ink": [
                         item["page_no"] for item in unassigned_pages if not item["blank"]
@@ -1137,6 +1377,7 @@ class LocalScriptPreparationService:
         qwen_warnings: list[str],
         provider: str = "llama_cpp_qwen38",
         text_source: str = "qwen38_visual_mapping_pending_transcription",
+        possible_continuation: bool = False,
     ) -> AnswerRegionMapping:
         status = "blocked" if not segments else str(draft["status"])
         if status == "not_found":
@@ -1197,7 +1438,9 @@ class LocalScriptPreparationService:
             manual_answer_text=None,
             full_answer_confirmed=False,
             evidence_status="unconfirmed",
-            continuation_check_status="not_checked",
+            continuation_check_status=(
+                "possible_continuation" if possible_continuation else "not_checked"
+            ),
         )
         for index, segment in enumerate(segments, start=1):
             page = next(page for page in submission.pages if page.id == segment.page_id)
@@ -1244,6 +1487,30 @@ class LocalScriptPreparationService:
                 .order_by(AnswerRegionMapping.id)
             ).all()
         )
+
+    def _split_preserved_mappings(
+        self, mappings: list[AnswerRegionMapping]
+    ) -> tuple[list[AnswerRegionMapping], list[AnswerRegionMapping]]:
+        """Keep teacher-confirmed or grading-linked evidence immutable during repair."""
+        preserved: list[AnswerRegionMapping] = []
+        replaceable: list[AnswerRegionMapping] = []
+        for mapping in mappings:
+            region = mapping.answer_region
+            protected = bool(
+                mapping.teacher_confirmed
+                or region is not None
+                and (
+                    bool((region.manual_answer_text or "").strip())
+                    or region.grading_jobs
+                    or region.grade_suggestions
+                    or region.final_grades
+                )
+            )
+            if protected:
+                preserved.append(mapping)
+            else:
+                replaceable.append(mapping)
+        return preserved, replaceable
 
     def _assert_replace_is_safe(self, mappings: list[AnswerRegionMapping]) -> None:
         for mapping in mappings:

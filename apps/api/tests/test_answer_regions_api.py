@@ -159,6 +159,32 @@ def test_create_answer_region_crops_image_and_serves_png(
         assert cropped.size == (30, 20)
 
 
+def test_full_answer_confirmation_refuses_an_unresolved_page_continuation(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    question, page, headers = create_uploaded_page(client, tmp_path)
+    created = client.post(
+        f"/submission-pages/{page['id']}/answer-regions",
+        headers=headers,
+        json={"question_id": question["id"], "x": 10, "y": 12, "width": 30, "height": 20},
+    )
+    assert created.status_code == 201
+    region_id = created.json()["id"]
+    region = db_session.get(AnswerRegion, region_id)
+    assert region is not None
+    region.continuation_check_status = "possible_continuation"
+    db_session.commit()
+
+    response = client.patch(
+        f"/answer-regions/{region_id}/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True},
+    )
+
+    assert response.status_code == 409
+    assert "Repair the mapping" in response.text
+
+
 def test_answer_region_list_endpoints_and_question_filter(
     client: TestClient, tmp_path: Path
 ) -> None:

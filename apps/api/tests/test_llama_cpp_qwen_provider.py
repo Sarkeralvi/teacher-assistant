@@ -276,6 +276,27 @@ def test_qwen_maps_only_supplied_submission_ocr_block_ids() -> None:
     assert request["response_format"]["json_schema"]["name"] == ("submission_answer_mapping")
 
 
+def test_qwen_marks_unassigned_block_coverage_mapping_as_a_distinct_pass() -> None:
+    client = FakeClient(valid_submission_mapping_completion())
+    make_provider(client).map_submission_answers_from_ocr_pages(
+        pages=[{"page": 2, "blocks": [{"order": 7, "text": "final line", "bbox": [1, 2, 30, 20]}]}],
+        questions=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)",
+                "question_text": "Calculate force",
+                "model_answer": "10 N",
+                "rubric": {"criteria": []},
+                "mapping_scope": "additional_unassigned_blocks_only",
+            }
+        ],
+    )
+
+    request = client.post_calls[0][1]["json"]
+    assert "bounded coverage pass" in request["messages"][0]["content"]
+    assert "additional blocks" in request["messages"][0]["content"]
+
+
 def test_qwen_prepares_student_answer_from_known_ocr_candidates_only() -> None:
     client = FakeClient(valid_prepared_answer_completion())
     result = make_provider(client).prepare_student_answers_from_ocr_candidates(

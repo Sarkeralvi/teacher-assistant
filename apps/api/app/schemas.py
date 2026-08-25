@@ -980,6 +980,9 @@ class VisualTranscriptionRejectionRequest(BaseModel):
 
 class AnswerRegionMappingRunRequest(BaseModel):
     replace_existing: bool = True
+    # A repair preserves previously teacher-confirmed mappings and replaces only
+    # unresolved drafts. It remains an explicit teacher-authorized operation.
+    repair_unconfirmed_only: bool = False
     # The local hybrid path uses PaddleOCR for page/block geometry and Qwen3.6
     # only to associate those immutable block identifiers with locked questions.
     # Qwen3.8 is reserved for explicit, teacher-authorized transcription rescue.
@@ -989,6 +992,10 @@ class AnswerRegionMappingRunRequest(BaseModel):
     expected_layout_model: str | None = Field(default=None, max_length=255)
     draft_only_confirmed: bool = False
     maximum_ocr_calls: int = Field(default=25, ge=1, le=100)
+    # The first call assigns PaddleOCR blocks. A second, bounded coverage pass
+    # may assign only blocks left unassigned by the first pass to unresolved or
+    # page-bottom continuation answers. This is not a retry.
+    maximum_text_mapping_calls: int = Field(default=2, ge=1, le=2)
 
 
 class AnswerRegionMappingUpdate(BaseModel):

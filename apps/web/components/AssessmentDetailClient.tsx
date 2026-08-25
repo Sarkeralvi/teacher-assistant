@@ -840,22 +840,24 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
-  async function handleRunAutomaticMappings() {
+  async function handleRunAutomaticMappings(repairUnconfirmedOnly = false) {
     setRunningMappings(true);
     setError(null);
     setScriptPreparationMessage(null);
     try {
       const responses = await runAssessmentQuestionNodeMappings(assessmentId, {
-        replace_existing: true,
+        replace_existing: !repairUnconfirmedOnly,
+        repair_unconfirmed_only: repairUnconfirmedOnly,
         provider: "local_paddle_qwen",
         expected_model: localAiStatus?.qwen.model ?? "qwen3.6-35b-a3b-q4km",
         expected_ocr_model: localAiStatus?.paddle_ocr.model ?? "PaddleOCR-VL-1.6",
         expected_layout_model: localAiStatus?.paddle_ocr.layout_model ?? "PP-DocLayoutV3",
         draft_only_confirmed: true,
         maximum_ocr_calls: 25,
+        maximum_text_mapping_calls: 2,
       });
       setScriptPreparationMessage(
-        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answer regions prepared. Confirm each region, then review its direct PaddleOCR transcript.`,
+        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answer regions prepared${repairUnconfirmedOnly ? " while preserving confirmed evidence" : ""}. Confirm each region, then review its direct PaddleOCR transcript.`,
       );
       await load();
     } catch (err) {
@@ -1695,6 +1697,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           >
             {runningMappings ? "PaddleOCR and Qwen3.6 are preparing scripts..." : "Prepare scripts locally"}
           </button>
+          {flatMappings.some((mapping) => !mapping.teacher_confirmed) ? (
+            <button
+              className="rounded border border-amber-700 px-3 py-2 text-sm text-amber-100 hover:border-amber-500"
+              type="button"
+              disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
+              onClick={() => void handleRunAutomaticMappings(true)}
+            >
+              {runningMappings ? "Repairing unresolved mappings..." : "Repair unresolved mappings locally"}
+            </button>
+          ) : null}
         </div>
         <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-5">
           <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
@@ -1703,6 +1715,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p>Qwen3.6: {localAiStatus?.qwen.available ? "ready" : localAiStatus?.qwen.enabled ? "configured · starts on action" : "disabled"}</p>
           <p>Qwen3.8 rescue: {localAiStatus?.qwen38.available ? "ready" : localAiStatus?.qwen38.transcription_enabled ? "configured · explicit rescue only" : "disabled"}</p>
         </div>
+        <p className="text-xs text-amber-200">Repair preserves teacher-confirmed or graded evidence. It authorizes at most two Qwen3.6 mapping passes: initial block mapping plus one unassigned-block coverage pass; it never retries or grades.</p>
         {!localScriptPreparationAuthorized ? (
           <p className="rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-100">
             Local script preparation is disabled in the host configuration. It must be explicitly enabled for this supervised rehearsal.
@@ -1765,6 +1778,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           <p className="font-semibold text-slate-100">PaddleOCR + Qwen3.6 mapping</p>
                           <p className="text-xs text-amber-200">Mapping, verbatim transcription, and full-answer coverage are three separate teacher confirmations.</p>
                           <p className="text-xs text-slate-300">PaddleOCR text is a direct draft. If it is wrong, reject it and explicitly request Qwen3.8 vision rescue.</p>
+                          {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm a full answer; use “Repair unresolved mappings locally”.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
                           <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || imageState !== "loaded"} onClick={() => void handleConfirmMapping(mapping)}>

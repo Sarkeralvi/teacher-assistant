@@ -1417,12 +1417,14 @@ export function runSubmissionQuestionNodeMappings(
   submissionId: number,
   payload: {
     replace_existing?: boolean;
+    repair_unconfirmed_only?: boolean;
     provider?: ScriptMappingProvider;
     expected_model?: string;
     expected_ocr_model?: string;
     expected_layout_model?: string;
     draft_only_confirmed?: boolean;
     maximum_ocr_calls?: number;
+    maximum_text_mapping_calls?: number;
   } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse>(`/submissions/${submissionId}/question-node-mappings/run`, {
@@ -1437,12 +1439,14 @@ export function runAssessmentQuestionNodeMappings(
   assessmentId: number,
   payload: {
     replace_existing?: boolean;
+    repair_unconfirmed_only?: boolean;
     provider?: ScriptMappingProvider;
     expected_model?: string;
     expected_ocr_model?: string;
     expected_layout_model?: string;
     draft_only_confirmed?: boolean;
     maximum_ocr_calls?: number;
+    maximum_text_mapping_calls?: number;
   } = {},
 ) {
   return apiRequest<AnswerRegionMappingRunResponse[]>(`/assessments/${assessmentId}/question-node-mappings/run`, {

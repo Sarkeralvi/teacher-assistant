@@ -1047,7 +1047,9 @@ def run_submission_question_node_mappings(
                 expected_ocr_model=request.expected_ocr_model or "",
                 expected_layout_model=request.expected_layout_model or "",
                 replace_existing=request.replace_existing,
+                repair_unconfirmed_only=request.repair_unconfirmed_only,
                 maximum_ocr_calls=request.maximum_ocr_calls,
+                maximum_text_mapping_calls=request.maximum_text_mapping_calls,
             )
         except LocalScriptPreparationError as exc:
             raise HTTPException(
@@ -1648,6 +1650,19 @@ def update_answer_region_full_answer_confirmation(
     current_user: CurrentUser,
 ) -> AnswerRegion:
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    if (
+        payload.full_answer_confirmed
+        and region.continuation_check_status == "possible_continuation"
+        and not payload.continuation_not_needed
+        and len(region.segments) < 2
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This answer may continue onto the next page. Repair the mapping to include "
+                "every segment before confirming a full answer."
+            ),
+        )
     region.full_answer_confirmed = payload.full_answer_confirmed
     if payload.manual_answer_text is not None:
         region.manual_answer_text = payload.manual_answer_text.strip() or None
