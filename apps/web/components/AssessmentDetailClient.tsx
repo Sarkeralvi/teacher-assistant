@@ -7,6 +7,7 @@ import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from ".
 import {
   AuthenticatedAnswerRegionImage,
   AuthenticatedAnswerRegionSegmentImage,
+  type EditingDecisionOverlay,
   type AnswerRegionImageLoadState,
 } from "./AuthenticatedAnswerRegionImage";
 import { AuthenticatedMappedSourcePage } from "./AuthenticatedMappedSourcePage";
@@ -46,7 +47,10 @@ import {
   listSubmissions,
   removeAnswerRegionSegment,
   confirmVisualTranscriptionRun,
+  confirmVisualTranscriptionThinkingRepair,
+  createVisualTranscriptionThinkingRepair,
   rejectVisualTranscriptionRun,
+  rejectVisualTranscriptionThinkingRepair,
   reorderAnswerRegionSegments,
   runAssessmentQuestionNodeMappings,
   runSubmissionQuestionNodeMappings,
@@ -184,6 +188,39 @@ function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
   return mapping.provider === "local_paddle_qwen" || mapping.provider === "llama_cpp_qwen38";
 }
 
+type ThinkingRepairDecision = EditingDecisionOverlay & {
+  page_index: number;
+  position_hint: string;
+  status: "cancelled" | "replacement" | "uncertain_correction";
+};
+
+function thinkingRepairDecisions(run: AnswerRegionOcrRun | null): ThinkingRepairDecision[] {
+  const analysis = run?.normalized_result?.editing_analysis;
+  if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)) return [];
+  const marks = (analysis as Record<string, unknown>).editing_marks;
+  if (!Array.isArray(marks)) return [];
+  return marks.flatMap((raw, decisionIndex) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const value = raw as Record<string, unknown>;
+    const status = value.status;
+    const bbox = value.bbox;
+    const pageIndex = value.page_index;
+    const positionHint = value.position_hint;
+    if (
+      !["cancelled", "replacement", "uncertain_correction"].includes(String(status)) ||
+      !Array.isArray(bbox) || bbox.length !== 4 || !bbox.every((item) => typeof item === "number") ||
+      typeof pageIndex !== "number" || typeof positionHint !== "string"
+    ) return [];
+    return [{
+      bbox: bbox as number[],
+      status: status as ThinkingRepairDecision["status"],
+      decisionIndex,
+      page_index: pageIndex,
+      position_hint: positionHint,
+    }];
+  });
+}
+
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const uploadFormRef = useRef<HTMLFormElement | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -203,6 +240,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [answerRegions, setAnswerRegions] = useState<AnswerRegion[]>([]);
   const [ocrRunsByRegionId, setOcrRunsByRegionId] = useState<Record<number, AnswerRegionOcrRun[]>>({});
   const [runningOcrRegionId, setRunningOcrRegionId] = useState<number | null>(null);
+  const [repairingOcrRegionId, setRepairingOcrRegionId] = useState<number | null>(null);
+  const [reviewedRepairDecisions, setReviewedRepairDecisions] = useState<Record<number, number[]>>({});
   const [questionNodeMappings, setQuestionNodeMappings] = useState<QuestionNodeMappingGroup[]>([]);
   const [selectedMappingQuestionNodeId, setSelectedMappingQuestionNodeId] = useState("");
   const [mappingPageId, setMappingPageId] = useState("");
@@ -1069,6 +1108,89 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleRunThinkingRepair(
+    mapping: AnswerRegionMapping,
+    sourceRun: AnswerRegionOcrRun,
+  ) {
+    if (!mapping.answer_region_id) return;
+    const regionId = mapping.answer_region_id;
+    setRepairingOcrRegionId(regionId);
+    setError(null);
+    try {
+      let run = await createVisualTranscriptionThinkingRepair(
+        regionId,
+        sourceRun.id,
+        localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+      );
+      rememberVisualRun(regionId, run);
+      for (let attempt = 0; attempt < 360 && ["queued", "running"].includes(run.status); attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        run = await getVisualTranscriptionRun(run.id);
+        rememberVisualRun(regionId, run);
+      }
+      if (["queued", "running"].includes(run.status)) {
+        setError("Thinking repair is still running. Reload this page to continue reviewing it.");
+      } else if (["failed", "uncertain"].includes(run.status)) {
+        setError(run.error ?? "Thinking repair did not complete safely.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Qwen3.8 thinking repair could not start");
+    } finally {
+      setRepairingOcrRegionId(null);
+    }
+  }
+
+  async function handleConfirmThinkingRepair(
+    mapping: AnswerRegionMapping,
+    run: AnswerRegionOcrRun,
+  ) {
+    if (!mapping.answer_region_id || !run.output_sha256) return;
+    const decisionSetSha256 = run.normalized_result?.decision_set_sha256;
+    if (typeof decisionSetSha256 !== "string") {
+      setError("Thinking repair decision integrity data is missing; confirmation is blocked.");
+      return;
+    }
+    const regionId = mapping.answer_region_id;
+    setConfirmingVisualRunId(run.id);
+    setError(null);
+    try {
+      const confirmed = await confirmVisualTranscriptionThinkingRepair(regionId, run.id, {
+        draft_text_sha256: run.output_sha256,
+        decision_set_sha256: decisionSetSha256,
+        reviewed_decision_indexes: reviewedRepairDecisions[run.id] ?? [],
+      });
+      rememberVisualRun(regionId, confirmed);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Thinking repair confirmation failed");
+    } finally {
+      setConfirmingVisualRunId(null);
+    }
+  }
+
+  async function handleRejectThinkingRepair(
+    mapping: AnswerRegionMapping,
+    run: AnswerRegionOcrRun,
+  ) {
+    if (!mapping.answer_region_id) return;
+    const regionId = mapping.answer_region_id;
+    setConfirmingVisualRunId(run.id);
+    setError(null);
+    try {
+      const rejected = await rejectVisualTranscriptionThinkingRepair(
+        regionId,
+        run.id,
+        "all_candidates_wrong",
+      );
+      rememberVisualRun(regionId, rejected);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Thinking repair rejection failed");
+    } finally {
+      setConfirmingVisualRunId(null);
+    }
+  }
+
   async function handleSaveManualMapping(mapping: AnswerRegionMapping) {
     if (!mappingPageId || !selectedMappingQuestionNodeId) {
       setError("Select a question node and page before saving a manual mapping correction.");
@@ -1798,12 +1920,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       .filter((run) => run.profile === "qwen38_verbatim_visual")
                       .sort((left, right) => right.id - left.id)[0] ?? null
                   : null;
+                const thinkingRepairRun = mapping.answer_region_id
+                  ? [...(ocrRunsByRegionId[mapping.answer_region_id] ?? [])]
+                      .filter((run) => run.profile === "qwen38_thinking_repair" && run.normalized_result?.source_run_id === visualRun?.id)
+                      .sort((left, right) => right.id - left.id)[0] ?? null
+                  : null;
+                const repairDecisions = thinkingRepairDecisions(thinkingRepairRun);
                 const currentFinalIntentRun = Boolean(
                   visualRun?.prompt_version === "qwen38-final-intent-structured-v2",
                 );
-                const confirmedRun = visualRun?.status === "confirmed" && currentFinalIntentRun
-                  ? visualRun
-                  : null;
+                const confirmedRun = thinkingRepairRun?.status === "confirmed"
+                  ? thinkingRepairRun
+                  : !thinkingRepairRun && visualRun?.status === "confirmed" && currentFinalIntentRun
+                    ? visualRun
+                    : null;
                 const legacyRetranscriptionRequired = Boolean(
                   visualRun &&
                   !currentFinalIntentRun &&
@@ -1900,6 +2030,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               orderIndex={segment.order_index}
                               alt={`Prepared answer segment ${segment.order_index} for ${group.question_node.label}, submission ${mapping.submission_id}`}
                               onLoadStateChange={handleSegmentCropImageStateChange}
+                              editingDecisions={repairDecisions.filter((decision) => decision.page_index === segment.order_index)}
                             />
                           ))}
                         </section>
@@ -1952,10 +2083,73 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               </p>
                             ) : null}
                             {visualRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{visualRun.draft_text}</pre> : null}
-                            {visualRun.status === "succeeded" && currentFinalIntentRun ? <div className="flex flex-wrap gap-2">
+                            {visualRun.status === "succeeded" && currentFinalIntentRun && !thinkingRepairRun ? <div className="flex flex-wrap gap-2">
                               <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>Confirm faithful final-intent transcription</button>
                               <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleRejectVisualTranscription(mapping, visualRun)}>None matches — block and upload clearer page</button>
                             </div> : null}
+                          </div>
+                        ) : null}
+                        {visualRun && currentFinalIntentRun && ["succeeded", "confirmed", "rejected"].includes(visualRun.status) && !thinkingRepairRun && mapping.answer_region_id && !gradedRegionIds.has(mapping.answer_region_id) && !finalizedRegionIds.has(mapping.answer_region_id) ? (
+                          <button
+                            className="rounded border border-violet-500 bg-violet-950/40 px-3 py-2 font-semibold text-violet-100 disabled:opacity-50"
+                            type="button"
+                            disabled={repairingOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.thinking_repair_enabled}
+                            onClick={() => void handleRunThinkingRepair(mapping, visualRun)}
+                          >
+                            {repairingOcrRegionId === mapping.answer_region_id
+                              ? "Qwen3.8 Thinking is adjudicating visible edits..."
+                              : "Repair cancellation interpretation with Qwen3.8 Thinking"}
+                          </button>
+                        ) : null}
+                        {thinkingRepairRun ? (
+                          <div className="grid gap-3 rounded border border-violet-600 bg-violet-950/20 p-3">
+                            <div>
+                              <p className="font-semibold text-violet-100">Thinking-enabled cancellation repair · run #{thinkingRepairRun.id}</p>
+                              <p className="text-xs text-violet-200">{thinkingRepairRun.status} · {thinkingRepairRun.calls_used}/{thinkingRepairRun.call_limit} call · no question, solution, rubric, or marks were provided</p>
+                              <p className="mt-1 text-xs text-amber-200">Reasoning is advisory only. Verify every numbered visual box; mathematical plausibility is not evidence.</p>
+                            </div>
+                            {thinkingRepairRun.error ? <p className="text-xs text-red-200">{thinkingRepairRun.error}</p> : null}
+                            {thinkingRepairRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{thinkingRepairRun.draft_text}</pre> : null}
+                            {repairDecisions.length > 0 ? (
+                              <fieldset className="grid gap-2 rounded border border-slate-700 p-3">
+                                <legend className="px-1 text-xs font-semibold text-slate-100">Required: confirm each image-grounded editing decision</legend>
+                                {repairDecisions.map((decision) => {
+                                  const reviewed = reviewedRepairDecisions[thinkingRepairRun.id] ?? [];
+                                  const checked = reviewed.includes(decision.decisionIndex);
+                                  const tone = decision.status === "cancelled" ? "text-red-200" : decision.status === "replacement" ? "text-emerald-200" : "text-amber-200";
+                                  return (
+                                    <label key={decision.decisionIndex} className="flex items-start gap-2 rounded border border-slate-800 p-2 text-xs">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        disabled={thinkingRepairRun.status !== "succeeded"}
+                                        onChange={(event) => setReviewedRepairDecisions((current) => {
+                                          const existing = current[thinkingRepairRun.id] ?? [];
+                                          const next = event.target.checked
+                                            ? [...new Set([...existing, decision.decisionIndex])]
+                                            : existing.filter((item) => item !== decision.decisionIndex);
+                                          return { ...current, [thinkingRepairRun.id]: next };
+                                        })}
+                                      />
+                                      <span><strong className={tone}>Decision {decision.decisionIndex + 1}: {decision.status.replace("_", " ")}</strong> · segment {decision.page_index} · {decision.position_hint}</span>
+                                    </label>
+                                  );
+                                })}
+                              </fieldset>
+                            ) : null}
+                            {thinkingRepairRun.status === "succeeded" ? (
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  className={buttonClass}
+                                  type="button"
+                                  disabled={confirmingVisualRunId === thinkingRepairRun.id || (reviewedRepairDecisions[thinkingRepairRun.id] ?? []).length !== repairDecisions.length || repairDecisions.length === 0}
+                                  onClick={() => void handleConfirmThinkingRepair(mapping, thinkingRepairRun)}
+                                >
+                                  Confirm repaired final-intent transcription
+                                </button>
+                                <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === thinkingRepairRun.id} onClick={() => void handleRejectThinkingRepair(mapping, thinkingRepairRun)}>Repair still wrong — block grading</button>
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                         {confirmedRun ? <div className="flex flex-wrap gap-2">

@@ -107,6 +107,7 @@ class LocalAiStatusService:
             "models": [self.settings.local_qwen38_model],
             "visual_preparation_enabled": self.settings.local_qwen38_visual_preparation_enabled,
             "transcription_enabled": self.settings.local_qwen38_transcription_enabled,
+            "thinking_repair_enabled": self.settings.local_qwen38_thinking_repair_enabled,
             "grading_enabled": self.settings.local_qwen38_grading_enabled,
         }
         if not self.settings.local_qwen38_enabled:
@@ -134,6 +135,7 @@ class LocalAiStatusService:
         base["available"] = True
         if not (
             self.settings.local_qwen38_transcription_enabled
+            or self.settings.local_qwen38_thinking_repair_enabled
             or self.settings.local_qwen38_visual_preparation_enabled
         ):
             base["detail"] = "ready_features_disabled"

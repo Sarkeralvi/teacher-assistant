@@ -48,3 +48,11 @@ def run_qwen38_visual_transcription_job(ocr_run_id: int) -> None:
         Qwen38VisualTranscriptionService(db).run(ocr_run_id)
     finally:
         db.close()
+
+
+def run_qwen38_thinking_repair_job(ocr_run_id: int) -> None:
+    db = SessionLocal()
+    try:
+        Qwen38VisualTranscriptionService(db).run_thinking_repair(ocr_run_id)
+    finally:
+        db.close()

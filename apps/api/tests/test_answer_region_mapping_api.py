@@ -35,6 +35,8 @@ from app.models import (
     User,
 )
 from app.services.local_ocr_client import LocalOcrResult
+from app.services.qwen38_visual_transcription_service import Qwen38VisualTranscriptionService
+from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
 
 CLEANUP_MODELS = (
     FinalGrade,
@@ -562,6 +564,117 @@ def test_qwen38_mapping_confirmation_confirms_every_ordered_image_segment(
     )
     assert audit is not None
     assert audit.payload_json["segment_count"] == 2
+
+
+def test_thinking_repair_route_is_owned_explicit_and_enqueued_without_retry(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    teacher, token = register_teacher(client, "thinking-repair-owner")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    seed_confirmed_question_nodes(db_session, int(assessment["id"]))
+    pdf_path = tmp_path / "thinking-repair.pdf"
+    make_text_pdf(pdf_path, ["Q1(a) crossed draft and surviving final answer"])
+    submission = upload_submission_pdf(
+        client, int(assessment["id"]), pdf_path, token, "S-THINKING-REPAIR"
+    )
+    mapping_response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"replace_existing": True},
+    )
+    mapping_payload = next(
+        item for item in mapping_response.json()["mappings"] if item["answer_region_id"]
+    )
+    mapping = db_session.get(AnswerRegionMapping, int(mapping_payload["id"]))
+    assert mapping is not None and mapping.answer_region is not None
+    mapping.provider = "llama_cpp_qwen38"
+    db_session.commit()
+    confirm_response = client.post(
+        f"/question-node-mappings/{mapping.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True},
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+    region = mapping.answer_region
+    source_hash = Qwen38VisualTranscriptionService(db_session)._source_hash(region)
+    source_run = AnswerRegionOcrRun(
+        answer_region_id=region.id,
+        requested_by_teacher_id=int(teacher["id"]),
+        request_id=f"source-thinking-repair-{uuid4().hex}",
+        status="succeeded",
+        profile="qwen38_verbatim_visual",
+        task_kind="visual_transcription",
+        reasoning_mode="off",
+        prompt_version=FINAL_INTENT_PROMPT_VERSION,
+        source_image_sha256=source_hash,
+        source_image_hashes=[],
+        input_manifest_sha256=source_hash,
+        output_sha256=hashlib.sha256(b"mixed draft").hexdigest(),
+        provider="llama_cpp_qwen38",
+        model_name="qwen3.8-27b-q4km",
+        draft_text="mixed draft",
+        normalized_result={},
+        warnings=["teacher_review_required"],
+        call_limit=1,
+        calls_used=1,
+    )
+    db_session.add(source_run)
+    db_session.commit()
+
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_TRANSCRIPTION_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_THINKING_REPAIR_ENABLED", "true")
+    get_settings.cache_clear()
+    enqueue_options: list[dict[str, object]] = []
+
+    class RecordingQueue:
+        def enqueue(self, _function: object, *_args: object, **kwargs: object) -> None:
+            enqueue_options.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.api.routes.answer_regions.get_default_queue", lambda: RecordingQueue()
+    )
+    repair_response = client.post(
+        f"/answer-regions/{region.id}/visual-transcription-runs/{source_run.id}/thinking-repair",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+        },
+    )
+
+    assert repair_response.status_code == 202, repair_response.text
+    repair = repair_response.json()
+    assert repair["profile"] == "qwen38_thinking_repair"
+    assert repair["reasoning_mode"] == "thinking"
+    assert repair["call_limit"] == 1
+    assert repair["calls_used"] == 0
+    assert enqueue_options == [{"retry": None}]
+    assert db_session.scalar(select(func.count(GradeSuggestion.id))) == 0
+    assert db_session.scalar(select(func.count(FinalGrade.id))) == 0
+
+    duplicate = client.post(
+        f"/answer-regions/{region.id}/visual-transcription-runs/{source_run.id}/thinking-repair",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+        },
+    )
+    assert duplicate.status_code == 409
+    assert "duplicate retries are disabled" in duplicate.text
+
+    _, intruder_token = register_teacher(client, "thinking-repair-intruder")
+    hidden = client.get(
+        f"/answer-region-visual-transcription-runs/{repair['id']}",
+        headers={"Authorization": f"Bearer {intruder_token}"},
+    )
+    assert hidden.status_code == 404
 
 
 def test_direct_paddle_draft_is_hash_confirmed_and_never_finalizes_grade(

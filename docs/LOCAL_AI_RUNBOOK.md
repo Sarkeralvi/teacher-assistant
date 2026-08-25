@@ -126,15 +126,25 @@ The teacher uploads the question, solution/model answer, and rubric once and aut
 3. The teacher confirms each mapped image region and continuation.
 4. A fresh Qwen3.8 task performs structured editing interpretation and final-intent transcription from all confirmed segments in one authorized provider call.
 5. If faithful, the teacher confirms its exact SHA-256. This copies the unedited draft into `manual_answer_text` with partial evidence status.
-6. If unfaithful, the teacher rejects it and uploads a clearer complete page; no inferred correction is substituted.
-7. The teacher separately confirms that displayed images contain the complete answer. Text confirmation alone never makes evidence grading-ready.
+6. If cancellation intent is wrong, the teacher may explicitly authorize one
+   thinking-enabled repair. It sees only the answer images and rejected transcript—never
+   the question, solution, rubric, marks, or grading context. It has no retry or fallback.
+7. The repair overlays numbered red/green/amber boxes. The teacher must acknowledge every
+   image-grounded decision before its exact hashes can be confirmed.
+8. If the repair is still unfaithful, the teacher rejects it and uploads a clearer complete
+   page; no inferred correction is substituted.
+9. The teacher separately confirms that displayed images contain the complete answer. Text
+   confirmation alone never makes evidence grading-ready.
 
 Cancelled writing is excluded even when readable. A visible replacement is retained. An
 ambiguous overwrite must remain `[unclear correction]`; the model must never select a symbol
 from arithmetic consistency or the expected answer. Minus signs, fraction/root bars, the
 variable `x`, ordinary underlining, and diagram lines are not cancellation by themselves.
 
-If neither transcript is faithful, grading stays blocked and the teacher uploads a clearer complete page. There is no manual-crop or replacement-transcription box.
+Creating a thinking repair immediately blocks the source transcript from grading until the
+repair is teacher-confirmed. A failed or rejected repair remains blocked. If neither transcript
+is faithful, the teacher uploads a clearer complete page. There is no manual-crop or
+replacement-transcription box.
 
 ### Grading
 

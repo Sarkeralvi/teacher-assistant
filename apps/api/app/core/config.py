@@ -230,6 +230,9 @@ class Settings(BaseSettings):
     local_qwen38_transcription_enabled: bool = Field(
         default=False, alias="LOCAL_QWEN38_TRANSCRIPTION_ENABLED"
     )
+    local_qwen38_thinking_repair_enabled: bool = Field(
+        default=False, alias="LOCAL_QWEN38_THINKING_REPAIR_ENABLED"
+    )
     local_qwen38_grading_enabled: bool = Field(default=False, alias="LOCAL_QWEN38_GRADING_ENABLED")
     local_qwen38_grading_reasoning_mode: str = Field(
         default="off", alias="LOCAL_QWEN38_GRADING_REASONING_MODE"

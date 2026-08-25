@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import Settings, get_settings
@@ -30,7 +30,10 @@ from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
-from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
+from packages.brain.schemas_qwen38 import (
+    FINAL_INTENT_PROMPT_VERSION,
+    THINKING_REPAIR_PROMPT_VERSION,
+)
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
@@ -223,8 +226,11 @@ class GradingService:
         if not (region.manual_answer_text or "").strip():
             blockers.append("missing teacher-approved answer evidence")
         final_intent_run = self._confirmed_final_intent_run(region)
+        latest_thinking_repair = self._latest_thinking_repair(region)
         if self._requires_final_intent_transcription(region):
-            if final_intent_run is None:
+            if latest_thinking_repair is not None and latest_thinking_repair.status != "confirmed":
+                blockers.append("Qwen3.8 thinking repair must be teacher-confirmed")
+            elif final_intent_run is None:
                 blockers.append("Qwen3.8 final-intent transcription must be confirmed")
             elif final_intent_run.confirmed_text != region.manual_answer_text:
                 blockers.append("confirmed final-intent transcription no longer matches evidence")
@@ -303,6 +309,11 @@ class GradingService:
                 "final_intent_transcription_confirmed": final_intent_run is not None,
                 "final_intent_prompt_version": (
                     final_intent_run.prompt_version if final_intent_run is not None else None
+                ),
+                "thinking_repair_status": (
+                    latest_thinking_repair.status
+                    if latest_thinking_repair is not None
+                    else None
                 ),
                 "segment_count": len(confirmed_segments),
                 "pages_covered": pages_covered,
@@ -961,12 +972,53 @@ class GradingService:
             select(AnswerRegionOcrRun)
             .where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
-                AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
                 AnswerRegionOcrRun.status == "confirmed",
+                or_(
+                    and_(
+                        AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
+                        AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
+                    ),
+                    and_(
+                        AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
+                        AnswerRegionOcrRun.prompt_version == THINKING_REPAIR_PROMPT_VERSION,
+                    ),
+                ),
+            )
+            .order_by(AnswerRegionOcrRun.id.desc())
+        ).first()
+
+    def _latest_thinking_repair(
+        self, region: AnswerRegion
+    ) -> AnswerRegionOcrRun | None:
+        latest_source = self.db.scalars(
+            select(AnswerRegionOcrRun)
+            .where(
+                AnswerRegionOcrRun.answer_region_id == region.id,
+                AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
                 AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
             )
             .order_by(AnswerRegionOcrRun.id.desc())
         ).first()
+        if latest_source is None:
+            return None
+        repairs = self.db.scalars(
+            select(AnswerRegionOcrRun)
+            .where(
+                AnswerRegionOcrRun.answer_region_id == region.id,
+                AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
+                AnswerRegionOcrRun.prompt_version == THINKING_REPAIR_PROMPT_VERSION,
+            )
+            .order_by(AnswerRegionOcrRun.id.desc())
+        ).all()
+        return next(
+            (
+                repair
+                for repair in repairs
+                if (repair.normalized_result or {}).get("source_run_id")
+                == latest_source.id
+            ),
+            None,
+        )
 
     def _get_active_rubric(self, question_id: int) -> Rubric:
         rubric = self._get_active_rubric_or_none(question_id)

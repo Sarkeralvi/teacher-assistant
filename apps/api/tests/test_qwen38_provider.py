@@ -227,6 +227,111 @@ def test_structured_editing_analysis_precedes_final_intent_transcription() -> No
     assert "surviving final work" in prompt
 
 
+def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "A^c = {P, PF, PPF, PPPF, PPPP}",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 300, 900, 650],
+                                    "status": "cancelled",
+                                    "position_hint": "middle lines with repeated strike strokes",
+                                }
+                            ],
+                            "cancellation_detected": True,
+                            "replacement_detected": False,
+                            "uncertain_correction_detected": False,
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.82,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 20, "completion_tokens": 30},
+    }
+    provider, client = provider_with(completion)
+
+    result = provider.repair_transcription_images(
+        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        rejected_transcript="cancelled and surviving text mixed together",
+    )
+
+    assert result.needs_review is True
+    assert result.cancellation_detected is True
+    request = client.requests[0]
+    assert request["temperature"] == 0.0
+    assert request["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "preserve_thinking": False,
+    }
+    system_prompt = request["messages"][0]["content"]
+    assert "do not know the question" in system_prompt
+    assert "Never solve" in system_prompt
+    user_prompt = request["messages"][1]["content"][0]["text"]
+    assert "UNTRUSTED PRIOR TRANSCRIPT" in user_prompt
+    assert "solution" not in user_prompt.lower()
+    assert "rubric" not in user_prompt.lower()
+    assert "expected marks" not in user_prompt.lower()
+
+
+def test_thinking_repair_fails_when_model_returns_no_visual_edit_decisions() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "unchanged",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [],
+                            "cancellation_detected": False,
+                            "replacement_detected": False,
+                            "uncertain_correction_detected": False,
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.5,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(ValueError, match="no image-grounded edit decisions"):
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="wrong reading",
+        )
+
+
+def test_thinking_repair_refuses_an_unleased_call_before_http() -> None:
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key")
+    client = FakeClient({})
+    provider.client = client
+
+    with pytest.raises(RuntimeError, match="lease is required"):
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="wrong reading",
+        )
+
+    assert client.requests == []
+
+
 def test_uncertain_correction_must_remain_explicit_in_final_transcript() -> None:
     completion = {
         "choices": [

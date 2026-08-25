@@ -18,7 +18,10 @@ FinalGrade exists or is exported.
   Providers include `mock` (default), `gemini`, `openai`, `codex_cli`, and
   loopback-only `llama_cpp_qwen` (Qwen3.6 text) and `llama_cpp_qwen38`
   (Qwen3.8 vision). Qwen3.8 performs non-thinking final-intent transcription
-  that excludes deliberately cancelled work while preserving surviving mistakes;
+  that excludes deliberately cancelled work while preserving surviving mistakes.
+  A separately authorized, one-call thinking repair may adjudicate visible
+  cancellations after a teacher finds that draft unfaithful; it receives no
+  question, solution, rubric, marks, or grading context and remains review-only;
   Qwen3.6/Qwen3.8 grading receives teacher-confirmed text
   only. The retired PaddleOCR sidecar is not part of the active workflow. All
   real/local providers are off unless explicitly configured.

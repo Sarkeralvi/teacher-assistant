@@ -23,6 +23,7 @@ LOCAL_PADDLE_OCR_LAYOUT_MODEL=PP-DocLayoutV3
 
 LOCAL_QWEN38_ENABLED=false
 LOCAL_QWEN38_TRANSCRIPTION_ENABLED=false
+LOCAL_QWEN38_THINKING_REPAIR_ENABLED=false
 LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED=false
 LOCAL_QWEN38_GRADING_ENABLED=false
 
@@ -52,7 +53,7 @@ Behavior:
 - `BRAIN_PROVIDER=llama_cpp_qwen` additionally requires `LOCAL_QWEN_ENABLED=true`, a loopback HTTP URL, and `LOCAL_QWEN_API_KEY`.
 - `llama_cpp_qwen` verifies the exact configured alias through `/v1/models` before completion, sends strict JSON-schema requests with reasoning disabled, records token/latency metadata and zero monetary cost, and never sends answer image bytes or paths.
 - `LOCAL_PADDLE_OCR_ENABLED=true` enables only the authenticated loopback client. Every OCR request requires the exclusive `PaddleOcr` database lease and exact OCR/layout model identities.
-- `llama_cpp_qwen38` is unavailable to the normal reference, mapping, and grading contracts. It requires its separate transcription-rescue switch and a matching `Qwen38` lease.
+- Every `llama_cpp_qwen38` inference requires a matching `Qwen38` lease. The optional thinking repair additionally requires `LOCAL_QWEN38_THINKING_REPAIR_ENABLED=true`, uses one explicit call with zero retry/fallback, receives no reference or marking context, and cannot confirm itself.
 - `CODEX_CLI_COMMAND` defaults to `codex`; it must exist on `PATH` or provider preflight fails clearly.
 - `CODEX_CLI_MODEL` defaults to `gpt-5.5`; keep it explicit so host dev runs do not fall back to an unsupported Codex CLI default model.
 - `CODEX_CLI_TIMEOUT_SECONDS` controls subprocess timeout for preflight/execution.

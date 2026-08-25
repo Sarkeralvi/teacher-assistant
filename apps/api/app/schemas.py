@@ -20,6 +20,7 @@ class LocalAiServiceStatusRead(BaseModel):
     models: list[str] = Field(default_factory=list)
     visual_preparation_enabled: bool = False
     transcription_enabled: bool = False
+    thinking_repair_enabled: bool = False
     grading_enabled: bool = False
 
 
@@ -976,6 +977,25 @@ class VisualTranscriptionRejectionRequest(BaseModel):
         "wrong_region",
         "image_quality",
     ]
+
+
+class VisualTranscriptionThinkingRepairRequest(BaseModel):
+    expected_model: str = Field(min_length=1, max_length=255)
+    draft_only_confirmed: Literal[True]
+
+
+class VisualTranscriptionThinkingRepairConfirmationRequest(BaseModel):
+    teacher_confirmed: Literal[True]
+    draft_text_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    decision_set_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    reviewed_decision_indexes: list[int] = Field(min_length=1, max_length=100)
+
+    @field_validator("reviewed_decision_indexes")
+    @classmethod
+    def decision_indexes_are_unique_and_nonnegative(cls, value: list[int]) -> list[int]:
+        if any(item < 0 for item in value) or len(value) != len(set(value)):
+            raise ValueError("reviewed decision indexes must be unique and nonnegative")
+        return value
 
 
 class AnswerRegionMappingRunRequest(BaseModel):

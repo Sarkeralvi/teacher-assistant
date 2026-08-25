@@ -416,6 +416,8 @@ export type AnswerRegionOcrRun = {
   request_id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "confirmed" | "rejected" | "uncertain";
   profile: string;
+  task_kind: string;
+  reasoning_mode: string | null;
   prompt_version: string | null;
   source_image_sha256: string | null;
   queued_at: string | null;
@@ -836,6 +838,7 @@ export type LocalAiServiceStatus = {
   models: string[];
   visual_preparation_enabled: boolean;
   transcription_enabled: boolean;
+  thinking_repair_enabled: boolean;
   grading_enabled: boolean;
 };
 
@@ -1601,6 +1604,46 @@ export function rejectVisualTranscriptionRun(answerRegionId: number, runId: numb
 
 export function getAnswerRegionImageUrl(answerRegionId: number) {
   return `${resolveApiBaseUrl()}/answer-regions/${answerRegionId}/image`;
+}
+
+export function createVisualTranscriptionThinkingRepair(
+  answerRegionId: number,
+  sourceRunId: number,
+  expectedModel: string,
+) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/visual-transcription-runs/${sourceRunId}/thinking-repair`,
+    {
+      method: "POST",
+      body: { expected_model: expectedModel, draft_only_confirmed: true },
+    },
+  );
+}
+
+export function confirmVisualTranscriptionThinkingRepair(
+  answerRegionId: number,
+  runId: number,
+  payload: {
+    draft_text_sha256: string;
+    decision_set_sha256: string;
+    reviewed_decision_indexes: number[];
+  },
+) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/visual-transcription-runs/${runId}/confirm-thinking-repair`,
+    { method: "POST", body: { teacher_confirmed: true, ...payload } },
+  );
+}
+
+export function rejectVisualTranscriptionThinkingRepair(
+  answerRegionId: number,
+  runId: number,
+  reason: string,
+) {
+  return apiRequest<AnswerRegionOcrRun>(
+    `/answer-regions/${answerRegionId}/visual-transcription-runs/${runId}/reject-thinking-repair`,
+    { method: "POST", body: { reason } },
+  );
 }
 
 export function getAnswerRegionSegmentImageUrl(answerRegionId: number, segmentId: number) {

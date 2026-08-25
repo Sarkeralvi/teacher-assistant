@@ -33,7 +33,10 @@ from app.models import (
 )
 from app.schemas import LocalQwenGradeRequest
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
-from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
+from packages.brain.schemas_qwen38 import (
+    FINAL_INTENT_PROMPT_VERSION,
+    THINKING_REPAIR_PROMPT_VERSION,
+)
 
 CLEANUP_MODELS = (
     FinalGrade,
@@ -614,13 +617,54 @@ def test_qwen38_mapping_requires_matching_final_intent_transcription_before_grad
     assert current_packet["readiness_result"]["ready_for_grading"] is True
     assert current_packet["student_answer_evidence"]["final_intent_transcription_confirmed"]
 
+    repair = AnswerRegionOcrRun(
+        answer_region_id=region.id,
+        requested_by_teacher_id=teacher.id,
+        request_id="pending-thinking-repair-grading-evidence",
+        status="succeeded",
+        profile="qwen38_thinking_repair",
+        task_kind="visual_transcription_thinking_repair",
+        reasoning_mode="thinking",
+        prompt_version=THINKING_REPAIR_PROMPT_VERSION,
+        provider="llama_cpp_qwen38",
+        model_name="qwen3.8-27b-q4km",
+        draft_text=region.manual_answer_text,
+        normalized_result={"source_run_id": transcript.id},
+        warnings=["teacher_review_required"],
+        call_limit=1,
+        calls_used=1,
+    )
+    db_session.add(repair)
+    db_session.commit()
+    pending_repair_packet = service.get_grading_evidence_packet(region.id)
+    assert pending_repair_packet["readiness_result"]["ready_for_grading"] is False
+    assert (
+        "Qwen3.8 thinking repair must be teacher-confirmed"
+        in pending_repair_packet["readiness_result"]["blockers"]
+    )
+
+    repair.status = "confirmed"
+    repair.confirmed_text = region.manual_answer_text
+    db_session.commit()
+    confirmed_repair_packet = service.get_grading_evidence_packet(region.id)
+    assert confirmed_repair_packet["readiness_result"]["ready_for_grading"] is True
+    assert (
+        confirmed_repair_packet["student_answer_evidence"]["final_intent_prompt_version"]
+        == THINKING_REPAIR_PROMPT_VERSION
+    )
+
     transcript.confirmed_text = "changed after confirmation"
     db_session.commit()
     changed_packet = service.get_grading_evidence_packet(region.id)
-    assert changed_packet["readiness_result"]["ready_for_grading"] is False
+    assert changed_packet["readiness_result"]["ready_for_grading"] is True
+
+    repair.confirmed_text = "changed after confirmation"
+    db_session.commit()
+    changed_repair_packet = service.get_grading_evidence_packet(region.id)
+    assert changed_repair_packet["readiness_result"]["ready_for_grading"] is False
     assert (
         "confirmed final-intent transcription no longer matches evidence"
-        in changed_packet["readiness_result"]["blockers"]
+        in changed_repair_packet["readiness_result"]["blockers"]
     )
 
 

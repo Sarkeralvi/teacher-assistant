@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
+THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v1"
 
 
 class UncertainGlyph(BaseModel):

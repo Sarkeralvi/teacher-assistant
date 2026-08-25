@@ -10,6 +10,12 @@ import {
 
 export type AnswerRegionImageLoadState = "loading" | "loaded" | "error";
 
+export type EditingDecisionOverlay = {
+  bbox: [number, number, number, number] | number[];
+  status: "cancelled" | "replacement" | "uncertain_correction";
+  decisionIndex: number;
+};
+
 export async function fetchProtectedImageResponse(url: string, token: string): Promise<Response> {
   try {
     return await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -36,6 +42,7 @@ type AuthenticatedAnswerRegionSegmentImageProps = {
     segmentId: number,
     state: AnswerRegionImageLoadState,
   ) => void;
+  editingDecisions?: EditingDecisionOverlay[];
 };
 
 type ProtectedAnswerImageProps = {
@@ -44,6 +51,7 @@ type ProtectedAnswerImageProps = {
   caption: string;
   loadingLabel: string;
   onLoadStateChange?: (state: AnswerRegionImageLoadState) => void;
+  editingDecisions?: EditingDecisionOverlay[];
 };
 
 /**
@@ -57,6 +65,7 @@ function ProtectedAnswerImage({
   caption,
   loadingLabel,
   onLoadStateChange,
+  editingDecisions = [],
 }: Readonly<ProtectedAnswerImageProps>) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +120,39 @@ function ProtectedAnswerImage({
 
   return (
     <figure className="grid gap-2 rounded border border-slate-700 bg-slate-950 p-2">
-      <img className="max-h-[36rem] w-full rounded object-contain" src={imageUrl} alt={alt} />
+      <div className="relative mx-auto w-fit max-w-full">
+        <img className="block max-h-[36rem] max-w-full rounded object-contain" src={imageUrl} alt={alt} />
+        {editingDecisions.map((decision) => {
+          const [x1, y1, x2, y2] = decision.bbox;
+          const color = decision.status === "cancelled"
+            ? "border-red-500 bg-red-500/20 text-red-50"
+            : decision.status === "replacement"
+              ? "border-emerald-400 bg-emerald-400/20 text-emerald-50"
+              : "border-amber-400 bg-amber-400/20 text-amber-50";
+          return (
+            <div
+              key={`${decision.decisionIndex}-${decision.status}`}
+              className={`pointer-events-none absolute border-2 ${color}`}
+              style={{
+                left: `${x1 / 10}%`,
+                top: `${y1 / 10}%`,
+                width: `${(x2 - x1) / 10}%`,
+                height: `${(y2 - y1) / 10}%`,
+              }}
+              aria-label={`Editing decision ${decision.decisionIndex + 1}: ${decision.status}`}
+            >
+              <span className="absolute -top-5 left-0 rounded bg-slate-950 px-1 text-[10px]">
+                {decision.decisionIndex + 1}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {editingDecisions.length > 0 ? (
+        <p className="text-[11px] text-slate-300">
+          <span className="text-red-300">Red = excluded cancellation</span> · <span className="text-emerald-300">green = visible replacement</span> · <span className="text-amber-300">amber = uncertain correction</span>
+        </p>
+      ) : null}
       <figcaption className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
         <span>{caption}</span>
         <a className="text-cyan-300 underline" href={imageUrl} target="_blank" rel="noreferrer">Open image in new tab</a>
@@ -146,6 +187,7 @@ export function AuthenticatedAnswerRegionSegmentImage({
   orderIndex,
   alt,
   onLoadStateChange,
+  editingDecisions = [],
 }: Readonly<AuthenticatedAnswerRegionSegmentImageProps>) {
   const handleLoadStateChange = useCallback(
     (state: AnswerRegionImageLoadState) => onLoadStateChange?.(answerRegionId, segmentId, state),
@@ -158,6 +200,7 @@ export function AuthenticatedAnswerRegionSegmentImage({
       caption={`Answer segment ${orderIndex} in reading order. All segments below are sent together for transcription.`}
       loadingLabel={`Loading answer segment ${orderIndex}…`}
       onLoadStateChange={handleLoadStateChange}
+      editingDecisions={editingDecisions}
     />
   );
 }

@@ -62,6 +62,8 @@ from app.schemas import (
     VisualTranscriptionConfirmationRequest,
     VisualTranscriptionRejectionRequest,
     VisualTranscriptionRunRequest,
+    VisualTranscriptionThinkingRepairConfirmationRequest,
+    VisualTranscriptionThinkingRepairRequest,
 )
 from app.services.answer_region_mapping_service import (
     build_submission_mapping_candidates,
@@ -78,7 +80,10 @@ from app.services.qwen38_visual_transcription_service import (
     VisualTranscriptionError,
 )
 from app.services.storage import LocalStorage
-from app.worker.jobs import run_qwen38_visual_transcription_job
+from app.worker.jobs import (
+    run_qwen38_thinking_repair_job,
+    run_qwen38_visual_transcription_job,
+)
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import sanitize_provider_error
 from packages.brain.answer_region_suggestion_codex_provider import (
@@ -1593,11 +1598,112 @@ def get_visual_transcription_run(
     run_id: int, db: DbSession, current_user: CurrentUser
 ) -> AnswerRegionOcrRun:
     run = db.get(AnswerRegionOcrRun, run_id)
-    if run is None or run.profile != "qwen38_verbatim_visual":
+    if run is None or run.profile not in {
+        "qwen38_verbatim_visual",
+        "qwen38_thinking_repair",
+    }:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Visual transcription run not found"
         )
     get_owned_answer_region_or_404(run.answer_region_id, db, current_user)
+    return run
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/visual-transcription-runs/{source_run_id}/thinking-repair",
+    response_model=AnswerRegionOcrRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_visual_transcription_thinking_repair(
+    answer_region_id: int,
+    source_run_id: int,
+    payload: VisualTranscriptionThinkingRepairRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionOcrRun:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    source_run = db.get(AnswerRegionOcrRun, source_run_id)
+    if source_run is None or source_run.answer_region_id != region.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source visual transcription run not found",
+        )
+    service = Qwen38VisualTranscriptionService(db)
+    try:
+        run = service.create_thinking_repair(
+            region,
+            source_run,
+            teacher=current_user,
+            expected_model=payload.expected_model,
+        )
+        get_default_queue().enqueue(run_qwen38_thinking_repair_job, run.id, retry=None)
+        return run
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Qwen3.8 thinking repair could not be queued")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Qwen3.8 thinking repair could not be queued",
+        ) from exc
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/visual-transcription-runs/{run_id}/confirm-thinking-repair",
+    response_model=AnswerRegionOcrRunRead,
+)
+def confirm_visual_transcription_thinking_repair(
+    answer_region_id: int,
+    run_id: int,
+    payload: VisualTranscriptionThinkingRepairConfirmationRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionOcrRun:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    run = db.get(AnswerRegionOcrRun, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Thinking repair run not found"
+        )
+    try:
+        Qwen38VisualTranscriptionService(db).confirm_thinking_repair(
+            region,
+            run,
+            teacher=current_user,
+            draft_hash=payload.draft_text_sha256,
+            decision_set_hash=payload.decision_set_sha256,
+            reviewed_decision_indexes=payload.reviewed_decision_indexes,
+        )
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    db.refresh(run)
+    return run
+
+
+@router.post(
+    "/answer-regions/{answer_region_id}/visual-transcription-runs/{run_id}/reject-thinking-repair",
+    response_model=AnswerRegionOcrRunRead,
+)
+def reject_visual_transcription_thinking_repair(
+    answer_region_id: int,
+    run_id: int,
+    payload: VisualTranscriptionRejectionRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AnswerRegionOcrRun:
+    region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    run = db.get(AnswerRegionOcrRun, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Thinking repair run not found"
+        )
+    try:
+        Qwen38VisualTranscriptionService(db).reject_thinking_repair(
+            region, run, teacher=current_user, reason=payload.reason
+        )
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    db.refresh(run)
     return run
 
 
