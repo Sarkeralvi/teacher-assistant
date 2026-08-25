@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
+import { AuthenticatedAnswerRegionImage, type AnswerRegionImageLoadState } from "./AuthenticatedAnswerRegionImage";
 import {
   acceptAnswerRegionMappingSuggestion,
   acceptQuestionImportDrafts,
@@ -20,7 +21,6 @@ import {
   createRubric,
   deleteSubmission,
   editAnswerRegionSegment,
-  getAnswerRegionImageUrl,
   getVisualTranscriptionRun,
   getAssessment,
   getAssessmentReviewQueue,
@@ -213,6 +213,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
   const [confirmingVisualRunId, setConfirmingVisualRunId] = useState<number | null>(null);
+  const [answerRegionImageStates, setAnswerRegionImageStates] = useState<Record<number, AnswerRegionImageLoadState>>({});
   const [savingMappingId, setSavingMappingId] = useState<number | null>(null);
   const [evidencePackets, setEvidencePackets] = useState<Record<number, GradingEvidencePacket>>({});
   const [evidencePrepSummary, setEvidencePrepSummary] = useState<EvidencePrepRun | null>(null);
@@ -260,6 +261,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [creatingEvidencePrepRun, setCreatingEvidencePrepRun] = useState(false);
   const [creatingGradingQueueRun, setCreatingGradingQueueRun] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleAnswerRegionImageStateChange = useCallback((answerRegionId: number, state: AnswerRegionImageLoadState) => {
+    setAnswerRegionImageStates((current) => current[answerRegionId] === state ? current : { ...current, [answerRegionId]: state });
+  }, []);
 
   const pages = submissions.flatMap((submission) => submission.pages);
   const selectedUploadFileName = submissionFile?.name ?? "";
@@ -1725,6 +1730,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   : null;
                 const confirmedRun = [paddleRun, visualRun].find((run) => run?.status === "confirmed") ?? null;
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
+                const imageState = mapping.answer_region_id == null
+                  ? null
+                  : answerRegionImageStates[mapping.answer_region_id] ?? "loading";
                 return (
                   <article key={mapping.id} className="grid gap-3 rounded border border-slate-700 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1733,6 +1741,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         <p className="text-xs text-slate-400">
                           {mapping.mapping_status} · mapping confidence {mapping.confidence ?? "n/a"} · {mapping.provider}
                         </p>
+                        <p className="mt-1 max-w-4xl text-xs text-slate-300">Mapped question: {group.question_node.text}</p>
                       </div>
                       <span className={`rounded-full border px-2 py-1 text-xs ${mapping.teacher_confirmed || blankSafetyGate ? "border-emerald-700 text-emerald-200" : "border-amber-700 text-amber-200"}`}>
                         {mapping.teacher_confirmed ? "region confirmed" : blankSafetyGate ? "blank safety gate" : "approval required"}
@@ -1743,6 +1752,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         No visible answer was found. This question is excluded from local Qwen grading; no answer text will be fabricated.
                       </p>
                     ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
+                    {mapping.answer_region_id ? (
+                      <AuthenticatedAnswerRegionImage
+                        answerRegionId={mapping.answer_region_id}
+                        alt={`Prepared answer region for ${group.question_node.label}, submission ${mapping.submission_id}`}
+                        onLoadStateChange={handleAnswerRegionImageStateChange}
+                      />
+                    ) : null}
                     {isLocalPreparedMapping(mapping) && mapping.answer_region_id ? (
                       <section className="grid gap-3 rounded border border-cyan-700 bg-slate-950/50 p-3 text-sm">
                         <div>
@@ -1751,8 +1767,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           <p className="text-xs text-slate-300">PaddleOCR text is a direct draft. If it is wrong, reject it and explicitly request Qwen3.8 vision rescue.</p>
                         </div>
                         {!mapping.teacher_confirmed ? (
-                          <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id} onClick={() => void handleConfirmMapping(mapping)}>
-                            {confirmingMappingId === mapping.id ? "Confirming region..." : "Confirm displayed answer region"}
+                          <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || imageState !== "loaded"} onClick={() => void handleConfirmMapping(mapping)}>
+                            {confirmingMappingId === mapping.id ? "Confirming region..." : imageState === "error" ? "Answer image must load before confirmation" : imageState !== "loaded" ? "Loading answer image..." : "Confirm displayed answer region"}
                           </button>
                         ) : null}
                         {mapping.teacher_confirmed && !paddleRun ? (
@@ -1792,11 +1808,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           {mapping.answer_region?.full_answer_confirmed ? <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id || !localSingleGradeAuthorized} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "Qwen3.6 is grading..." : "Grade confirmed answer with Qwen3.6"}</button> : null}
                         </div> : null}
                       </section>
-                    ) : null}
-                    {mapping.answer_region_id && !isLocalPreparedMapping(mapping) ? (
-                      <a className="text-sm text-cyan-300 underline" href={getAnswerRegionImageUrl(mapping.answer_region_id)} target="_blank" rel="noreferrer">
-                        Open prepared answer image
-                      </a>
                     ) : null}
                     {warnings.length > 0 ? (
                       <details className="rounded border border-amber-900/70 p-3 text-xs text-amber-100">
@@ -2102,7 +2113,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 <p className="text-xs text-slate-500">
                   {linkedQuestion ? formatQuestionOption(linkedQuestion) : `Question ${region.question_id}`} · Submission #{linkedSubmission?.id ?? region.submission_id} · page {linkedPage?.page_no ?? region.page_id}
                 </p>
-                <a className="text-xs text-cyan-300 underline" href={getAnswerRegionImageUrl(region.id)} target="_blank" rel="noreferrer">Open prepared answer image</a>
+                <AuthenticatedAnswerRegionImage
+                  answerRegionId={region.id}
+                  alt={`Prepared answer region ${region.id}`}
+                />
 
                 <section className="grid gap-3 rounded border border-cyan-900 bg-slate-950/40 p-3" data-testid="evidence-packet-preview">
                   <div>

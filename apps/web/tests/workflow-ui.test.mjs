@@ -135,6 +135,8 @@ for (const marker of [
   "Upload submission",
   "Upload script ZIP",
   "PaddleOCR + Qwen3.6 mapping",
+  "AuthenticatedAnswerRegionImage",
+  "Loading answer image...",
   "Create direct PaddleOCR transcript",
   "Use Qwen3.8 vision rescue",
   "Confirm faithful transcription",

@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
+import { AuthenticatedAnswerRegionImage } from "./AuthenticatedAnswerRegionImage";
 import {
   approveGradeSuggestion,
   approveSelectedFinalGrades,
   editGradeSuggestion,
-  getAnswerRegionImageUrl,
   getAssessment,
   getAssessmentFinalGradesExportUrl,
   getAssessmentReviewQueue,
@@ -440,14 +440,11 @@ function ReviewCard({
         <SummaryMetric label="Final score if finalized" value={finalScoreText} />
       </div>
 
-      <div className="flex flex-wrap gap-3 text-sm">
-        <a className="text-cyan-300 underline" href={getAnswerRegionImageUrl(item.answer_region.id)} target="_blank" rel="noreferrer">
-          Open prepared answer image
-        </a>
-        <span className="text-slate-400">Answer region #{item.answer_region.id}</span>
-      </div>
-
-      <img className="max-h-80 rounded border border-slate-700 object-contain" src={getAnswerRegionImageUrl(item.answer_region.id)} alt={`Answer region ${item.answer_region.id}`} />
+      <div className="text-sm text-slate-400">Answer region #{item.answer_region.id}</div>
+      <AuthenticatedAnswerRegionImage
+        answerRegionId={item.answer_region.id}
+        alt={`Answer region ${item.answer_region.id}`}
+      />
       <p className="text-sm text-slate-300">Question text: {item.question.question_text}</p>
 
       {suggestion ? (
