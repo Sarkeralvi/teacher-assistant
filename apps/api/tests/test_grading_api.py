@@ -15,13 +15,17 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     AnswerRegion,
+    AnswerRegionMapping,
+    AnswerRegionOcrRun,
     AnswerRegionSegment,
     Assessment,
     Course,
+    ExtractionRun,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
     Question,
+    QuestionNode,
     Rubric,
     Submission,
     SubmissionPage,
@@ -29,6 +33,7 @@ from app.models import (
 )
 from app.schemas import LocalQwenGradeRequest
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
+from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
 
 CLEANUP_MODELS = (
     FinalGrade,
@@ -525,6 +530,98 @@ def test_grading_evidence_packet_reports_ready_state_and_auditable_fields(
     assert packet["readiness_result"]["ready_for_grading"] is True
     assert packet["readiness_result"]["blockers"] == []
     assert "context completeness unknown" in packet["readiness_result"]["warnings"]
+
+
+def test_qwen38_mapping_requires_matching_final_intent_transcription_before_grading(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    from app.services.grading_service import GradingService
+
+    region_payload = create_answer_region_with_optional_rubric(client, tmp_path)
+    region = db_session.get(AnswerRegion, region_payload["id"])
+    assert region is not None
+    submission = db_session.get(Submission, region.submission_id)
+    teacher = db_session.scalars(select(User)).one()
+    assert submission is not None
+
+    extraction = ExtractionRun(
+        assessment_id=submission.assessment_id,
+        artifact_file_path="tests/question.pdf",
+        original_filename="question.pdf",
+        content_type="application/pdf",
+        extraction_type="question_paper",
+        provider="llama_cpp_qwen38",
+        status="succeeded",
+        blockers=[],
+    )
+    db_session.add(extraction)
+    db_session.flush()
+    node = QuestionNode(
+        assessment_id=submission.assessment_id,
+        extraction_run_id=extraction.id,
+        question_number="1",
+        label="1",
+        text="Explain.",
+        marks=Decimal("5"),
+        node_type="question",
+        teacher_confirmed=True,
+    )
+    db_session.add(node)
+    db_session.flush()
+    db_session.add(
+        AnswerRegionMapping(
+            assessment_id=submission.assessment_id,
+            submission_id=submission.id,
+            question_node_id=node.id,
+            question_id=region.question_id,
+            answer_region_id=region.id,
+            mapping_status="teacher_confirmed",
+            provider="llama_cpp_qwen38",
+            teacher_confirmed=True,
+        )
+    )
+    transcript = AnswerRegionOcrRun(
+        answer_region_id=region.id,
+        requested_by_teacher_id=teacher.id,
+        request_id="legacy-confirmed-grading-evidence",
+        status="confirmed",
+        profile="qwen38_verbatim_visual",
+        task_kind="answer_transcription",
+        reasoning_mode="disabled",
+        prompt_version="qwen38-forensic-verbatim-v1",
+        provider="llama_cpp_qwen38",
+        model_name="qwen3.8-27b-q4km",
+        draft_text=region.manual_answer_text,
+        confirmed_text=region.manual_answer_text,
+        warnings=[],
+        call_limit=1,
+        calls_used=1,
+    )
+    db_session.add(transcript)
+    db_session.commit()
+
+    service = GradingService(db_session, use_configured_adapter=False)
+    legacy_packet = service.get_grading_evidence_packet(region.id)
+    assert legacy_packet["readiness_result"]["ready_for_grading"] is False
+    assert (
+        "Qwen3.8 final-intent transcription must be confirmed"
+        in legacy_packet["readiness_result"]["blockers"]
+    )
+
+    transcript.prompt_version = FINAL_INTENT_PROMPT_VERSION
+    db_session.commit()
+    current_packet = service.get_grading_evidence_packet(region.id)
+    assert current_packet["readiness_result"]["ready_for_grading"] is True
+    assert current_packet["student_answer_evidence"]["final_intent_transcription_confirmed"]
+
+    transcript.confirmed_text = "changed after confirmation"
+    db_session.commit()
+    changed_packet = service.get_grading_evidence_packet(region.id)
+    assert changed_packet["readiness_result"]["ready_for_grading"] is False
+    assert (
+        "confirmed final-intent transcription no longer matches evidence"
+        in changed_packet["readiness_result"]["blockers"]
+    )
 
 
 def test_grading_evidence_packet_blocks_when_active_rubric_is_missing(

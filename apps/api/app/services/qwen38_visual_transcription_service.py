@@ -15,13 +15,11 @@ from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
+from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
 
 
 class VisualTranscriptionError(RuntimeError):
     pass
-
-
-FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
 
 
 def _sha256_joined(parts: list[str]) -> str:

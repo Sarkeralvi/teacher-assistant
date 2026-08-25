@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.config import Settings, get_settings
 from app.models import (
     AnswerRegion,
+    AnswerRegionMapping,
+    AnswerRegionOcrRun,
     AnswerRegionSegment,
     Assessment,
     GradeSuggestion,
@@ -28,6 +30,7 @@ from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
+from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
 
@@ -219,6 +222,12 @@ class GradingService:
             blockers.append("missing confirmed answer segment")
         if not (region.manual_answer_text or "").strip():
             blockers.append("missing teacher-approved answer evidence")
+        final_intent_run = self._confirmed_final_intent_run(region)
+        if self._requires_final_intent_transcription(region):
+            if final_intent_run is None:
+                blockers.append("Qwen3.8 final-intent transcription must be confirmed")
+            elif final_intent_run.confirmed_text != region.manual_answer_text:
+                blockers.append("confirmed final-intent transcription no longer matches evidence")
         ordered_indexes = [segment.order_index for segment in segments]
         if ordered_indexes != list(range(1, len(segments) + 1)):
             blockers.append("answer segment order must be contiguous starting at 1")
@@ -288,6 +297,13 @@ class GradingService:
                 "manual_answer_text": region.manual_answer_text,
                 "extracted_student_answer_text": region.manual_answer_text,
                 "manual_answer_text_present": bool((region.manual_answer_text or "").strip()),
+                "final_intent_transcription_required": self._requires_final_intent_transcription(
+                    region
+                ),
+                "final_intent_transcription_confirmed": final_intent_run is not None,
+                "final_intent_prompt_version": (
+                    final_intent_run.prompt_version if final_intent_run is not None else None
+                ),
                 "segment_count": len(confirmed_segments),
                 "pages_covered": pages_covered,
                 "segments": segment_payloads,
@@ -928,6 +944,29 @@ class GradingService:
             Rubric.question_id == question_id, Rubric.is_active.is_(True)
         )
         return self.db.scalars(statement).first()
+
+    def _requires_final_intent_transcription(self, region: AnswerRegion) -> bool:
+        return self.db.scalar(
+            select(AnswerRegionMapping.id).where(
+                AnswerRegionMapping.answer_region_id == region.id,
+                AnswerRegionMapping.provider == "llama_cpp_qwen38",
+                AnswerRegionMapping.teacher_confirmed.is_(True),
+            )
+        ) is not None
+
+    def _confirmed_final_intent_run(
+        self, region: AnswerRegion
+    ) -> AnswerRegionOcrRun | None:
+        return self.db.scalars(
+            select(AnswerRegionOcrRun)
+            .where(
+                AnswerRegionOcrRun.answer_region_id == region.id,
+                AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
+                AnswerRegionOcrRun.status == "confirmed",
+                AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
+            )
+            .order_by(AnswerRegionOcrRun.id.desc())
+        ).first()
 
     def _get_active_rubric(self, question_id: int) -> Rubric:
         rubric = self._get_active_rubric_or_none(question_id)

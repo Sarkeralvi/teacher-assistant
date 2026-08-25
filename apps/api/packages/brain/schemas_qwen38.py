@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
+
 
 class UncertainGlyph(BaseModel):
     """A character or symbol whose identity the model cannot determine with
@@ -63,8 +65,9 @@ class VisualTranscriptionOutput(BaseModel):
     --------------
     * ``needs_review`` is always ``True`` — this is a draft, never a final
       record.
-    * ``draft_text`` contains verbatim Markdown/LaTeX transcribed from the
-      image.  It must not contain grading verdicts or corrections.
+    * ``draft_text`` contains final-intent Markdown/LaTeX transcribed from the
+      image. Deliberately cancelled work is excluded, but surviving student
+      mistakes are preserved and never mathematically repaired.
     * ``image_sha256`` is a 64-character lowercase hex string recorded for
       audit purposes.  Raw student image bytes are never logged elsewhere.
     """
