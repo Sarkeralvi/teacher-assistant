@@ -172,7 +172,7 @@ for (const marker of [
   "cannot replace confirmed evidence and creates no transcript or grade",
   "!finalizedRegionIds.has(mapping.answer_region_id)",
   "Repair cancellation interpretation with Qwen3.8 Thinking",
-  "qwen38-final-intent-thinking-repair-v4",
+  "qwen38-final-intent-thinking-repair-v5",
   "Start corrected Thinking repair",
   "Failure category:",
   "no question, solution, rubric, or marks were provided",

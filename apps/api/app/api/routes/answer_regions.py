@@ -1578,7 +1578,12 @@ def create_visual_transcription_run(
     service = Qwen38VisualTranscriptionService(db)
     try:
         run = service.create(region, teacher=current_user, expected_model=payload.expected_model)
-        get_default_queue().enqueue(run_qwen38_visual_transcription_job, run.id, retry=None)
+        get_default_queue().enqueue(
+            run_qwen38_visual_transcription_job,
+            run.id,
+            retry=None,
+            job_timeout=get_settings().local_qwen38_visual_job_timeout_seconds,
+        )
         return run
     except VisualTranscriptionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1636,7 +1641,12 @@ def create_visual_transcription_thinking_repair(
             teacher=current_user,
             expected_model=payload.expected_model,
         )
-        get_default_queue().enqueue(run_qwen38_thinking_repair_job, run.id, retry=None)
+        get_default_queue().enqueue(
+            run_qwen38_thinking_repair_job,
+            run.id,
+            retry=None,
+            job_timeout=get_settings().local_qwen38_visual_job_timeout_seconds,
+        )
         return run
     except VisualTranscriptionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

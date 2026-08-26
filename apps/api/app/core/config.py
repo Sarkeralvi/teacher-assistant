@@ -218,6 +218,15 @@ class Settings(BaseSettings):
     local_qwen38_timeout_seconds: float = Field(
         default=1800.0, alias="LOCAL_QWEN38_TIMEOUT_SECONDS", gt=0
     )
+    # RQ defaults to 180 seconds, which is shorter than a measured Qwen3.8
+    # visual repair on this host. Keep the worker envelope above the HTTP
+    # timeout plus model phase startup so RQ cannot interrupt a valid response.
+    local_qwen38_visual_job_timeout_seconds: int = Field(
+        default=2400,
+        alias="LOCAL_QWEN38_VISUAL_JOB_TIMEOUT_SECONDS",
+        ge=300,
+        le=3600,
+    )
     # Must match the running llama-server's -c value (see Start-LocalAi.ps1); used
     # to keep reference-bundle completion budgets from exceeding the server's
     # actual context window instead of guessing at a fixed safe ceiling.

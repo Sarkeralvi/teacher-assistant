@@ -64,6 +64,16 @@ class InvalidJsonClient(FakeClient):
         return InvalidJsonResponse({})
 
 
+class JobTimeoutException(Exception):
+    pass
+
+
+class JobTimeoutClient(FakeClient):
+    def post(self, _path: str, *, json: dict[str, Any], **_kwargs: object) -> FakeResponse:
+        self.requests.append(json)
+        raise JobTimeoutException("SECRET STUDENT TEXT")
+
+
 def provider_with(completion: dict[str, Any]) -> tuple[LlamaCppQwen38VisionProvider, FakeClient]:
     # Unit tests exercise provider parsing in isolation.  Production
     # construction is always lease-enforced by default.
@@ -402,6 +412,25 @@ def test_thinking_repair_invalid_http_json_is_content_free_and_not_retried() -> 
         )
 
     assert exc_info.value.failure_code == "thinking_repair_provider_invalid_http_json"
+    assert "SECRET STUDENT TEXT" not in str(exc_info.value)
+    assert len(client.requests) == 1
+
+
+def test_thinking_repair_rq_timeout_is_precise_content_free_and_not_retried() -> None:
+    provider = LlamaCppQwen38VisionProvider(
+        api_key="test-key",
+        require_model_lease=False,
+    )
+    client = JobTimeoutClient({})
+    provider.client = client
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="SECRET STUDENT TEXT",
+        )
+
+    assert exc_info.value.failure_code == "thinking_repair_provider_job_timeout"
     assert "SECRET STUDENT TEXT" not in str(exc_info.value)
     assert len(client.requests) == 1
 

@@ -193,7 +193,7 @@ const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   "qwen38-final-intent-structured-v2",
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
-const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v4";
+const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v5";
 
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;

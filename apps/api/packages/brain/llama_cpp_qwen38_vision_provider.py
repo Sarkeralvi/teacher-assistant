@@ -721,6 +721,15 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 "The local Qwen3.8 connection ended before a valid response was received",
             ) from exc
         except Exception as exc:
+            # RQ's default 180-second JobTimeoutException is injected into the
+            # blocked HTTP call on Windows. Keep the provider independent of RQ
+            # while preserving a precise, content-free diagnosis if queue
+            # configuration ever regresses.
+            if type(exc).__name__ == "JobTimeoutException":
+                raise Qwen38CompletionRequestError(
+                    "provider_job_timeout",
+                    "The queued Qwen3.8 task exceeded its worker execution window",
+                ) from exc
             raise Qwen38CompletionRequestError(
                 "provider_request_error",
                 "The local Qwen3.8 request failed before a valid response was received",
