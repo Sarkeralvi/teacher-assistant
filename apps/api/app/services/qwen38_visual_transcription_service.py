@@ -300,6 +300,11 @@ class Qwen38VisualTranscriptionService:
                     images.append((image_bytes, "image/png"))
                     image_hashes.append(hashlib.sha256(image_bytes).hexdigest())
                 lease.heartbeat(holder_id=lease_holder_id)
+                # Count the provider attempt before the call. A timeout or
+                # malformed response still consumed the one authorized call.
+                run.calls_used = 1
+                run.heartbeat_at = datetime.now(UTC)
+                self.db.commit()
                 result = provider.transcribe_images(
                     images=images,
                     label=region.question.question_no,
@@ -381,9 +386,22 @@ class Qwen38VisualTranscriptionService:
             self.db.rollback()
             failed = self.db.get(AnswerRegionOcrRun, run_id)
             if failed is not None:
+                failure_code = str(
+                    getattr(exc, "failure_code", "visual_transcription_execution_failed")
+                )[:100]
                 failed.status = "failed"
                 failed.completed_at = datetime.now(UTC)
                 failed.error = sanitize_provider_error(str(exc))[:500]
+                failed.normalized_result = {
+                    **(failed.normalized_result or {}),
+                    "prompt_version": failed.prompt_version,
+                    "failure_code": failure_code,
+                }
+                failed.warnings = [
+                    warning
+                    for warning in (failed.warnings or [])
+                    if warning != "visual_transcription_pending"
+                ] + [failure_code]
                 self._audit(
                     failed,
                     "qwen38_visual_transcription_failed",
@@ -392,6 +410,7 @@ class Qwen38VisualTranscriptionService:
                     {
                         "answer_region_id": failed.answer_region_id,
                         "calls_used": failed.calls_used,
+                        "failure_code": failure_code,
                     },
                 )
                 self.db.commit()

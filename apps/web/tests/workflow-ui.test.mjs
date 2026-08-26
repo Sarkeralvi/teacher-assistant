@@ -166,6 +166,8 @@ for (const marker of [
   "cancelled work and excluded it",
   "Unclear correction detected.",
   "Re-transcribe with final-intent rules",
+  "Re-run corrected final-intent transcription",
+  "safeVisualTranscriptionError",
   "older cancellation policy",
   "cannot replace confirmed evidence and creates no transcript or grade",
   "!finalizedRegionIds.has(mapping.answer_region_id)",

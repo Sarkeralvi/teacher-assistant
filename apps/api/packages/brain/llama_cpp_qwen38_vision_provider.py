@@ -237,7 +237,7 @@ class _Qwen38TranscriptionPayload(BaseModel):
 
     draft_text: str
     uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
-    editing_marks: list[EditingMark] = Field(default_factory=list)
+    editing_marks: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     cancellation_detected: bool = False
     replacement_detected: bool = False
     uncertain_correction_detected: bool = False
@@ -261,16 +261,6 @@ class _Qwen38TranscriptionPayload(BaseModel):
             )
         if any(marker in self.draft_text for marker in markers) and not self.uncertain_glyphs:
             raise ValueError("uncertainty markers require uncertain_glyphs metadata")
-        statuses = {mark.status for mark in self.editing_marks}
-        expected = {
-            "cancelled": self.cancellation_detected,
-            "replacement": self.replacement_detected,
-            "uncertain_correction": self.uncertain_correction_detected,
-        }
-        if any((status in statuses) != enabled for status, enabled in expected.items()):
-            raise ValueError("editing-analysis flags must match editing_marks")
-        if self.uncertain_correction_detected and "[unclear correction]" not in self.draft_text:
-            raise ValueError("uncertain correction was not preserved in draft_text")
         return self
 
 
@@ -345,6 +335,14 @@ class Qwen38ThinkingRepairOutputError(RuntimeError):
         self.failure_code = failure_code
 
 
+class Qwen38VisualTranscriptionOutputError(RuntimeError):
+    """Sanitized, machine-readable failure for normal visual transcription."""
+
+    def __init__(self, failure_code: str, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.failure_code = failure_code
+
+
 def _safe_completion_diagnostics(message: str) -> str:
     match = re.search(
         r"finish_reason=([^\s)]+) prompt_tokens=([^\s)]+) "
@@ -396,8 +394,45 @@ def _thinking_repair_output_error(exc: Exception) -> Qwen38ThinkingRepairOutputE
     )
 
 
-def _normalize_thinking_repair_marks(
-    raw_marks: list[dict[str, Any]], *, page_count: int
+def _visual_transcription_output_error(
+    exc: Exception,
+) -> Qwen38VisualTranscriptionOutputError:
+    if isinstance(exc, Qwen38VisualTranscriptionOutputError):
+        return exc
+    message = str(exc)
+    diagnostics = _safe_completion_diagnostics(message)
+    if "cut off before finishing" in message or "finish_reason=length" in message:
+        code = "visual_transcription_output_truncated"
+        summary = "Qwen3.8 ran out of output space before the transcript JSON finished"
+    elif "not valid JSON" in message:
+        code = "visual_transcription_malformed_json"
+        summary = "Qwen3.8 did not return a valid transcript JSON object"
+    elif "schema mismatch" in message:
+        code = "visual_transcription_schema_mismatch"
+        summary = "Qwen3.8 returned JSON that did not match the safe transcription contract"
+    elif "empty choices" in message or "empty content" in message:
+        code = "visual_transcription_empty_response"
+        summary = "Qwen3.8 returned no transcription result"
+    elif "completion request failed" in message:
+        code = "visual_transcription_provider_request_failed"
+        summary = "The local Qwen3.8 transcription request failed before a valid result arrived"
+    elif "blank" in message:
+        code = "visual_transcription_unsafe_blank"
+        summary = "Qwen3.8 classified visible editing or writing as blank"
+    elif "edit decision" in message or "editing bbox" in message:
+        code = "visual_transcription_invalid_decisions"
+        summary = "Qwen3.8 returned invalid visual edit decisions"
+    else:
+        code = "visual_transcription_output_contract_failed"
+        summary = "Qwen3.8 failed the safe transcription output contract"
+    return Qwen38VisualTranscriptionOutputError(
+        code,
+        f"{summary}{diagnostics}. No transcript was accepted.",
+    )
+
+
+def _normalize_editing_marks(
+    raw_marks: list[dict[str, Any]], *, page_count: int, require_nonempty: bool
 ) -> list[EditingMark]:
     """Normalize harmless numeric formatting while rejecting ambiguous boxes."""
 
@@ -436,7 +471,7 @@ def _normalize_thinking_repair_marks(
                 }
             )
         )
-    if not normalized:
+    if require_nonempty and not normalized:
         raise ValueError("Qwen3.8 thinking repair returned no image-grounded edit decisions")
     return normalized
 
@@ -769,6 +804,14 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         """
         if not images:
             raise ValueError("At least one answer image is required")
+        if self.require_model_lease:
+            from app.services.local_model_call_guard import (
+                assert_local_model_call_authorized,
+            )
+
+            # Authorization failures must remain exact and occur before the
+            # content-sanitizing output wrapper or any HTTP request.
+            assert_local_model_call_authorized(model_phase="Qwen38")
         image_parts: list[dict[str, Any]] = []
         image_hashes: list[str] = []
         for image_bytes, mime_type in images:
@@ -846,17 +889,36 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         ]
 
         start = time.perf_counter()
-        payload, usage = self._structured_completion(
-            messages=messages,
-            response_model=_Qwen38TranscriptionPayload,
-            schema_name="visual_transcription",
-            max_tokens=max_tokens or _TRANSCRIBE_MAX_TOKENS,
-            temperature=0.0,
-            enable_thinking=False,
-        )
+        try:
+            payload, usage = self._structured_completion(
+                messages=messages,
+                response_model=_Qwen38TranscriptionPayload,
+                schema_name="visual_transcription",
+                max_tokens=max_tokens or _TRANSCRIBE_MAX_TOKENS,
+                temperature=0.0,
+                enable_thinking=False,
+            )
+            assert isinstance(payload, _Qwen38TranscriptionPayload)
+            editing_marks = _normalize_editing_marks(
+                payload.editing_marks,
+                page_count=len(images),
+                require_nonempty=False,
+            )
+            statuses = {mark.status for mark in editing_marks}
+            cancellation_detected = "cancelled" in statuses
+            replacement_detected = "replacement" in statuses
+            uncertain_correction_detected = "uncertain_correction" in statuses
+            if (
+                uncertain_correction_detected
+                and "[unclear correction]" not in payload.draft_text
+            ):
+                raise ValueError(
+                    "uncertain edit decision was not preserved in the transcript draft"
+                )
+        except Exception as exc:
+            raise _visual_transcription_output_error(exc) from exc
         latency_ms = int((time.perf_counter() - start) * 1000)
 
-        assert isinstance(payload, _Qwen38TranscriptionPayload)
         # Build uncertain_glyphs from raw dicts
         uncertain_glyphs: list[UncertainGlyph] = []
         for raw in payload.uncertain_glyphs:
@@ -868,10 +930,10 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         return VisualTranscriptionOutput(
             draft_text=payload.draft_text,
             uncertain_glyphs=uncertain_glyphs,
-            editing_marks=payload.editing_marks,
-            cancellation_detected=payload.cancellation_detected,
-            replacement_detected=payload.replacement_detected,
-            uncertain_correction_detected=payload.uncertain_correction_detected,
+            editing_marks=editing_marks,
+            cancellation_detected=cancellation_detected,
+            replacement_detected=replacement_detected,
+            uncertain_correction_detected=uncertain_correction_detected,
             is_blank=payload.is_blank,
             is_irrelevant=payload.is_irrelevant,
             confidence=payload.confidence,
@@ -989,9 +1051,10 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             assert isinstance(payload, _Qwen38ThinkingRepairPayload)
             if payload.is_blank:
                 raise ValueError("thinking repair unsafe blank classification")
-            editing_marks = _normalize_thinking_repair_marks(
+            editing_marks = _normalize_editing_marks(
                 payload.editing_marks,
                 page_count=len(images),
+                require_nonempty=True,
             )
             statuses = {mark.status for mark in editing_marks}
             cancellation_detected = "cancelled" in statuses

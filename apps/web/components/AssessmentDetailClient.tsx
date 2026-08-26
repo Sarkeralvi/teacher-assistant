@@ -228,6 +228,18 @@ function thinkingRepairDecisions(run: AnswerRegionOcrRun | null): ThinkingRepair
   });
 }
 
+function safeVisualTranscriptionError(error: string | null): string | null {
+  if (!error) return null;
+  if (
+    error.includes("input_value=") ||
+    error.includes("content starts:") ||
+    error.includes("data:image/")
+  ) {
+    return "Qwen3.8 output did not match the safe transcription contract. No transcript was accepted.";
+  }
+  return error;
+}
+
 export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const uploadFormRef = useRef<HTMLFormElement | null>(null);
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -1959,6 +1971,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   !gradedRegionIds.has(mapping.answer_region_id) &&
                   !finalizedRegionIds.has(mapping.answer_region_id),
                 );
+                const failedCurrentRetranscriptionRequired = Boolean(
+                  visualRun &&
+                  currentFinalIntentRun &&
+                  ["failed", "uncertain"].includes(visualRun.status) &&
+                  mapping.answer_region_id &&
+                  !gradedRegionIds.has(mapping.answer_region_id) &&
+                  !finalizedRegionIds.has(mapping.answer_region_id),
+                );
                 const blankSafetyGate = mapping.mapping_status === "blocked" && !mapping.answer_region_id;
                 const sourceSegments = mapping.answer_region?.segments ?? [];
                 const sourceStates = mapping.answer_region_id == null
@@ -2069,13 +2089,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             {confirmingMappingId === mapping.id ? "Confirming region..." : segmentCropsState === "error" || sourcePagesState === "error" ? "All evidence images must load before confirmation" : segmentCropsState !== "loaded" || sourcePagesState !== "loaded" ? "Loading every source page and answer segment..." : !boundaryReviewed ? "Compare and acknowledge the full-page boundary first" : `Confirm all ${sourceSegments.length} displayed answer segment${sourceSegments.length === 1 ? "" : "s"}`}
                           </button>
                         ) : null}
-                        {mapping.teacher_confirmed && (!visualRun || legacyRetranscriptionRequired) ? (
+                        {mapping.teacher_confirmed && (!visualRun || legacyRetranscriptionRequired || failedCurrentRetranscriptionRequired) ? (
                           <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
                             {runningOcrRegionId === mapping.answer_region_id
                               ? "Qwen3.8 is resolving corrections and transcribing..."
-                              : legacyRetranscriptionRequired
-                                ? "Re-transcribe with final-intent rules"
-                                : "Transcribe final intended answer with Qwen3.8 vision"}
+                              : failedCurrentRetranscriptionRequired
+                                ? "Re-run corrected final-intent transcription"
+                                : legacyRetranscriptionRequired
+                                  ? "Re-transcribe with final-intent rules"
+                                  : "Transcribe final intended answer with Qwen3.8 vision"}
                           </button>
                         ) : null}
                         {visualRun ? (
@@ -2086,7 +2108,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                 This transcript used an older cancellation policy. It cannot be directly confirmed; re-transcribe with the conservative policy or use the explicit Thinking repair.
                               </p>
                             ) : null}
-                            {visualRun.error ? <p className="text-xs text-red-200">{visualRun.error}</p> : null}
+                            {safeVisualTranscriptionError(visualRun.error) ? <p className="text-xs text-red-200">{safeVisualTranscriptionError(visualRun.error)}</p> : null}
                             {visualRun.warnings.includes("cancelled_work_excluded") ? (
                               <p className="rounded border border-violet-800 bg-violet-950/20 p-2 text-xs text-violet-100">
                                 Qwen detected deliberately cancelled work and excluded it from this final-intent transcript. Verify that decision against the image.

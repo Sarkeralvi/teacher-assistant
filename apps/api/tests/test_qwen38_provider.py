@@ -11,6 +11,7 @@ from packages.brain.adapter import BrainAdapter
 from packages.brain.llama_cpp_qwen38_vision_provider import (
     LlamaCppQwen38VisionProvider,
     Qwen38ThinkingRepairOutputError,
+    Qwen38VisualTranscriptionOutputError,
     _Qwen38TranscriptionPayload,
 )
 
@@ -193,8 +194,10 @@ def test_structured_editing_analysis_precedes_final_intent_transcription() -> No
                                     "position_hint": "replacement above the same line",
                                 },
                             ],
-                            "cancellation_detected": True,
-                            "replacement_detected": True,
+                            # Summary flags are untrusted; server derives them
+                            # from the two reviewable visual boxes above.
+                            "cancellation_detected": False,
+                            "replacement_detected": False,
                             "uncertain_correction_detected": False,
                             "is_blank": False,
                             "is_irrelevant": False,
@@ -508,11 +511,12 @@ def test_uncertain_correction_must_remain_explicit_in_final_transcript() -> None
     }
     provider, _client = provider_with(completion)
 
-    with pytest.raises(ValueError, match="schema mismatch"):
+    with pytest.raises(Qwen38VisualTranscriptionOutputError) as exc_info:
         provider.transcribe_image(
             image_bytes=b"\x89PNG\r\n\x1a\nimage",
             mime_type="image/png",
         )
+    assert exc_info.value.failure_code == "visual_transcription_invalid_decisions"
 
 
 def test_unclear_correction_marker_requires_uncertainty_metadata() -> None:
@@ -532,10 +536,11 @@ def test_unclear_correction_marker_requires_uncertainty_metadata() -> None:
     }
     provider, _client = provider_with(completion)
 
-    with pytest.raises(ValueError, match="schema mismatch"):
+    with pytest.raises(Qwen38VisualTranscriptionOutputError) as exc_info:
         provider.transcribe_image(
             image_bytes=b"\x89PNG\r\n\x1a\nimage", mime_type="image/png"
         )
+    assert exc_info.value.failure_code == "visual_transcription_schema_mismatch"
 
 
 def test_visual_transcription_keeps_blank_evidence_empty() -> None:
@@ -601,12 +606,14 @@ def test_visual_transcription_rejects_model_blank_when_editing_marks_are_visible
     }
     provider, _client = provider_with(completion)
 
-    with pytest.raises(ValueError, match="schema mismatch"):
+    with pytest.raises(Qwen38VisualTranscriptionOutputError) as exc_info:
         provider.transcribe_image(
             image_bytes=b"\x89PNG\r\n\x1a\nimage",
             mime_type="image/png",
             label="1(c)(i)",
         )
+    assert exc_info.value.failure_code == "visual_transcription_schema_mismatch"
+    assert "model claimed the whole written area" not in str(exc_info.value)
 
 
 def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:
