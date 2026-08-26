@@ -275,7 +275,11 @@ class AnswerRegionOcrService:
                 .where(
                     AnswerRegionOcrRun.answer_region_id == answer_region_id,
                     AnswerRegionOcrRun.task_kind.in_(
-                        ["paddle_baseline_transcription", "visual_transcription"]
+                        [
+                            "paddle_baseline_transcription",
+                            "visual_transcription",
+                            "visual_transcription_thinking_repair",
+                        ]
                     ),
                 )
                 .order_by(AnswerRegionOcrRun.id.desc())

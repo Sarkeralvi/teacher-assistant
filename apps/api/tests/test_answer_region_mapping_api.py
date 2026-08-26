@@ -658,6 +658,13 @@ def test_thinking_repair_route_is_owned_explicit_and_enqueued_without_retry(
     assert db_session.scalar(select(func.count(GradeSuggestion.id))) == 0
     assert db_session.scalar(select(func.count(FinalGrade.id))) == 0
 
+    listed = client.get(
+        f"/answer-regions/{region.id}/ocr-runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert [item["id"] for item in listed.json()[:2]] == [repair["id"], source_run.id]
+
     duplicate = client.post(
         f"/answer-regions/{region.id}/visual-transcription-runs/{source_run.id}/thinking-repair",
         headers={"Authorization": f"Bearer {token}"},
