@@ -59,7 +59,10 @@ export function CustomControlledGradingRunClient({
   const activeRunId = run?.id;
   const referencesConfirmed = Boolean(run?.questions_confirmed_at && run.rubrics_confirmed_at);
   const localProviderConfigured = Boolean(
-    localAi?.real_providers_allowed && localAi.paddle_ocr.enabled && localAi.qwen.enabled,
+    localAi?.real_providers_allowed
+      && localAi.qwen38.enabled
+      && localAi.qwen38.available
+      && localAi.qwen38.visual_preparation_enabled,
   );
 
   const load = useCallback(async () => {
@@ -289,7 +292,7 @@ export function CustomControlledGradingRunClient({
       <header className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 md:grid-cols-[1fr_auto] md:items-start">
         <div>
           <Link className="text-sm text-cyan-300 hover:text-cyan-200" href={`/assessments/${assessmentId}`}>
-            ← Back to assessment
+            &larr; Back to assessment
           </Link>
           <p className="mt-5 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
             Custom Controlled
@@ -356,7 +359,7 @@ export function CustomControlledGradingRunClient({
               disabled={busy || extractionActive || (!questionPdf && !solutionPdf && !rubricPdf)}
               type="submit"
             >
-              {busy ? "Uploading…" : materialsUploaded ? "Upload selected replacement" : "Upload three PDFs"}
+              {busy ? "Uploading\u2026" : materialsUploaded ? "Upload selected replacement" : "Upload three PDFs"}
             </button>
             {materialsUploaded ? (
               <span className="text-sm text-emerald-300">All three references are stored.</span>
@@ -400,10 +403,12 @@ export function CustomControlledGradingRunClient({
                   type="button"
                   onClick={() => void handleStartExtraction()}
                 >
-                  {busy ? "Starting…" : extraction?.status === "failed" ? "Start a new extraction" : "Confirm and extract drafts"}
+                  {busy ? "Starting\u2026" : extraction?.status === "failed" ? "Start a new extraction" : "Confirm and extract drafts"}
                 </button>
                 {!localProviderConfigured ? (
-                  <span className="text-sm text-amber-200">Local providers are not enabled in the backend.</span>
+                  <span className="text-sm text-amber-200">
+                    Qwen3.8 visual extraction is not ready. Check the local AI status and backend safety switches.
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -532,7 +537,7 @@ export function CustomControlledGradingRunClient({
                   type="button"
                   onClick={() => void handleConfirmDrafts()}
                 >
-                  {busy ? "Saving…" : "Confirm grading references"}
+                  {busy ? "Saving\u2026" : "Confirm grading references"}
                 </button>
               </div>
             </div>
@@ -615,7 +620,7 @@ function SectionHeading({
   return (
     <div className="flex items-start gap-4">
       <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-bold ${complete ? "bg-emerald-400 text-emerald-950" : "bg-slate-800 text-slate-200"}`}>
-        {complete ? "✓" : number}
+        {complete ? "\u2713" : number}
       </span>
       <div>
         <h2 className="text-xl font-semibold">{title}</h2>
@@ -672,7 +677,7 @@ function friendlyExtractionError(error: string | null): string {
 
 function RuntimeBadge({ status }: Readonly<{ status: LocalAiStatus | null }>) {
   const phase = status?.qwen38.available
-    ? `Qwen3.8 active · ${status.qwen38.device}`
+    ? `Qwen3.8 active \u00b7 ${status.qwen38.device}`
       : "Local models load on demand";
   const configured = Boolean(
     status?.real_providers_allowed &&

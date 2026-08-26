@@ -114,6 +114,18 @@ for (const marker of [
   }
 }
 
+if (referencePage.includes("localAi.paddle_ocr.enabled")) {
+  throw new Error("Qwen3.8 reference extraction must not depend on retired PaddleOCR");
+}
+for (const marker of [
+  "localAi.qwen38.available",
+  "localAi.qwen38.visual_preparation_enabled",
+]) {
+  if (!referencePage.includes(marker)) {
+    throw new Error(`Reference preparation readiness is missing Qwen3.8 marker: ${marker}`);
+  }
+}
+
 for (const obsolete of [
   "Start custom controlled run",
   "Upload/confirm materials",
