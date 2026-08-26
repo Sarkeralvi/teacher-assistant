@@ -12,7 +12,7 @@ export type AnswerRegionImageLoadState = "loading" | "loaded" | "error";
 
 export type EditingDecisionOverlay = {
   bbox: [number, number, number, number] | number[];
-  status: "cancelled" | "replacement" | "uncertain_correction";
+  status: "cancelled" | "replacement" | "retained" | "uncertain_correction";
   decisionIndex: number;
 };
 
@@ -126,7 +126,7 @@ function ProtectedAnswerImage({
           const [x1, y1, x2, y2] = decision.bbox;
           const color = decision.status === "cancelled"
             ? "border-red-500 bg-red-500/20 text-red-50"
-            : decision.status === "replacement"
+            : decision.status === "replacement" || decision.status === "retained"
               ? "border-emerald-400 bg-emerald-400/20 text-emerald-50"
               : "border-amber-400 bg-amber-400/20 text-amber-50";
           return (
@@ -150,7 +150,7 @@ function ProtectedAnswerImage({
       </div>
       {editingDecisions.length > 0 ? (
         <p className="text-[11px] text-slate-300">
-          <span className="text-red-300">Red = excluded cancellation</span> · <span className="text-emerald-300">green = visible replacement</span> · <span className="text-amber-300">amber = uncertain correction</span>
+          <span className="text-red-300">Red = excluded cancellation</span> · <span className="text-emerald-300">green = visible replacement or retained work</span> · <span className="text-amber-300">amber = uncertain correction</span>
         </p>
       ) : null}
       <figcaption className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">

@@ -193,12 +193,12 @@ const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   "qwen38-final-intent-structured-v2",
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
-const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v5";
+const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v6";
 
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;
   position_hint: string;
-  status: "cancelled" | "replacement" | "uncertain_correction";
+  status: "cancelled" | "replacement" | "retained" | "uncertain_correction";
 };
 
 function thinkingRepairDecisions(run: AnswerRegionOcrRun | null): ThinkingRepairDecision[] {
@@ -214,7 +214,7 @@ function thinkingRepairDecisions(run: AnswerRegionOcrRun | null): ThinkingRepair
     const pageIndex = value.page_index;
     const positionHint = value.position_hint;
     if (
-      !["cancelled", "replacement", "uncertain_correction"].includes(String(status)) ||
+      !["cancelled", "replacement", "retained", "uncertain_correction"].includes(String(status)) ||
       !Array.isArray(bbox) || bbox.length !== 4 || !bbox.every((item) => typeof item === "number") ||
       typeof pageIndex !== "number" || typeof positionHint !== "string"
     ) return [];
@@ -2159,7 +2159,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                 {repairDecisions.map((decision) => {
                                   const reviewed = reviewedRepairDecisions[thinkingRepairRun.id] ?? [];
                                   const checked = reviewed.includes(decision.decisionIndex);
-                                  const tone = decision.status === "cancelled" ? "text-red-200" : decision.status === "replacement" ? "text-emerald-200" : "text-amber-200";
+                                  const tone = decision.status === "cancelled" ? "text-red-200" : decision.status === "replacement" || decision.status === "retained" ? "text-emerald-200" : "text-amber-200";
                                   return (
                                     <label key={decision.decisionIndex} className="flex items-start gap-2 rounded border border-slate-800 p-2 text-xs">
                                       <input

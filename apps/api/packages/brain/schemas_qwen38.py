@@ -19,16 +19,18 @@ SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS = (
     LEGACY_FINAL_INTENT_PROMPT_VERSION,
     FINAL_INTENT_PROMPT_VERSION,
 )
-THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v5"
+THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v6"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v1"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V2 = "qwen38-final-intent-thinking-repair-v2"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V3 = "qwen38-final-intent-thinking-repair-v3"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V4 = "qwen38-final-intent-thinking-repair-v4"
+LEGACY_THINKING_REPAIR_PROMPT_VERSION_V5 = "qwen38-final-intent-thinking-repair-v5"
 SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS = (
     LEGACY_THINKING_REPAIR_PROMPT_VERSION,
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V2,
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V3,
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V4,
+    LEGACY_THINKING_REPAIR_PROMPT_VERSION_V5,
     THINKING_REPAIR_PROMPT_VERSION,
 )
 
@@ -64,7 +66,7 @@ class EditingMark(BaseModel):
 
     page_index: int = Field(ge=1)
     bbox: list[int] = Field(min_length=4, max_length=4)
-    status: Literal["cancelled", "replacement", "uncertain_correction"]
+    status: Literal["cancelled", "replacement", "retained", "uncertain_correction"]
     position_hint: str = Field(min_length=1, max_length=200)
 
     @model_validator(mode="after")

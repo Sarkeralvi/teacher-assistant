@@ -101,7 +101,7 @@ def test_thinking_repair_duplicate_hash_is_scoped_to_prompt_contract() -> None:
 
     old_hash = _thinking_repair_input_hash(
         **common,
-        prompt_version="qwen38-final-intent-thinking-repair-v4",
+        prompt_version="qwen38-final-intent-thinking-repair-v5",
     )
     current_hash = _thinking_repair_input_hash(**common)
 

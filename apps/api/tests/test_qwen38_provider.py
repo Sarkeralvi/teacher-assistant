@@ -523,6 +523,49 @@ def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:
     assert result.editing_marks[0].bbox == [0, 300, 1000, 650]
 
 
+def test_thinking_repair_normalizes_retained_status_fractional_box_and_empty_hint() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "surviving visible line",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": "1",
+                                    "bbox": ["0.9", "0.8", "0.1", "0.2"],
+                                    "status": "surviving",
+                                    "position_hint": "",
+                                }
+                            ],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.7,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.repair_transcription_images(
+        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        rejected_transcript="wrong reading",
+    )
+
+    assert result.editing_marks[0].status == "retained"
+    assert result.editing_marks[0].bbox == [100, 200, 900, 800]
+    assert result.editing_marks[0].position_hint == "page 1, normalized visual edit box"
+    assert result.cancellation_detected is False
+    assert result.replacement_detected is False
+
+
 def test_thinking_repair_unsafe_blank_error_is_sanitized() -> None:
     completion = {
         "choices": [

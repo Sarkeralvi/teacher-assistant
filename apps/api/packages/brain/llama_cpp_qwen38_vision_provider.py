@@ -466,6 +466,8 @@ def _normalize_editing_marks(
         if not isinstance(raw, dict):
             raise ValueError(f"edit decision {index + 1} is not an object")
         raw_page = raw.get("page_index")
+        if isinstance(raw_page, str) and re.fullmatch(r"\d+(?:\.0+)?", raw_page.strip()):
+            raw_page = float(raw_page)
         if isinstance(raw_page, bool) or not isinstance(raw_page, int | float):
             raise ValueError(f"edit decision {index + 1} has an invalid page index")
         page_index = int(raw_page)
@@ -474,28 +476,81 @@ def _normalize_editing_marks(
         raw_bbox = raw.get("bbox")
         if not isinstance(raw_bbox, list) or len(raw_bbox) != 4:
             raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
-        coordinates: list[int] = []
+        numeric_coordinates: list[float] = []
         for value in raw_bbox:
+            if isinstance(value, str):
+                try:
+                    value = float(value.strip())
+                except ValueError as exc:
+                    raise ValueError(
+                        f"edit decision {index + 1} has an invalid editing bbox"
+                    ) from exc
             if isinstance(value, bool) or not isinstance(value, int | float):
                 raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
             numeric = float(value)
             if not -25 <= numeric <= 1025:
                 raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
-            coordinates.append(max(0, min(1000, round(numeric))))
+            numeric_coordinates.append(numeric)
+        # Some otherwise valid responses use 0..1 coordinates despite the
+        # requested 0..1000 scale. This changes notation only; the teacher
+        # still reviews the same visual location.
+        if all(0 <= value <= 1 for value in numeric_coordinates):
+            numeric_coordinates = [value * 1000 for value in numeric_coordinates]
+        coordinates = [max(0, min(1000, round(value))) for value in numeric_coordinates]
+        x1, y1, x2, y2 = coordinates
+        coordinates = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+        if coordinates[0] == coordinates[2] or coordinates[1] == coordinates[3]:
+            raise ValueError(f"edit decision {index + 1} has an empty editing bbox")
         status = raw.get("status")
         position_hint = raw.get("position_hint")
-        if not isinstance(status, str) or not isinstance(position_hint, str):
+        if not isinstance(status, str) or (
+            position_hint is not None and not isinstance(position_hint, str)
+        ):
             raise ValueError(f"edit decision {index + 1} is missing visual evidence metadata")
-        normalized.append(
-            EditingMark.model_validate(
+        status_key = re.sub(r"[\s-]+", "_", status.strip().casefold())
+        status_aliases = {
+            "cancelled": "cancelled",
+            "canceled": "cancelled",
+            "crossed_out": "cancelled",
+            "crossedout": "cancelled",
+            "struck_out": "cancelled",
+            "deleted": "cancelled",
+            "replacement": "replacement",
+            "replaced": "replacement",
+            "corrected": "replacement",
+            "overwrite": "replacement",
+            "overwritten": "replacement",
+            "retained": "retained",
+            "surviving": "retained",
+            "survives": "retained",
+            "kept": "retained",
+            "active": "retained",
+            "not_cancelled": "retained",
+            "not_canceled": "retained",
+            "uncertain": "uncertain_correction",
+            "ambiguous": "uncertain_correction",
+            "uncertain_correction": "uncertain_correction",
+            "unclear_correction": "uncertain_correction",
+            "ambiguous_correction": "uncertain_correction",
+        }
+        normalized_status = status_aliases.get(status_key)
+        if normalized_status is None:
+            raise ValueError(f"edit decision {index + 1} has an unsupported status")
+        safe_position_hint = (position_hint or "").strip()[:200]
+        if not safe_position_hint:
+            safe_position_hint = f"page {page_index}, normalized visual edit box"
+        try:
+            mark = EditingMark.model_validate(
                 {
                     "page_index": page_index,
                     "bbox": coordinates,
-                    "status": status.strip().lower(),
-                    "position_hint": position_hint.strip()[:200],
+                    "status": normalized_status,
+                    "position_hint": safe_position_hint,
                 }
             )
-        )
+        except ValidationError as exc:
+            raise ValueError(f"edit decision {index + 1} failed safe normalization") from exc
+        normalized.append(mark)
     if require_nonempty and not normalized:
         raise ValueError("Qwen3.8 thinking repair returned no image-grounded edit decisions")
     return normalized
@@ -946,7 +1001,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "Return exactly this JSON shape with no extra keys: "
             '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
             '"alternatives":["option 1","option 2"]}],"editing_marks":['
-            '{"page_index":1,"bbox":[0,0,1000,1000],"status":"cancelled",'
+            '{"page_index":1,"bbox":[0,0,1000,1000],'
+            '"status":"cancelled|replacement|retained|uncertain_correction",'
             '"position_hint":"location only"}],"cancellation_detected":false,'
             '"replacement_detected":false,"uncertain_correction_detected":false,"is_blank":false,'
             '"is_irrelevant":false,"confidence":0.0,"needs_review":true}. '
@@ -1098,7 +1154,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "Return exactly this JSON shape with no extra keys: "
             '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
             '"alternatives":["option 1","option 2"]}],"editing_marks":['
-            '{"page_index":1,"bbox":[0,0,1000,1000],"status":"cancelled",'
+            '{"page_index":1,"bbox":[0,0,1000,1000],'
+            '"status":"cancelled|replacement|retained|uncertain_correction",'
             '"position_hint":"location and visible stroke basis only"}],'
             '"cancellation_detected":true,"replacement_detected":false,'
             '"uncertain_correction_detected":false,"is_blank":false,'
