@@ -31,8 +31,8 @@ from app.services.local_model_lease_service import LocalModelLeaseError, LocalMo
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
 from packages.brain.schemas_qwen38 import (
-    FINAL_INTENT_PROMPT_VERSION,
-    THINKING_REPAIR_PROMPT_VERSION,
+    SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS,
+    SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS,
 )
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
@@ -976,11 +976,15 @@ class GradingService:
                 or_(
                     and_(
                         AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
-                        AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
+                        AnswerRegionOcrRun.prompt_version.in_(
+                            SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
+                        ),
                     ),
                     and_(
                         AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
-                        AnswerRegionOcrRun.prompt_version == THINKING_REPAIR_PROMPT_VERSION,
+                        AnswerRegionOcrRun.prompt_version.in_(
+                            SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS
+                        ),
                     ),
                 ),
             )
@@ -995,7 +999,9 @@ class GradingService:
             .where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
                 AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
-                AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
+                AnswerRegionOcrRun.prompt_version.in_(
+                    SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
+                ),
             )
             .order_by(AnswerRegionOcrRun.id.desc())
         ).first()
@@ -1006,7 +1012,9 @@ class GradingService:
             .where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
                 AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
-                AnswerRegionOcrRun.prompt_version == THINKING_REPAIR_PROMPT_VERSION,
+                AnswerRegionOcrRun.prompt_version.in_(
+                    SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS
+                ),
             )
             .order_by(AnswerRegionOcrRun.id.desc())
         ).all()

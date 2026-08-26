@@ -188,6 +188,12 @@ function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
   return mapping.provider === "local_paddle_qwen" || mapping.provider === "llama_cpp_qwen38";
 }
 
+const CURRENT_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v3";
+const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
+  "qwen38-final-intent-structured-v2",
+  CURRENT_FINAL_INTENT_PROMPT_VERSION,
+]);
+
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;
   position_hint: string;
@@ -1927,16 +1933,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   : null;
                 const repairDecisions = thinkingRepairDecisions(thinkingRepairRun);
                 const currentFinalIntentRun = Boolean(
-                  visualRun?.prompt_version === "qwen38-final-intent-structured-v2",
+                  visualRun?.prompt_version === CURRENT_FINAL_INTENT_PROMPT_VERSION,
+                );
+                const repairableFinalIntentRun = Boolean(
+                  visualRun?.prompt_version && REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS.has(visualRun.prompt_version),
                 );
                 const confirmedRun = thinkingRepairRun?.status === "confirmed"
                   ? thinkingRepairRun
-                  : !thinkingRepairRun && visualRun?.status === "confirmed" && currentFinalIntentRun
+                  : !thinkingRepairRun && visualRun?.status === "confirmed" && repairableFinalIntentRun
                     ? visualRun
                     : null;
                 const legacyRetranscriptionRequired = Boolean(
                   visualRun &&
                   !currentFinalIntentRun &&
+                  visualRun.status !== "confirmed" &&
                   mapping.answer_region_id &&
                   !gradedRegionIds.has(mapping.answer_region_id) &&
                   !finalizedRegionIds.has(mapping.answer_region_id),
@@ -2065,7 +2075,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             <p className="text-xs text-slate-300">Run #{visualRun.id} · {visualRun.status} · {visualRun.calls_used}/{visualRun.call_limit} visual calls · {visualRun.prompt_version ?? "legacy prompt"}</p>
                             {legacyRetranscriptionRequired ? (
                               <p className="rounded border border-amber-800 bg-amber-950/20 p-2 text-xs text-amber-100">
-                                This transcript used the retired include-crossed-out rules. It cannot authorize a new grade; re-transcribe it with final-intent rules.
+                                This transcript used an older cancellation policy. It cannot be directly confirmed; re-transcribe with the conservative policy or use the explicit Thinking repair.
                               </p>
                             ) : null}
                             {visualRun.error ? <p className="text-xs text-red-200">{visualRun.error}</p> : null}
@@ -2089,7 +2099,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             </div> : null}
                           </div>
                         ) : null}
-                        {visualRun && currentFinalIntentRun && ["succeeded", "confirmed", "rejected"].includes(visualRun.status) && !thinkingRepairRun && mapping.answer_region_id && !gradedRegionIds.has(mapping.answer_region_id) && !finalizedRegionIds.has(mapping.answer_region_id) ? (
+                        {visualRun && repairableFinalIntentRun && ["succeeded", "confirmed", "rejected"].includes(visualRun.status) && !thinkingRepairRun && mapping.answer_region_id && !gradedRegionIds.has(mapping.answer_region_id) && !finalizedRegionIds.has(mapping.answer_region_id) ? (
                           <button
                             className="rounded border border-violet-500 bg-violet-950/40 px-3 py-2 font-semibold text-violet-100 disabled:opacity-50"
                             type="button"

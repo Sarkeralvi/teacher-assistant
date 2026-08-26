@@ -8,6 +8,8 @@ from app.services.qwen38_visual_transcription_service import (
     Qwen38VisualTranscriptionService,
     VisualTranscriptionError,
     _repair_decision_hash,
+    _repair_source_text,
+    _source_run_has_repairable_output,
 )
 from packages.brain.schemas_qwen38 import THINKING_REPAIR_PROMPT_VERSION
 
@@ -22,7 +24,7 @@ def test_legacy_include_crossed_out_transcript_cannot_be_confirmed() -> None:
     )
     teacher = SimpleNamespace(id=7)
 
-    with pytest.raises(VisualTranscriptionError, match="retired include-crossed-out rules"):
+    with pytest.raises(VisualTranscriptionError, match="older cancellation policy"):
         service.confirm(
             region,  # type: ignore[arg-type]
             run,  # type: ignore[arg-type]
@@ -65,6 +67,28 @@ def test_thinking_repair_has_an_independent_disabled_by_default_kill_switch() ->
 
     with pytest.raises(VisualTranscriptionError, match="thinking repair is disabled"):
         service._assert_thinking_repair_enabled("qwen3.8-27b-q4km")
+
+
+def test_thinking_repair_can_rescue_an_unsafe_model_blank() -> None:
+    source = SimpleNamespace(
+        draft_text="",
+        normalized_result={
+            "is_blank": True,
+            "editing_analysis": {
+                "editing_marks": [
+                    {
+                        "page_index": 1,
+                        "bbox": [10, 10, 990, 990],
+                        "status": "cancelled",
+                        "position_hint": "whole page claim",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert _source_run_has_repairable_output(source) is True  # type: ignore[arg-type]
+    assert "returned blank" in _repair_source_text(source)  # type: ignore[arg-type]
 
 
 def test_thinking_repair_requires_teacher_review_of_every_editing_decision(

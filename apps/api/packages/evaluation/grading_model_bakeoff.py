@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
 from packages.evaluation import local_curated_evaluation as evaluation
 
 BAKEOFF_SCHEMA_VERSION = 1
@@ -501,7 +502,7 @@ def seed_grading_bakeoff_candidate(
                 profile="qwen38_verbatim_visual",
                 task_kind="locked_bakeoff_evidence_replay",
                 reasoning_mode="off",
-                prompt_version="qwen38-final-intent-structured-v2",
+                prompt_version=FINAL_INTENT_PROMPT_VERSION,
                 source_image_sha256=source_case.source_image_sha256,
                 source_image_hashes=source_case.source_image_hashes,
                 input_manifest_sha256=source_case.source_image_sha256,

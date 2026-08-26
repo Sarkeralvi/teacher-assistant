@@ -18,6 +18,7 @@ from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, sanitize_provider_error
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
+    SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS,
     THINKING_REPAIR_PROMPT_VERSION,
 )
 
@@ -33,6 +34,18 @@ def _sha256_joined(parts: list[str]) -> str:
 def _repair_decision_hash(decisions: list[dict[str, Any]]) -> str:
     encoded = json.dumps(decisions, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _source_run_has_repairable_output(run: AnswerRegionOcrRun) -> bool:
+    """A model-blank result is repairable when visible writing may have been deleted."""
+
+    return bool((run.draft_text or "").strip()) or bool(
+        (run.normalized_result or {}).get("is_blank")
+    )
+
+
+def _repair_source_text(run: AnswerRegionOcrRun) -> str:
+    return run.draft_text or "[source model returned blank despite visible student writing]"
 
 
 class Qwen38VisualTranscriptionService:
@@ -142,9 +155,9 @@ class Qwen38VisualTranscriptionService:
         if (
             source_run.answer_region_id != region.id
             or source_run.profile != "qwen38_verbatim_visual"
-            or source_run.prompt_version != FINAL_INTENT_PROMPT_VERSION
+            or source_run.prompt_version not in SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
             or source_run.status not in {"succeeded", "confirmed", "rejected"}
-            or not (source_run.draft_text or "").strip()
+            or not _source_run_has_repairable_output(source_run)
         ):
             raise VisualTranscriptionError(
                 "Thinking repair requires a completed current final-intent transcript"
@@ -375,8 +388,9 @@ class Qwen38VisualTranscriptionService:
             )
         if run.prompt_version != FINAL_INTENT_PROMPT_VERSION:
             raise VisualTranscriptionError(
-                "This transcript used retired include-crossed-out rules; run final-intent "
-                "transcription before confirmation"
+                "This transcript used an older cancellation policy; run the current "
+                "conservative final-intent transcription before direct confirmation, or use "
+                "the explicit thinking repair"
             )
         is_blank = bool((run.normalized_result or {}).get("is_blank"))
         if run.status != "succeeded" or (not run.draft_text and not is_blank):
@@ -457,7 +471,7 @@ class Qwen38VisualTranscriptionService:
             if (
                 source_run is None
                 or source_run.answer_region_id != region.id
-                or not (source_run.draft_text or "").strip()
+                or not _source_run_has_repairable_output(source_run)
             ):
                 raise VisualTranscriptionError("Source transcript is no longer available")
             source_draft_hash = hashlib.sha256(
@@ -494,7 +508,7 @@ class Qwen38VisualTranscriptionService:
                 self.db.commit()
                 result = provider.repair_transcription_images(
                     images=images,
-                    rejected_transcript=source_run.draft_text,
+                    rejected_transcript=_repair_source_text(source_run),
                 )
                 lease.heartbeat(holder_id=lease_holder_id)
 

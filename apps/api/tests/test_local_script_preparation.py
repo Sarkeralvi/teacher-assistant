@@ -32,7 +32,9 @@ from app.services.local_script_preparation import (
     PreparedSegment,
     _apply_adjacent_continuation_boundary_fallback,
     _cleaned_whole_image,
+    _stabilize_visual_page_regions,
 )
+from packages.brain.schemas_qwen38 import VisualPageRegion
 
 
 @pytest.fixture()
@@ -95,6 +97,71 @@ def test_cleaned_whole_image_removes_red_marker_but_preserves_black_ink(
         red_point = (round((32 + 30) * scale), round((32 + 28) * scale))
         assert cleaned.getpixel(black_point) < 64
         assert cleaned.getpixel(red_point) > 245
+
+
+def test_visual_region_hardening_preserves_full_width_shared_setup_and_final_line(
+    tmp_path: Path,
+) -> None:
+    page_path = tmp_path / "single-answer.png"
+    page = Image.new("RGB", (1200, 1700), "white")
+    draw = ImageDraw.Draw(page)
+    draw.text((80, 180), "shared givens", fill="black")
+    draw.text((700, 1550), "right-side final result", fill="black")
+    page.save(page_path)
+    region = VisualPageRegion(
+        question_label="1(b)(i)",
+        bbox=[70, 650, 910, 940],
+        continues_from_previous=False,
+        continues_to_next=False,
+        confidence=Decimal("0.9"),
+        warnings=[],
+    )
+
+    [stabilized] = _stabilize_visual_page_regions(
+        regions=[region],
+        image_path=page_path,
+        page_id=4,
+        page_no=3,
+        page_width=page.width,
+        page_height=page.height,
+    )
+
+    assert stabilized.segment.x == 0
+    assert stabilized.segment.width == page.width
+    assert stabilized.segment.y == 0
+    assert stabilized.segment.y + stabilized.segment.height == page.height
+    warnings = " ".join(stabilized.warnings)
+    assert "shared givens" in warnings
+    assert "full page width" in warnings
+    assert "page bottom" in warnings
+
+
+def test_visual_region_hardening_keeps_a_suspicious_low_continuation_anchor(
+    tmp_path: Path,
+) -> None:
+    page_path = tmp_path / "continuation-and-next-part.png"
+    Image.new("RGB", (1000, 1000), "white").save(page_path)
+    region = VisualPageRegion(
+        question_label="1(a)(i)",
+        bbox=[100, 350, 900, 700],
+        continues_from_previous=True,
+        continues_to_next=False,
+        confidence=Decimal("0.7"),
+        warnings=[],
+    )
+
+    [stabilized] = _stabilize_visual_page_regions(
+        regions=[region],
+        image_path=page_path,
+        page_id=2,
+        page_no=2,
+        page_width=1000,
+        page_height=1000,
+    )
+
+    # The adjacent-question fallback needs this unassigned top strip to remain
+    # visible; blindly extending every alleged continuation would hide it.
+    assert stabilized.segment.y > 0
 
 
 def test_adjacent_blank_after_multi_page_answer_gets_uncertain_shared_boundary() -> None:

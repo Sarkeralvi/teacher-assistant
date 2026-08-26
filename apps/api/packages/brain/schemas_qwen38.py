@@ -13,8 +13,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
-THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v1"
+FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v3"
+LEGACY_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
+SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS = (
+    LEGACY_FINAL_INTENT_PROMPT_VERSION,
+    FINAL_INTENT_PROMPT_VERSION,
+)
+THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v2"
+LEGACY_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v1"
+SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS = (
+    LEGACY_THINKING_REPAIR_PROMPT_VERSION,
+    THINKING_REPAIR_PROMPT_VERSION,
+)
 
 
 class UncertainGlyph(BaseModel):
@@ -114,6 +124,10 @@ class VisualTranscriptionOutput(BaseModel):
             raise ValueError("blank visual transcriptions must use an empty draft_text")
         if not self.is_blank and not self.draft_text.strip():
             raise ValueError("nonblank visual transcriptions require draft_text")
+        if self.is_blank and self.editing_marks:
+            raise ValueError(
+                "a region with visible cancellation or replacement marks is not genuinely blank"
+            )
         statuses = {mark.status for mark in self.editing_marks}
         expected = {
             "cancelled": self.cancellation_detected,

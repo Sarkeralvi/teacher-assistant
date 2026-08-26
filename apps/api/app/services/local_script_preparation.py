@@ -48,6 +48,15 @@ class PreparedSegment:
 
 
 @dataclass(frozen=True)
+class StabilizedVisualRegion:
+    """A model-labelled region after deterministic page-boundary hardening."""
+
+    model_region: Any
+    segment: PreparedSegment
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
 class _ScriptPageReading:
     """One script page as tier-1 OCR saw it, plus whether detection can be trusted."""
 
@@ -209,26 +218,28 @@ class LocalScriptPreparationService:
                             raise LocalScriptPreparationError(
                                 "Qwen3.8 returned an unknown finalized question"
                             )
-                        x1, y1, x2, y2 = region.bbox
-                        with Image.open(image_path) as image:
-                            x, y, width, height = _normalized_box_to_page_box(
-                                x1, y1, x2, y2, image.width, image.height
-                            )
-                        segments_by_question[question.id].append(
-                            PreparedSegment(
-                                page_id=page.id,
-                                page_no=page.page_no,
-                                x=x,
-                                y=y,
-                                width=width,
-                                height=height,
-                                block_orders=[],
-                            )
+                    with Image.open(image_path) as image:
+                        page_height = image.height
+                        stabilized_regions = _stabilize_visual_page_regions(
+                            regions=result.regions,
+                            image_path=image_path,
+                            page_id=page.id,
+                            page_no=page.page_no,
+                            page_width=image.width,
+                            page_height=image.height,
                         )
+                    for stabilized in stabilized_regions:
+                        region = stabilized.model_region
+                        question = question_by_label[region.question_label.casefold()]
+                        segment = stabilized.segment
+                        segments_by_question[question.id].append(segment)
                         confidence_by_question[question.id].append(region.confidence)
-                        warning_by_question[question.id].extend(region.warnings)
-                        reaches_page_bottom = (
-                            int(y2) >= 850 and page.page_no < pages[-1].page_no
+                        warning_by_question[question.id].extend(
+                            [*region.warnings, *stabilized.warnings]
+                        )
+                        reaches_page_bottom = bool(
+                            float(segment.y + segment.height) >= page_height * 0.88
+                            and page.page_no < pages[-1].page_no
                         )
                         if reaches_page_bottom and not region.continues_to_next:
                             warning_by_question[question.id].append(
@@ -249,6 +260,9 @@ class LocalScriptPreparationService:
             confidence_by_question=confidence_by_question,
         )
         unassigned_pages = self._detect_unassigned_content(pages, segments_by_question)
+        unassigned_page_numbers = {
+            int(item["page_no"]) for item in unassigned_pages if not item["blank"]
+        }
 
         created: list[AnswerRegionMapping] = []
         for question in questions_to_persist:
@@ -266,6 +280,14 @@ class LocalScriptPreparationService:
             # NOT place. Those are the ones the missed ink might belong to, and
             # attaching it to every mapping would bury the signal.
             page_warnings: list[str] = []
+            mapped_uncovered_pages = sorted(
+                {segment.page_no for segment in segments} & unassigned_page_numbers
+            )
+            for page_no in mapped_uncovered_pages:
+                page_warnings.append(
+                    f"page {page_no} still has handwriting outside every prepared answer "
+                    "band; do not confirm this mapping until the missing content is resolved"
+                )
             if not segments:
                 for finding in unassigned_pages:
                     if finding["blank"]:
@@ -801,24 +823,23 @@ class LocalScriptPreparationService:
                         raise LocalScriptPreparationError(
                             "Qwen3.8 returned an unknown finalized question"
                         )
-                    x1, y1, x2, y2 = region.bbox
-                    with Image.open(image_path) as image:
-                        x, y, width, height = _normalized_box_to_page_box(
-                            x1, y1, x2, y2, image.width, image.height
-                        )
-                    segments_by_question[question.id].append(
-                        PreparedSegment(
-                            page_id=item.page.id,
-                            page_no=item.page.page_no,
-                            x=x,
-                            y=y,
-                            width=width,
-                            height=height,
-                            block_orders=[],
-                        )
+                with Image.open(image_path) as image:
+                    stabilized_regions = _stabilize_visual_page_regions(
+                        regions=result.regions,
+                        image_path=image_path,
+                        page_id=item.page.id,
+                        page_no=item.page.page_no,
+                        page_width=image.width,
+                        page_height=image.height,
                     )
+                for stabilized in stabilized_regions:
+                    region = stabilized.model_region
+                    question = question_by_label[region.question_label.casefold()]
+                    segments_by_question[question.id].append(stabilized.segment)
                     confidence_by_question[question.id].append(region.confidence)
-                    warning_by_question[question.id].extend(region.warnings)
+                    warning_by_question[question.id].extend(
+                        [*region.warnings, *stabilized.warnings]
+                    )
                     warning_by_question[question.id].append(
                         f"page {item.page.page_no} was located by the vision model because the "
                         "first-pass reader could not; check this region most closely"
@@ -1117,6 +1138,16 @@ class LocalScriptPreparationService:
                 or warning.startswith("ambiguous OCR block claim was withheld")
                 for warning in warning_by_question[question.id]
             )
+            mapped_uncovered_pages = sorted(
+                {segment.page_no for segment in segments} & unassigned_page_numbers
+            )
+            if mapped_uncovered_pages:
+                is_uncertain = True
+                warning_by_question[question.id].extend(
+                    f"page {page_no} still has handwriting outside every prepared answer "
+                    "band; do not confirm until the missing content is resolved"
+                    for page_no in mapped_uncovered_pages
+                )
             draft = {
                 "status": (
                     "uncertain"
@@ -1959,6 +1990,155 @@ def _normalized_box_to_page_box(
     if right <= left or bottom <= top:
         raise LocalScriptPreparationError("Qwen3.8 returned an invalid visual mapping box")
     return Decimal(left), Decimal(top), Decimal(right - left), Decimal(bottom - top)
+
+
+def _find_low_ink_page_boundary(
+    *,
+    image_path: Path,
+    previous_bottom: int,
+    next_top: int,
+    page_height: int,
+) -> int:
+    """Choose a deterministic low-ink separator near two model anchors.
+
+    Qwen is used for question identity and approximate vertical anchors only.
+    The server owns the actual boundary.  A low-ink row is materially safer
+    than bisecting a fraction, complement bar, or descender at an arbitrary
+    midpoint.  Geometry remains the fallback if the image cannot be analysed.
+    """
+
+    midpoint = max(1, min(page_height - 1, round((previous_bottom + next_top) / 2)))
+    radius = max(16, round(page_height * 0.04))
+    search_top = max(1, min(previous_bottom, next_top) - radius)
+    search_bottom = min(page_height - 1, max(previous_bottom, next_top) + radius)
+    if search_bottom - search_top < 5:
+        return midpoint
+    try:
+        import numpy as np  # noqa: PLC0415
+
+        with Image.open(image_path) as source:
+            rgb = np.asarray(source.convert("RGB"))
+        left = max(0, round(rgb.shape[1] * 0.02))
+        right = min(rgb.shape[1], round(rgb.shape[1] * 0.98))
+        sample = rgb[search_top:search_bottom, left:right]
+        if sample.size == 0:
+            return midpoint
+        red, green, blue = (
+            sample[:, :, 0].astype(np.int16),
+            sample[:, :, 1].astype(np.int16),
+            sample[:, :, 2].astype(np.int16),
+        )
+        luminance = (299 * red + 587 * green + 114 * blue) // 1000
+        teacher_red = (red > 110) & (red > green + 35) & (red > blue + 35)
+        row_ink = ((luminance <= 150) & ~teacher_red).sum(axis=1).astype(float)
+        if row_ink.size >= 5:
+            row_ink = np.convolve(row_ink, np.ones(5), mode="same")
+        rows = np.arange(search_top, search_bottom)
+        # Ink count is authoritative; distance only breaks equally blank ties.
+        score = row_ink + np.abs(rows - midpoint) * 0.001
+        boundary = int(rows[int(np.argmin(score))])
+        return max(1, min(page_height - 1, boundary))
+    except Exception:
+        return midpoint
+
+
+def _stabilize_visual_page_regions(
+    *,
+    regions: list[Any],
+    image_path: Path,
+    page_id: int,
+    page_no: int,
+    page_width: int,
+    page_height: int,
+) -> list[StabilizedVisualRegion]:
+    """Turn Qwen's rough boxes into conservative, non-truncating page bands.
+
+    The vision model decides *which question* owns a visible area.  It is not
+    trusted to place pixel-tight crop edges.  The server expands every band to
+    the full page width, preserves leading shared setup for the first visible
+    answer, and uses low-ink separators between adjacent answers.  A final band
+    that already reaches the lower fifth is extended to the page bottom.
+
+    This deliberately prefers a little blank margin over losing mark-bearing
+    handwriting.  Every result remains uncertain until the teacher compares
+    the rectangle with the complete source page.
+    """
+
+    if not regions:
+        return []
+    ordered = sorted(regions, key=lambda item: (int(item.bbox[1]), int(item.bbox[3])))
+    pad_y = max(8, round(page_height * 0.02))
+    overlap = max(4, round(page_height * 0.005))
+    raw_tops = [round(page_height * int(item.bbox[1]) / 1000) for item in ordered]
+    raw_bottoms = [round(page_height * int(item.bbox[3]) / 1000) for item in ordered]
+    tops = [max(0, value - pad_y) for value in raw_tops]
+    bottoms = [min(page_height, value + pad_y) for value in raw_bottoms]
+    warning_lists: list[list[str]] = [[] for _item in ordered]
+
+    first = ordered[0]
+    # A genuine continuation should begin near the top.  If Qwen places an
+    # alleged continuation much lower, keep its anchor so the existing
+    # adjacent-question fallback can preserve the unassigned top strip.
+    if not first.continues_from_previous or int(first.bbox[1]) <= 250:
+        if tops[0] > 0:
+            warning_lists[0].append(
+                "server extended the first visible answer to the page top so headings, "
+                "shared givens, preliminary work, and crossed-out setup cannot be truncated"
+            )
+        tops[0] = 0
+
+    for index in range(len(ordered) - 1):
+        boundary = _find_low_ink_page_boundary(
+            image_path=image_path,
+            previous_bottom=raw_bottoms[index],
+            next_top=raw_tops[index + 1],
+            page_height=page_height,
+        )
+        previous_bottom = min(page_height, boundary + overlap)
+        next_top = max(0, boundary - overlap)
+        bottoms[index] = max(tops[index] + 1, previous_bottom)
+        tops[index + 1] = min(bottoms[index + 1] - 1, next_top)
+        warning = (
+            "server replaced tight model crop edges with a low-ink page partition; the "
+            "small overlap protects handwriting that crosses the separator"
+        )
+        warning_lists[index].append(warning)
+        warning_lists[index + 1].append(warning)
+
+    if int(ordered[-1].bbox[3]) >= 780:
+        if bottoms[-1] < page_height:
+            warning_lists[-1].append(
+                "server extended the final near-bottom answer band to the page bottom to "
+                "preserve final lines, units, and trailing working"
+            )
+        bottoms[-1] = page_height
+
+    stabilized: list[StabilizedVisualRegion] = []
+    for index, region in enumerate(ordered):
+        top = max(0, min(tops[index], page_height - 1))
+        bottom = max(top + 1, min(bottoms[index], page_height))
+        warnings = warning_lists[index]
+        if int(region.bbox[0]) > 0 or int(region.bbox[2]) < 1000:
+            warnings.append(
+                "server expanded the answer band to full page width so left headings, "
+                "fraction work, and right-side results cannot be cut off"
+            )
+        stabilized.append(
+            StabilizedVisualRegion(
+                model_region=region,
+                segment=PreparedSegment(
+                    page_id=page_id,
+                    page_no=page_no,
+                    x=Decimal("0"),
+                    y=Decimal(top),
+                    width=Decimal(page_width),
+                    height=Decimal(bottom - top),
+                    block_orders=[],
+                ),
+                warnings=list(dict.fromkeys(warnings)),
+            )
+        )
+    return stabilized
 
 
 def _apply_adjacent_continuation_boundary_fallback(

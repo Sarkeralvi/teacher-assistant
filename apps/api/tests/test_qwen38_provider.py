@@ -159,6 +159,8 @@ def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None
     assert "exactly one JSON object" in client.requests[0]["messages"][0]["content"]
     assert "FINAL INTENDED ANSWER" in client.requests[0]["messages"][0]["content"]
     assert "Cancelled content must not appear" in client.requests[0]["messages"][0]["content"]
+    assert "One horizontal or diagonal stroke" in client.requests[0]["messages"][0]["content"]
+    assert "teacher ticks" in client.requests[0]["messages"][0]["content"]
     user_prompt = client.requests[0]["messages"][1]["content"][0]["text"]
     assert "surviving final work" in user_prompt
     assert "Preserve every written mistake" not in user_prompt
@@ -469,6 +471,48 @@ def test_visual_transcription_keeps_blank_evidence_empty() -> None:
     assert '"draft_text"' in prompt
 
 
+def test_visual_transcription_rejects_model_blank_when_editing_marks_are_visible() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 100, 900, 900],
+                                    "status": "cancelled",
+                                    "position_hint": "model claimed the whole written area",
+                                }
+                            ],
+                            "cancellation_detected": True,
+                            "replacement_detected": False,
+                            "uncertain_correction_detected": False,
+                            "is_blank": True,
+                            "is_irrelevant": False,
+                            "confidence": 0.95,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(ValueError, match="schema mismatch"):
+        provider.transcribe_image(
+            image_bytes=b"\x89PNG\r\n\x1a\nimage",
+            mime_type="image/png",
+            label="1(c)(i)",
+        )
+
+
 def test_reference_bundle_uses_a_bounded_nonthinking_response() -> None:
     completion = {
         "choices": [
@@ -652,6 +696,9 @@ def test_page_mapping_uses_question_identity_without_grading_student_work() -> N
     assert "last line of an open continuation" in prompt
     assert "include shared setup" in prompt
     assert "Do not return only the final formula" in prompt
+    assert "full writable page width" in prompt
+    assert "scan the whole page" in prompt
+    assert "do not choose a narrow crop" in prompt
     assert "0.38" not in prompt
     assert "rubric" not in prompt.casefold()
 
