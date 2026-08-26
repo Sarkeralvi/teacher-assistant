@@ -193,6 +193,7 @@ const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   "qwen38-final-intent-structured-v2",
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
+const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v3";
 
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;
@@ -1926,10 +1927,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       .filter((run) => run.profile === "qwen38_verbatim_visual")
                       .sort((left, right) => right.id - left.id)[0] ?? null
                   : null;
-                const thinkingRepairRun = mapping.answer_region_id
+                const thinkingRepairRuns = mapping.answer_region_id
                   ? [...(ocrRunsByRegionId[mapping.answer_region_id] ?? [])]
                       .filter((run) => run.profile === "qwen38_thinking_repair" && run.normalized_result?.source_run_id === visualRun?.id)
-                      .sort((left, right) => right.id - left.id)[0] ?? null
+                      .sort((left, right) => right.id - left.id)
+                  : [];
+                const thinkingRepairRun = thinkingRepairRuns[0] ?? null;
+                const hasCurrentThinkingRepairRun = thinkingRepairRuns.some(
+                  (run) => run.prompt_version === CURRENT_THINKING_REPAIR_PROMPT_VERSION,
+                );
+                const thinkingRepairFailureCode = typeof thinkingRepairRun?.normalized_result?.failure_code === "string"
+                  ? thinkingRepairRun.normalized_result.failure_code
                   : null;
                 const repairDecisions = thinkingRepairDecisions(thinkingRepairRun);
                 const currentFinalIntentRun = Boolean(
@@ -2099,7 +2107,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             </div> : null}
                           </div>
                         ) : null}
-                        {visualRun && repairableFinalIntentRun && ["succeeded", "confirmed", "rejected"].includes(visualRun.status) && !thinkingRepairRun && mapping.answer_region_id && !gradedRegionIds.has(mapping.answer_region_id) && !finalizedRegionIds.has(mapping.answer_region_id) ? (
+                        {visualRun && repairableFinalIntentRun && ["succeeded", "confirmed", "rejected"].includes(visualRun.status) && !hasCurrentThinkingRepairRun && thinkingRepairRun?.status !== "confirmed" && mapping.answer_region_id && !gradedRegionIds.has(mapping.answer_region_id) && !finalizedRegionIds.has(mapping.answer_region_id) ? (
                           <button
                             className="rounded border border-violet-500 bg-violet-950/40 px-3 py-2 font-semibold text-violet-100 disabled:opacity-50"
                             type="button"
@@ -2108,7 +2116,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           >
                             {repairingOcrRegionId === mapping.answer_region_id
                               ? "Qwen3.8 Thinking is adjudicating visible edits..."
-                              : "Repair cancellation interpretation with Qwen3.8 Thinking"}
+                              : thinkingRepairRun?.status === "failed"
+                                ? "Start corrected Thinking repair"
+                                : "Repair cancellation interpretation with Qwen3.8 Thinking"}
                           </button>
                         ) : null}
                         {thinkingRepairRun ? (
@@ -2119,6 +2129,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               <p className="mt-1 text-xs text-amber-200">Reasoning is advisory only. Verify every numbered visual box; mathematical plausibility is not evidence.</p>
                             </div>
                             {thinkingRepairRun.error ? <p className="text-xs text-red-200">{thinkingRepairRun.error}</p> : null}
+                            {thinkingRepairFailureCode ? <p className="text-xs text-red-300">Failure category: {thinkingRepairFailureCode.replaceAll("_", " ")}</p> : null}
                             {thinkingRepairRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{thinkingRepairRun.draft_text}</pre> : null}
                             {repairDecisions.length > 0 ? (
                               <fieldset className="grid gap-2 rounded border border-slate-700 p-3">

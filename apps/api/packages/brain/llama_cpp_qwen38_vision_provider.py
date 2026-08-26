@@ -274,6 +274,36 @@ class _Qwen38TranscriptionPayload(BaseModel):
         return self
 
 
+class _Qwen38ThinkingRepairPayload(BaseModel):
+    """Repair-only output contract for disputed visible writing.
+
+    The model's boolean summaries are advisory. The provider derives them from
+    validated visual decisions so a contradictory flag cannot discard an
+    otherwise reviewable box or silently change its meaning.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    draft_text: str = Field(min_length=1)
+    uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
+    editing_marks: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    cancellation_detected: bool = False
+    replacement_detected: bool = False
+    uncertain_correction_detected: bool = False
+    # A repair is authorized only for disputed visible writing. Calling that
+    # image blank is unsafe even when every visible line was cancelled.
+    is_blank: bool
+    is_irrelevant: bool = False
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    needs_review: bool | None = None
+
+    @model_validator(mode="after")
+    def repair_requires_visible_output(self) -> _Qwen38ThinkingRepairPayload:
+        if not self.draft_text.strip():
+            raise ValueError("thinking repair requires a nonblank review draft")
+        return self
+
+
 class _Qwen38PageMappingPayload(BaseModel):
     """Model-owned mapping fields; review status is set by the server."""
 
@@ -305,6 +335,110 @@ def _strip_json_fence(content: str) -> str:
     body = text[newline + 1 :]
     closing = body.rfind("```")
     return body[:closing].strip() if closing != -1 else body.strip()
+
+
+class Qwen38ThinkingRepairOutputError(RuntimeError):
+    """Sanitized, machine-readable failure for a single repair call."""
+
+    def __init__(self, failure_code: str, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.failure_code = failure_code
+
+
+def _safe_completion_diagnostics(message: str) -> str:
+    match = re.search(
+        r"finish_reason=([^\s)]+) prompt_tokens=([^\s)]+) "
+        r"completion_tokens=([^\s)]+) requested_max_tokens=([^\s)]+)",
+        message,
+    )
+    if match is None:
+        return ""
+    finish_reason, prompt_tokens, completion_tokens, requested_max_tokens = match.groups()
+    return (
+        " (finish_reason="
+        f"{finish_reason}, prompt_tokens={prompt_tokens}, "
+        f"completion_tokens={completion_tokens}, requested_max_tokens={requested_max_tokens})"
+    )
+
+
+def _thinking_repair_output_error(exc: Exception) -> Qwen38ThinkingRepairOutputError:
+    if isinstance(exc, Qwen38ThinkingRepairOutputError):
+        return exc
+    message = str(exc)
+    diagnostics = _safe_completion_diagnostics(message)
+    if "cut off before finishing" in message or "finish_reason=length" in message:
+        code = "thinking_repair_output_truncated"
+        summary = "Qwen3.8 Thinking ran out of output space before the repair JSON finished"
+    elif "not valid JSON" in message:
+        code = "thinking_repair_malformed_json"
+        summary = "Qwen3.8 Thinking did not return a valid repair JSON object"
+    elif "schema mismatch" in message:
+        code = "thinking_repair_schema_mismatch"
+        summary = "Qwen3.8 Thinking returned JSON that did not match the safe repair contract"
+    elif "empty choices" in message or "empty content" in message:
+        code = "thinking_repair_empty_response"
+        summary = "Qwen3.8 Thinking returned no repair result"
+    elif "completion request failed" in message:
+        code = "thinking_repair_provider_request_failed"
+        summary = "The local Qwen3.8 repair request failed before a valid result was received"
+    elif "blank" in message:
+        code = "thinking_repair_unsafe_blank"
+        summary = "Qwen3.8 Thinking classified disputed visible writing as blank"
+    elif "edit decision" in message or "editing bbox" in message:
+        code = "thinking_repair_invalid_decisions"
+        summary = "Qwen3.8 Thinking returned invalid or missing visual edit decisions"
+    else:
+        code = "thinking_repair_output_contract_failed"
+        summary = "Qwen3.8 Thinking failed the safe repair output contract"
+    return Qwen38ThinkingRepairOutputError(
+        code,
+        f"{summary}{diagnostics}. No transcript was accepted.",
+    )
+
+
+def _normalize_thinking_repair_marks(
+    raw_marks: list[dict[str, Any]], *, page_count: int
+) -> list[EditingMark]:
+    """Normalize harmless numeric formatting while rejecting ambiguous boxes."""
+
+    normalized: list[EditingMark] = []
+    for index, raw in enumerate(raw_marks):
+        if not isinstance(raw, dict):
+            raise ValueError(f"edit decision {index + 1} is not an object")
+        raw_page = raw.get("page_index")
+        if isinstance(raw_page, bool) or not isinstance(raw_page, (int, float)):
+            raise ValueError(f"edit decision {index + 1} has an invalid page index")
+        page_index = int(raw_page)
+        if float(raw_page) != page_index or not 1 <= page_index <= page_count:
+            raise ValueError(f"edit decision {index + 1} has an invalid page index")
+        raw_bbox = raw.get("bbox")
+        if not isinstance(raw_bbox, list) or len(raw_bbox) != 4:
+            raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
+        coordinates: list[int] = []
+        for value in raw_bbox:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
+            numeric = float(value)
+            if not -25 <= numeric <= 1025:
+                raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
+            coordinates.append(max(0, min(1000, round(numeric))))
+        status = raw.get("status")
+        position_hint = raw.get("position_hint")
+        if not isinstance(status, str) or not isinstance(position_hint, str):
+            raise ValueError(f"edit decision {index + 1} is missing visual evidence metadata")
+        normalized.append(
+            EditingMark.model_validate(
+                {
+                    "page_index": page_index,
+                    "bbox": coordinates,
+                    "status": status.strip().lower(),
+                    "position_hint": position_hint.strip()[:200],
+                }
+            )
+        )
+    if not normalized:
+        raise ValueError("Qwen3.8 thinking repair returned no image-grounded edit decisions")
+    return normalized
 
 
 # ── Main provider class ───────────────────────────────────────────────────
@@ -846,20 +980,36 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         try:
             payload, usage = self._structured_completion(
                 messages=messages,
-                response_model=_Qwen38TranscriptionPayload,
+                response_model=_Qwen38ThinkingRepairPayload,
                 schema_name="visual_transcription_thinking_repair",
                 max_tokens=max_tokens,
                 temperature=0.0,
                 enable_thinking=True,
             )
+            assert isinstance(payload, _Qwen38ThinkingRepairPayload)
+            if payload.is_blank:
+                raise ValueError("thinking repair unsafe blank classification")
+            editing_marks = _normalize_thinking_repair_marks(
+                payload.editing_marks,
+                page_count=len(images),
+            )
+            statuses = {mark.status for mark in editing_marks}
+            cancellation_detected = "cancelled" in statuses
+            replacement_detected = "replacement" in statuses
+            uncertain_correction_detected = "uncertain_correction" in statuses
+            if (
+                uncertain_correction_detected
+                and "[unclear correction]" not in payload.draft_text
+            ):
+                raise ValueError(
+                    "uncertain edit decision was not preserved in the repair draft"
+                )
         except Exception as exc:
-            # Do not persist model content or the untrusted student transcript
-            # through a validation error. Operators still get a precise stage.
-            raise RuntimeError("Qwen3.8 thinking repair failed strict output validation") from exc
+            # Never persist model content or the untrusted student transcript
+            # through a validation error. The category and token diagnostics
+            # are safe to expose and make a failed one-call run actionable.
+            raise _thinking_repair_output_error(exc) from exc
         latency_ms = int((time.perf_counter() - start) * 1000)
-        assert isinstance(payload, _Qwen38TranscriptionPayload)
-        if not payload.editing_marks:
-            raise ValueError("Qwen3.8 thinking repair returned no image-grounded edit decisions")
 
         uncertain_glyphs: list[UncertainGlyph] = []
         for raw in payload.uncertain_glyphs:
@@ -871,12 +1021,12 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         return VisualTranscriptionOutput(
             draft_text=payload.draft_text,
             uncertain_glyphs=uncertain_glyphs,
-            editing_marks=payload.editing_marks,
-            cancellation_detected=payload.cancellation_detected,
-            replacement_detected=payload.replacement_detected,
-            uncertain_correction_detected=payload.uncertain_correction_detected,
-            is_blank=payload.is_blank,
-            is_irrelevant=payload.is_irrelevant,
+            editing_marks=editing_marks,
+            cancellation_detected=cancellation_detected,
+            replacement_detected=replacement_detected,
+            uncertain_correction_detected=uncertain_correction_detected,
+            is_blank=False,
+            is_irrelevant=False,
             confidence=payload.confidence,
             needs_review=True,
             model_provider=self.provider_name,

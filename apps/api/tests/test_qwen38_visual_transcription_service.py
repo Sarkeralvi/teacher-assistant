@@ -10,6 +10,7 @@ from app.services.qwen38_visual_transcription_service import (
     _repair_decision_hash,
     _repair_source_text,
     _source_run_has_repairable_output,
+    _thinking_repair_input_hash,
 )
 from packages.brain.schemas_qwen38 import THINKING_REPAIR_PROMPT_VERSION
 
@@ -89,6 +90,22 @@ def test_thinking_repair_can_rescue_an_unsafe_model_blank() -> None:
 
     assert _source_run_has_repairable_output(source) is True  # type: ignore[arg-type]
     assert "returned blank" in _repair_source_text(source)  # type: ignore[arg-type]
+
+
+def test_thinking_repair_duplicate_hash_is_scoped_to_prompt_contract() -> None:
+    common = {
+        "source_hash": "a" * 64,
+        "source_run_id": 52,
+        "source_draft_hash": "b" * 64,
+    }
+
+    old_hash = _thinking_repair_input_hash(
+        **common,
+        prompt_version="qwen38-final-intent-thinking-repair-v2",
+    )
+    current_hash = _thinking_repair_input_hash(**common)
+
+    assert old_hash != current_hash
 
 
 def test_thinking_repair_requires_teacher_review_of_every_editing_decision(

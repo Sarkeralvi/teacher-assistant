@@ -36,6 +36,20 @@ def _repair_decision_hash(decisions: list[dict[str, Any]]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _thinking_repair_input_hash(
+    *,
+    source_hash: str,
+    source_run_id: int,
+    source_draft_hash: str,
+    prompt_version: str = THINKING_REPAIR_PROMPT_VERSION,
+) -> str:
+    """Pin duplicate protection to the exact output contract version."""
+
+    return hashlib.sha256(
+        f"{source_hash}:{source_run_id}:{source_draft_hash}:{prompt_version}".encode("ascii")
+    ).hexdigest()
+
+
 def _source_run_has_repairable_output(run: AnswerRegionOcrRun) -> bool:
     """A model-blank result is repairable when visible writing may have been deleted."""
 
@@ -166,9 +180,11 @@ class Qwen38VisualTranscriptionService:
         if source_run.source_image_sha256 != source_hash:
             raise VisualTranscriptionError("Answer images changed; run normal transcription again")
         source_draft_hash = hashlib.sha256(source_run.draft_text.encode("utf-8")).hexdigest()
-        input_hash = hashlib.sha256(
-            f"{source_hash}:{source_run.id}:{source_draft_hash}".encode("ascii")
-        ).hexdigest()
+        input_hash = _thinking_repair_input_hash(
+            source_hash=source_hash,
+            source_run_id=source_run.id,
+            source_draft_hash=source_draft_hash,
+        )
         existing = self.db.scalar(
             select(AnswerRegionOcrRun.id).where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
@@ -214,6 +230,7 @@ class Qwen38VisualTranscriptionService:
             warnings=["teacher_review_required", "thinking_repair_pending"],
             normalized_result={
                 "task_kind": "visual_transcription_thinking_repair",
+                "prompt_version": THINKING_REPAIR_PROMPT_VERSION,
                 "source_run_id": source_run.id,
                 "source_draft_sha256": source_draft_hash,
             },
@@ -578,9 +595,22 @@ class Qwen38VisualTranscriptionService:
             self.db.rollback()
             failed = self.db.get(AnswerRegionOcrRun, run_id)
             if failed is not None:
+                failure_code = str(
+                    getattr(exc, "failure_code", "thinking_repair_execution_failed")
+                )[:100]
                 failed.status = "failed"
                 failed.completed_at = datetime.now(UTC)
                 failed.error = sanitize_provider_error(str(exc))[:500]
+                failed.normalized_result = {
+                    **(failed.normalized_result or {}),
+                    "prompt_version": failed.prompt_version,
+                    "failure_code": failure_code,
+                }
+                failed.warnings = [
+                    warning
+                    for warning in (failed.warnings or [])
+                    if warning != "thinking_repair_pending"
+                ] + [failure_code]
                 self._audit(
                     failed,
                     "qwen38_thinking_repair_failed",
@@ -589,6 +619,7 @@ class Qwen38VisualTranscriptionService:
                     {
                         "answer_region_id": failed.answer_region_id,
                         "calls_used": failed.calls_used,
+                        "failure_code": failure_code,
                     },
                 )
                 self.db.commit()

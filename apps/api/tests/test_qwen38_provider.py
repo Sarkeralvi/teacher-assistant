@@ -10,6 +10,7 @@ from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter
 from packages.brain.llama_cpp_qwen38_vision_provider import (
     LlamaCppQwen38VisionProvider,
+    Qwen38ThinkingRepairOutputError,
     _Qwen38TranscriptionPayload,
 )
 
@@ -370,11 +371,106 @@ def test_thinking_repair_fails_when_model_returns_no_visual_edit_decisions() -> 
     }
     provider, _client = provider_with(completion)
 
-    with pytest.raises(ValueError, match="no image-grounded edit decisions"):
+    with pytest.raises(
+        Qwen38ThinkingRepairOutputError,
+        match="invalid or missing visual edit decisions",
+    ) as exc_info:
         provider.repair_transcription_images(
             images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
             rejected_transcript="wrong reading",
         )
+    assert exc_info.value.failure_code == "thinking_repair_invalid_decisions"
+
+
+def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "surviving visible line",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1.0,
+                                    "bbox": [-2.0, 300.2, 1002.0, 650.1],
+                                    "status": "cancelled",
+                                    "position_hint": "middle rows with repeated strokes",
+                                }
+                            ],
+                            # These summaries are deliberately contradictory;
+                            # the server derives authority from the boxes.
+                            "cancellation_detected": False,
+                            "replacement_detected": True,
+                            "uncertain_correction_detected": False,
+                            "is_blank": False,
+                            "is_irrelevant": True,
+                            "confidence": 0.7,
+                            "needs_review": False,
+                            "unused_reasoning_summary": "ignored",
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.repair_transcription_images(
+        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        rejected_transcript="wrong reading",
+    )
+
+    assert result.cancellation_detected is True
+    assert result.replacement_detected is False
+    assert result.is_blank is False
+    assert result.is_irrelevant is False
+    assert result.needs_review is True
+    assert result.editing_marks[0].bbox == [0, 300, 1000, 650]
+
+
+def test_thinking_repair_unsafe_blank_error_is_sanitized() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "SECRET STUDENT TEXT",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 300, 900, 650],
+                                    "status": "cancelled",
+                                    "position_hint": "middle rows",
+                                }
+                            ],
+                            "is_blank": True,
+                            "is_irrelevant": False,
+                            "confidence": 0.5,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="wrong reading",
+        )
+
+    assert exc_info.value.failure_code == "thinking_repair_unsafe_blank"
+    assert "SECRET STUDENT TEXT" not in str(exc_info.value)
 
 
 def test_thinking_repair_refuses_an_unleased_call_before_http() -> None:
