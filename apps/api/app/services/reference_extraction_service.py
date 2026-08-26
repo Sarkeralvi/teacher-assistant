@@ -355,9 +355,24 @@ class ReferenceExtractionService:
                     "The configured Qwen3.8 provider cannot extract reference images"
                 )
             lease.heartbeat(holder_id=lease_holder_id)
+            # Persist the authorized provider attempt before entering the HTTP
+            # call. A schema-invalid response is still a real model call and
+            # must never be reported as zero after the surrounding transaction
+            # rolls back.
+            grading_run.reference_qwen_call_count = 1
+            self._audit(
+                grading_run,
+                "reference_extraction_provider_call_started",
+                actor_type="worker",
+                payload={
+                    "provider": "llama_cpp_qwen38",
+                    "model": self.settings.local_qwen38_model,
+                    "call_number": 1,
+                },
+            )
+            self.db.commit()
             result = extract(documents=documents)
             lease.heartbeat(holder_id=lease_holder_id)
-        grading_run.reference_qwen_call_count = 1
         result["warnings"] = list(result.get("warnings") or []) + [
             "Draft references were extracted directly by local Qwen3.8 vision with "
             "thinking disabled; teacher confirmation is required."

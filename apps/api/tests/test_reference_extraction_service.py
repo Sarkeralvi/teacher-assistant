@@ -360,6 +360,47 @@ def test_reference_bundle_detects_material_tampering_before_any_model_call(
     assert extractor.qwen_calls == 0
 
 
+def test_qwen38_schema_failure_records_the_provider_attempt(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.reference_extraction_service as module
+
+    storage_root = tmp_path / "storage"
+    run = seed_run(db_session, storage_root)
+    service = ReferenceExtractionService(
+        db_session,
+        settings=enabled_settings(storage_root),
+        phase_manager=FakePhaseManager(),
+        extractor_factory=FakeExtractor,
+    )
+    service.create(
+        run,
+        teacher_id=run.created_by_teacher_id,
+        expected_model="qwen3.8-27b-q4km",
+    )
+
+    def fail_after_provider_attempt(*, documents):
+        assert set(documents) == {"QUESTION", "SOLUTION", "RUBRIC"}
+        raise ValueError("response schema mismatch")
+
+    provider = SimpleNamespace(extract_reference_bundle_from_images=fail_after_provider_attempt)
+    adapter = SimpleNamespace(provider=provider, verify_available_model=lambda: None)
+    monkeypatch.setattr(
+        module.BrainAdapter,
+        "for_provider",
+        classmethod(lambda cls, settings, provider_name: adapter),
+    )
+
+    service.run(run.id)
+
+    db_session.expire_all()
+    refreshed = db_session.get(GradingRun, run.id)
+    assert refreshed is not None
+    assert refreshed.reference_extraction_status == "failed"
+    assert refreshed.reference_qwen_call_count == 1
+    assert "schema mismatch" in (refreshed.reference_extraction_error or "")
+
+
 def test_reference_bundle_kill_switch_and_model_alias_are_enforced(
     db_session: Session, tmp_path: Path
 ) -> None:
