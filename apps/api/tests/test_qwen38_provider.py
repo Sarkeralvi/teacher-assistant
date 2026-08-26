@@ -227,6 +227,63 @@ def test_structured_editing_analysis_precedes_final_intent_transcription() -> No
     assert "surviving final work" in prompt
 
 
+def test_reference_bundle_normalizes_mark_only_rubric_without_inventing_submarks() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "question_number": "1(a)",
+                                    "parent_question_number": "1",
+                                    "node_type": "subquestion",
+                                    "question_text": "Find x.",
+                                    "model_answer": "x = 4",
+                                    "marks": 6,
+                                    "source_question_pages": [1],
+                                    "source_solution_pages": [1],
+                                    "source_text_excerpt": "Find x.",
+                                    "confidence": 0.9,
+                                    "criteria": [],
+                                    "blockers": [],
+                                    "needs_review": True,
+                                }
+                            ],
+                            "warnings": [],
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider, client = provider_with(completion)
+    image = b"\x89PNG\r\n\x1a\nimage"
+
+    result = provider.extract_reference_bundle_from_images(
+        documents={
+            "QUESTION": [(image, "image/png", 1)],
+            "SOLUTION": [(image, "image/png", 1)],
+            "RUBRIC": [(image, "image/png", 1)],
+        }
+    )
+
+    assert len(client.requests) == 1
+    criterion = result["questions"][0]["criteria"][0]
+    assert criterion["criterion_label"] == "Holistic model-answer alignment"
+    assert criterion["max_marks"] == "6"
+    assert criterion["confidence"] == "0"
+    assert "no descriptive criteria" in criterion["blocker"]
+    assert "Mark-only rubric detected for: 1(a)." in result["warnings"][0]
+    assert result["questions"][0]["blockers"]
+    request = client.requests[0]
+    prompt = request["messages"][1]["content"][0]["text"]
+    assert "Criteria must contain at least one item" in prompt
+    assert "mark-allocation-only" in prompt
+
+
 def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
     completion = {
         "choices": [

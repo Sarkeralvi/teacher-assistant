@@ -41,7 +41,10 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from packages.brain.llama_cpp_qwen_provider import QwenReferenceBundlePayload
+from packages.brain.llama_cpp_qwen_provider import (
+    QwenReferenceCriterionDraft,
+    QwenReferenceQuestionDraft,
+)
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import (
@@ -96,6 +99,70 @@ _PAGE_MAPPING_BASE_TOKENS = 200
 _PAGE_MAPPING_TOKENS_PER_LABEL = 120
 _PAGE_MAPPING_MIN_TOKENS = 900
 _PAGE_MAPPING_MAX_TOKENS_CEILING = 4000
+
+
+class _Qwen38ReferenceQuestionDraft(QwenReferenceQuestionDraft):
+    """Vision draft that may honestly report a mark-only rubric."""
+
+    criteria: list[QwenReferenceCriterionDraft] = Field(default_factory=list, max_length=8)
+
+
+class _Qwen38ReferenceBundlePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    questions: list[_Qwen38ReferenceQuestionDraft] = Field(min_length=1, max_length=20)
+    warnings: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def normalize_mark_only_rubrics(self) -> _Qwen38ReferenceBundlePayload:
+        numbers = [item.question_number.strip().casefold() for item in self.questions]
+        if len(numbers) != len(set(numbers)):
+            raise ValueError("reference question numbers must be unique")
+
+        mark_only_questions: list[str] = []
+        for item in self.questions:
+            if not item.criteria:
+                mark_only_questions.append(item.question_number)
+                blocker = (
+                    "The uploaded rubric supplied a total mark but no descriptive criteria. "
+                    "Teacher must verify this holistic criterion before confirmation."
+                )
+                item.criteria = [
+                    QwenReferenceCriterionDraft(
+                        criterion_label="Holistic model-answer alignment",
+                        description=(
+                            "Evaluate the complete response against the teacher-confirmed "
+                            "model answer."
+                        ),
+                        max_marks=item.marks,
+                        confidence=Decimal("0"),
+                        source_rubric_pages=[],
+                        blocker=blocker,
+                    )
+                ]
+                if blocker not in item.blockers:
+                    item.blockers.append(blocker)
+
+            criterion_marks = [criterion.max_marks for criterion in item.criteria]
+            if not criterion_marks or any(mark is None for mark in criterion_marks):
+                continue
+            criterion_total = sum(
+                (mark for mark in criterion_marks if mark is not None), Decimal("0")
+            )
+            if item.marks is None:
+                item.marks = criterion_total
+            elif item.marks != criterion_total:
+                raise ValueError("reference question marks must equal the rubric criterion total")
+
+        if mark_only_questions:
+            warning = (
+                "Mark-only rubric detected for: "
+                + ", ".join(mark_only_questions)
+                + ". Holistic criteria require teacher verification."
+            )
+            if warning not in self.warnings and len(self.warnings) < 10:
+                self.warnings.append(warning)
+        return self
 # Must match --image-max-tokens on the running llama-server (Start-LocalAi.ps1).
 _IMAGE_MAX_TOKENS_PER_PAGE = 1280
 _REFERENCE_BUNDLE_PROMPT_OVERHEAD_TOKENS = 300
@@ -942,13 +1009,17 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                     "Every output needs teacher review. Return exactly one JSON object with keys "
                     "questions and warnings. Each question must contain question_number, "
                     "parent_question_number (string or null), node_type (question or subquestion), "
-                    "question_text, model_answer (string or null), marks (number or null), "
+                    "question_text, model_answer (a non-empty string), marks (number or null), "
                     "source_question_pages, source_solution_pages, source_text_excerpt, "
                     "confidence, "
                     "criteria, blockers, and needs_review=true. Each criterion must contain "
                     "criterion_label, description, max_marks (number or null), confidence, "
-                    "source_rubric_pages, and blocker (string or null). Use arrays even "
-                    "when empty; "
+                    "source_rubric_pages, and blocker (string or null). Criteria must contain "
+                    "at least one item for every question. If the rubric is a mark-allocation-only "
+                    "sheet with no descriptive criteria, create exactly one holistic draft "
+                    "criterion using the question total and model answer, set confidence to 0, "
+                    "and add a blocker saying teacher verification is required. Do not invent "
+                    "detailed sub-marks. Use arrays for blockers and warnings even when empty; "
                     "never add extra keys or prose."
                 ),
             }
@@ -960,13 +1031,13 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 content.append(image_part)
         payload, usage = self._structured_completion(
             messages=[{"role": "user", "content": content}],
-            response_model=QwenReferenceBundlePayload,
+            response_model=_Qwen38ReferenceBundlePayload,
             schema_name="qwen38_visual_reference_bundle",
             max_tokens=max_tokens,
             temperature=0.0,
             enable_thinking=False,
         )
-        assert isinstance(payload, QwenReferenceBundlePayload)
+        assert isinstance(payload, _Qwen38ReferenceBundlePayload)
         result = payload.model_dump(mode="json")
         for question in result["questions"]:
             question["needs_review"] = True
