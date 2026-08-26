@@ -69,6 +69,13 @@ _TRANSCRIBE_MAX_TOKENS = 2048
 # small, the model was looping, and more budget only buys more looping.
 _REPEAT_PENALTY = 1.1
 _GRADE_MAX_TOKENS = 1500
+_THINKING_REPAIR_MAX_TOKENS = 2200
+# Qwen3.8 defaults to xhigh, unrestricted reasoning.  A real cancellation
+# repair consumed all 3000 completion tokens in its think block (444 seconds)
+# and never produced the JSON contract.  The installed llama.cpp build exposes
+# a per-request reasoning budget; 512 tokens keeps reasoning genuinely enabled
+# while reserving most of the response for the reviewable transcript/boxes.
+_THINKING_REPAIR_BUDGET_TOKENS = 512
 
 # Reference-bundle completion budget is sized per request, not a flat
 # constant: a real multi-question, multi-criterion bundle needs more room to
@@ -343,6 +350,14 @@ class Qwen38VisualTranscriptionOutputError(RuntimeError):
         self.failure_code = failure_code
 
 
+class Qwen38CompletionRequestError(RuntimeError):
+    """Content-free transport/HTTP failure from the local completion endpoint."""
+
+    def __init__(self, failure_code: str, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.failure_code = failure_code
+
+
 def _safe_completion_diagnostics(message: str) -> str:
     match = re.search(
         r"finish_reason=([^\s)]+) prompt_tokens=([^\s)]+) "
@@ -362,6 +377,11 @@ def _safe_completion_diagnostics(message: str) -> str:
 def _thinking_repair_output_error(exc: Exception) -> Qwen38ThinkingRepairOutputError:
     if isinstance(exc, Qwen38ThinkingRepairOutputError):
         return exc
+    if isinstance(exc, Qwen38CompletionRequestError):
+        return Qwen38ThinkingRepairOutputError(
+            f"thinking_repair_{exc.failure_code}",
+            f"{exc}. No transcript was accepted.",
+        )
     message = str(exc)
     diagnostics = _safe_completion_diagnostics(message)
     if "cut off before finishing" in message or "finish_reason=length" in message:
@@ -399,6 +419,11 @@ def _visual_transcription_output_error(
 ) -> Qwen38VisualTranscriptionOutputError:
     if isinstance(exc, Qwen38VisualTranscriptionOutputError):
         return exc
+    if isinstance(exc, Qwen38CompletionRequestError):
+        return Qwen38VisualTranscriptionOutputError(
+            f"visual_transcription_{exc.failure_code}",
+            f"{exc}. No transcript was accepted.",
+        )
     message = str(exc)
     diagnostics = _safe_completion_diagnostics(message)
     if "cut off before finishing" in message or "finish_reason=length" in message:
@@ -441,7 +466,7 @@ def _normalize_editing_marks(
         if not isinstance(raw, dict):
             raise ValueError(f"edit decision {index + 1} is not an object")
         raw_page = raw.get("page_index")
-        if isinstance(raw_page, bool) or not isinstance(raw_page, (int, float)):
+        if isinstance(raw_page, bool) or not isinstance(raw_page, int | float):
             raise ValueError(f"edit decision {index + 1} has an invalid page index")
         page_index = int(raw_page)
         if float(raw_page) != page_index or not 1 <= page_index <= page_count:
@@ -451,7 +476,7 @@ def _normalize_editing_marks(
             raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
         coordinates: list[int] = []
         for value in raw_bbox:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if isinstance(value, bool) or not isinstance(value, int | float):
                 raise ValueError(f"edit decision {index + 1} has an invalid editing bbox")
             numeric = float(value)
             if not -25 <= numeric <= 1025:
@@ -600,6 +625,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         max_tokens: int = 1500,
         temperature: float = 0.0,
         enable_thinking: bool = False,
+        reasoning_effort: Literal["low", "medium", "xhigh"] | None = None,
+        thinking_budget_tokens: int | None = None,
     ) -> tuple[BaseModel, dict[str, Any]]:
         """Call /v1/chat/completions and validate its JSON response.
 
@@ -647,6 +674,21 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 )
         else:
             request_messages.insert(0, output_instruction)
+        if reasoning_effort is not None and not enable_thinking:
+            raise ValueError("reasoning_effort requires thinking to be enabled")
+        if thinking_budget_tokens is not None:
+            if not enable_thinking:
+                raise ValueError("thinking_budget_tokens requires thinking to be enabled")
+            if not 1 <= thinking_budget_tokens < max_tokens:
+                raise ValueError(
+                    "thinking_budget_tokens must be positive and smaller than max_tokens"
+                )
+        template_kwargs: dict[str, Any] = {
+            "enable_thinking": enable_thinking,
+            "preserve_thinking": False,
+        }
+        if reasoning_effort is not None:
+            template_kwargs["reasoning_effort"] = reasoning_effort
         body: dict[str, Any] = {
             "model": EXPECTED_ALIAS,
             "messages": request_messages,
@@ -656,22 +698,47 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             # token cap is exhausted, producing truncated unparseable output.
             "repeat_penalty": _REPEAT_PENALTY,
             "stream": False,
-            "chat_template_kwargs": {
-                "enable_thinking": enable_thinking,
-                "preserve_thinking": False,
-            },
+            "chat_template_kwargs": template_kwargs,
         }
+        if thinking_budget_tokens is not None:
+            # llama.cpp applies this sampler only inside the model's think
+            # block, then continues generation for the final JSON response.
+            body["thinking_budget_tokens"] = thinking_budget_tokens
         try:
             resp = self._http().post(
                 "/chat/completions",
                 json=body,
                 headers=self._headers(),
             )
+        except httpx.TimeoutException as exc:
+            raise Qwen38CompletionRequestError(
+                "provider_timeout",
+                "The local Qwen3.8 request timed out before a valid response was received",
+            ) from exc
+        except httpx.TransportError as exc:
+            raise Qwen38CompletionRequestError(
+                "provider_transport_error",
+                "The local Qwen3.8 connection ended before a valid response was received",
+            ) from exc
+        except Exception as exc:
+            raise Qwen38CompletionRequestError(
+                "provider_request_error",
+                "The local Qwen3.8 request failed before a valid response was received",
+            ) from exc
+        try:
             resp.raise_for_status()
+        except Exception as exc:
+            status_code = getattr(resp, "status_code", "unknown")
+            raise Qwen38CompletionRequestError(
+                "provider_http_error",
+                f"The local Qwen3.8 server returned HTTP {status_code} before a valid response",
+            ) from exc
+        try:
             data = resp.json()
         except Exception as exc:
-            raise RuntimeError(
-                f"llama_cpp_qwen38_vision: completion request failed — {self._sanitize(str(exc))}"
+            raise Qwen38CompletionRequestError(
+                "provider_invalid_http_json",
+                "The local Qwen3.8 server returned an invalid HTTP JSON response",
             ) from exc
 
         usage = data.get("usage") or {}
@@ -951,7 +1018,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         *,
         images: list[tuple[bytes, str]],
         rejected_transcript: str,
-        max_tokens: int = 3000,
+        max_tokens: int = _THINKING_REPAIR_MAX_TOKENS,
     ) -> VisualTranscriptionOutput:
         """Adjudicate visible cancellations in one fresh thinking-enabled call.
 
@@ -984,7 +1051,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
 
         system_prompt = (
             "You are a forensic visual adjudicator for handwritten exam-script editing marks. "
-            "Use careful internal reasoning only to decide what the student visibly retained, "
+            "Use brief, focused internal reasoning only to decide what the student visibly "
+            "retained, "
             "cancelled, replaced, or left visually ambiguous. You do not know the question, "
             "solution, rubric, marks, or expected mathematics, and must not infer any of them. "
             "The supplied prior transcript is untrusted comparison material, not ground truth "
@@ -1047,6 +1115,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 max_tokens=max_tokens,
                 temperature=0.0,
                 enable_thinking=True,
+                reasoning_effort="low",
+                thinking_budget_tokens=_THINKING_REPAIR_BUDGET_TOKENS,
             )
             assert isinstance(payload, _Qwen38ThinkingRepairPayload)
             if payload.is_blank:

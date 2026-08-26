@@ -4,6 +4,7 @@ import json
 from decimal import Decimal
 from typing import Any
 
+import httpx
 import pytest
 
 from app.core.config import Settings
@@ -44,6 +45,23 @@ class FakeClient:
 class AuthFailClient(FakeClient):
     def get(self, *_args: object, **_kwargs: object) -> FakeResponse:
         return FakeResponse({}, status_code=401)
+
+
+class TimeoutClient(FakeClient):
+    def post(self, _path: str, *, json: dict[str, Any], **_kwargs: object) -> FakeResponse:
+        self.requests.append(json)
+        raise httpx.ReadTimeout("SECRET STUDENT TEXT")
+
+
+class InvalidJsonResponse(FakeResponse):
+    def json(self) -> dict[str, Any]:
+        raise ValueError("SECRET STUDENT TEXT")
+
+
+class InvalidJsonClient(FakeClient):
+    def post(self, _path: str, *, json: dict[str, Any], **_kwargs: object) -> FakeResponse:
+        self.requests.append(json)
+        return InvalidJsonResponse({})
 
 
 def provider_with(completion: dict[str, Any]) -> tuple[LlamaCppQwen38VisionProvider, FakeClient]:
@@ -336,7 +354,10 @@ def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
     assert request["chat_template_kwargs"] == {
         "enable_thinking": True,
         "preserve_thinking": False,
+        "reasoning_effort": "low",
     }
+    assert request["thinking_budget_tokens"] == 512
+    assert request["max_tokens"] == 2200
     system_prompt = request["messages"][0]["content"]
     assert "do not know the question" in system_prompt
     assert "Never solve" in system_prompt
@@ -345,6 +366,44 @@ def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
     assert "solution" not in user_prompt.lower()
     assert "rubric" not in user_prompt.lower()
     assert "expected marks" not in user_prompt.lower()
+
+
+def test_thinking_repair_timeout_has_a_content_free_failure_category() -> None:
+    provider = LlamaCppQwen38VisionProvider(
+        api_key="test-key",
+        require_model_lease=False,
+    )
+    client = TimeoutClient({})
+    provider.client = client
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="SECRET STUDENT TEXT",
+        )
+
+    assert exc_info.value.failure_code == "thinking_repair_provider_timeout"
+    assert "SECRET STUDENT TEXT" not in str(exc_info.value)
+    assert len(client.requests) == 1
+
+
+def test_thinking_repair_invalid_http_json_is_content_free_and_not_retried() -> None:
+    provider = LlamaCppQwen38VisionProvider(
+        api_key="test-key",
+        require_model_lease=False,
+    )
+    client = InvalidJsonClient({})
+    provider.client = client
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="SECRET STUDENT TEXT",
+        )
+
+    assert exc_info.value.failure_code == "thinking_repair_provider_invalid_http_json"
+    assert "SECRET STUDENT TEXT" not in str(exc_info.value)
+    assert len(client.requests) == 1
 
 
 def test_thinking_repair_fails_when_model_returns_no_visual_edit_decisions() -> None:
