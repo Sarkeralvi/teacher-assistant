@@ -624,7 +624,7 @@ def test_thinking_repair_refuses_an_unleased_call_before_http() -> None:
     assert client.requests == []
 
 
-def test_uncertain_correction_must_remain_explicit_in_final_transcript() -> None:
+def test_uncertain_edit_inventory_routes_to_thinking_review() -> None:
     completion = {
         "choices": [
             {
@@ -645,12 +645,13 @@ def test_uncertain_correction_must_remain_explicit_in_final_transcript() -> None
     }
     provider, _client = provider_with(completion)
 
-    with pytest.raises(Qwen38VisualTranscriptionOutputError) as exc_info:
-        provider.transcribe_image(
-            image_bytes=b"\x89PNG\r\n\x1a\nimage",
-            mime_type="image/png",
-        )
-    assert exc_info.value.failure_code == "visual_transcription_invalid_decisions"
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+    )
+
+    assert result.uncertain_correction_detected is True
+    assert result.requires_thinking_repair is True
 
 
 def test_unclear_correction_marker_requires_uncertainty_metadata() -> None:

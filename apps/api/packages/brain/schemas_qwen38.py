@@ -150,7 +150,11 @@ class VisualTranscriptionOutput(BaseModel):
         }
         if any((status in statuses) != enabled for status, enabled in expected.items()):
             raise ValueError("editing-analysis flags must match editing_marks")
-        if self.uncertain_correction_detected and "[unclear correction]" not in self.draft_text:
+        if (
+            self.uncertain_correction_detected
+            and not self.requires_thinking_repair
+            and "[unclear correction]" not in self.draft_text
+        ):
             raise ValueError("uncertain correction must remain explicit in draft_text")
         if self.requires_thinking_repair and self.is_blank:
             raise ValueError("blank evidence cannot require cancellation repair")

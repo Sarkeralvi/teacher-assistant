@@ -1061,13 +1061,6 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             cancellation_detected = "cancelled" in statuses
             replacement_detected = "replacement" in statuses
             uncertain_correction_detected = "uncertain_correction" in statuses
-            if (
-                uncertain_correction_detected
-                and "[unclear correction]" not in payload.draft_text
-            ):
-                raise ValueError(
-                    "uncertain edit decision was not preserved in the transcript draft"
-                )
             requires_thinking_repair = bool(editing_marks) or (
                 payload.draft_text == UNRESOLVED_VISIBLE_WRITING
             )
