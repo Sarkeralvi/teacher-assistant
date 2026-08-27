@@ -703,6 +703,76 @@ def test_visual_transcription_keeps_blank_evidence_empty() -> None:
     assert '"draft_text"' in prompt
 
 
+def test_visual_transcription_discards_untrusted_extra_metadata() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "x = 4",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [],
+                            "cancellation_detected": False,
+                            "replacement_detected": False,
+                            "uncertain_correction_detected": False,
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.9,
+                            "needs_review": True,
+                            "explanation": "untrusted model commentary",
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+    )
+
+    assert result.draft_text == "x = 4"
+    assert result.needs_review is True
+    assert "explanation" not in result.model_dump(mode="json")
+
+
+def test_visual_transcription_still_requires_safety_fields_when_extras_are_ignored() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "x = 4",
+                            "uncertain_glyphs": [],
+                            "is_irrelevant": False,
+                            "confidence": 0.9,
+                            "needs_review": True,
+                            "explanation": "is_blank was omitted",
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(Qwen38VisualTranscriptionOutputError) as exc_info:
+        provider.transcribe_image(
+            image_bytes=b"\x89PNG\r\n\x1a\nimage",
+            mime_type="image/png",
+        )
+
+    assert exc_info.value.failure_code == "visual_transcription_schema_mismatch"
+
+
 def test_visual_transcription_rejects_model_blank_when_editing_marks_are_visible() -> None:
     completion = {
         "choices": [

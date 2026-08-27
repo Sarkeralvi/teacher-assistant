@@ -188,9 +188,10 @@ function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
   return mapping.provider === "local_paddle_qwen" || mapping.provider === "llama_cpp_qwen38";
 }
 
-const CURRENT_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v3";
+const CURRENT_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v4";
 const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   "qwen38-final-intent-structured-v2",
+  "qwen38-final-intent-structured-v3",
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
 const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v6";

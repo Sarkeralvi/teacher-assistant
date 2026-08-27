@@ -13,10 +13,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v3"
+FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v4"
 LEGACY_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
+LEGACY_FINAL_INTENT_PROMPT_VERSION_V3 = "qwen38-final-intent-structured-v3"
 SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS = (
     LEGACY_FINAL_INTENT_PROMPT_VERSION,
+    LEGACY_FINAL_INTENT_PROMPT_VERSION_V3,
     FINAL_INTENT_PROMPT_VERSION,
 )
 THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v6"

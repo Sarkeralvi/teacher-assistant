@@ -240,7 +240,11 @@ class _Qwen38GradePayload(BaseModel):
 class _Qwen38TranscriptionPayload(BaseModel):
     """Structured output the model returns for visual transcription."""
 
-    model_config = ConfigDict(extra="forbid")
+    # Qwen occasionally adds a harmless explanatory field even after returning
+    # every required contract field.  Treat those keys as untrusted metadata:
+    # discard them rather than persisting them or rejecting otherwise safe
+    # evidence.  Required fields and the validators below remain fail-closed.
+    model_config = ConfigDict(extra="ignore")
 
     draft_text: str
     uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
