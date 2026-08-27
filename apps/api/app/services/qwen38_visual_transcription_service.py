@@ -63,7 +63,7 @@ def _repair_source_text(run: AnswerRegionOcrRun) -> str:
 
 
 class Qwen38VisualTranscriptionService:
-    """One durable, no-retry final-intent transcription call per confirmed mapping."""
+    """One durable, no-retry visual-evidence transcription per confirmed mapping."""
 
     def __init__(self, db: Session, *, settings: Settings | None = None) -> None:
         self.db = db
@@ -174,7 +174,7 @@ class Qwen38VisualTranscriptionService:
             or not _source_run_has_repairable_output(source_run)
         ):
             raise VisualTranscriptionError(
-                "Thinking repair requires a completed current final-intent transcript"
+                "Thinking repair requires a completed visual-evidence transcript"
             )
         source_hash = self._source_hash(region)
         if source_run.source_image_sha256 != source_hash:
@@ -335,6 +335,7 @@ class Qwen38VisualTranscriptionService:
                     "replacement_detected": result.replacement_detected,
                     "uncertain_correction_detected": result.uncertain_correction_detected,
                 },
+                "requires_thinking_repair": result.requires_thinking_repair,
                 "is_blank": result.is_blank,
                 "is_irrelevant": result.is_irrelevant,
                 "confidence": str(result.confidence),
@@ -344,11 +345,7 @@ class Qwen38VisualTranscriptionService:
             run.warnings = [
                 "teacher_review_required",
                 "final_intent_transcription",
-                *(
-                    ["cancelled_work_excluded"]
-                    if result.cancellation_detected
-                    else []
-                ),
+                *(["visible_edits_preserved"] if result.editing_marks else []),
                 *(
                     ["student_replacement_detected"]
                     if result.replacement_detected
@@ -360,6 +357,11 @@ class Qwen38VisualTranscriptionService:
                     else []
                 ),
                 *(["visual_transcription_uncertain"] if result.uncertain_glyphs else []),
+                *(
+                    ["thinking_repair_required"]
+                    if result.requires_thinking_repair
+                    else []
+                ),
             ]
             run.latency_ms = result.latency_ms
             self._audit(
@@ -379,6 +381,7 @@ class Qwen38VisualTranscriptionService:
                     "uncertain_correction_detected": (
                         result.uncertain_correction_detected
                     ),
+                    "requires_thinking_repair": result.requires_thinking_repair,
                 },
             )
             self.db.commit()
@@ -424,9 +427,9 @@ class Qwen38VisualTranscriptionService:
             )
         if run.prompt_version != FINAL_INTENT_PROMPT_VERSION:
             raise VisualTranscriptionError(
-                "This transcript used an older cancellation policy; run the current "
-                "conservative final-intent transcription before direct confirmation, or use "
-                "the explicit thinking repair"
+                "This transcript used the older combined transcription/cancellation policy; "
+                "run the current evidence-preserving transcription before direct confirmation, "
+                "or use the explicit Thinking repair"
             )
         is_blank = bool((run.normalized_result or {}).get("is_blank"))
         if run.status != "succeeded" or (not run.draft_text and not is_blank):
@@ -434,6 +437,11 @@ class Qwen38VisualTranscriptionService:
         if hashlib.sha256(run.draft_text.encode("utf-8")).hexdigest() != draft_hash:
             raise VisualTranscriptionError(
                 "Displayed visual transcription changed; refresh before confirming"
+            )
+        if bool((run.normalized_result or {}).get("requires_thinking_repair")):
+            raise VisualTranscriptionError(
+                "Visible edits or unresolved writing require explicit Thinking review before "
+                "this transcript can be confirmed"
             )
         if run.source_image_sha256 != self._source_hash(region):
             raise VisualTranscriptionError("Answer image changed after transcription; run it again")

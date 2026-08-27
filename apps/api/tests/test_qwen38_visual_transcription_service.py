@@ -12,7 +12,10 @@ from app.services.qwen38_visual_transcription_service import (
     _source_run_has_repairable_output,
     _thinking_repair_input_hash,
 )
-from packages.brain.schemas_qwen38 import THINKING_REPAIR_PROMPT_VERSION
+from packages.brain.schemas_qwen38 import (
+    FINAL_INTENT_PROMPT_VERSION,
+    THINKING_REPAIR_PROMPT_VERSION,
+)
 
 
 def test_legacy_include_crossed_out_transcript_cannot_be_confirmed() -> None:
@@ -25,12 +28,33 @@ def test_legacy_include_crossed_out_transcript_cannot_be_confirmed() -> None:
     )
     teacher = SimpleNamespace(id=7)
 
-    with pytest.raises(VisualTranscriptionError, match="older cancellation policy"):
+    with pytest.raises(VisualTranscriptionError, match="older combined"):
         service.confirm(
             region,  # type: ignore[arg-type]
             run,  # type: ignore[arg-type]
             teacher=teacher,  # type: ignore[arg-type]
             draft_hash="0" * 64,
+        )
+
+
+def test_visible_edit_inventory_requires_thinking_before_confirmation() -> None:
+    service = Qwen38VisualTranscriptionService(None)  # type: ignore[arg-type]
+    draft_text = "[visibly crossed] x=3\nx=4"
+    run = SimpleNamespace(
+        answer_region_id=42,
+        profile="qwen38_verbatim_visual",
+        prompt_version=FINAL_INTENT_PROMPT_VERSION,
+        status="succeeded",
+        draft_text=draft_text,
+        normalized_result={"is_blank": False, "requires_thinking_repair": True},
+    )
+
+    with pytest.raises(VisualTranscriptionError, match="explicit Thinking review"):
+        service.confirm(
+            SimpleNamespace(id=42),  # type: ignore[arg-type]
+            run,  # type: ignore[arg-type]
+            teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+            draft_hash=hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
         )
 
 

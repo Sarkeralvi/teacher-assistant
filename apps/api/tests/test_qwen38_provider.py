@@ -15,6 +15,7 @@ from packages.brain.llama_cpp_qwen38_vision_provider import (
     Qwen38VisualTranscriptionOutputError,
     _Qwen38TranscriptionPayload,
 )
+from packages.brain.schemas_qwen38 import UNRESOLVED_VISIBLE_WRITING
 
 
 class FakeResponse:
@@ -187,13 +188,14 @@ def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None
     assert "response_format" not in client.requests[0]
     assert client.requests[0]["messages"][0]["role"] == "system"
     assert "exactly one JSON object" in client.requests[0]["messages"][0]["content"]
-    assert "FINAL INTENDED ANSWER" in client.requests[0]["messages"][0]["content"]
-    assert "Cancelled content must not appear" in client.requests[0]["messages"][0]["content"]
+    assert "EVIDENCE transcriber" in client.requests[0]["messages"][0]["content"]
+    system_prompt = client.requests[0]["messages"][0]["content"]
+    assert "Never delete text because it appears cancelled" in system_prompt
     assert "One horizontal or diagonal stroke" in client.requests[0]["messages"][0]["content"]
-    assert "teacher ticks" in client.requests[0]["messages"][0]["content"]
+    assert "teacher marks" in client.requests[0]["messages"][0]["content"]
     user_prompt = client.requests[0]["messages"][1]["content"][0]["text"]
-    assert "surviving final work" in user_prompt
-    assert "Preserve every written mistake" not in user_prompt
+    assert "complete visual evidence inventory" in user_prompt
+    assert "do not decide which mathematics survives" in user_prompt
     assert client.requests[0]["temperature"] == 0.0
     with pytest.raises(ValueError, match="magic"):
         provider.transcribe_image(image_bytes=b"not-an-image", mime_type="image/png")
@@ -248,6 +250,7 @@ def test_structured_editing_analysis_precedes_final_intent_transcription() -> No
     assert result.cancellation_detected is True
     assert result.replacement_detected is True
     assert result.uncertain_correction_detected is False
+    assert result.requires_thinking_repair is True
     assert result.completion_tokens == 8
     request = client.requests[0]
     assert request["temperature"] == 0.0
@@ -256,9 +259,9 @@ def test_structured_editing_analysis_precedes_final_intent_transcription() -> No
         "preserve_thinking": False,
     }
     prompt = request["messages"][1]["content"][0]["text"]
-    assert "editing-interpretation stage" in prompt
+    assert "complete visual evidence inventory" in prompt
     assert "without copying answer text into position_hint" in prompt
-    assert "surviving final work" in prompt
+    assert "do not decide which mathematics survives" in prompt
 
 
 def test_reference_bundle_normalizes_mark_only_rubric_without_inventing_submarks() -> None:
@@ -701,6 +704,81 @@ def test_visual_transcription_keeps_blank_evidence_empty() -> None:
     prompt = client.requests[0]["messages"][1]["content"][0]["text"]
     assert "empty string" in prompt
     assert '"draft_text"' in prompt
+
+
+def test_nonblank_empty_model_output_becomes_blocked_review_evidence() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.2,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+    )
+
+    assert result.draft_text == UNRESOLVED_VISIBLE_WRITING
+    assert result.is_blank is False
+    assert result.requires_thinking_repair is True
+
+
+def test_visible_edit_inventory_cannot_be_directly_confirmed() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "[visibly crossed] x=3\nx=4",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 100, 800, 300],
+                                    "status": "cancelled",
+                                    "position_hint": "upper written line",
+                                }
+                            ],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.8,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.transcribe_image(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+    )
+
+    assert result.draft_text == "[visibly crossed] x=3\nx=4"
+    assert result.cancellation_detected is True
+    assert result.requires_thinking_repair is True
 
 
 def test_visual_transcription_discards_untrusted_extra_metadata() -> None:

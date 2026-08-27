@@ -48,6 +48,7 @@ from packages.brain.llama_cpp_qwen_provider import (
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import (
+    UNRESOLVED_VISIBLE_WRITING,
     EditingMark,
     UncertainGlyph,
     VisualPageMappingOutput,
@@ -258,6 +259,26 @@ class _Qwen38TranscriptionPayload(BaseModel):
     # Review status is authorization metadata, never model authority. The
     # provider accepts either value then forces True on its public output.
     needs_review: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_unresolved_nonblank_evidence(cls, value: Any) -> Any:
+        """Turn one known model contradiction into a reviewable safe state.
+
+        Qwen can correctly report ``is_blank=false`` yet emit an empty draft
+        after deleting everything it interpreted as cancelled.  Empty text is
+        never accepted as evidence.  Preserve the fact that visible writing
+        exists with a server-owned sentinel so the run can be routed to the
+        explicit Thinking review instead of failing opaquely or being graded.
+        """
+
+        if not isinstance(value, dict):
+            return value
+        if value.get("is_blank") is False and not str(value.get("draft_text") or "").strip():
+            normalized = dict(value)
+            normalized["draft_text"] = UNRESOLVED_VISIBLE_WRITING
+            return normalized
+        return value
 
     @model_validator(mode="after")
     def uncertainty_markers_require_metadata(self) -> _Qwen38TranscriptionPayload:
@@ -893,7 +914,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         label: str = "answer",
         max_tokens: int | None = None,
     ) -> VisualTranscriptionOutput:
-        """Final-intent transcription of a handwritten student answer image.
+        """Evidence-preserving transcription of a handwritten answer image.
 
         Parameters
         ----------
@@ -930,7 +951,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         label: str = "answer",
         max_tokens: int | None = None,
     ) -> VisualTranscriptionOutput:
-        """Transcribe final active work in one fresh, non-thinking visual call.
+        """Transcribe visible evidence in one fresh, non-thinking visual call.
 
         ``max_tokens`` overrides the answer-crop default. A whole escalated page
         carries far more text than one answer region: a real reference page hit
@@ -955,53 +976,49 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             image_hashes.append(digest)
 
         final_intent_system_prompt = (
-            "You are a specialized handwritten mathematics exam-script transcriber. Your task "
-            "is not to OCR every visible mark. Transcribe only the student's FINAL INTENDED "
-            "ANSWER. Decide ACTIVE/CANCELLED/REPLACEMENT separately for each visible line or "
-            "local fragment; never classify a whole page or multi-line answer from one long "
-            "stroke. Cancellation requires local text-targeting evidence: an X over the glyphs, "
-            "dense scratch-out, repeated cancellation strokes through the same writing, or a "
-            "clearly overwritten old answer. One horizontal or diagonal stroke alone is "
-            "insufficient when it could be an underline, bracket, fraction bar, page rule, arrow, "
-            "or teacher annotation. Red or differently coloured teacher ticks, slashes, circles, "
-            "and marks never cancel black/blue student writing. Cancelled content must not appear "
-            "in draft_text even when it remains readable. When cancelled work has a visible "
-            "replacement, output only the uncancelled replacement in its logical position. For a "
-            "local symbol replacement, retain the active rest of the line and use only the "
-            "replacement. Do not confuse cancellation with minus signs, fraction bars, "
-            "square-root bars, multiplication signs, the variable x, equality or inequality "
-            "symbols, ordinary underlining, brackets, diagram lines, integrals, or sums. Preserve "
-            "the student's surviving mistakes exactly. Never solve, correct, complete, simplify, "
-            "normalize, summarize, or reconstruct from arithmetic or the expected answer. If "
-            "active handwriting cannot be read from pixels, write [illegible]. If the final "
-            "symbol in an overwrite or correction is visually uncertain, write [unclear "
-            "correction]. Record bounded visual alternatives in uncertain_glyphs, but never "
-            "choose one from mathematical context. Inspect the complete image from top to bottom "
-            "and re-check the lowest visible student line before deciding the answer is empty. "
-            "Set is_blank=true only when there is no student writing at all. If every visible "
-            "student line is genuinely cancelled, set is_blank=false and return [all visible "
-            "work cancelled]."
+            "You are a forensic handwritten mathematics exam-script EVIDENCE transcriber. "
+            "Transcription and cancellation interpretation are separate tasks. In this "
+            "thinking-disabled task, preserve every visible student-written fragment from the "
+            "pixels, including readable crossed-out, overwritten, or abandoned work. Never delete "
+            "text because it appears cancelled. Prefix readable disputed fragments with a short "
+            "literal marker such as [visibly crossed] or [overwritten], while retaining the text. "
+            "Use [illegible crossed writing] when crossed writing is visible but unreadable. "
+            "Record the location and apparent edit status separately in editing_marks. Those "
+            "statuses are review signals, not authority to omit evidence. Never classify a whole "
+            "page or multi-line answer from one long stroke. One horizontal or diagonal stroke "
+            "may be an underline, bracket, fraction bar, page rule, arrow, or teacher annotation. "
+            "Red or differently coloured teacher marks never cancel black/blue student writing. "
+            "Do not confuse cancellation with minus signs, fraction bars, square-root bars, "
+            "multiplication signs, the variable x, equality or inequality symbols, ordinary "
+            "underlining, brackets, "
+            "diagram lines, integrals, or sums. Preserve the student's mistakes exactly. Never "
+            "solve, correct, complete, simplify, normalize, summarize, or reconstruct from "
+            "arithmetic or an expected answer. If handwriting cannot be read from pixels, write "
+            "[illegible]. Record bounded visual alternatives in uncertain_glyphs, but never choose "
+            "from mathematical context. Inspect all images top to bottom and re-check the lowest "
+            "visible student line. Set is_blank=true only when there is no student writing at all. "
+            f"If writing is visible but no faithful text can be produced, return exactly "
+            f"{UNRESOLVED_VISIBLE_WRITING!r} with is_blank=false."
         )
         transcription_prompt = (
-            f"Transcribe the ordered exam-script images for {label} according to the final-intent "
-            "rules. First visually resolve cancellations, overwriting, replacements, and abandoned "
-            "calculations as an editing-interpretation stage, then output only the student's "
-            "surviving final work in draft_text. Record edit-event locations in editing_marks, "
+            f"Transcribe the ordered exam-script images for {label} as a complete visual evidence "
+            "inventory. Include both active-looking and visibly edited student writing in "
+            "draft_text; do not decide which mathematics survives. Record edit-event locations "
+            "in editing_marks, "
             "without copying answer text into position_hint. Page indices are one-based; boxes "
             "are normalized [x1,y1,x2,y2] from 0 to 1000.\n\n"
             "Required safety check before returning JSON: inspect every line independently; a "
-            "single long stroke must not cancel several rows; coloured teacher marks must be "
-            "ignored; and any clean uncancelled line near the bottom must appear in draft_text. "
-            "If cancellation intent is ambiguous, preserve the active-looking writing with an "
-            "[unclear correction] marker and lower confidence instead of deleting it.\n\n"
-            "Preserve active line order, written mistakes, numerals, decimal points, fractions, "
+            "single long stroke must not erase several rows; coloured teacher marks must be "
+            "ignored; and every visible student line, including crossed work, must be represented "
+            "in draft_text. If edit intent is ambiguous, preserve the writing with an "
+            "[unclear correction] marker and lower confidence.\n\n"
+            "Preserve visual line order, written mistakes, numerals, decimal points, fractions, "
             "conditional and complement bars, intersections, units, question numbering, and "
             "readable "
             "diagram labels. Use LaTeX for mathematics.\n\n"
             "If the answer region contains no student writing at all, set is_blank=true and "
-            "draft_text to an empty string. Visible crossed work is not blank. If all visible "
-            "student work is genuinely cancelled, use draft_text='[all visible work cancelled]' "
-            "with is_blank=false. Do not use a placeholder such as [blank].\n\n"
+            "draft_text to an empty string. Visible crossed work is not blank and must be "
+            "transcribed or explicitly marked illegible. Do not use [blank].\n\n"
             "Return exactly this JSON shape with no extra keys: "
             '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
             '"alternatives":["option 1","option 2"]}],"editing_marks":['
@@ -1051,6 +1068,9 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 raise ValueError(
                     "uncertain edit decision was not preserved in the transcript draft"
                 )
+            requires_thinking_repair = bool(editing_marks) or (
+                payload.draft_text == UNRESOLVED_VISIBLE_WRITING
+            )
         except Exception as exc:
             raise _visual_transcription_output_error(exc) from exc
         latency_ms = int((time.perf_counter() - start) * 1000)
@@ -1070,6 +1090,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             cancellation_detected=cancellation_detected,
             replacement_detected=replacement_detected,
             uncertain_correction_detected=uncertain_correction_detected,
+            requires_thinking_repair=requires_thinking_repair,
             is_blank=payload.is_blank,
             is_irrelevant=payload.is_irrelevant,
             confidence=payload.confidence,

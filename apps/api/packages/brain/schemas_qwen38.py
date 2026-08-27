@@ -13,14 +13,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v4"
+FINAL_INTENT_PROMPT_VERSION = "qwen38-visible-evidence-structured-v5"
 LEGACY_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
 LEGACY_FINAL_INTENT_PROMPT_VERSION_V3 = "qwen38-final-intent-structured-v3"
+LEGACY_FINAL_INTENT_PROMPT_VERSION_V4 = "qwen38-final-intent-structured-v4"
 SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS = (
     LEGACY_FINAL_INTENT_PROMPT_VERSION,
     LEGACY_FINAL_INTENT_PROMPT_VERSION_V3,
+    LEGACY_FINAL_INTENT_PROMPT_VERSION_V4,
     FINAL_INTENT_PROMPT_VERSION,
 )
+UNRESOLVED_VISIBLE_WRITING = "[visible writing unresolved — thinking review required]"
 THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v6"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v1"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V2 = "qwen38-final-intent-thinking-repair-v2"
@@ -86,8 +89,8 @@ class VisualTranscriptionOutput(BaseModel):
     --------------
     * ``needs_review`` is always ``True`` — this is a draft, never a final
       record.
-    * ``draft_text`` contains final-intent Markdown/LaTeX transcribed from the
-      image. Deliberately cancelled work is excluded, but surviving student
+    * ``draft_text`` contains an evidence-preserving Markdown/LaTeX transcript.
+      Possible edits remain visible until the separate Thinking review; student
       mistakes are preserved and never mathematically repaired.
     * ``image_sha256`` is a 64-character lowercase hex string recorded for
       audit purposes.  Raw student image bytes are never logged elsewhere.
@@ -109,6 +112,7 @@ class VisualTranscriptionOutput(BaseModel):
     cancellation_detected: bool = False
     replacement_detected: bool = False
     uncertain_correction_detected: bool = False
+    requires_thinking_repair: bool = False
     is_blank: bool = Field(
         description="True if the answer region contains no student writing.",
     )
@@ -148,6 +152,8 @@ class VisualTranscriptionOutput(BaseModel):
             raise ValueError("editing-analysis flags must match editing_marks")
         if self.uncertain_correction_detected and "[unclear correction]" not in self.draft_text:
             raise ValueError("uncertain correction must remain explicit in draft_text")
+        if self.requires_thinking_repair and self.is_blank:
+            raise ValueError("blank evidence cannot require cancellation repair")
         return self
 
 
