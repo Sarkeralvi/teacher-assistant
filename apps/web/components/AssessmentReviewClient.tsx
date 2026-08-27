@@ -29,6 +29,7 @@ type ReviewDraft = {
 };
 
 type ReviewStatusFilter = "all" | "ungraded" | "suggested" | "finalized" | "approved" | "edited" | "rejected";
+const CURRENT_REAL_GRADING_PROMPT_VERSION = "real-grading-v3";
 
 export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -494,9 +495,17 @@ function ReviewCard({
       {suggestion ? (
         <section className="grid gap-3 rounded border border-amber-800 bg-amber-950/20 p-3">
           <h3 className="font-semibold text-amber-200">Local Qwen suggested score — not final</h3>
+          {suggestion.prompt_version !== CURRENT_REAL_GRADING_PROMPT_VERSION ? (
+            <p className="rounded border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">
+              This draft used an older grading policy ({suggestion.prompt_version}). It may
+              over-penalize equivalent student-defined notation. Do not approve it unchanged;
+              verify the mathematics and use “Edit score and save final grade” when needed.
+            </p>
+          ) : null}
           <p className="text-sm">Draft score: {suggestion.score} / {suggestion.max_score}</p>
           <p className="text-sm">Confidence: {suggestion.confidence} · teacher review required</p>
           <p className="text-sm">Marking policy used: {suggestion.marking_policy}</p>
+          <p className="text-sm">Grading prompt: {suggestion.prompt_version}</p>
           <p className="text-sm">feedback: {suggestion.feedback}</p>
           <p className="text-sm">review_flags: {(suggestion.raw_response_json.review_flags ?? []).join(", ")}</p>
           <div>

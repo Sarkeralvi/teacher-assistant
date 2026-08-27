@@ -255,6 +255,8 @@ for (const marker of [
   "Edit score and save final grade",
   "Reject suggestion",
   "Export approved grades (.xlsx)",
+  "This draft used an older grading policy",
+  "Grading prompt:",
 ]) {
   if (!review.includes(marker)) {
     throw new Error(`Teacher review UI missing marker: ${marker}`);

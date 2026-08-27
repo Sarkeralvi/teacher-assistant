@@ -4,7 +4,7 @@ from packages.brain.schemas import ModelPolicy
 
 PROMPT_VERSIONS: dict[ModelPolicy, str] = {
     ModelPolicy.MOCK_GRADING: "mock-grading-v1",
-    ModelPolicy.REAL_GRADING: "real-grading-v2",
+    ModelPolicy.REAL_GRADING: "real-grading-v3",
 }
 
 MARKING_POLICY_INSTRUCTIONS: dict[str, tuple[str, ...]] = {
@@ -92,6 +92,49 @@ HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE: tuple[str, ...] = (
     "- Never create a FinalGrade. Always preserve teacher review requirement.",
 )
 
+SEMANTIC_EQUIVALENCE_GRADING_GUIDANCE: tuple[str, ...] = (
+    "Semantic equivalence and student-defined notation guidance",
+    (
+        "- Treat the model answer as a semantic reference, not an exact-string, symbol-name, "
+        "set-name, or presentation template."
+    ),
+    (
+        "- Before deducting marks for different symbols, read any explicit definitions in the "
+        "teacher-confirmed student answer and substitute those meanings consistently."
+    ),
+    (
+        "- If a consistent renaming of student-defined symbols produces the same mathematical "
+        "objects, events, outcomes, relations, or method as the model answer, treat the notation "
+        "as mathematically equivalent and do not deduct marks merely for that renaming."
+    ),
+    (
+        "- A different set name or a different listing order is not an error unless the question "
+        "or rubric explicitly requires that name or an ordered sequence."
+    ),
+    (
+        "- Example: if the student explicitly defines F as fail and P as does not fail, then "
+        "{F, PF, PPF, PPPF, PPPP} is notation-equivalent to "
+        "{N, NF, NNF, NNNF, NNNN} when N means does not fail."
+    ),
+    (
+        "- Apply that substitution element-by-element. Under the same definitions, "
+        "{P, PF, PPF, PPPF, PPPP} is not fully equivalent to the reference because its first "
+        "outcome maps to N rather than F; the other four outcomes still match. Use the rubric "
+        "to award proportionate partial credit instead of treating the entire construction as "
+        "wrong merely because it uses P rather than N."
+    ),
+    (
+        "- Do penalize a real semantic defect: an undefined or inconsistently used symbol, a "
+        "missing or duplicate outcome, an impossible outcome, a changed event meaning, or an "
+        "incorrect relation. Do not invent a symbol definition that the student did not supply."
+    ),
+    (
+        "- In every rubric reason, state the semantic comparison you performed. Never claim that "
+        "canonical notation is required unless that requirement is explicit in the question or "
+        "rubric."
+    ),
+)
+
 DEPENDENT_RUBRIC_GRADING_GUIDANCE: tuple[str, ...] = (
     "Dependent rubric grading guidance",
     "- Evaluate rubric criteria in context, not as isolated keyword checks.",
@@ -137,6 +180,10 @@ def build_dependent_rubric_guidance() -> str:
     return "\n".join(DEPENDENT_RUBRIC_GRADING_GUIDANCE)
 
 
+def build_semantic_equivalence_guidance() -> str:
+    return "\n".join(SEMANTIC_EQUIVALENCE_GRADING_GUIDANCE)
+
+
 def build_grading_prompt(
     *,
     question_text: str,
@@ -170,6 +217,7 @@ def build_grading_prompt(
     policy_instruction = build_marking_policy_instruction(normalized_policy)
     math_stat_guidance = build_handwritten_math_stat_guidance()
     dependent_rubric_guidance = build_dependent_rubric_guidance()
+    semantic_equivalence_guidance = build_semantic_equivalence_guidance()
     user_prompt = f"""
 Task: answer_region_grading
 <question>
@@ -204,6 +252,9 @@ Math/stat grading guidance:
 
 Dependent rubric grading guidance:
 {dependent_rubric_guidance}
+
+Semantic equivalence grading guidance:
+{semantic_equivalence_guidance}
 
 Do not change max_score, rubric criterion max_marks, or teacher-review requirements
 because of policy. Include marking_policy:{normalized_policy} in review_flags.

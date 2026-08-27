@@ -464,7 +464,7 @@ def _advance_candidate_to_teacher_review(
                     else "llama_cpp_qwen38"
                 ),
                 model_name=candidate.model_alias,
-                prompt_version="real-grading-v2",
+                prompt_version="real-grading-v3",
                 marking_policy="general",
                 token_usage={
                     "prompt_tokens": 10,

@@ -200,6 +200,47 @@ def test_grading_prompt_includes_handwritten_math_statistics_guidance() -> None:
     assert "Do not create a final grade" in prompt
 
 
+def test_grading_prompt_requires_semantic_equivalence_for_student_defined_symbols() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    prompt = "\n".join(
+        message["content"]
+        for message in build_grading_prompt(
+            question_text="Construct the sample space.",
+            rubric_json={
+                "model_answer": "S = {F, NF, NNF, NNNF, NNNN}",
+                "total_marks": "5.00",
+                "criteria": [
+                    {
+                        "id": "sample-space",
+                        "description": "Construct the complete sample space.",
+                        "max_marks": "5.00",
+                    }
+                ],
+            },
+            answer_image_path="[image input disabled]",
+            image_input_enabled=False,
+            student_answer_text=(
+                "Fail -> F\ndoesn't fail -> P\n"
+                "A = {F, PF, PPF, PPPF, PPPP}"
+            ),
+            marking_policy="general",
+        )
+    )
+
+    assert "model answer as a semantic reference" in prompt
+    assert "explicit definitions" in prompt
+    assert "consistent renaming" in prompt
+    assert "different set name or a different listing order is not an error" in prompt
+    assert "{F, PF, PPF, PPPF, PPPP}" in prompt
+    assert "{N, NF, NNF, NNNF, NNNN}" in prompt
+    assert "{P, PF, PPF, PPPF, PPPP} is not fully equivalent" in prompt
+    assert "other four outcomes still match" in prompt
+    assert "proportionate partial credit" in prompt
+    assert "undefined or inconsistently used symbol" in prompt
+    assert "Never claim that canonical notation is required" in prompt
+
+
 def test_grading_prompt_includes_bayes_probability_score_band_guidance() -> None:
     from packages.brain.prompt_registry import build_grading_prompt
 

@@ -36,7 +36,7 @@ SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km",)
 # grading run; run_grading_stage accepts SUPPORTED_GRADING_MODELS only.
 HISTORICAL_GRADING_MODELS = (*SUPPORTED_GRADING_MODELS, "qwen3.8-27b-q4km")
 EXPECTED_LLAMA_CPP_BUILD = "10249"
-EXPECTED_PROMPT_VERSION = "real-grading-v2"
+EXPECTED_PROMPT_VERSION = "real-grading-v3"
 OCR_CALL_LIMIT = 20
 QWEN_CALL_LIMIT = 18
 DEFAULT_SEED = 360_020
@@ -236,7 +236,7 @@ class LocalCuratedEvaluationManifest(BaseModel):
     # No default: the run must state which grading model it used, because the
     # choice between Qwen3.6 and Qwen3.8 is still being decided on measurements.
     expected_qwen_model: str
-    prompt_version: Literal["real-grading-v2"] = EXPECTED_PROMPT_VERSION
+    prompt_version: Literal["real-grading-v3"] = EXPECTED_PROMPT_VERSION
     operator_assets: OperatorAssetMetadata
     transport: Literal["direct_host_eval"] = "direct_host_eval"
     ocr_call_limit: Literal[20] = OCR_CALL_LIMIT
