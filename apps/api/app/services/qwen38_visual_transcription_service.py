@@ -438,23 +438,19 @@ class Qwen38VisualTranscriptionService:
             raise VisualTranscriptionError(
                 "Displayed visual transcription changed; refresh before confirming"
             )
-        if bool((run.normalized_result or {}).get("requires_thinking_repair")):
-            raise VisualTranscriptionError(
-                "Visible edits or unresolved writing require explicit Thinking review before "
-                "this transcript can be confirmed"
-            )
         if run.source_image_sha256 != self._source_hash(region):
             raise VisualTranscriptionError("Answer image changed after transcription; run it again")
-        repair_exists = self.db.scalar(
+        confirmed_repair_exists = self.db.scalar(
             select(AnswerRegionOcrRun.id).where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
                 AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
+                AnswerRegionOcrRun.status == "confirmed",
             )
         )
-        if repair_exists is not None:
+        if confirmed_repair_exists is not None:
             raise VisualTranscriptionError(
-                "A thinking repair exists; review that repair instead of confirming the "
-                "source transcript"
+                "A Thinking alternative is already confirmed; it cannot be overwritten by the "
+                "original transcript"
             )
         mapping = self._mapping_for_region(region.id)
         if (
@@ -468,6 +464,15 @@ class Qwen38VisualTranscriptionService:
         run.confirmed_text = run.draft_text
         run.confirmed_by_teacher_id = teacher.id
         run.confirmed_at = datetime.now(UTC)
+        teacher_selected_flagged_baseline = bool(
+            (run.normalized_result or {}).get("requires_thinking_repair")
+        )
+        existing_warnings = run.warnings or []
+        if (
+            teacher_selected_flagged_baseline
+            and "teacher_selected_original_transcript" not in existing_warnings
+        ):
+            run.warnings = [*existing_warnings, "teacher_selected_original_transcript"]
         region.manual_answer_text = run.draft_text
         region.evidence_status = "partial"
         self._audit(
@@ -479,6 +484,7 @@ class Qwen38VisualTranscriptionService:
                 "answer_region_id": region.id,
                 "draft_text_sha256": draft_hash,
                 "character_count": len(run.draft_text),
+                "teacher_selected_flagged_baseline": teacher_selected_flagged_baseline,
             },
         )
         self.db.commit()
@@ -671,8 +677,8 @@ class Qwen38VisualTranscriptionService:
             raise VisualTranscriptionError("Displayed repaired transcript changed; refresh first")
         normalized = run.normalized_result or {}
         decisions = (normalized.get("editing_analysis") or {}).get("editing_marks") or []
-        if not isinstance(decisions, list) or not decisions:
-            raise VisualTranscriptionError("Thinking repair has no reviewable editing decisions")
+        if not isinstance(decisions, list):
+            raise VisualTranscriptionError("Thinking repair editing decisions are invalid")
         expected_decision_hash = _repair_decision_hash(decisions)
         if (
             decision_set_hash != expected_decision_hash
@@ -732,12 +738,6 @@ class Qwen38VisualTranscriptionService:
         run.rejected_by_teacher_id = teacher.id
         run.rejected_at = datetime.now(UTC)
         run.rejection_reason_codes = [reason]
-        mapping = self._mapping_for_region(region.id)
-        if mapping is not None:
-            mapping.mapping_status = "blocked"
-            mapping.blocker_reason = (
-                "Thinking repair could not resolve final student intent; upload a clearer page"
-            )
         self._audit(
             run,
             "qwen38_thinking_repair_rejected",

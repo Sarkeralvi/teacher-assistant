@@ -44,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from packages.brain.llama_cpp_qwen_provider import (
     QwenReferenceCriterionDraft,
     QwenReferenceQuestionDraft,
+    _llama_cpp_json_schema,
 )
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy, RubricBreakdownItem
@@ -71,11 +72,12 @@ _TRANSCRIBE_MAX_TOKENS = 2048
 _REPEAT_PENALTY = 1.1
 _GRADE_MAX_TOKENS = 1500
 _THINKING_REPAIR_MAX_TOKENS = 2200
-# Qwen3.8 defaults to xhigh, unrestricted reasoning.  A real cancellation
+# Qwen3.8 defaults to xhigh, unrestricted reasoning. A real cancellation
 # repair consumed all 3000 completion tokens in its think block (444 seconds)
-# and never produced the JSON contract.  The installed llama.cpp build exposes
-# a per-request reasoning budget; 512 tokens keeps reasoning genuinely enabled
-# while reserving most of the response for the reviewable transcript/boxes.
+# and never produced the JSON contract. On the locked two-page cancellation
+# case, 256 tokens retained crossed work, 512 avoided reconstructing the crossed
+# sample space, and 1024 reconstructed it while taking about three times as
+# long. 512 is therefore a measured safety optimum, not a speed guess.
 _THINKING_REPAIR_BUDGET_TOKENS = 512
 
 # Reference-bundle completion budget is sized per request, not a flat
@@ -707,6 +709,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         enable_thinking: bool = False,
         reasoning_effort: Literal["low", "medium", "xhigh"] | None = None,
         thinking_budget_tokens: int | None = None,
+        constrain_json_schema: bool = False,
     ) -> tuple[BaseModel, dict[str, Any]]:
         """Call /v1/chat/completions and validate its JSON response.
 
@@ -780,6 +783,23 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "stream": False,
             "chat_template_kwargs": template_kwargs,
         }
+        if constrain_json_schema:
+            # Thinking repair transcribes mathematical handwriting, where a raw
+            # backslash such as ``\times`` or ``\frac`` is enough to make an
+            # otherwise complete model response invalid JSON.  Prompt wording
+            # cannot prevent that reliably.  Constrain this small, stable
+            # repair contract at decode time so invalid JSON is not a possible
+            # model output.  Other visual tasks retain the legacy unconstrained
+            # path because their larger schemas have separate compatibility
+            # history with older llama.cpp builds.
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": _llama_cpp_json_schema(response_model),
+                },
+            }
         if thinking_budget_tokens is not None:
             # llama.cpp applies this sampler only inside the model's think
             # block, then continues generation for the final JSON response.
@@ -1102,6 +1122,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         images: list[tuple[bytes, str]],
         rejected_transcript: str,
         max_tokens: int = _THINKING_REPAIR_MAX_TOKENS,
+        thinking_budget_tokens: int = _THINKING_REPAIR_BUDGET_TOKENS,
     ) -> VisualTranscriptionOutput:
         """Adjudicate visible cancellations in one fresh thinking-enabled call.
 
@@ -1160,6 +1181,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "text. "
             "Page indices are one-based and boxes are normalized [x1,y1,x2,y2] from 0 to 1000. "
             "Then produce draft_text containing only surviving final-intent work in visible order. "
+            "Use ordinary Unicode mathematical symbols where possible. If a backslash is needed "
+            "inside draft_text, it must be a valid JSON-escaped backslash. "
             "Re-check the lowest visible student line and never return blank when editing marks or "
             "any student writing are visible. If every visible line is genuinely cancelled, "
             "return [all visible work cancelled] with is_blank=false. "
@@ -1200,7 +1223,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 temperature=0.0,
                 enable_thinking=True,
                 reasoning_effort="low",
-                thinking_budget_tokens=_THINKING_REPAIR_BUDGET_TOKENS,
+                thinking_budget_tokens=thinking_budget_tokens,
+                constrain_json_schema=True,
             )
             assert isinstance(payload, _Qwen38ThinkingRepairPayload)
             if payload.is_blank:
@@ -1208,7 +1232,11 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             editing_marks = _normalize_editing_marks(
                 payload.editing_marks,
                 page_count=len(images),
-                require_nonempty=True,
+                # A valid Thinking comparison can conclude that no local edit
+                # box is reliable.  The transcript remains teacher-reviewable
+                # as a whole-image alternative; rejecting it merely because a
+                # box is absent turned a useful answer into an opaque failure.
+                require_nonempty=False,
             )
             statuses = {mark.status for mark in editing_marks}
             cancellation_detected = "cancelled" in statuses

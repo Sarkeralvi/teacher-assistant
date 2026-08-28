@@ -371,6 +371,15 @@ def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
     }
     assert request["thinking_budget_tokens"] == 512
     assert request["max_tokens"] == 2200
+    assert request["response_format"]["type"] == "json_schema"
+    assert request["response_format"]["json_schema"]["name"] == (
+        "visual_transcription_thinking_repair"
+    )
+    assert request["response_format"]["json_schema"]["strict"] is True
+    repair_schema = request["response_format"]["json_schema"]["schema"]
+    assert repair_schema["type"] == "object"
+    assert "draft_text" in repair_schema["properties"]
+    assert "editing_marks" in repair_schema["properties"]
     system_prompt = request["messages"][0]["content"]
     assert "do not know the question" in system_prompt
     assert "Never solve" in system_prompt
@@ -438,7 +447,7 @@ def test_thinking_repair_rq_timeout_is_precise_content_free_and_not_retried() ->
     assert len(client.requests) == 1
 
 
-def test_thinking_repair_fails_when_model_returns_no_visual_edit_decisions() -> None:
+def test_thinking_repair_keeps_a_whole_image_comparison_without_edit_boxes() -> None:
     completion = {
         "choices": [
             {
@@ -465,15 +474,14 @@ def test_thinking_repair_fails_when_model_returns_no_visual_edit_decisions() -> 
     }
     provider, _client = provider_with(completion)
 
-    with pytest.raises(
-        Qwen38ThinkingRepairOutputError,
-        match="invalid or missing visual edit decisions",
-    ) as exc_info:
-        provider.repair_transcription_images(
-            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
-            rejected_transcript="wrong reading",
-        )
-    assert exc_info.value.failure_code == "thinking_repair_invalid_decisions"
+    result = provider.repair_transcription_images(
+        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        rejected_transcript="wrong reading",
+    )
+
+    assert result.draft_text == "unchanged"
+    assert result.editing_marks == []
+    assert result.needs_review is True
 
 
 def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:

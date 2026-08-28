@@ -988,7 +988,10 @@ class VisualTranscriptionThinkingRepairConfirmationRequest(BaseModel):
     teacher_confirmed: Literal[True]
     draft_text_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     decision_set_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    reviewed_decision_indexes: list[int] = Field(min_length=1, max_length=100)
+    # Empty is valid when Thinking supplied a whole-image comparison but no
+    # reliable local edit boxes. The teacher's explicit confirmation still
+    # pins the transcript and empty decision-set hashes.
+    reviewed_decision_indexes: list[int] = Field(default_factory=list, max_length=100)
 
     @field_validator("reviewed_decision_indexes")
     @classmethod

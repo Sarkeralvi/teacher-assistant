@@ -37,25 +37,54 @@ def test_legacy_include_crossed_out_transcript_cannot_be_confirmed() -> None:
         )
 
 
-def test_visible_edit_inventory_requires_thinking_before_confirmation() -> None:
-    service = Qwen38VisualTranscriptionService(None)  # type: ignore[arg-type]
+def test_teacher_can_select_an_exact_flagged_baseline_without_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeDb:
+        def scalar(self, _statement):
+            return None
+
+        def commit(self):
+            return None
+
+    service = Qwen38VisualTranscriptionService(FakeDb())  # type: ignore[arg-type]
     draft_text = "[visibly crossed] x=3\nx=4"
     run = SimpleNamespace(
+        id=51,
         answer_region_id=42,
         profile="qwen38_verbatim_visual",
         prompt_version=FINAL_INTENT_PROMPT_VERSION,
         status="succeeded",
         draft_text=draft_text,
         normalized_result={"is_blank": False, "requires_thinking_repair": True},
+        source_image_sha256="a" * 64,
+        warnings=["thinking_repair_required"],
+        confirmed_text=None,
+        confirmed_by_teacher_id=None,
+        confirmed_at=None,
+    )
+    region = SimpleNamespace(
+        id=42,
+        grading_jobs=[],
+        grade_suggestions=[],
+        manual_answer_text=None,
+        evidence_status="unconfirmed",
+    )
+    mapping = SimpleNamespace(teacher_confirmed=True)
+    monkeypatch.setattr(service, "_source_hash", lambda _region: "a" * 64)
+    monkeypatch.setattr(service, "_mapping_for_region", lambda _region_id: mapping)
+    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
+
+    service.confirm(
+        region,  # type: ignore[arg-type]
+        run,  # type: ignore[arg-type]
+        teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+        draft_hash=hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
     )
 
-    with pytest.raises(VisualTranscriptionError, match="explicit Thinking review"):
-        service.confirm(
-            SimpleNamespace(id=42),  # type: ignore[arg-type]
-            run,  # type: ignore[arg-type]
-            teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
-            draft_hash=hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
-        )
+    assert run.status == "confirmed"
+    assert "teacher_selected_original_transcript" in run.warnings
+    assert region.manual_answer_text == draft_text
 
 
 def test_transcription_cannot_replace_evidence_after_grading_started(
@@ -221,3 +250,56 @@ def test_thinking_repair_requires_teacher_review_of_every_editing_decision(
     assert region.evidence_status == "partial"
     assert mapping.mapping_status == "teacher_confirmed"
     assert mapping.blocker_reason is None
+
+
+def test_thinking_comparison_without_boxes_can_be_confirmed_as_a_whole_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_text = "surviving final line"
+    draft_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+    decision_hash = _repair_decision_hash([])
+    run = SimpleNamespace(
+        id=12,
+        answer_region_id=42,
+        profile="qwen38_thinking_repair",
+        prompt_version=THINKING_REPAIR_PROMPT_VERSION,
+        status="succeeded",
+        draft_text=draft_text,
+        normalized_result={
+            "decision_set_sha256": decision_hash,
+            "editing_analysis": {"editing_marks": []},
+        },
+        source_image_sha256="a" * 64,
+        confirmed_text=None,
+        confirmed_by_teacher_id=None,
+        confirmed_at=None,
+    )
+    region = SimpleNamespace(
+        id=42,
+        grading_jobs=[],
+        grade_suggestions=[],
+        manual_answer_text=None,
+        evidence_status="unconfirmed",
+    )
+    mapping = SimpleNamespace(
+        teacher_confirmed=True,
+        mapping_status="teacher_confirmed",
+        blocker_reason=None,
+    )
+    db = SimpleNamespace(commit=lambda: None)
+    service = Qwen38VisualTranscriptionService(db)  # type: ignore[arg-type]
+    monkeypatch.setattr(service, "_source_hash", lambda _region: "a" * 64)
+    monkeypatch.setattr(service, "_mapping_for_region", lambda _region_id: mapping)
+    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
+
+    service.confirm_thinking_repair(
+        region,  # type: ignore[arg-type]
+        run,  # type: ignore[arg-type]
+        teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+        draft_hash=draft_hash,
+        decision_set_hash=decision_hash,
+        reviewed_decision_indexes=[],
+    )
+
+    assert run.status == "confirmed"
+    assert region.manual_answer_text == draft_text

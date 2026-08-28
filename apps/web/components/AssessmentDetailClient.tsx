@@ -195,7 +195,7 @@ const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   "qwen38-final-intent-structured-v4",
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
-const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v6";
+const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v7";
 
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;
@@ -1965,7 +1965,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 );
                 const confirmedRun = thinkingRepairRun?.status === "confirmed"
                   ? thinkingRepairRun
-                  : !thinkingRepairRun && visualRun?.status === "confirmed" && repairableFinalIntentRun
+                  : visualRun?.status === "confirmed" && repairableFinalIntentRun
                     ? visualRun
                     : null;
                 const legacyRetranscriptionRequired = Boolean(
@@ -2120,8 +2120,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               </p>
                             ) : null}
                             {visualRun.warnings.includes("thinking_repair_required") ? (
-                              <p className="rounded border border-red-700 bg-red-950/30 p-2 text-xs font-semibold text-red-100">
-                                Direct confirmation is blocked. Complete the Thinking-enabled cancellation review below; this draft cannot be sent for grading.
+                              <p className="rounded border border-amber-700 bg-amber-950/30 p-2 text-xs font-semibold text-amber-100">
+                                Possible edits need special attention. If this original transcript is already exact, you may use it as shown; otherwise compare it with the optional Thinking interpretation below.
                               </p>
                             ) : null}
                             {visualRun.warnings.includes("student_replacement_detected") ? (
@@ -2133,8 +2133,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               </p>
                             ) : null}
                             {visualRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{visualRun.draft_text}</pre> : null}
-                            {visualRun.status === "succeeded" && currentFinalIntentRun && !requiresThinkingRepair && !thinkingRepairRun ? <div className="flex flex-wrap gap-2">
-                              <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>Confirm faithful transcription</button>
+                            {visualRun.status === "succeeded" && currentFinalIntentRun && thinkingRepairRun?.status !== "confirmed" ? <div className="flex flex-wrap gap-2">
+                              <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>{requiresThinkingRepair ? "Use original transcript exactly as shown" : "Use this faithful transcription"}</button>
                               <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleRejectVisualTranscription(mapping, visualRun)}>None matches — block and upload clearer page</button>
                             </div> : null}
                           </div>
@@ -2150,7 +2150,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               ? "Qwen3.8 Thinking is adjudicating visible edits..."
                               : thinkingRepairRun?.status === "failed"
                                 ? "Start corrected Thinking repair"
-                                : "Repair cancellation interpretation with Qwen3.8 Thinking"}
+                                : requiresThinkingRepair
+                                  ? "Compare with Qwen3.8 Thinking (recommended)"
+                                  : "Compare with Qwen3.8 Thinking (optional)"}
                           </button>
                         ) : null}
                         {thinkingRepairRun ? (
@@ -2159,6 +2161,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               <p className="font-semibold text-violet-100">Thinking-enabled cancellation repair · run #{thinkingRepairRun.id}</p>
                               <p className="text-xs text-violet-200">{thinkingRepairRun.status} · {thinkingRepairRun.calls_used}/{thinkingRepairRun.call_limit} call · no question, solution, rubric, or marks were provided</p>
                               <p className="mt-1 text-xs text-amber-200">Reasoning is advisory only. Verify every numbered visual box; mathematical plausibility is not evidence.</p>
+                              <p className="mt-1 text-xs text-slate-300">Thinking is a comparison, not an automatic upgrade. It may be worse than the original transcript; choose only the version that matches the images.</p>
                             </div>
                             {thinkingRepairRun.error ? <p className="text-xs text-red-200">{thinkingRepairRun.error}</p> : null}
                             {thinkingRepairFailureCode ? <p className="text-xs text-red-300">Failure category: {thinkingRepairFailureCode.replaceAll("_", " ")}</p> : null}
@@ -2189,18 +2192,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                   );
                                 })}
                               </fieldset>
+                            ) : thinkingRepairRun.status === "succeeded" ? (
+                              <p className="rounded border border-slate-700 p-2 text-xs text-slate-200">Thinking produced a whole-image alternative without reliable local edit boxes. Compare the complete transcript with every displayed image before choosing it.</p>
                             ) : null}
                             {thinkingRepairRun.status === "succeeded" ? (
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   className={buttonClass}
                                   type="button"
-                                  disabled={confirmingVisualRunId === thinkingRepairRun.id || (reviewedRepairDecisions[thinkingRepairRun.id] ?? []).length !== repairDecisions.length || repairDecisions.length === 0}
+                                  disabled={confirmingVisualRunId === thinkingRepairRun.id || (reviewedRepairDecisions[thinkingRepairRun.id] ?? []).length !== repairDecisions.length}
                                   onClick={() => void handleConfirmThinkingRepair(mapping, thinkingRepairRun)}
                                 >
-                                  Confirm repaired final-intent transcription
+                                  Use Thinking transcript after image review
                                 </button>
-                                <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === thinkingRepairRun.id} onClick={() => void handleRejectThinkingRepair(mapping, thinkingRepairRun)}>Repair still wrong — block grading</button>
+                                <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === thinkingRepairRun.id} onClick={() => void handleRejectThinkingRepair(mapping, thinkingRepairRun)}>Discard Thinking alternative</button>
                               </div>
                             ) : null}
                           </div>
