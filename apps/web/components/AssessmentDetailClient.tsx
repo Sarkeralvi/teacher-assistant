@@ -2116,7 +2116,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
                     {mapping.answer_region_id ? (
                       <>
-                        <details open={sourceSegments.length > 1} className="rounded border border-red-800 bg-red-950/20 p-3">
+                        <details open={!mapping.teacher_confirmed || sourceSegments.length > 1} className="rounded border border-red-800 bg-red-950/20 p-3">
                           <summary className="cursor-pointer font-semibold text-red-100">Required: compare the crop boundary with the complete source page</summary>
                           <div className="mt-3 grid gap-3">
                             {sourceSegments.map((segment) => (

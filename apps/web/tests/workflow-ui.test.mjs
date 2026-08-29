@@ -155,6 +155,7 @@ for (const marker of [
   "Existing submissions and approved grades were not changed.",
   "Confirmed mappings are protected.",
   "Required: compare the crop boundary with the complete source page",
+  "open={!mapping.teacher_confirmed || sourceSegments.length > 1}",
   "Compare and acknowledge the full-page boundary first",
   "Complete prepared answer",
   "Review every segment below in order.",
