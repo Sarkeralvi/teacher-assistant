@@ -80,13 +80,16 @@ function Get-LocalAiRuntimeState {
 $psql = Join-Path $paths.PostgresBin "psql.exe"
 $postgresReady = $false
 try {
-    $postgresReady = (& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1"
+    # PowerShell's collection comparison returns an empty array when psql
+    # cannot connect.  Cast explicitly so the operator table always shows a
+    # clear Boolean instead of rendering that empty array as "{}".
+    $postgresReady = [bool]((& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1")
 } catch {
     $postgresReady = $false
 }
 $redisReady = $false
 try {
-    $redisReady = (& $paths.RedisCli -h 127.0.0.1 -p 6379 PING 2>$null) -eq "PONG"
+    $redisReady = [bool]((& $paths.RedisCli -h 127.0.0.1 -p 6379 PING 2>$null) -eq "PONG")
 } catch {
     $redisReady = $false
 }
