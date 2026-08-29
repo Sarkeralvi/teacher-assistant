@@ -32,6 +32,7 @@ from app.services.local_script_preparation import (
     PreparedSegment,
     _apply_adjacent_continuation_boundary_fallback,
     _cleaned_whole_image,
+    _find_low_ink_page_boundary,
     _stabilize_visual_page_regions,
 )
 from packages.brain.schemas_qwen38 import VisualPageRegion
@@ -162,6 +163,27 @@ def test_visual_region_hardening_keeps_a_suspicious_low_continuation_anchor(
     # The adjacent-question fallback needs this unassigned top strip to remain
     # visible; blindly extending every alleged continuation would hide it.
     assert stabilized.segment.y > 0
+
+
+def test_low_ink_boundary_uses_white_gap_without_luminance_overflow(
+    tmp_path: Path,
+) -> None:
+    page_path = tmp_path / "white-gap.png"
+    page = Image.new("RGB", (600, 1000), "white")
+    draw = ImageDraw.Draw(page)
+    # The rough model anchors meet inside this dark answer line. The server
+    # must move the separator to the first nearby white rows below it.
+    draw.rectangle((20, 380, 580, 425), fill="black")
+    page.save(page_path)
+
+    boundary = _find_low_ink_page_boundary(
+        image_path=page_path,
+        previous_bottom=390,
+        next_top=410,
+        page_height=page.height,
+    )
+
+    assert 426 <= boundary <= 445
 
 
 def test_adjacent_blank_after_multi_page_answer_gets_uncertain_shared_boundary() -> None:

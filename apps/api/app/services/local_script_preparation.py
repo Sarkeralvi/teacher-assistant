@@ -2224,7 +2224,11 @@ def _find_low_ink_page_boundary(
 
     midpoint = max(1, min(page_height - 1, round((previous_bottom + next_top) / 2)))
     radius = max(16, round(page_height * 0.04))
-    search_top = max(1, min(previous_bottom, next_top) - radius)
+    # Never move the cut above both rough anchors. That can truncate the final
+    # line of the preceding answer when both model boxes meet inside a glyph.
+    # Extra search room belongs below the anchors, where including a little of
+    # the next heading is safer than deleting mark-bearing prior work.
+    search_top = max(1, min(previous_bottom, next_top))
     search_bottom = min(page_height - 1, max(previous_bottom, next_top) + radius)
     if search_bottom - search_top < 5:
         return midpoint
@@ -2239,9 +2243,9 @@ def _find_low_ink_page_boundary(
         if sample.size == 0:
             return midpoint
         red, green, blue = (
-            sample[:, :, 0].astype(np.int16),
-            sample[:, :, 1].astype(np.int16),
-            sample[:, :, 2].astype(np.int16),
+            sample[:, :, 0].astype(np.int32),
+            sample[:, :, 1].astype(np.int32),
+            sample[:, :, 2].astype(np.int32),
         )
         luminance = (299 * red + 587 * green + 114 * blue) // 1000
         teacher_red = (red > 110) & (red > green + 35) & (red > blue + 35)
