@@ -404,7 +404,12 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     return Settings(**values)
 
 
-def _seed(db: Session, tmp_path: Path, page_count: int = 2) -> tuple[Submission, User]:
+def _seed(
+    db: Session,
+    tmp_path: Path,
+    page_count: int = 2,
+    labels: tuple[str, ...] = LABELS,
+) -> tuple[Submission, User]:
     suffix = uuid4().hex[:8]
     teacher = User(
         name="Teacher",
@@ -439,7 +444,7 @@ def _seed(db: Session, tmp_path: Path, page_count: int = 2) -> tuple[Submission,
     )
     db.add(extraction_run)
     db.flush()
-    for label in LABELS:
+    for label in labels:
         question = Question(
             assessment_id=assessment.id,
             question_no=label,
@@ -1068,6 +1073,180 @@ def test_visual_mapping_splits_lower_continuation_band_to_missing_next_question(
     )
     assert first.mapping_status == "uncertain"
     assert second.mapping_status == "uncertain"
+
+
+def test_visual_mapping_recovers_missing_internal_subpart_with_focused_call(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    labels = ("1(b)(i)", "1(b)(ii)", "1(c)(i)")
+    submission, teacher = _seed(db_session, tmp_path, labels=labels)
+    vision = FakeVisionProvider(
+        [
+            [
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[40, 100, 960, 980],
+                    continues_from_previous=False,
+                    continues_to_next=True,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                )
+            ],
+            [
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[0, 180, 1000, 520],
+                    continues_from_previous=True,
+                    continues_to_next=False,
+                    confidence=Decimal("0.6"),
+                    warnings=[],
+                ),
+                VisualPageRegion(
+                    question_label=labels[2],
+                    bbox=[0, 560, 1000, 840],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.7"),
+                    warnings=[],
+                ),
+            ],
+            [
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[0, 180, 1000, 265],
+                    continues_from_previous=True,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                ),
+                VisualPageRegion(
+                    question_label=labels[1],
+                    bbox=[0, 265, 1000, 490],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                ),
+                VisualPageRegion(
+                    question_label=labels[2],
+                    bbox=[0, 490, 1000, 860],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                ),
+            ],
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(vision),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_ocr_calls=3,
+    )
+
+    assert vision.calls == 3
+    assert vision.inputs[2]["question_labels"] == list(labels)
+    assert vision.inputs[2]["open_continuations"] == [labels[0]]
+    assert vision.inputs[2]["boundary_verification"] is True
+    mapping_by_label = {
+        mapping.question.question_no: mapping for mapping in mappings
+    }
+    assert len(mapping_by_label[labels[0]].answer_region.segments) == 2
+    assert len(mapping_by_label[labels[1]].answer_region.segments) == 1
+    assert len(mapping_by_label[labels[2]].answer_region.segments) == 1
+    second_page_segments = [
+        mapping_by_label[label].answer_region.segments[-1] for label in labels
+    ]
+    assert [segment.page.page_no for segment in second_page_segments] == [2, 2, 2]
+    assert second_page_segments[0].y < second_page_segments[1].y
+    assert second_page_segments[1].y < second_page_segments[2].y
+    assert "focused visual boundary check recovered" in " ".join(
+        mapping_by_label[labels[1]].source_reference["warnings"]
+    )
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.event_type == "submission_script_draft_prepared")
+        .order_by(AuditLog.id.desc())
+        .first()
+    )
+    assert audit.payload_json["visual_mapping_call_count"] == 3
+    assert audit.payload_json["visual_boundary_recovery_call_count"] == 1
+
+
+def test_visual_mapping_blocks_ambiguous_internal_boundary_without_recovery_budget(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    labels = ("1(b)(i)", "1(b)(ii)", "1(c)(i)")
+    submission, teacher = _seed(db_session, tmp_path, labels=labels)
+    vision = FakeVisionProvider(
+        [
+            [
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[40, 100, 960, 980],
+                    continues_from_previous=False,
+                    continues_to_next=True,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                )
+            ],
+            [
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[0, 180, 1000, 520],
+                    continues_from_previous=True,
+                    continues_to_next=False,
+                    confidence=Decimal("0.6"),
+                    warnings=[],
+                ),
+                VisualPageRegion(
+                    question_label=labels[2],
+                    bbox=[0, 560, 1000, 840],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.7"),
+                    warnings=[],
+                ),
+            ],
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(vision),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_ocr_calls=2,
+    )
+
+    assert vision.calls == 2
+    mapping_by_label = {
+        mapping.question.question_no: mapping for mapping in mappings
+    }
+    assert mapping_by_label[labels[0]].answer_region is not None
+    assert mapping_by_label[labels[0]].mapping_status == "blocked"
+    assert mapping_by_label[labels[1]].answer_region is None
+    assert mapping_by_label[labels[1]].mapping_status == "blocked"
+    assert mapping_by_label[labels[2]].mapping_status == "blocked"
+    assert "visual-call limit" in mapping_by_label[labels[0]].blocker_reason
+    assert mapping_by_label[labels[0]].source_reference["mapping_blockers"]
 
 
 def test_no_vision_call_when_tier1_read_every_page(

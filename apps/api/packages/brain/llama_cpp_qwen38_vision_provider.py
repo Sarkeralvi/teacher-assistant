@@ -1290,6 +1290,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         question_labels: list[str],
         question_references: list[dict[str, Any]] | None = None,
         open_continuations: list[str] | None = None,
+        boundary_verification: bool = False,
     ) -> VisualPageMappingOutput:
         """Locate one union box per visible finalized answer label on a page.
 
@@ -1312,8 +1313,19 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             f"- {item['question_no']}: {item['question_text']}" for item in references
         )
         continuation_hint = ", ".join(open_continuations or []) or "none"
+        boundary_instruction = (
+            "This is a focused boundary-verification pass after a general pass omitted an "
+            "internal canonical subpart. The supplied labels are one consecutive page window. "
+            "Inspect the entire window from the first label through the last, explicitly look "
+            "for every intervening part heading, and return a separate ordered ownership band "
+            "for every supplied label that has visible student work. Never merge an intervening "
+            "part into either neighbour. "
+            if boundary_verification
+            else ""
+        )
         prompt = (
-            "This is a complete exam-script page. Map only visible student answer segments to "
+            boundary_instruction
+            + "This is a complete exam-script page. Map only visible student answer segments to "
             "the supplied FINALIZED labels. Return at most one union bounding box per label on "
             "this page, never one box per line. A page can contain both the last line of an open "
             "continuation and the start of the next labeled subpart; return two separate regions "

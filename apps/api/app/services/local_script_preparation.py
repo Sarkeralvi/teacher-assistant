@@ -164,6 +164,9 @@ class LocalScriptPreparationService:
         confidence_by_question: dict[int, list[Decimal]] = {
             question.id: [] for question in questions
         }
+        boundary_blocker_by_question: dict[int, list[str]] = {
+            question.id: [] for question in questions
+        }
         open_continuations: list[str] = []
         calls_used = 0
         lease_holder_id = f"script_preparation:{submission.id}:{uuid4().hex}"
@@ -249,6 +252,21 @@ class LocalScriptPreparationService:
                         if region.continues_to_next or reaches_page_bottom:
                             next_continuations.append(question.question_no)
                     open_continuations = next_continuations
+
+                recovery_calls = self._recover_missing_visual_internal_boundaries(
+                    pages=pages,
+                    questions=questions,
+                    references=references,
+                    provider=provider,
+                    lease=lease,
+                    lease_holder_id=lease_holder_id,
+                    maximum_calls=max(0, maximum_ocr_calls - calls_used),
+                    segments_by_question=segments_by_question,
+                    warning_by_question=warning_by_question,
+                    confidence_by_question=confidence_by_question,
+                    boundary_blocker_by_question=boundary_blocker_by_question,
+                )
+                calls_used += recovery_calls
         except LocalModelLeaseError as exc:
             raise LocalScriptPreparationError(str(exc)) from exc
 
@@ -267,13 +285,22 @@ class LocalScriptPreparationService:
         created: list[AnswerRegionMapping] = []
         for question in questions_to_persist:
             segments = segments_by_question[question.id]
+            boundary_blockers = list(
+                dict.fromkeys(boundary_blocker_by_question[question.id])
+            )
             draft = {
                 # A visual boundary is always review-only. A geometrically
                 # plausible box is not authoritative until the teacher compares
                 # it with the complete page overlay.
-                "status": "uncertain" if segments else "not_found",
+                "status": (
+                    "blocked"
+                    if boundary_blockers
+                    else ("uncertain" if segments else "not_found")
+                ),
                 "confidence": str(min(confidence_by_question[question.id], default=Decimal("0"))),
                 "warnings": list(dict.fromkeys(warning_by_question[question.id])),
+                "mapping_blockers": boundary_blockers,
+                "blocker_reason": boundary_blockers[0] if boundary_blockers else None,
             }
             node = nodes[question.id]
             # Attach the unassigned-content warning to questions the mapper did
@@ -328,6 +355,7 @@ class LocalScriptPreparationService:
                     "provider": "llama_cpp_qwen38",
                     "expected_qwen_model": expected_model,
                     "visual_mapping_call_count": calls_used,
+                    "visual_boundary_recovery_call_count": max(0, calls_used - len(pages)),
                     "repair_unconfirmed_only": repair_unconfirmed_only,
                     "preserved_mapping_count": len(preserved_existing),
                     "mapping_count": len(created),
@@ -742,6 +770,188 @@ class LocalScriptPreparationService:
             warning_by_question[current_question.id].append(warning)
             confidence_by_question[previous_question.id].append(Decimal("0.35"))
             confidence_by_question[current_question.id].append(Decimal("0.35"))
+
+    def _recover_missing_visual_internal_boundaries(
+        self,
+        *,
+        pages: list[Any],
+        questions: list[Question],
+        references: list[dict[str, Any]],
+        provider: Any,
+        lease: LocalModelLeaseService,
+        lease_holder_id: str,
+        maximum_calls: int,
+        segments_by_question: dict[int, list[PreparedSegment]],
+        warning_by_question: dict[int, list[str]],
+        confidence_by_question: dict[int, list[Decimal]],
+        boundary_blocker_by_question: dict[int, list[str]],
+    ) -> int:
+        """Recover a canonical part omitted between two mapped page anchors.
+
+        A full-page vision call can find the outer answers yet omit a short
+        subpart between them.  Geometry cannot invent the missing ownership
+        boundary: assigning all intervening ink to either neighbour would
+        silently corrupt evidence.  For that precise structural condition we
+        make one focused, thinking-disabled call containing only the adjacent
+        canonical labels.  The result replaces the ambiguous same-page bands
+        only when every expected label is returned once and in order.
+
+        The call is part of the teacher-authorized visual-call budget and is
+        never retried.  If it cannot produce a complete partition, every
+        affected mapping is hard-blocked from teacher confirmation.
+        """
+
+        page_by_no = {page.page_no: page for page in pages}
+        reference_by_label = {
+            str(item.get("question_no") or "").casefold(): item for item in references
+        }
+        calls_used = 0
+        handled: set[tuple[int, tuple[int, ...]]] = set()
+
+        for left_index, left_question in enumerate(questions[:-2]):
+            left_pages = {segment.page_no for segment in segments_by_question[left_question.id]}
+            if not left_pages:
+                continue
+            for right_index in range(left_index + 2, len(questions)):
+                right_question = questions[right_index]
+                middle_questions = questions[left_index + 1 : right_index]
+                if any(segments_by_question[item.id] for item in middle_questions):
+                    break
+                shared_pages = sorted(
+                    left_pages
+                    & {
+                        segment.page_no
+                        for segment in segments_by_question[right_question.id]
+                    }
+                )
+                if not shared_pages:
+                    continue
+
+                page_no = shared_pages[0]
+                target_questions = questions[left_index : right_index + 1]
+                target_ids = tuple(item.id for item in target_questions)
+                key = (page_no, target_ids)
+                if key in handled:
+                    break
+                handled.add(key)
+                labels = [item.question_no for item in target_questions]
+                blocker_prefix = (
+                    f"page {page_no} has an unresolved boundary across "
+                    f"{', '.join(labels)}"
+                )
+                if calls_used >= maximum_calls:
+                    blocker = (
+                        f"{blocker_prefix}; the authorized visual-call limit left no call "
+                        "for focused boundary verification"
+                    )
+                    for item in target_questions:
+                        boundary_blocker_by_question[item.id].append(blocker)
+                    break
+
+                page = page_by_no.get(page_no)
+                if page is None:
+                    blocker = f"{blocker_prefix}; the source page is unavailable"
+                    for item in target_questions:
+                        boundary_blocker_by_question[item.id].append(blocker)
+                    break
+                image_path = self.storage.resolve_relative(page.image_path)
+                focused_references = [
+                    reference_by_label[item.question_no.casefold()]
+                    for item in target_questions
+                    if item.question_no.casefold() in reference_by_label
+                ]
+                left_has_previous_page = any(
+                    segment.page_no < page_no
+                    for segment in segments_by_question[left_question.id]
+                )
+                calls_used += 1
+                try:
+                    lease.heartbeat(holder_id=lease_holder_id)
+                    result = provider.map_page_answer_regions(
+                        image_bytes=image_path.read_bytes(),
+                        mime_type=_image_content_type(image_path),
+                        question_labels=labels,
+                        question_references=focused_references,
+                        open_continuations=(
+                            [left_question.question_no] if left_has_previous_page else []
+                        ),
+                        boundary_verification=True,
+                    )
+                    lease.heartbeat(holder_id=lease_holder_id)
+                except Exception as exc:
+                    blocker = (
+                        f"{blocker_prefix}; focused boundary verification failed safely "
+                        f"({type(exc).__name__})"
+                    )
+                    for item in target_questions:
+                        boundary_blocker_by_question[item.id].append(blocker)
+                    break
+
+                expected = [label.casefold() for label in labels]
+                returned = [region.question_label.casefold() for region in result.regions]
+                vertically_ordered = [
+                    region.question_label.casefold()
+                    for region in sorted(
+                        result.regions,
+                        key=lambda item: (int(item.bbox[1]), int(item.bbox[3])),
+                    )
+                ]
+                if returned != expected or vertically_ordered != expected:
+                    blocker = (
+                        f"{blocker_prefix}; focused boundary verification did not return "
+                        "every canonical label exactly once in page order"
+                    )
+                    for item in target_questions:
+                        boundary_blocker_by_question[item.id].append(blocker)
+                    break
+
+                with Image.open(image_path) as image:
+                    stabilized = _stabilize_visual_page_regions(
+                        regions=result.regions,
+                        image_path=image_path,
+                        page_id=page.id,
+                        page_no=page.page_no,
+                        page_width=image.width,
+                        page_height=image.height,
+                    )
+                if len(stabilized) != len(target_questions):
+                    blocker = (
+                        f"{blocker_prefix}; focused boundary verification produced an "
+                        "incomplete deterministic partition"
+                    )
+                    for item in target_questions:
+                        boundary_blocker_by_question[item.id].append(blocker)
+                    break
+
+                recovery_warning = (
+                    "a focused visual boundary check recovered a canonical subpart omitted "
+                    "by the full-page pass; compare all adjacent full-width bands before approval"
+                )
+                for question, recovered in zip(
+                    target_questions, stabilized, strict=True
+                ):
+                    segments_by_question[question.id] = [
+                        segment
+                        for segment in segments_by_question[question.id]
+                        if segment.page_no != page_no
+                    ]
+                    segments_by_question[question.id].append(recovered.segment)
+                    segments_by_question[question.id].sort(
+                        key=lambda item: (item.page_no, item.y)
+                    )
+                    confidence_by_question[question.id].append(
+                        recovered.model_region.confidence
+                    )
+                    warning_by_question[question.id].extend(
+                        [
+                            recovery_warning,
+                            *recovered.model_region.warnings,
+                            *recovered.warnings,
+                        ]
+                    )
+                break
+
+        return calls_used
 
     def _validate_paddle_authorization(
         self,
@@ -1838,6 +2048,7 @@ class LocalScriptPreparationService:
                     for item in segments
                 ],
                 "warnings": warnings,
+                "mapping_blockers": list(draft.get("mapping_blockers") or []),
                 "teacher_review_required": True,
                 "text_source": text_source,
             },
@@ -1846,7 +2057,11 @@ class LocalScriptPreparationService:
             blocker_reason=(
                 "No answer blocks were found for this question"
                 if not segments
-                else ("Qwen marked this mapping uncertain" if status == "uncertain" else None)
+                else (
+                    str(draft.get("blocker_reason") or "Mapping boundary is unresolved")
+                    if status == "blocked"
+                    else ("Qwen marked this mapping uncertain" if status == "uncertain" else None)
+                )
             ),
             provider=provider,
             teacher_confirmed=False,
