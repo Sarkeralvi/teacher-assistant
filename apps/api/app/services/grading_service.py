@@ -736,6 +736,12 @@ class GradingService:
             )
             if lease is not None and lease_holder_id is not None:
                 lease.heartbeat(holder_id=lease_holder_id)
+                # The provider is finished. Release before committing the
+                # terminal job/suggestion so an API process interruption after
+                # that commit cannot leave every later teacher action blocked
+                # by an idle model slot until the lease expires.
+                lease.release(holder_id=lease_holder_id)
+                lease_acquired = False
             output = adapter_output.model_dump(mode="json")
             grade_result = {
                 "score": output.get("score"),

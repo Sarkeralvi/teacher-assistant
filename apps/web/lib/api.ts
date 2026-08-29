@@ -1049,6 +1049,13 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
     if (response.status === 401 && options.authErrorMessage) {
       throw new Error(options.authErrorMessage);
     }
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      if (token) {
+        clearStoredAuthToken();
+        throw new Error("Your login session expired. Please log in again.");
+      }
+      throw new Error("Please log in to continue.");
+    }
     let detail = `${response.status} ${response.statusText}`;
     try {
       const errorBody = (await response.json()) as { detail?: unknown };

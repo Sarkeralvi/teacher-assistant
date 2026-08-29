@@ -25,6 +25,7 @@ from app.models import (
     GradeSuggestion,
     GradingJob,
     GradingRun,
+    LocalModelLease,
     Question,
     QuestionNode,
     Rubric,
@@ -33,6 +34,10 @@ from app.models import (
     User,
 )
 from app.schemas import LocalQwenGradeRequest
+from app.services.local_model_call_guard import (
+    clear_local_model_call_authorization_for_shutdown,
+)
+from app.services.local_model_lease_service import LocalModelLeaseService
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
@@ -40,6 +45,7 @@ from packages.brain.schemas_qwen38 import (
 )
 
 CLEANUP_MODELS = (
+    LocalModelLease,
     FinalGrade,
     GradeSuggestion,
     GradingJob,
@@ -107,11 +113,13 @@ def test_local_qwen38_grade_route_honors_model_specific_kill_switch(
 def db_session() -> Iterator[Session]:
     db = SessionLocal()
     try:
+        clear_local_model_call_authorization_for_shutdown()
         for model in CLEANUP_MODELS:
             db.execute(delete(model))
         db.commit()
         yield db
     finally:
+        clear_local_model_call_authorization_for_shutdown()
         for model in CLEANUP_MODELS:
             db.execute(delete(model))
         db.commit()
@@ -412,6 +420,9 @@ class SuccessfulLocalQwen38Adapter:
     def __init__(self) -> None:
         self.calls = 0
 
+    def verify_available_model(self) -> None:
+        return None
+
     def grade_answer_region(self, **_: object) -> GradeSuggestionOutput:
         self.calls += 1
         return GradeSuggestionOutput(
@@ -452,11 +463,6 @@ def test_one_click_grades_every_approved_answer_as_review_only_draft(
     monkeypatch.setattr(
         "app.api.routes.grading.BrainAdapter.for_provider", lambda *_args: adapter
     )
-    monkeypatch.setattr(
-        "app.services.grading_service.GradingService._local_model_phase",
-        lambda _self: None,
-    )
-
     response = client.post(
         f"/assessments/{setup['assessment_id']}/grade-approved-local-qwen38",
         headers=setup["headers"],
@@ -479,6 +485,55 @@ def test_one_click_grades_every_approved_answer_as_review_only_draft(
     assert adapter.calls == 2
     assert db_session.scalars(select(GradeSuggestion)).all()
     assert db_session.scalars(select(FinalGrade)).all() == []
+    lease = db_session.scalar(select(LocalModelLease))
+    assert lease is not None
+    assert lease.holder_id is None
+
+
+def test_one_click_reclaims_stale_lease_from_terminal_grading_job(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = create_assessment_with_answer_regions(client, tmp_path, region_count=1)
+    region_id = int(setup["regions"][0]["id"])
+    run = create_custom_grading_run(db_session, int(setup["assessment_id"]))
+    finished_job = GradingJob(answer_region_id=region_id, status="succeeded")
+    db_session.add(finished_job)
+    db_session.commit()
+    db_session.refresh(finished_job)
+    LocalModelLeaseService(db_session).acquire(
+        model_phase="Qwen38",
+        holder_kind="grading",
+        holder_id=f"grading_job:{finished_job.id}:interrupted-after-success-commit",
+    )
+
+    adapter = SuccessfulLocalQwen38Adapter()
+    enable_local_qwen38_grading(monkeypatch)
+    monkeypatch.setattr(
+        "app.api.routes.grading.BrainAdapter.for_provider", lambda *_args: adapter
+    )
+
+    response = client.post(
+        f"/assessments/{setup['assessment_id']}/grade-approved-local-qwen38",
+        headers=setup["headers"],
+        json={
+            "grading_run_id": run.id,
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+            "call_limit": 1,
+            "stop_on_failure": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["graded_count"] == 1
+    assert adapter.calls == 1
+    lease = db_session.scalar(select(LocalModelLease))
+    assert lease is not None
+    assert lease.holder_id is None
 
 
 def test_one_click_refuses_over_call_limit_before_adapter_initialization(

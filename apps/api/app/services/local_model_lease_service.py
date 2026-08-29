@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import LocalModelLease
+from app.models import GradingJob, LocalModelLease
 from app.services.local_model_call_guard import (
     activate_local_model_call_authorization,
     clear_local_model_call_authorization,
@@ -78,11 +78,20 @@ class LocalModelLeaseService:
         now = datetime.now(UTC)
         row = self._locked_row()
         if self._is_held_by_other(row, now=now, holder_id=holder_id):
-            raise LocalModelLeaseError(
-                f"The local model slot is held by {row.holder_kind}:{row.holder_id} "
-                f"running {row.model_phase} until {row.expires_at:%H:%M:%S}. "
-                "Wait for it to finish; this run will not switch the model underneath it."
-            )
+            # A successful grading call commits its terminal job immediately
+            # before releasing the lease. If the process is terminated in that
+            # tiny window, no inference is still running but the durable row
+            # used to block all grading for up to 30 minutes. Reclaim only when
+            # the exact owner job is durably terminal; unknown or running
+            # owners remain fail-closed.
+            if self._is_terminal_grading_holder(row):
+                self._clear(row)
+            else:
+                raise LocalModelLeaseError(
+                    f"The local model slot is held by {row.holder_kind}:{row.holder_id} "
+                    f"running {row.model_phase} until {row.expires_at:%H:%M:%S}. "
+                    "Wait for it to finish; this run will not switch the model underneath it."
+                )
         row.model_phase = model_phase
         row.holder_kind = holder_kind
         row.holder_id = holder_id
@@ -240,6 +249,20 @@ class LocalModelLeaseService:
         if row.holder_id is None or row.holder_id == holder_id:
             return False
         return not self._is_expired(row, now=now)
+
+    def _is_terminal_grading_holder(self, row: LocalModelLease) -> bool:
+        if row.holder_kind != "grading" or not row.holder_id:
+            return False
+        prefix, separator, remainder = row.holder_id.partition(":")
+        job_id_text, second_separator, _nonce = remainder.partition(":")
+        if prefix != "grading_job" or not separator or not second_separator:
+            return False
+        try:
+            job_id = int(job_id_text)
+        except ValueError:
+            return False
+        job = self.db.get(GradingJob, job_id)
+        return job is not None and job.status in {"succeeded", "failed"}
 
     @staticmethod
     def _is_expired(row: LocalModelLease, *, now: datetime) -> bool:

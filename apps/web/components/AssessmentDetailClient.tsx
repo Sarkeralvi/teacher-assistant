@@ -2054,6 +2054,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                   : visualRun?.status === "confirmed" && repairableFinalIntentRun
                     ? visualRun
                     : null;
+                const hasDraftSuggestion = Boolean(
+                  mapping.answer_region_id && gradedRegionIds.has(mapping.answer_region_id),
+                );
                 const legacyRetranscriptionRequired = Boolean(
                   visualRun &&
                   !currentFinalIntentRun &&
@@ -2299,7 +2302,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                         ) : null}
                         {confirmedRun ? <div className="flex flex-wrap gap-2">
                           <button className={buttonClass} type="button" disabled={Boolean(mapping.answer_region?.full_answer_confirmed)} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(mapping.answer_region_id!, { full_answer_confirmed: true, packet_status: "complete" }))}>Confirm displayed image is the full answer</button>
-                          {mapping.answer_region?.full_answer_confirmed ? <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id || !localSingleGradeAuthorized} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "Qwen3.8 is grading..." : "Grade confirmed answer with Qwen3.8"}</button> : null}
+                          {mapping.answer_region?.full_answer_confirmed ? hasDraftSuggestion ? (
+                            <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>Draft ready — open review queue</Link>
+                          ) : (
+                            <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id || !localSingleGradeAuthorized} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "Qwen3.8 is grading..." : "Grade confirmed answer with Qwen3.8"}</button>
+                          ) : null}
                         </div> : null}
                       </section>
                     ) : null}
