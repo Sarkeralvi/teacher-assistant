@@ -33,12 +33,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
+import json
 import re
 import time
 from decimal import Decimal
 from typing import Any, Literal
 
 import httpx
+from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from packages.brain.llama_cpp_qwen_provider import (
@@ -71,14 +74,15 @@ _TRANSCRIBE_MAX_TOKENS = 2048
 # small, the model was looping, and more budget only buys more looping.
 _REPEAT_PENALTY = 1.1
 _GRADE_MAX_TOKENS = 1500
-_THINKING_REPAIR_MAX_TOKENS = 2200
+_THINKING_REPAIR_MAX_TOKENS = 2800
 # Qwen3.8 defaults to xhigh, unrestricted reasoning. A real cancellation
 # repair consumed all 3000 completion tokens in its think block (444 seconds)
 # and never produced the JSON contract. On the locked two-page cancellation
-# case, 256 tokens retained crossed work, 512 avoided reconstructing the crossed
-# sample space, and 1024 reconstructed it while taking about three times as
-# long. 512 is therefore a measured safety optimum, not a speed guess.
-_THINKING_REPAIR_BUDGET_TOKENS = 512
+# case, 256 tokens retained crossed work and 1024 reconstructed it while taking
+# about three times as long. The decision-only contract uses a bounded 768-token
+# middle ground: enough to adjudicate every supplied box, but not enough to turn
+# the call into a second transcription or a mathematical reconstruction pass.
+_THINKING_REPAIR_BUDGET_TOKENS = 768
 
 # Reference-bundle completion budget is sized per request, not a flat
 # constant: a real multi-question, multi-criterion bundle needs more room to
@@ -298,6 +302,15 @@ class _Qwen38TranscriptionPayload(BaseModel):
         return self
 
 
+class _Qwen38FinalEditDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page_index: int = Field(ge=1)
+    bbox: list[int] = Field(min_length=4, max_length=4)
+    status: Literal["cancelled", "replacement", "retained"]
+    position_hint: str = Field(min_length=1, max_length=200)
+
+
 class _Qwen38ThinkingRepairPayload(BaseModel):
     """Repair-only output contract for disputed visible writing.
 
@@ -310,7 +323,7 @@ class _Qwen38ThinkingRepairPayload(BaseModel):
 
     draft_text: str = Field(min_length=1)
     uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
-    editing_marks: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    editing_marks: list[_Qwen38FinalEditDecisionPayload] = Field(min_length=1, max_length=50)
     cancellation_detected: bool = False
     replacement_detected: bool = False
     uncertain_correction_detected: bool = False
@@ -364,9 +377,10 @@ def _strip_json_fence(content: str) -> str:
 class Qwen38ThinkingRepairOutputError(RuntimeError):
     """Sanitized, machine-readable failure for a single repair call."""
 
-    def __init__(self, failure_code: str, safe_message: str) -> None:
+    def __init__(self, failure_code: str, safe_message: str, *, calls_used: int = 1) -> None:
         super().__init__(safe_message)
         self.failure_code = failure_code
+        self.calls_used = calls_used
 
 
 class Qwen38VisualTranscriptionOutputError(RuntimeError):
@@ -581,6 +595,83 @@ def _normalize_editing_marks(
     if require_nonempty and not normalized:
         raise ValueError("Qwen3.8 thinking repair returned no image-grounded edit decisions")
     return normalized
+
+
+def _boxes_overlap(left: list[int], right: list[int]) -> bool:
+    return (
+        max(left[0], right[0]) < min(left[2], right[2])
+        and max(left[1], right[1]) < min(left[3], right[3])
+    )
+
+
+def _final_edit_marks_are_pre_adjudicated(
+    final_marks: list[EditingMark], adjudicated_marks: list[EditingMark]
+) -> bool:
+    """Allow only second-pass signals already resolved by the first pass.
+
+    A replacement box may still look like a replacement or cancellation to the
+    thinking-disabled transcriber because both old and new strokes remain in
+    the pixels. A retained box must remain retained. A masked cancelled box,
+    any new box, or any incompatible status fails closed.
+    """
+
+    for final_mark in final_marks:
+        compatible = False
+        for adjudicated in adjudicated_marks:
+            if adjudicated.page_index != final_mark.page_index or not _boxes_overlap(
+                adjudicated.bbox, final_mark.bbox
+            ):
+                continue
+            if adjudicated.status == "replacement" and final_mark.status in {
+                "replacement",
+                "cancelled",
+                "retained",
+            }:
+                compatible = True
+                break
+            if adjudicated.status == "retained" and final_mark.status == "retained":
+                compatible = True
+                break
+        if not compatible:
+            return False
+    return True
+
+
+def _mask_cancelled_image_regions(
+    images: list[tuple[bytes, str]], editing_marks: list[EditingMark]
+) -> list[tuple[bytes, str]]:
+    """Remove only adjudicated-cancelled pixels before final transcription.
+
+    The images are transformed in memory and never persisted. Replacement and
+    retained boxes remain visible. A small padding prevents residual crossing
+    strokes at the box edge from reintroducing cancelled text.
+    """
+
+    masked: list[tuple[bytes, str]] = []
+    for page_index, (image_bytes, _mime_type) in enumerate(images, start=1):
+        with Image.open(io.BytesIO(image_bytes)) as opened:
+            image = opened.convert("RGB")
+        draw = ImageDraw.Draw(image)
+        page_marks = [
+            mark
+            for mark in editing_marks
+            if mark.page_index == page_index and mark.status == "cancelled"
+        ]
+        # Padding scales with the source image.  A fixed three pixels left
+        # anti-aliasing and diagonal strike-through remnants on the real
+        # 300-DPI script, causing the second pass to read cancelled work again.
+        padding = max(4, round(min(image.width, image.height) * 0.004))
+        for mark in page_marks:
+            x1, y1, x2, y2 = mark.bbox
+            left = max(0, round((x1 / 1000) * image.width) - padding)
+            top = max(0, round((y1 / 1000) * image.height) - padding)
+            right = min(image.width, round((x2 / 1000) * image.width) + padding)
+            bottom = min(image.height, round((y2 / 1000) * image.height) + padding)
+            draw.rectangle((left, top, right, bottom), fill=(255, 255, 255))
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        masked.append((output.getvalue(), "image/png"))
+    return masked
 
 
 # ── Main provider class ───────────────────────────────────────────────────
@@ -970,6 +1061,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         images: list[tuple[bytes, str]],
         label: str = "answer",
         max_tokens: int | None = None,
+        adjudicated_final_intent: list[EditingMark] | None = None,
+        bounded_visual_reasoning: bool = False,
     ) -> VisualTranscriptionOutput:
         """Transcribe visible evidence in one fresh, non-thinking visual call.
 
@@ -980,6 +1073,8 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         """
         if not images:
             raise ValueError("At least one answer image is required")
+        if bounded_visual_reasoning and adjudicated_final_intent is None:
+            raise ValueError("Bounded visual reasoning requires adjudicated final-intent boxes")
         if self.require_model_lease:
             from app.services.local_model_call_guard import (
                 assert_local_model_call_authorized,
@@ -1043,12 +1138,67 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
             '"alternatives":["option 1","option 2"]}],"editing_marks":['
             '{"page_index":1,"bbox":[0,0,1000,1000],'
-            '"status":"cancelled|replacement|retained|uncertain_correction",'
+            '"status":"cancelled|replacement|retained",'
             '"position_hint":"location only"}],"cancellation_detected":false,'
             '"replacement_detected":false,"uncertain_correction_detected":false,"is_blank":false,'
             '"is_irrelevant":false,"confidence":0.0,"needs_review":true}. '
             "Use an empty uncertain_glyphs array when there are no ambiguities."
         )
+
+        if adjudicated_final_intent is not None:
+            safe_decisions = [
+                {
+                    "page_index": mark.page_index,
+                    "bbox": mark.bbox,
+                    "status": mark.status,
+                }
+                for mark in adjudicated_final_intent
+            ]
+            final_intent_system_prompt = (
+                "You are the thinking-disabled transcription stage of a two-stage forensic "
+                "handwriting workflow. A separate image-grounded adjudication has already "
+                "decided the cancellation/replacement status of every disputed edit box. "
+                "Cancelled boxes have been replaced with white pixels by the server. Never infer "
+                "or reconstruct content from those white areas. Transcribe only the surviving "
+                "visible student pixels. In a replacement box, transcribe the visible replacement "
+                "and omit the superseded strokes; in a retained box, transcribe the visible work "
+                "normally. Do not reconsider edit intent and return editing_marks as an empty "
+                "array. Preserve all surviving mistakes exactly. Never solve, correct, complete, "
+                "simplify, normalize, summarize, or reconstruct from arithmetic. If a surviving "
+                "glyph cannot be read directly from pixels, report bounded alternatives in "
+                "uncertain_glyphs; do not choose from mathematical context. Do not reveal "
+                "chain-of-thought; return only the JSON contract."
+            )
+            transcription_prompt = (
+                f"Transcribe the ordered masked images for {label}. The following visual boxes "
+                "are already adjudicated and are location/status metadata only, never answer "
+                "content:\n"
+                f"{json.dumps(safe_decisions, separators=(',', ':'))}\n\n"
+                "Transcribe the complete surviving student work in visible reading order. "
+                "Do not include [visibly crossed], [overwritten], [unclear correction], or any "
+                "other edit marker. Do not describe blank masked boxes. Re-check the lowest "
+                "visible student line. Set is_blank=true only if no surviving student writing is "
+                "visible. Return editing_marks=[] because edit intent is already finalized.\n\n"
+                "Return exactly this JSON shape with no extra keys: "
+                '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
+                '"alternatives":["option 1","option 2"]}],"editing_marks":[],'
+                '"cancellation_detected":false,"replacement_detected":false,'
+                '"uncertain_correction_detected":false,"is_blank":false,'
+                '"is_irrelevant":false,"confidence":0.0,"needs_review":true}.'
+            )
+            if bounded_visual_reasoning:
+                final_intent_system_prompt += (
+                    " Use a small bounded reasoning budget only to compare ambiguous surviving "
+                    "strokes across the supplied image views. Mathematical plausibility, expected "
+                    "sequences, arithmetic consistency, and notation conventions are never "
+                    "evidence. The final answer must still be a pixel-faithful transcription, not "
+                    "a repair of the student's work."
+                )
+                transcription_prompt += (
+                    "\nThis is the explicit bounded visual-resolution stage. Resolve a glyph only "
+                    "from its visible strokes. If the pixels remain ambiguous, preserve the "
+                    "uncertainty instead of guessing."
+                )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": final_intent_system_prompt},
@@ -1069,7 +1219,9 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 schema_name="visual_transcription",
                 max_tokens=max_tokens or _TRANSCRIBE_MAX_TOKENS,
                 temperature=0.0,
-                enable_thinking=False,
+                enable_thinking=bounded_visual_reasoning,
+                reasoning_effort="low" if bounded_visual_reasoning else None,
+                thinking_budget_tokens=512 if bounded_visual_reasoning else None,
             )
             assert isinstance(payload, _Qwen38TranscriptionPayload)
             editing_marks = _normalize_editing_marks(
@@ -1121,6 +1273,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         *,
         images: list[tuple[bytes, str]],
         rejected_transcript: str,
+        source_editing_marks: list[dict[str, Any]] | None = None,
         max_tokens: int = _THINKING_REPAIR_MAX_TOKENS,
         thinking_budget_tokens: int = _THINKING_REPAIR_BUDGET_TOKENS,
     ) -> VisualTranscriptionOutput:
@@ -1152,6 +1305,20 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             part, digest = self._image_part(image_bytes, mime_type)
             image_parts.append(part)
             image_hashes.append(digest)
+        source_hints = _normalize_editing_marks(
+            source_editing_marks or [],
+            page_count=len(images),
+            require_nonempty=False,
+        )
+        safe_source_hints = [
+            {
+                "hint_index": index,
+                "page_index": mark.page_index,
+                "bbox": mark.bbox,
+                "provisional_status": mark.status,
+            }
+            for index, mark in enumerate(source_hints, start=1)
+        ]
 
         system_prompt = (
             "You are a forensic visual adjudicator for handwritten exam-script editing marks. "
@@ -1170,19 +1337,27 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "multiplication signs, variables, underlines, brackets, diagram lines, integrals, or "
             "sums for cancellation. Exclude deliberately cancelled work even when readable. Keep "
             "only visible replacements and all surviving mathematical mistakes. Never solve, "
-            "correct, simplify, complete, normalize, or reconstruct from arithmetic. Use "
-            "[unclear correction] when overwrite intent is ambiguous and [illegible] for active "
-            "pixels that cannot be read. Do not reveal chain-of-thought; return only the JSON."
+            "correct, simplify, complete, normalize, or reconstruct from arithmetic. "
+            "This call is an edit-decision pass only, not a transcription pass. Return an "
+            "image-grounded box for every retained, cancelled, or replacement decision. The "
+            "server will mask adjudicated-cancelled pixels and run a separate thinking-disabled "
+            "transcription. If any correction decision remains ambiguous, report it as "
+            "uncertain_glyphs or as uncertain_correction; the server will fail closed instead of "
+            "allowing vague text into grading. Do not reveal chain-of-thought; return only the "
+            "JSON."
         )
         user_prompt = (
             "Review every ordered image and repair only cancellation/replacement interpretation. "
+            "The source pass supplied numbered untrusted location hints below. Inspect every hint "
+            "against the pixels. Return the adjudication for those hints first, in the same order, "
+            "using an overlapping box on the same page; use retained when a hinted crossing is a "
+            "false alarm. You may append additional image-grounded edits found during review. "
             "Return one editing_marks entry for every disputed visible edit. Each position_hint "
             "must state the visual location and stroke basis without copying cancelled answer "
             "text. "
             "Page indices are one-based and boxes are normalized [x1,y1,x2,y2] from 0 to 1000. "
-            "Then produce draft_text containing only surviving final-intent work in visible order. "
-            "Use ordinary Unicode mathematical symbols where possible. If a backslash is needed "
-            "inside draft_text, it must be a valid JSON-escaped backslash. "
+            "Set draft_text exactly to [decision pass complete]; it is not answer evidence and "
+            "will be discarded before the separate final transcription. "
             "Re-check the lowest visible student line and never return blank when editing marks or "
             "any student writing are visible. If every visible line is genuinely cancelled, "
             "return [all visible work cancelled] with is_blank=false. "
@@ -1192,11 +1367,13 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             "<untrusted_transcript>\n"
             f"{rejected_transcript}\n"
             "</untrusted_transcript>\n\n"
+            "UNTRUSTED SOURCE EDIT LOCATIONS (location hints only; verify pixels):\n"
+            f"{json.dumps(safe_source_hints, separators=(',', ':'))}\n\n"
             "Return exactly this JSON shape with no extra keys: "
             '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
             '"alternatives":["option 1","option 2"]}],"editing_marks":['
             '{"page_index":1,"bbox":[0,0,1000,1000],'
-            '"status":"cancelled|replacement|retained|uncertain_correction",'
+            '"status":"cancelled|replacement|retained",'
             '"position_hint":"location and visible stroke basis only"}],'
             '"cancellation_detected":true,"replacement_detected":false,'
             '"uncertain_correction_detected":false,"is_blank":false,'
@@ -1222,7 +1399,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 max_tokens=max_tokens,
                 temperature=0.0,
                 enable_thinking=True,
-                reasoning_effort="low",
+                reasoning_effort="medium",
                 thinking_budget_tokens=thinking_budget_tokens,
                 constrain_json_schema=True,
             )
@@ -1230,56 +1407,166 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             if payload.is_blank:
                 raise ValueError("thinking repair unsafe blank classification")
             editing_marks = _normalize_editing_marks(
-                payload.editing_marks,
+                [item.model_dump(mode="python") for item in payload.editing_marks],
                 page_count=len(images),
-                # A valid Thinking comparison can conclude that no local edit
-                # box is reliable.  The transcript remains teacher-reviewable
-                # as a whole-image alternative; rejecting it merely because a
-                # box is absent turned a useful answer into an opaque failure.
-                require_nonempty=False,
+                # Final-intent text is allowed into grading only when every
+                # cancellation/replacement choice has an image-grounded box.
+                require_nonempty=True,
             )
+            if len(editing_marks) < len(source_hints):
+                raise ValueError("thinking repair omitted a source visual edit decision")
+            for index, source_hint in enumerate(source_hints):
+                decision = editing_marks[index]
+                if decision.page_index != source_hint.page_index or not _boxes_overlap(
+                    decision.bbox, source_hint.bbox
+                ):
+                    raise ValueError(
+                        "thinking repair visual edit decision does not match its source hint"
+                    )
             statuses = {mark.status for mark in editing_marks}
             cancellation_detected = "cancelled" in statuses
             replacement_detected = "replacement" in statuses
-            uncertain_correction_detected = "uncertain_correction" in statuses
-            if (
-                uncertain_correction_detected
-                and "[unclear correction]" not in payload.draft_text
-            ):
-                raise ValueError(
-                    "uncertain edit decision was not preserved in the repair draft"
-                )
+            uncertain_correction_detected = bool(payload.uncertain_correction_detected) or (
+                "uncertain_correction" in statuses
+            )
+            if uncertain_correction_detected or payload.uncertain_glyphs:
+                raise ValueError("final-intent repair contains an unresolved visual decision")
+            if payload.draft_text != "[decision pass complete]":
+                raise ValueError("thinking repair mixed transcription into the edit-decision pass")
         except Exception as exc:
             # Never persist model content or the untrusted student transcript
             # through a validation error. The category and token diagnostics
             # are safe to expose and make a failed one-call run actionable.
             raise _thinking_repair_output_error(exc) from exc
+        masked_images = _mask_cancelled_image_regions(images, editing_marks)
+        try:
+            final_transcription = self.transcribe_images(
+                images=masked_images,
+                label="surviving final-intent student work after cancellation masking",
+                adjudicated_final_intent=editing_marks,
+            )
+        except Exception as exc:
+            raise Qwen38ThinkingRepairOutputError(
+                "thinking_repair_final_transcription_failed",
+                "Qwen3.8 could not produce a safe transcript from the surviving pixels. "
+                "No transcript was accepted.",
+                calls_used=2,
+            ) from exc
+        if final_transcription.editing_marks and not _final_edit_marks_are_pre_adjudicated(
+            final_transcription.editing_marks, editing_marks
+        ):
+            raise Qwen38ThinkingRepairOutputError(
+                "thinking_repair_final_transcription_new_edit",
+                "The surviving-pixel transcription found a new or conflicting visual edit. "
+                "No transcript was accepted.",
+                calls_used=2,
+            )
+        forbidden_markers = (
+            "[visibly crossed]",
+            "[overwritten]",
+            "[illegible crossed writing]",
+            "[unclear correction]",
+            "[illegible]",
+            UNRESOLVED_VISIBLE_WRITING,
+        )
+        second_pass_unresolved = (
+            bool(final_transcription.uncertain_glyphs)
+            or final_transcription.uncertain_correction_detected
+            or any(
+                marker.casefold() in final_transcription.draft_text.casefold()
+                for marker in forbidden_markers
+            )
+            or (
+                final_transcription.is_blank
+                and any(mark.status != "cancelled" for mark in editing_marks)
+            )
+        )
+        provider_calls_used = 2
+        transcription_prompt_tokens = final_transcription.prompt_tokens or 0
+        transcription_completion_tokens = final_transcription.completion_tokens or 0
+        transcription_confidence = final_transcription.confidence
+        if second_pass_unresolved:
+            try:
+                resolved_transcription = self.transcribe_images(
+                    images=masked_images,
+                    label="surviving final-intent student work after cancellation masking",
+                    adjudicated_final_intent=editing_marks,
+                    bounded_visual_reasoning=True,
+                )
+            except Exception as exc:
+                failure_code = getattr(
+                    exc, "failure_code", "visual_transcription_output_contract_failed"
+                )
+                raise Qwen38ThinkingRepairOutputError(
+                    f"thinking_repair_visual_resolution_{failure_code}",
+                    "Qwen3.8 could not return a safe bounded visual-resolution transcript. "
+                    f"Failure category: {failure_code}. No transcript was accepted.",
+                    calls_used=3,
+                ) from exc
+            provider_calls_used = 3
+            transcription_prompt_tokens += resolved_transcription.prompt_tokens or 0
+            transcription_completion_tokens += resolved_transcription.completion_tokens or 0
+            transcription_confidence = min(
+                transcription_confidence, resolved_transcription.confidence
+            )
+            if resolved_transcription.editing_marks and not (
+                _final_edit_marks_are_pre_adjudicated(
+                    resolved_transcription.editing_marks, editing_marks
+                )
+            ):
+                raise Qwen38ThinkingRepairOutputError(
+                    "thinking_repair_visual_resolution_new_edit",
+                    "The bounded visual-resolution stage found a new or conflicting edit. "
+                    "No transcript was accepted.",
+                    calls_used=3,
+                )
+            resolved_unresolved = (
+                bool(resolved_transcription.uncertain_glyphs)
+                or resolved_transcription.uncertain_correction_detected
+                or any(
+                    marker.casefold() in resolved_transcription.draft_text.casefold()
+                    for marker in forbidden_markers
+                )
+                or (
+                    resolved_transcription.is_blank
+                    and any(mark.status != "cancelled" for mark in editing_marks)
+                )
+            )
+            if resolved_unresolved:
+                raise Qwen38ThinkingRepairOutputError(
+                    "thinking_repair_visual_resolution_unresolved",
+                    "The surviving pixels remain visually unresolved after bounded reasoning. "
+                    "No transcript was accepted.",
+                    calls_used=3,
+                )
+            final_transcription = resolved_transcription
+        final_text = (
+            "[all visible work cancelled]"
+            if final_transcription.is_blank
+            else final_transcription.draft_text
+        )
         latency_ms = int((time.perf_counter() - start) * 1000)
 
-        uncertain_glyphs: list[UncertainGlyph] = []
-        for raw in payload.uncertain_glyphs:
-            try:
-                uncertain_glyphs.append(UncertainGlyph.model_validate(raw))
-            except Exception:
-                pass
-
         return VisualTranscriptionOutput(
-            draft_text=payload.draft_text,
-            uncertain_glyphs=uncertain_glyphs,
+            draft_text=final_text,
+            uncertain_glyphs=[],
             editing_marks=editing_marks,
             cancellation_detected=cancellation_detected,
             replacement_detected=replacement_detected,
             uncertain_correction_detected=uncertain_correction_detected,
             is_blank=False,
             is_irrelevant=False,
-            confidence=payload.confidence,
+            confidence=min(payload.confidence, transcription_confidence),
             needs_review=True,
             model_provider=self.provider_name,
             model_name=self.model_name,
             image_sha256=hashlib.sha256("".join(image_hashes).encode("ascii")).hexdigest(),
             latency_ms=latency_ms,
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
+            prompt_tokens=(usage.get("prompt_tokens") or 0)
+            + transcription_prompt_tokens,
+            completion_tokens=(usage.get("completion_tokens") or 0)
+            + transcription_completion_tokens,
+            provider_calls_used=provider_calls_used,
         )
 
     def map_page_answer_regions(

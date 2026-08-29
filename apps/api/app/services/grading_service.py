@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from PIL import Image
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import Settings, get_settings
@@ -226,10 +226,27 @@ class GradingService:
         if not (region.manual_answer_text or "").strip():
             blockers.append("missing teacher-approved answer evidence")
         final_intent_run = self._confirmed_final_intent_run(region)
+        latest_final_intent_source = self._latest_final_intent_source_run(region)
         latest_thinking_repair = self._latest_thinking_repair(region)
         if self._requires_final_intent_transcription(region):
-            if latest_thinking_repair is not None and latest_thinking_repair.status != "confirmed":
+            if (
+                final_intent_run is None
+                and latest_thinking_repair is not None
+                and latest_thinking_repair.status != "confirmed"
+            ):
                 blockers.append("Qwen3.8 thinking repair must be teacher-confirmed")
+            elif (
+                latest_final_intent_source is not None
+                and bool(
+                    (latest_final_intent_source.normalized_result or {}).get(
+                        "requires_thinking_repair"
+                    )
+                )
+                and final_intent_run is None
+            ):
+                blockers.append(
+                    "Qwen3.8 final-intent Thinking transcription must be confirmed"
+                )
             elif final_intent_run is None:
                 blockers.append("Qwen3.8 final-intent transcription must be confirmed")
             elif final_intent_run.confirmed_text != region.manual_answer_text:
@@ -968,33 +985,18 @@ class GradingService:
     def _confirmed_final_intent_run(
         self, region: AnswerRegion
     ) -> AnswerRegionOcrRun | None:
-        return self.db.scalars(
-            select(AnswerRegionOcrRun)
-            .where(
-                AnswerRegionOcrRun.answer_region_id == region.id,
-                AnswerRegionOcrRun.status == "confirmed",
-                or_(
-                    and_(
-                        AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
-                        AnswerRegionOcrRun.prompt_version.in_(
-                            SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
-                        ),
-                    ),
-                    and_(
-                        AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
-                        AnswerRegionOcrRun.prompt_version.in_(
-                            SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS
-                        ),
-                    ),
-                ),
-            )
-            .order_by(AnswerRegionOcrRun.id.desc())
-        ).first()
+        latest_source = self._latest_final_intent_source_run(region)
+        if latest_source is None:
+            return None
+        repair = self._latest_thinking_repair(region)
+        if repair is not None and repair.status == "confirmed":
+            return repair
+        return latest_source if latest_source.status == "confirmed" else None
 
-    def _latest_thinking_repair(
+    def _latest_final_intent_source_run(
         self, region: AnswerRegion
     ) -> AnswerRegionOcrRun | None:
-        latest_source = self.db.scalars(
+        return self.db.scalars(
             select(AnswerRegionOcrRun)
             .where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
@@ -1005,6 +1007,11 @@ class GradingService:
             )
             .order_by(AnswerRegionOcrRun.id.desc())
         ).first()
+
+    def _latest_thinking_repair(
+        self, region: AnswerRegion
+    ) -> AnswerRegionOcrRun | None:
+        latest_source = self._latest_final_intent_source_run(region)
         if latest_source is None:
             return None
         repairs = self.db.scalars(

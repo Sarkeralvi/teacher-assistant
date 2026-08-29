@@ -1793,6 +1793,49 @@ export function gradeAnswerRegionWithLocalQwen38(
   );
 }
 
+export type LocalQwenApprovedBatchGradeItem = {
+  answer_region_id: number;
+  status: "graded" | "skipped" | "failed" | "not_started";
+  suggestion_id: number | null;
+  grading_job_id: number | null;
+  reason: string | null;
+};
+
+export type LocalQwenApprovedBatchGradeResponse = {
+  assessment_id: number;
+  grading_run_id: number;
+  eligible_count: number;
+  call_limit: number;
+  calls_completed: number;
+  graded_count: number;
+  skipped_count: number;
+  failed_count: number;
+  stopped_on_failure: boolean;
+  items: LocalQwenApprovedBatchGradeItem[];
+};
+
+export function gradeAllApprovedAnswersWithLocalQwen38(
+  assessmentId: number,
+  payload: {
+    grading_run_id: number;
+    provider: "llama_cpp_qwen38";
+    expected_model: string;
+    draft_only_confirmed: true;
+    call_limit: number;
+    stop_on_failure: true;
+  },
+) {
+  return apiRequest<LocalQwenApprovedBatchGradeResponse>(
+    `/assessments/${assessmentId}/grade-approved-local-qwen38`,
+    {
+      method: "POST",
+      body: payload,
+      token: getStoredAuthToken(),
+      authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+    },
+  );
+}
+
 export function gradeAnswerRegionWithCodexDev(answerRegionId: number) {
   return apiRequest<BrowserCodexGradeResponse>(`/answer-regions/${answerRegionId}/grade-codex-dev`, {
     method: "POST",

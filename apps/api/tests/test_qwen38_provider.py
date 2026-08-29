@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 from decimal import Decimal
 from typing import Any
 
 import httpx
 import pytest
+from PIL import Image
 
 from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter
@@ -13,9 +15,50 @@ from packages.brain.llama_cpp_qwen38_vision_provider import (
     LlamaCppQwen38VisionProvider,
     Qwen38ThinkingRepairOutputError,
     Qwen38VisualTranscriptionOutputError,
+    _mask_cancelled_image_regions,
     _Qwen38TranscriptionPayload,
 )
-from packages.brain.schemas_qwen38 import UNRESOLVED_VISIBLE_WRITING
+from packages.brain.schemas_qwen38 import UNRESOLVED_VISIBLE_WRITING, EditingMark
+
+
+def valid_png_bytes() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (100, 100), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_cancelled_region_mask_removes_pixels_without_touching_retained_work() -> None:
+    source = Image.new("RGB", (1000, 1000), "white")
+    for x in range(100, 201):
+        for y in range(100, 201):
+            source.putpixel((x, y), (0, 0, 0))
+    for x in range(700, 801):
+        for y in range(700, 801):
+            source.putpixel((x, y), (0, 0, 0))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+
+    result = _mask_cancelled_image_regions(
+        [(buffer.getvalue(), "image/png")],
+        [
+            EditingMark(
+                page_index=1,
+                bbox=[105, 105, 195, 195],
+                status="cancelled",
+                position_hint="upper block",
+            ),
+            EditingMark(
+                page_index=1,
+                bbox=[700, 700, 800, 800],
+                status="retained",
+                position_hint="lower block",
+            ),
+        ],
+    )
+
+    with Image.open(io.BytesIO(result[0][0])) as masked:
+        assert masked.getpixel((150, 150)) == (255, 255, 255)
+        assert masked.getpixel((750, 750)) == (0, 0, 0)
 
 
 class FakeResponse:
@@ -41,6 +84,18 @@ class FakeClient:
     def post(self, _path: str, *, json: dict[str, Any], **_kwargs: object) -> FakeResponse:
         self.requests.append(json)
         return FakeResponse(self.completion)
+
+
+class SequenceFakeClient(FakeClient):
+    def __init__(self, completions: list[dict[str, Any]]) -> None:
+        super().__init__({})
+        self.completions = list(completions)
+
+    def post(self, _path: str, *, json: dict[str, Any], **_kwargs: object) -> FakeResponse:
+        self.requests.append(json)
+        if not self.completions:
+            raise AssertionError("unexpected extra provider call")
+        return FakeResponse(self.completions.pop(0))
 
 
 class AuthFailClient(FakeClient):
@@ -80,6 +135,100 @@ def provider_with(completion: dict[str, Any]) -> tuple[LlamaCppQwen38VisionProvi
     # construction is always lease-enforced by default.
     provider = LlamaCppQwen38VisionProvider(api_key="test-key", require_model_lease=False)
     client = FakeClient(completion)
+    provider.client = client
+    return provider, client
+
+
+def provider_with_repair_sequence(
+    decision_completion: dict[str, Any],
+    *,
+    final_text: str = "surviving final work",
+    final_editing_marks: list[dict[str, Any]] | None = None,
+) -> tuple[LlamaCppQwen38VisionProvider, SequenceFakeClient]:
+    final_completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": final_text,
+                            "uncertain_glyphs": [],
+                            "editing_marks": final_editing_marks or [],
+                            "cancellation_detected": False,
+                            "replacement_detected": False,
+                            "uncertain_correction_detected": False,
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.9,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 12},
+    }
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key", require_model_lease=False)
+    client = SequenceFakeClient([decision_completion, final_completion])
+    provider.client = client
+    return provider, client
+
+
+def provider_with_visual_resolution_sequence(
+    decision_completion: dict[str, Any], *, resolved_text: str
+) -> tuple[LlamaCppQwen38VisionProvider, SequenceFakeClient]:
+    unresolved_completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "A = [illegible]",
+                            "uncertain_glyphs": [
+                                {
+                                    "position_hint": "final set symbol",
+                                    "alternatives": ["P", "F"],
+                                }
+                            ],
+                            "editing_marks": [],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.4,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 11},
+    }
+    resolved_completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": resolved_text,
+                            "uncertain_glyphs": [],
+                            "editing_marks": [],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.75,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 13},
+    }
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key", require_model_lease=False)
+    client = SequenceFakeClient(
+        [decision_completion, unresolved_completion, resolved_completion]
+    )
     provider.client = client
     return provider, client
 
@@ -328,7 +477,7 @@ def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
                 "message": {
                     "content": json.dumps(
                         {
-                            "draft_text": "A^c = {P, PF, PPF, PPPF, PPPP}",
+                            "draft_text": "[decision pass complete]",
                             "uncertain_glyphs": [],
                             "editing_marks": [
                                 {
@@ -353,24 +502,28 @@ def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
         ],
         "usage": {"prompt_tokens": 20, "completion_tokens": 30},
     }
-    provider, client = provider_with(completion)
+    provider, client = provider_with_repair_sequence(
+        completion, final_text="A^c = {P, PF, PPF, PPPF, PPPP}"
+    )
 
     result = provider.repair_transcription_images(
-        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        images=[(valid_png_bytes(), "image/png")],
         rejected_transcript="cancelled and surviving text mixed together",
     )
 
     assert result.needs_review is True
     assert result.cancellation_detected is True
+    assert result.draft_text == "A^c = {P, PF, PPF, PPPF, PPPP}"
+    assert len(client.requests) == 2
     request = client.requests[0]
     assert request["temperature"] == 0.0
     assert request["chat_template_kwargs"] == {
         "enable_thinking": True,
         "preserve_thinking": False,
-        "reasoning_effort": "low",
+        "reasoning_effort": "medium",
     }
-    assert request["thinking_budget_tokens"] == 512
-    assert request["max_tokens"] == 2200
+    assert request["thinking_budget_tokens"] == 768
+    assert request["max_tokens"] == 2800
     assert request["response_format"]["type"] == "json_schema"
     assert request["response_format"]["json_schema"]["name"] == (
         "visual_transcription_thinking_repair"
@@ -388,6 +541,171 @@ def test_thinking_repair_is_visual_only_bounded_and_review_required() -> None:
     assert "solution" not in user_prompt.lower()
     assert "rubric" not in user_prompt.lower()
     assert "expected marks" not in user_prompt.lower()
+    final_request = client.requests[1]
+    assert final_request["chat_template_kwargs"]["enable_thinking"] is False
+    final_system_prompt = final_request["messages"][0]["content"]
+    final_user_prompt = final_request["messages"][1]["content"][0]["text"]
+    assert "already decided" in final_system_prompt
+    assert "Never infer" in final_system_prompt
+    assert "already adjudicated" in final_user_prompt
+    assert "editing_marks=[]" in final_user_prompt
+
+
+def test_thinking_repair_accepts_only_pre_adjudicated_second_pass_edit_signal() -> None:
+    decision_completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "[decision pass complete]",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 300, 900, 650],
+                                    "status": "replacement",
+                                    "position_hint": "middle replacement strokes",
+                                }
+                            ],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.8,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with_repair_sequence(
+        decision_completion,
+        final_text="visible replacement",
+        final_editing_marks=[
+            {
+                "page_index": 1,
+                "bbox": [120, 320, 880, 620],
+                "status": "replacement",
+                "position_hint": "same middle replacement",
+            }
+        ],
+    )
+
+    result = provider.repair_transcription_images(
+        images=[(valid_png_bytes(), "image/png")],
+        rejected_transcript="mixed visible work",
+    )
+
+    assert result.draft_text == "visible replacement"
+    assert result.editing_marks[0].status == "replacement"
+
+
+def test_thinking_repair_uses_one_bounded_visual_resolution_for_uncertain_pixels() -> None:
+    decision_completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "[decision pass complete]",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 300, 900, 650],
+                                    "status": "cancelled",
+                                    "position_hint": "middle cancelled rows",
+                                }
+                            ],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.8,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 9},
+    }
+    provider, client = provider_with_visual_resolution_sequence(
+        decision_completion,
+        resolved_text="A = {P, PF, PPF, PPPF, PPPP}",
+    )
+
+    result = provider.repair_transcription_images(
+        images=[(valid_png_bytes(), "image/png")],
+        rejected_transcript="mixed visible work",
+    )
+
+    assert result.draft_text == "A = {P, PF, PPF, PPPF, PPPP}"
+    assert result.provider_calls_used == 3
+    assert len(client.requests) == 3
+    resolution_request = client.requests[2]
+    assert resolution_request["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "preserve_thinking": False,
+        "reasoning_effort": "low",
+    }
+    assert resolution_request["thinking_budget_tokens"] == 512
+    resolution_prompt = resolution_request["messages"][1]["content"][0]["text"]
+    assert "bounded visual-resolution stage" in resolution_prompt
+    assert "question" not in resolution_prompt.lower()
+    assert "rubric" not in resolution_prompt.lower()
+
+
+def test_thinking_repair_rejects_new_second_pass_edit_box() -> None:
+    decision_completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "[decision pass complete]",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 100, 300, 250],
+                                    "status": "retained",
+                                    "position_hint": "upper retained strokes",
+                                }
+                            ],
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.8,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with_repair_sequence(
+        decision_completion,
+        final_editing_marks=[
+            {
+                "page_index": 1,
+                "bbox": [700, 700, 900, 900],
+                "status": "replacement",
+                "position_hint": "new lower edit",
+            }
+        ],
+    )
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(valid_png_bytes(), "image/png")],
+            rejected_transcript="mixed visible work",
+        )
+
+    assert exc_info.value.failure_code == "thinking_repair_final_transcription_new_edit"
+    assert exc_info.value.calls_used == 2
 
 
 def test_thinking_repair_timeout_has_a_content_free_failure_category() -> None:
@@ -447,7 +765,7 @@ def test_thinking_repair_rq_timeout_is_precise_content_free_and_not_retried() ->
     assert len(client.requests) == 1
 
 
-def test_thinking_repair_keeps_a_whole_image_comparison_without_edit_boxes() -> None:
+def test_thinking_repair_fails_closed_without_image_grounded_edit_boxes() -> None:
     completion = {
         "choices": [
             {
@@ -474,14 +792,128 @@ def test_thinking_repair_keeps_a_whole_image_comparison_without_edit_boxes() -> 
     }
     provider, _client = provider_with(completion)
 
-    result = provider.repair_transcription_images(
-        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
-        rejected_transcript="wrong reading",
-    )
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="wrong reading",
+        )
 
-    assert result.draft_text == "unchanged"
-    assert result.editing_marks == []
-    assert result.needs_review is True
+    assert exc_info.value.failure_code == "thinking_repair_schema_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("draft_text", "uncertain_glyphs", "status", "expected_code"),
+    [
+        (
+            "x = [unclear correction]",
+            [],
+            "replacement",
+            "thinking_repair_output_contract_failed",
+        ),
+        (
+            "x = 4",
+            [{"position_hint": "final digit", "alternatives": ["4", "9"]}],
+            "replacement",
+            "thinking_repair_output_contract_failed",
+        ),
+        (
+            "x = 4",
+            [],
+            "uncertain_correction",
+            "thinking_repair_schema_mismatch",
+        ),
+    ],
+)
+def test_thinking_repair_fails_closed_on_unresolved_final_intent(
+    draft_text: str,
+    uncertain_glyphs: list[dict[str, object]],
+    status: str,
+    expected_code: str,
+) -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": draft_text,
+                            "uncertain_glyphs": uncertain_glyphs,
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 100, 500, 300],
+                                    "status": status,
+                                    "position_hint": "middle correction strokes",
+                                }
+                            ],
+                            "cancellation_detected": False,
+                            "replacement_detected": status == "replacement",
+                            "uncertain_correction_detected": status == "uncertain_correction",
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.5,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+            rejected_transcript="visible evidence inventory",
+        )
+
+    assert exc_info.value.failure_code == expected_code
+
+
+def test_thinking_repair_fails_closed_when_summary_reports_uncertain_correction() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "draft_text": "[decision pass complete]",
+                            "uncertain_glyphs": [],
+                            "editing_marks": [
+                                {
+                                    "page_index": 1,
+                                    "bbox": [100, 100, 500, 300],
+                                    "status": "retained",
+                                    "position_hint": "middle correction strokes",
+                                }
+                            ],
+                            "cancellation_detected": False,
+                            "replacement_detected": False,
+                            "uncertain_correction_detected": True,
+                            "is_blank": False,
+                            "is_irrelevant": False,
+                            "confidence": 0.5,
+                            "needs_review": True,
+                        }
+                    )
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {},
+    }
+    provider, client = provider_with(completion)
+
+    with pytest.raises(Qwen38ThinkingRepairOutputError) as exc_info:
+        provider.repair_transcription_images(
+            images=[(valid_png_bytes(), "image/png")],
+            rejected_transcript="visible evidence inventory",
+        )
+
+    assert exc_info.value.failure_code == "thinking_repair_output_contract_failed"
+    assert len(client.requests) == 1
 
 
 def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:
@@ -491,12 +923,12 @@ def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:
                 "message": {
                     "content": json.dumps(
                         {
-                            "draft_text": "surviving visible line",
+                            "draft_text": "[decision pass complete]",
                             "uncertain_glyphs": [],
                             "editing_marks": [
                                 {
-                                    "page_index": 1.0,
-                                    "bbox": [-2.0, 300.2, 1002.0, 650.1],
+                                    "page_index": 1,
+                                    "bbox": [0, 300, 1000, 650],
                                     "status": "cancelled",
                                     "position_hint": "middle rows with repeated strokes",
                                 }
@@ -519,10 +951,12 @@ def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:
         ],
         "usage": {},
     }
-    provider, _client = provider_with(completion)
+    provider, _client = provider_with_repair_sequence(
+        completion, final_text="surviving visible line"
+    )
 
     result = provider.repair_transcription_images(
-        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        images=[(valid_png_bytes(), "image/png")],
         rejected_transcript="wrong reading",
     )
 
@@ -534,21 +968,21 @@ def test_thinking_repair_derives_flags_and_normalizes_review_boxes() -> None:
     assert result.editing_marks[0].bbox == [0, 300, 1000, 650]
 
 
-def test_thinking_repair_normalizes_retained_status_fractional_box_and_empty_hint() -> None:
+def test_thinking_repair_accepts_strict_retained_decision() -> None:
     completion = {
         "choices": [
             {
                 "message": {
                     "content": json.dumps(
                         {
-                            "draft_text": "surviving visible line",
+                            "draft_text": "[decision pass complete]",
                             "uncertain_glyphs": [],
                             "editing_marks": [
                                 {
-                                    "page_index": "1",
-                                    "bbox": ["0.9", "0.8", "0.1", "0.2"],
-                                    "status": "surviving",
-                                    "position_hint": "",
+                                    "page_index": 1,
+                                    "bbox": [100, 200, 900, 800],
+                                    "status": "retained",
+                                    "position_hint": "top correction strokes",
                                 }
                             ],
                             "is_blank": False,
@@ -563,16 +997,18 @@ def test_thinking_repair_normalizes_retained_status_fractional_box_and_empty_hin
         ],
         "usage": {},
     }
-    provider, _client = provider_with(completion)
+    provider, _client = provider_with_repair_sequence(
+        completion, final_text="surviving visible line"
+    )
 
     result = provider.repair_transcription_images(
-        images=[(b"\x89PNG\r\n\x1a\nimage", "image/png")],
+        images=[(valid_png_bytes(), "image/png")],
         rejected_transcript="wrong reading",
     )
 
     assert result.editing_marks[0].status == "retained"
     assert result.editing_marks[0].bbox == [100, 200, 900, 800]
-    assert result.editing_marks[0].position_hint == "page 1, normalized visual edit box"
+    assert result.editing_marks[0].position_hint == "top correction strokes"
     assert result.cancellation_detected is False
     assert result.replacement_detected is False
 

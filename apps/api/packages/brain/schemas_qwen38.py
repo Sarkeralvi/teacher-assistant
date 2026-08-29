@@ -24,13 +24,15 @@ SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS = (
     FINAL_INTENT_PROMPT_VERSION,
 )
 UNRESOLVED_VISIBLE_WRITING = "[visible writing unresolved — thinking review required]"
-THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v7"
+THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v9"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v1"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V2 = "qwen38-final-intent-thinking-repair-v2"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V3 = "qwen38-final-intent-thinking-repair-v3"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V4 = "qwen38-final-intent-thinking-repair-v4"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V5 = "qwen38-final-intent-thinking-repair-v5"
 LEGACY_THINKING_REPAIR_PROMPT_VERSION_V6 = "qwen38-final-intent-thinking-repair-v6"
+LEGACY_THINKING_REPAIR_PROMPT_VERSION_V7 = "qwen38-final-intent-thinking-repair-v7"
+LEGACY_THINKING_REPAIR_PROMPT_VERSION_V8 = "qwen38-final-intent-thinking-repair-v8"
 SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS = (
     LEGACY_THINKING_REPAIR_PROMPT_VERSION,
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V2,
@@ -38,6 +40,8 @@ SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS = (
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V4,
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V5,
     LEGACY_THINKING_REPAIR_PROMPT_VERSION_V6,
+    LEGACY_THINKING_REPAIR_PROMPT_VERSION_V7,
+    LEGACY_THINKING_REPAIR_PROMPT_VERSION_V8,
     THINKING_REPAIR_PROMPT_VERSION,
 )
 
@@ -133,6 +137,7 @@ class VisualTranscriptionOutput(BaseModel):
     latency_ms: int = Field(ge=0)
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
+    provider_calls_used: int = Field(default=1, ge=1, le=3)
 
     @model_validator(mode="after")
     def blank_contract_is_exact(self) -> VisualTranscriptionOutput:

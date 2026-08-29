@@ -90,6 +90,23 @@ HANDWRITTEN_MATH_STAT_GRADING_GUIDANCE: tuple[str, ...] = (
     "- If handwriting is uncertain, set needs_review=true, lower confidence, and explain",
     "  the uncertainty, but do not automatically slash the score.",
     "- Never create a FinalGrade. Always preserve teacher review requirement.",
+    "Three-decimal numerical precision policy",
+    (
+        "- Do not deduct marks when a student's numerical answer is correct to three decimal "
+        "places, or when an exact fraction/algebraic form is numerically equivalent."
+    ),
+    (
+        "- Treat an absolute numerical difference of at most 0.0005 as consistent with correct "
+        "rounding to three decimal places; do not cite precision as an error in that case."
+    ),
+    (
+        "- Override this rule only when the teacher-confirmed question or active rubric explicitly "
+        "requires more than three decimal places or a specified exact form."
+    ),
+    (
+        "- This precision tolerance does not excuse a conceptual, formula, substitution, or method "
+        "error merely because an unrelated number is close."
+    ),
 )
 
 SEMANTIC_EQUIVALENCE_GRADING_GUIDANCE: tuple[str, ...] = (

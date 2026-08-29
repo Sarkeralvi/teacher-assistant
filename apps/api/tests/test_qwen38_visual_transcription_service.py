@@ -37,7 +37,7 @@ def test_legacy_include_crossed_out_transcript_cannot_be_confirmed() -> None:
         )
 
 
-def test_teacher_can_select_an_exact_flagged_baseline_without_thinking(
+def test_teacher_can_explicitly_confirm_an_exact_flagged_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeDb:
@@ -48,7 +48,7 @@ def test_teacher_can_select_an_exact_flagged_baseline_without_thinking(
             return None
 
     service = Qwen38VisualTranscriptionService(FakeDb())  # type: ignore[arg-type]
-    draft_text = "[visibly crossed] x=3\nx=4"
+    draft_text = "x=4"
     run = SimpleNamespace(
         id=51,
         answer_region_id=42,
@@ -83,7 +83,7 @@ def test_teacher_can_select_an_exact_flagged_baseline_without_thinking(
     )
 
     assert run.status == "confirmed"
-    assert "teacher_selected_original_transcript" in run.warnings
+    assert run.confirmed_text == draft_text
     assert region.manual_answer_text == draft_text
 
 
@@ -252,7 +252,7 @@ def test_thinking_repair_requires_teacher_review_of_every_editing_decision(
     assert mapping.blocker_reason is None
 
 
-def test_thinking_comparison_without_boxes_can_be_confirmed_as_a_whole_image(
+def test_thinking_repair_without_boxes_cannot_be_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     draft_text = "surviving final line"
@@ -292,14 +292,12 @@ def test_thinking_comparison_without_boxes_can_be_confirmed_as_a_whole_image(
     monkeypatch.setattr(service, "_mapping_for_region", lambda _region_id: mapping)
     monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
 
-    service.confirm_thinking_repair(
-        region,  # type: ignore[arg-type]
-        run,  # type: ignore[arg-type]
-        teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
-        draft_hash=draft_hash,
-        decision_set_hash=decision_hash,
-        reviewed_decision_indexes=[],
-    )
-
-    assert run.status == "confirmed"
-    assert region.manual_answer_text == draft_text
+    with pytest.raises(VisualTranscriptionError, match="image-grounded edit decisions"):
+        service.confirm_thinking_repair(
+            region,  # type: ignore[arg-type]
+            run,  # type: ignore[arg-type]
+            teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+            draft_hash=draft_hash,
+            decision_set_hash=decision_hash,
+            reviewed_decision_indexes=[],
+        )

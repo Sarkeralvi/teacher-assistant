@@ -14,6 +14,7 @@ from app.models import (
     Assessment,
     AuditLog,
     Course,
+    FinalGrade,
     GradeSuggestion,
     GradingDispatchRun,
     GradingJob,
@@ -33,6 +34,8 @@ from app.schemas import (
     GradingDispatchRunRead,
     GradingEvidencePacketRead,
     GradingJobRead,
+    LocalQwenApprovedBatchGradeRequest,
+    LocalQwenApprovedBatchGradeResponse,
     LocalQwenGradeRequest,
 )
 from app.services.grading_dispatch_service import GradingDispatchService
@@ -234,6 +237,317 @@ def grade_answer_region_with_local_qwen38(
     )
     db.commit()
     return {"job": job, "suggestion": suggestion}
+
+
+@router.post(
+    "/assessments/{assessment_id}/grade-approved-local-qwen38",
+    response_model=LocalQwenApprovedBatchGradeResponse,
+)
+def grade_all_approved_answers_with_local_qwen38(
+    assessment_id: int,
+    payload: LocalQwenApprovedBatchGradeRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    """Create review-only Qwen3.8 drafts for every currently approved packet.
+
+    Execution is intentionally sequential, capped at 25 calls, and stops on
+    the first integrity or provider failure. It never retries and never creates
+    a FinalGrade.
+    """
+    assessment = get_owned_assessment_or_404(assessment_id, db, current_user)
+    settings = get_settings()
+    if not settings.brain_allow_real_providers:
+        raise HTTPException(status_code=409, detail="Real local providers are disabled")
+    if not settings.local_single_answer_grading_enabled:
+        raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
+    if not settings.local_qwen38_grading_enabled:
+        raise HTTPException(status_code=409, detail="Local Qwen3.8 grading is disabled")
+    if not settings.local_qwen38_enabled:
+        raise HTTPException(status_code=409, detail="Local Qwen3.8 provider is disabled")
+    if payload.expected_model != settings.local_qwen38_model:
+        raise HTTPException(
+            status_code=409, detail="Expected local Qwen3.8 model alias does not match"
+        )
+    grading_run = db.get(GradingRun, payload.grading_run_id)
+    if (
+        grading_run is None
+        or grading_run.created_by_teacher_id != current_user.id
+        or grading_run.assessment_id != assessment.id
+    ):
+        raise HTTPException(status_code=404, detail="Grading run not found")
+
+    regions = db.scalars(
+        select(AnswerRegion)
+        .join(Submission, AnswerRegion.submission_id == Submission.id)
+        .where(Submission.assessment_id == assessment.id)
+        .order_by(Submission.id, AnswerRegion.question_id, AnswerRegion.id)
+    ).all()
+    region_ids = [region.id for region in regions]
+    suggestion_region_ids = set(
+        db.scalars(
+            select(GradeSuggestion.answer_region_id).where(
+                GradeSuggestion.answer_region_id.in_(region_ids)
+            )
+        ).all()
+        if region_ids
+        else []
+    )
+    final_region_ids = set(
+        db.scalars(
+            select(FinalGrade.answer_region_id).where(FinalGrade.answer_region_id.in_(region_ids))
+        ).all()
+        if region_ids
+        else []
+    )
+    active_job_region_ids = set(
+        db.scalars(
+            select(GradingJob.answer_region_id).where(
+                GradingJob.answer_region_id.in_(region_ids),
+                GradingJob.status.in_(("queued", "running")),
+            )
+        ).all()
+        if region_ids
+        else []
+    )
+
+    preflight_service = GradingService(db, use_configured_adapter=False)
+    candidates: list[dict[str, object]] = []
+    items: list[dict[str, object]] = []
+    for region in regions:
+        if region.id in suggestion_region_ids or region.id in final_region_ids:
+            items.append(
+                {
+                    "answer_region_id": region.id,
+                    "status": "skipped",
+                    "reason": "draft or final grade already exists",
+                }
+            )
+            continue
+        if region.id in active_job_region_ids:
+            items.append(
+                {
+                    "answer_region_id": region.id,
+                    "status": "skipped",
+                    "reason": "grading job already queued or running",
+                }
+            )
+            continue
+        packet = preflight_service.get_grading_evidence_packet(region.id)
+        readiness = packet.get("readiness_result", {})
+        if not isinstance(readiness, dict) or not readiness.get("ready_for_grading"):
+            items.append(
+                {
+                    "answer_region_id": region.id,
+                    "status": "skipped",
+                    "reason": "transcription or full-answer evidence is not fully approved",
+                }
+            )
+            continue
+        rubric = db.scalars(
+            select(Rubric)
+            .where(Rubric.question_id == region.question_id, Rubric.is_active.is_(True))
+            .order_by(Rubric.version.desc(), Rubric.id.desc())
+        ).first()
+        if rubric is None:
+            items.append(
+                {
+                    "answer_region_id": region.id,
+                    "status": "skipped",
+                    "reason": "active rubric is unavailable",
+                }
+            )
+            continue
+        candidates.append(
+            {
+                "region_id": region.id,
+                "evidence_hash": canonical_json_hash(packet),
+                "rubric_id": rubric.id,
+                "rubric_hash": rubric_snapshot_hash(region.question, rubric),
+            }
+        )
+
+    if len(candidates) > payload.call_limit:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{len(candidates)} approved answers exceed the authorized call limit of "
+                f"{payload.call_limit}; no grading calls were made"
+            ),
+        )
+
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="local_qwen38_approved_batch_requested",
+            entity_type="assessment",
+            entity_id=assessment.id,
+            payload_json={
+                "grading_run_id": grading_run.id,
+                "provider": payload.provider,
+                "expected_model": payload.expected_model,
+                "draft_only": True,
+                "call_limit": payload.call_limit,
+                "eligible_count": len(candidates),
+                "answer_region_ids": [item["region_id"] for item in candidates],
+                "evidence_hashes": [item["evidence_hash"] for item in candidates],
+                "rubric_hashes": [item["rubric_hash"] for item in candidates],
+            },
+        )
+    )
+    db.commit()
+
+    if not candidates:
+        return {
+            "assessment_id": assessment.id,
+            "grading_run_id": grading_run.id,
+            "eligible_count": 0,
+            "call_limit": payload.call_limit,
+            "calls_completed": 0,
+            "graded_count": 0,
+            "skipped_count": len(items),
+            "failed_count": 0,
+            "stopped_on_failure": False,
+            "items": items,
+        }
+
+    try:
+        adapter = BrainAdapter.for_provider(settings, payload.provider)
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Local Qwen3.8 could not be prepared with the expected model",
+        ) from exc
+
+    grading_service = GradingService(db, adapter=adapter)
+    calls_completed = 0
+    graded_count = 0
+    failed_count = 0
+    stopped_on_failure = False
+    for index, candidate in enumerate(candidates):
+        region_id = int(candidate["region_id"])
+        existing = db.scalars(
+            select(GradeSuggestion).where(GradeSuggestion.answer_region_id == region_id)
+        ).first()
+        existing_final = db.scalars(
+            select(FinalGrade).where(FinalGrade.answer_region_id == region_id)
+        ).first()
+        active_job = db.scalars(
+            select(GradingJob).where(
+                GradingJob.answer_region_id == region_id,
+                GradingJob.status.in_(("queued", "running")),
+            )
+        ).first()
+        if existing is not None or existing_final is not None or active_job is not None:
+            items.append(
+                {
+                    "answer_region_id": region_id,
+                    "status": "skipped",
+                    "reason": "grading state changed before execution",
+                }
+            )
+            continue
+
+        current_packet = grading_service.get_grading_evidence_packet(region_id)
+        current_region = assert_teacher_owns_answer_region(region_id, db, current_user)
+        current_rubric = db.scalars(
+            select(Rubric)
+            .where(Rubric.question_id == current_region.question_id, Rubric.is_active.is_(True))
+            .order_by(Rubric.version.desc(), Rubric.id.desc())
+        ).first()
+        integrity_ok = (
+            canonical_json_hash(current_packet) == candidate["evidence_hash"]
+            and current_rubric is not None
+            and current_rubric.id == candidate["rubric_id"]
+            and rubric_snapshot_hash(current_region.question, current_rubric)
+            == candidate["rubric_hash"]
+        )
+        if not integrity_ok:
+            items.append(
+                {
+                    "answer_region_id": region_id,
+                    "status": "failed",
+                    "reason": "evidence, question, model answer, or rubric changed",
+                }
+            )
+            failed_count += 1
+            stopped_on_failure = True
+        else:
+            try:
+                job = grading_service.create_queued_grading_job(region_id)
+                calls_completed += 1
+                job, suggestion = grading_service.run_queued_job(
+                    job.id,
+                    marking_policy=grading_run.marking_policy,
+                    expected_rubric_id=int(candidate["rubric_id"]),
+                    expected_rubric_hash=str(candidate["rubric_hash"]),
+                )
+                items.append(
+                    {
+                        "answer_region_id": region_id,
+                        "status": "graded",
+                        "suggestion_id": suggestion.id,
+                        "grading_job_id": job.id,
+                    }
+                )
+                graded_count += 1
+            except HTTPException as exc:
+                items.append(
+                    {
+                        "answer_region_id": region_id,
+                        "status": "failed",
+                        "reason": str(exc.detail),
+                    }
+                )
+                failed_count += 1
+                stopped_on_failure = True
+        if stopped_on_failure:
+            for remaining in candidates[index + 1 :]:
+                items.append(
+                    {
+                        "answer_region_id": int(remaining["region_id"]),
+                        "status": "not_started",
+                        "reason": "stopped after the first failure",
+                    }
+                )
+            break
+
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="local_qwen38_approved_batch_completed",
+            entity_type="assessment",
+            entity_id=assessment.id,
+            payload_json={
+                "grading_run_id": grading_run.id,
+                "eligible_count": len(candidates),
+                "calls_completed": calls_completed,
+                "graded_count": graded_count,
+                "failed_count": failed_count,
+                "stopped_on_failure": stopped_on_failure,
+                "graded_answer_region_ids": [
+                    item["answer_region_id"]
+                    for item in items
+                    if item["status"] == "graded"
+                ],
+            },
+        )
+    )
+    db.commit()
+    return {
+        "assessment_id": assessment.id,
+        "grading_run_id": grading_run.id,
+        "eligible_count": len(candidates),
+        "call_limit": payload.call_limit,
+        "calls_completed": calls_completed,
+        "graded_count": graded_count,
+        "skipped_count": sum(1 for item in items if item["status"] == "skipped"),
+        "failed_count": failed_count,
+        "stopped_on_failure": stopped_on_failure,
+        "items": items,
+    }
 
 
 @router.post(

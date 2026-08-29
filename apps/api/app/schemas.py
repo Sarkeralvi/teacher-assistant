@@ -1317,6 +1317,32 @@ class LocalQwenGradeRequest(BaseModel):
     draft_only_confirmed: Literal[True]
 
 
+class LocalQwenApprovedBatchGradeRequest(LocalQwenGradeRequest):
+    call_limit: int = Field(default=25, ge=1, le=25)
+    stop_on_failure: Literal[True] = True
+
+
+class LocalQwenApprovedBatchGradeItemRead(BaseModel):
+    answer_region_id: int
+    status: Literal["graded", "skipped", "failed", "not_started"]
+    suggestion_id: int | None = None
+    grading_job_id: int | None = None
+    reason: str | None = None
+
+
+class LocalQwenApprovedBatchGradeResponse(BaseModel):
+    assessment_id: int
+    grading_run_id: int
+    eligible_count: int
+    call_limit: int
+    calls_completed: int
+    graded_count: int
+    skipped_count: int
+    failed_count: int
+    stopped_on_failure: bool
+    items: list[LocalQwenApprovedBatchGradeItemRead]
+
+
 class BrowserCodexGradeResponse(BaseModel):
     job: GradingJobRead
     suggestion: BrowserCodexGradeSuggestionRead

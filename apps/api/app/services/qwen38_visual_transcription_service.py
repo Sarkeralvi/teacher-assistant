@@ -41,12 +41,16 @@ def _thinking_repair_input_hash(
     source_hash: str,
     source_run_id: int,
     source_draft_hash: str,
+    source_editing_hash: str = "",
     prompt_version: str = THINKING_REPAIR_PROMPT_VERSION,
 ) -> str:
     """Pin duplicate protection to the exact output contract version."""
 
     return hashlib.sha256(
-        f"{source_hash}:{source_run_id}:{source_draft_hash}:{prompt_version}".encode("ascii")
+        (
+            f"{source_hash}:{source_run_id}:{source_draft_hash}:"
+            f"{source_editing_hash}:{prompt_version}"
+        ).encode("ascii")
     ).hexdigest()
 
 
@@ -60,6 +64,28 @@ def _source_run_has_repairable_output(run: AnswerRegionOcrRun) -> bool:
 
 def _repair_source_text(run: AnswerRegionOcrRun) -> str:
     return run.draft_text or "[source model returned blank despite visible student writing]"
+
+
+def _repair_source_editing_marks(run: AnswerRegionOcrRun) -> list[dict[str, Any]]:
+    analysis = (run.normalized_result or {}).get("editing_analysis") or {}
+    raw_marks = analysis.get("editing_marks") if isinstance(analysis, dict) else None
+    if not isinstance(raw_marks, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in raw_marks:
+        if not isinstance(raw, dict):
+            continue
+        # Never copy baseline text or position hints into the repair prompt.
+        # Only image coordinates and provisional status are useful location hints.
+        result.append(
+            {
+                "page_index": raw.get("page_index"),
+                "bbox": raw.get("bbox"),
+                "status": raw.get("status"),
+                "position_hint": "source visual edit location",
+            }
+        )
+    return result
 
 
 class Qwen38VisualTranscriptionService:
@@ -180,10 +206,13 @@ class Qwen38VisualTranscriptionService:
         if source_run.source_image_sha256 != source_hash:
             raise VisualTranscriptionError("Answer images changed; run normal transcription again")
         source_draft_hash = hashlib.sha256(source_run.draft_text.encode("utf-8")).hexdigest()
+        source_editing_marks = _repair_source_editing_marks(source_run)
+        source_editing_hash = _repair_decision_hash(source_editing_marks)
         input_hash = _thinking_repair_input_hash(
             source_hash=source_hash,
             source_run_id=source_run.id,
             source_draft_hash=source_draft_hash,
+            source_editing_hash=source_editing_hash,
         )
         existing = self.db.scalar(
             select(AnswerRegionOcrRun.id).where(
@@ -223,7 +252,7 @@ class Qwen38VisualTranscriptionService:
             model_asset_sha256=self.settings.local_qwen38_model_sha256 or None,
             mmproj_asset_sha256=self.settings.local_qwen38_mmproj_sha256 or None,
             queued_at=datetime.now(UTC),
-            call_limit=1,
+            call_limit=3,
             calls_used=0,
             provider="llama_cpp_qwen38",
             model_name=self.settings.local_qwen38_model,
@@ -233,6 +262,7 @@ class Qwen38VisualTranscriptionService:
                 "prompt_version": THINKING_REPAIR_PROMPT_VERSION,
                 "source_run_id": source_run.id,
                 "source_draft_sha256": source_draft_hash,
+                "source_editing_sha256": source_editing_hash,
             },
         )
         self.db.add(run)
@@ -247,7 +277,7 @@ class Qwen38VisualTranscriptionService:
                 "source_run_id": source_run.id,
                 "source_draft_sha256": source_draft_hash,
                 "source_image_sha256": source_hash,
-                "call_limit": 1,
+                "call_limit": 3,
             },
         )
         self.db.commit()
@@ -341,6 +371,7 @@ class Qwen38VisualTranscriptionService:
                 "confidence": str(result.confidence),
                 "prompt_tokens": result.prompt_tokens,
                 "completion_tokens": result.completion_tokens,
+                "provider_calls_used": result.provider_calls_used,
             }
             run.warnings = [
                 "teacher_review_required",
@@ -432,6 +463,28 @@ class Qwen38VisualTranscriptionService:
                 "or use the explicit Thinking repair"
             )
         is_blank = bool((run.normalized_result or {}).get("is_blank"))
+        normalized = run.normalized_result or {}
+        editing_analysis = normalized.get("editing_analysis") or {}
+        forbidden_markers = (
+            "[visibly crossed]",
+            "[overwritten]",
+            "[illegible crossed writing]",
+            "[unclear correction]",
+            "[illegible]",
+            "[visible writing unresolved",
+        )
+        if (
+            normalized.get("uncertain_glyphs")
+            or (
+                isinstance(editing_analysis, dict)
+                and editing_analysis.get("uncertain_correction_detected")
+            )
+            or any(marker in (run.draft_text or "").casefold() for marker in forbidden_markers)
+        ):
+            raise VisualTranscriptionError(
+                "This baseline still contains unresolved or explicitly preserved edited writing; "
+                "use the Qwen3.8 Thinking comparison or upload a clearer complete page"
+            )
         if run.status != "succeeded" or (not run.draft_text and not is_blank):
             raise VisualTranscriptionError("Only a completed visual transcription can be confirmed")
         if hashlib.sha256(run.draft_text.encode("utf-8")).hexdigest() != draft_hash:
@@ -531,6 +584,14 @@ class Qwen38VisualTranscriptionService:
                 "source_draft_sha256"
             ):
                 raise VisualTranscriptionError("Source transcript changed after authorization")
+            source_editing_marks = _repair_source_editing_marks(source_run)
+            source_editing_hash = _repair_decision_hash(source_editing_marks)
+            if source_editing_hash != (run.normalized_result or {}).get(
+                "source_editing_sha256"
+            ):
+                raise VisualTranscriptionError(
+                    "Source visual edit locations changed after authorization"
+                )
 
             lease_holder_id = f"visual_transcription_repair:{run.id}:{uuid4().hex}"
             lease = LocalModelLeaseService(self.db)
@@ -559,7 +620,9 @@ class Qwen38VisualTranscriptionService:
                 result = provider.repair_transcription_images(
                     images=images,
                     rejected_transcript=_repair_source_text(source_run),
+                    source_editing_marks=source_editing_marks,
                 )
+                run.calls_used = result.provider_calls_used
                 lease.heartbeat(holder_id=lease_holder_id)
 
             draft_hash = hashlib.sha256(result.draft_text.encode("utf-8")).hexdigest()
@@ -601,6 +664,11 @@ class Qwen38VisualTranscriptionService:
                 "no_question_solution_or_rubric_context",
                 "all_edit_decisions_require_confirmation",
                 *(
+                    ["bounded_visual_resolution_used"]
+                    if result.provider_calls_used == 3
+                    else []
+                ),
+                *(
                     ["uncertain_student_correction"]
                     if result.uncertain_correction_detected
                     else []
@@ -619,7 +687,7 @@ class Qwen38VisualTranscriptionService:
                     "draft_text_sha256": draft_hash,
                     "decision_set_sha256": decision_hash,
                     "decision_count": len(decisions),
-                    "calls_used": 1,
+                    "calls_used": result.provider_calls_used,
                     "latency_ms": run.latency_ms,
                 },
             )
@@ -628,6 +696,10 @@ class Qwen38VisualTranscriptionService:
             self.db.rollback()
             failed = self.db.get(AnswerRegionOcrRun, run_id)
             if failed is not None:
+                failed.calls_used = max(
+                    failed.calls_used,
+                    int(getattr(exc, "calls_used", failed.calls_used)),
+                )
                 failure_code = str(
                     getattr(exc, "failure_code", "thinking_repair_execution_failed")
                 )[:100]
@@ -679,6 +751,30 @@ class Qwen38VisualTranscriptionService:
         decisions = (normalized.get("editing_analysis") or {}).get("editing_marks") or []
         if not isinstance(decisions, list):
             raise VisualTranscriptionError("Thinking repair editing decisions are invalid")
+        if not decisions:
+            raise VisualTranscriptionError(
+                "Finalized surviving-work transcription requires image-grounded edit decisions"
+            )
+        if any(
+            isinstance(decision, dict)
+            and decision.get("status") == "uncertain_correction"
+            for decision in decisions
+        ):
+            raise VisualTranscriptionError(
+                "Unresolved correction cannot be confirmed for grading"
+            )
+        forbidden_markers = (
+            "[visibly crossed]",
+            "[overwritten]",
+            "[illegible crossed writing]",
+            "[unclear correction]",
+            "[visible writing unresolved",
+        )
+        normalized_draft = (run.draft_text or "").casefold()
+        if any(marker in normalized_draft for marker in forbidden_markers):
+            raise VisualTranscriptionError(
+                "Finalized surviving-work transcription still contains unresolved evidence markers"
+            )
         expected_decision_hash = _repair_decision_hash(decisions)
         if (
             decision_set_hash != expected_decision_hash

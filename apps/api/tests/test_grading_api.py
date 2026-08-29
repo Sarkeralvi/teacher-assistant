@@ -24,6 +24,7 @@ from app.models import (
     FinalGrade,
     GradeSuggestion,
     GradingJob,
+    GradingRun,
     Question,
     QuestionNode,
     Rubric,
@@ -376,6 +377,204 @@ def create_assessment_with_answer_regions(
     return {"assessment_id": assessment_id, "regions": regions, "headers": batch_headers}
 
 
+def create_custom_grading_run(db: Session, assessment_id: int) -> GradingRun:
+    teacher = db.scalars(select(User)).one()
+    run = GradingRun(
+        assessment_id=assessment_id,
+        created_by_teacher_id=teacher.id,
+        mode="custom_controlled",
+        status="grading_ready",
+        marking_policy="general",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def enable_local_qwen38_grading(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("LOCAL_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_GRADING_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "local-test-key")
+    monkeypatch.setenv("LOCAL_QWEN38_MODEL", "qwen3.8-27b-q4km")
+    get_settings.cache_clear()
+
+
+class SuccessfulLocalQwen38Adapter:
+    provider = type(
+        "Provider",
+        (),
+        {"provider_name": "llama_cpp_qwen38", "model_name": "qwen3.8-27b-q4km"},
+    )()
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def grade_answer_region(self, **_: object) -> GradeSuggestionOutput:
+        self.calls += 1
+        return GradeSuggestionOutput(
+            model_provider="llama_cpp_qwen38",
+            model_name="qwen3.8-27b-q4km",
+            prompt_version="real-grading-v3",
+            score=Decimal("5.00"),
+            max_score=Decimal("5.00"),
+            confidence=Decimal("0.90"),
+            feedback_to_student="Draft for teacher review.",
+            detected_answer_summary="Complete answer.",
+            major_errors=[],
+            rubric_breakdown=[
+                RubricBreakdownItem(
+                    criterion_id="holistic",
+                    criterion="Holistic assessment",
+                    max_marks=Decimal("5.00"),
+                    awarded_marks=Decimal("5.00"),
+                    reason="Answer meets the rubric.",
+                    confidence=Decimal("0.90"),
+                )
+            ],
+            needs_review=True,
+            review_flags=["teacher_review_required", "image_input_disabled"],
+        )
+
+
+def test_one_click_grades_every_approved_answer_as_review_only_draft(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = create_assessment_with_answer_regions(client, tmp_path, region_count=2)
+    run = create_custom_grading_run(db_session, int(setup["assessment_id"]))
+    adapter = SuccessfulLocalQwen38Adapter()
+    enable_local_qwen38_grading(monkeypatch)
+    monkeypatch.setattr(
+        "app.api.routes.grading.BrainAdapter.for_provider", lambda *_args: adapter
+    )
+    monkeypatch.setattr(
+        "app.services.grading_service.GradingService._local_model_phase",
+        lambda _self: None,
+    )
+
+    response = client.post(
+        f"/assessments/{setup['assessment_id']}/grade-approved-local-qwen38",
+        headers=setup["headers"],
+        json={
+            "grading_run_id": run.id,
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+            "call_limit": 2,
+            "stop_on_failure": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["eligible_count"] == 2
+    assert payload["calls_completed"] == 2
+    assert payload["graded_count"] == 2
+    assert payload["failed_count"] == 0
+    assert adapter.calls == 2
+    assert db_session.scalars(select(GradeSuggestion)).all()
+    assert db_session.scalars(select(FinalGrade)).all() == []
+
+
+def test_one_click_refuses_over_call_limit_before_adapter_initialization(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = create_assessment_with_answer_regions(client, tmp_path, region_count=2)
+    run = create_custom_grading_run(db_session, int(setup["assessment_id"]))
+    enable_local_qwen38_grading(monkeypatch)
+    initialized = False
+
+    def forbidden_adapter(*_args: object) -> object:
+        nonlocal initialized
+        initialized = True
+        raise AssertionError("adapter must not initialize above the authorized cap")
+
+    monkeypatch.setattr(
+        "app.api.routes.grading.BrainAdapter.for_provider", forbidden_adapter
+    )
+    response = client.post(
+        f"/assessments/{setup['assessment_id']}/grade-approved-local-qwen38",
+        headers=setup["headers"],
+        json={
+            "grading_run_id": run.id,
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+            "call_limit": 1,
+            "stop_on_failure": True,
+        },
+    )
+
+    assert response.status_code == 409
+    assert "no grading calls were made" in response.json()["detail"]
+    assert initialized is False
+    assert db_session.scalars(select(GradingJob)).all() == []
+
+
+def test_one_click_stops_after_first_provider_failure_without_retry(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = create_assessment_with_answer_regions(client, tmp_path, region_count=2)
+    run = create_custom_grading_run(db_session, int(setup["assessment_id"]))
+    enable_local_qwen38_grading(monkeypatch)
+
+    class FailingLocalAdapter:
+        provider = type(
+            "Provider",
+            (),
+            {"provider_name": "llama_cpp_qwen38", "model_name": "qwen3.8-27b-q4km"},
+        )()
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def grade_answer_region(self, **_: object) -> object:
+            self.calls += 1
+            raise RuntimeError("local provider failed")
+
+    adapter = FailingLocalAdapter()
+    monkeypatch.setattr(
+        "app.api.routes.grading.BrainAdapter.for_provider", lambda *_args: adapter
+    )
+    monkeypatch.setattr(
+        "app.services.grading_service.GradingService._local_model_phase",
+        lambda _self: None,
+    )
+    response = client.post(
+        f"/assessments/{setup['assessment_id']}/grade-approved-local-qwen38",
+        headers=setup["headers"],
+        json={
+            "grading_run_id": run.id,
+            "provider": "llama_cpp_qwen38",
+            "expected_model": "qwen3.8-27b-q4km",
+            "draft_only_confirmed": True,
+            "call_limit": 2,
+            "stop_on_failure": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["calls_completed"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["stopped_on_failure"] is True
+    assert [item["status"] for item in payload["items"]] == ["failed", "not_started"]
+    assert adapter.calls == 1
+    assert db_session.scalars(select(GradeSuggestion)).all() == []
+    assert db_session.scalars(select(FinalGrade)).all() == []
+
+
 def test_grade_answer_region_creates_job_and_mock_suggestion(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:
@@ -617,6 +816,15 @@ def test_qwen38_mapping_requires_matching_final_intent_transcription_before_grad
     assert current_packet["readiness_result"]["ready_for_grading"] is True
     assert current_packet["student_answer_evidence"]["final_intent_transcription_confirmed"]
 
+    transcript.normalized_result = {"requires_thinking_repair": True}
+    db_session.commit()
+    required_repair_packet = service.get_grading_evidence_packet(region.id)
+    assert required_repair_packet["readiness_result"]["ready_for_grading"] is True
+    assert (
+        required_repair_packet["student_answer_evidence"]["final_intent_prompt_version"]
+        == FINAL_INTENT_PROMPT_VERSION
+    )
+
     repair = AnswerRegionOcrRun(
         answer_region_id=region.id,
         requested_by_teacher_id=teacher.id,
@@ -637,10 +845,10 @@ def test_qwen38_mapping_requires_matching_final_intent_transcription_before_grad
     db_session.add(repair)
     db_session.commit()
     pending_repair_packet = service.get_grading_evidence_packet(region.id)
-    assert pending_repair_packet["readiness_result"]["ready_for_grading"] is False
+    assert pending_repair_packet["readiness_result"]["ready_for_grading"] is True
     assert (
-        "Qwen3.8 thinking repair must be teacher-confirmed"
-        in pending_repair_packet["readiness_result"]["blockers"]
+        pending_repair_packet["student_answer_evidence"]["final_intent_prompt_version"]
+        == FINAL_INTENT_PROMPT_VERSION
     )
 
     repair.status = "confirmed"
@@ -1290,6 +1498,27 @@ def test_prompt_construction_includes_manual_student_answer_text() -> None:
     assert "Dhaka is the capital of Bangladesh." in rendered
     assert "Teacher-confirmed student answer text" in rendered
     assert "artifacts/answer_regions/example.png" in rendered
+
+
+def test_prompt_forbids_deduction_for_correct_three_decimal_precision() -> None:
+    from packages.brain.prompt_registry import build_grading_prompt
+
+    messages = build_grading_prompt(
+        question_text="Calculate the probability.",
+        rubric_json={
+            "model_answer": "0.384615...",
+            "criteria": [{"id": "answer", "max_marks": "5"}],
+        },
+        answer_image_path="[image input disabled]",
+        image_input_enabled=False,
+        student_answer_text="0.385",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "Do not deduct marks" in rendered
+    assert "correct to three decimal places" in rendered
+    assert "absolute numerical difference of at most 0.0005" in rendered
+    assert "explicitly requires more than three decimal places" in rendered
 
 
 def test_prompt_construction_includes_dependent_rubric_instruction() -> None:

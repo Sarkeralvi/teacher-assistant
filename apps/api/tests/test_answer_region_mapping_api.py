@@ -652,7 +652,7 @@ def test_thinking_repair_route_is_owned_explicit_and_enqueued_without_retry(
     repair = repair_response.json()
     assert repair["profile"] == "qwen38_thinking_repair"
     assert repair["reasoning_mode"] == "thinking"
-    assert repair["call_limit"] == 1
+    assert repair["call_limit"] == 3
     assert repair["calls_used"] == 0
     assert enqueue_options == [{"retry": None, "job_timeout": 2400}]
     assert db_session.scalar(select(func.count(GradeSuggestion.id))) == 0

@@ -34,6 +34,7 @@ import {
   getLocalAiStatus,
   getSubmissionPageImageUrl,
   getStoredAuthToken,
+  gradeAllApprovedAnswersWithLocalQwen38,
   gradeAnswerRegionWithLocalQwen38,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
@@ -74,6 +75,7 @@ import {
   type GradingQueueRun,
   type GradingRun,
   type LocalAiStatus,
+  type LocalQwenApprovedBatchGradeResponse,
   type Question,
   type QuestionImportJob,
   type QuestionImportProvider,
@@ -195,7 +197,7 @@ const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   "qwen38-final-intent-structured-v4",
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
-const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v7";
+const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v9";
 
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;
@@ -274,6 +276,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [runningMappings, setRunningMappings] = useState(false);
   const [scriptPreparationMessage, setScriptPreparationMessage] = useState<string | null>(null);
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
+  const [gradingAllApproved, setGradingAllApproved] = useState(false);
+  const [batchGradeResult, setBatchGradeResult] = useState<LocalQwenApprovedBatchGradeResponse | null>(null);
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
   const [confirmingVisualRunId, setConfirmingVisualRunId] = useState<number | null>(null);
   const [answerRegionImageStates, setAnswerRegionImageStates] = useState<Record<number, AnswerRegionImageLoadState>>({});
@@ -440,6 +444,13 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     localAiStatus.qwen38.enabled &&
     localAiStatus.qwen38.grading_enabled,
   );
+  const approvedBatchRegionIds = answerRegions
+    .filter((region) => (
+      Boolean(evidencePackets[region.id]?.readiness_result.ready_for_grading) &&
+      !gradedRegionIds.has(region.id) &&
+      !finalizedRegionIds.has(region.id)
+    ))
+    .map((region) => region.id);
 
   function statusForRegion(regionId: number): "finalized" | "graded" | "mapped" {
     if (finalizedRegionIds.has(regionId)) {
@@ -1051,6 +1062,36 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setError(err instanceof Error ? err.message : "Local Qwen3.8 grading failed");
     } finally {
       setGradingRegionId(null);
+    }
+  }
+
+  async function handleGradeAllApproved() {
+    if (!activeGradingRun) {
+      setError("Start a Custom Controlled grading run before local Qwen grading.");
+      return;
+    }
+    if (approvedBatchRegionIds.length === 0) {
+      setError("No ungraded answer has both approved final-intent transcription and full-answer confirmation.");
+      return;
+    }
+    setGradingAllApproved(true);
+    setBatchGradeResult(null);
+    setError(null);
+    try {
+      const result = await gradeAllApprovedAnswersWithLocalQwen38(assessmentId, {
+        grading_run_id: activeGradingRun.id,
+        provider: "llama_cpp_qwen38",
+        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        draft_only_confirmed: true,
+        call_limit: Math.min(approvedBatchRegionIds.length, 25),
+        stop_on_failure: true,
+      });
+      setBatchGradeResult(result);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "One-click local Qwen3.8 grading failed");
+    } finally {
+      setGradingAllApproved(false);
     }
   }
 
@@ -1929,6 +1970,37 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         {scriptPreparationMessage ? (
           <p className="rounded border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-100">{scriptPreparationMessage}</p>
         ) : null}
+        {answerRegions.length > 0 ? (
+          <section className="grid gap-3 rounded border border-cyan-700 bg-cyan-950/20 p-4">
+            <div>
+              <h3 className="font-semibold text-cyan-100">One-click draft grading</h3>
+              <p className="mt-1 text-xs text-slate-300">
+                Grades every ungraded answer whose finalized surviving-work transcription and full-answer images are already teacher-approved. Calls run one at a time, stop on the first failure, and create drafts only.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className={buttonClass}
+                type="button"
+                disabled={gradingAllApproved || !localSingleGradeAuthorized || !activeGradingRun || approvedBatchRegionIds.length === 0 || approvedBatchRegionIds.length > 25}
+                onClick={() => void handleGradeAllApproved()}
+              >
+                {gradingAllApproved
+                  ? "Qwen3.8 is grading approved answers sequentially..."
+                  : `Grade all approved transcriptions (${approvedBatchRegionIds.length})`}
+              </button>
+              <span className="text-xs text-slate-400">Server ceiling: 25 calls · no retries · no automatic final grades</span>
+            </div>
+            {approvedBatchRegionIds.length > 25 ? (
+              <p className="text-xs text-red-200">There are more than 25 ready answers. Grade a smaller supervised assessment; no partial batch will be started.</p>
+            ) : null}
+            {batchGradeResult ? (
+              <p className={`text-xs ${batchGradeResult.failed_count ? "text-red-200" : "text-emerald-200"}`}>
+                Completed {batchGradeResult.calls_completed} call(s): {batchGradeResult.graded_count} draft(s) created, {batchGradeResult.skipped_count} skipped, {batchGradeResult.failed_count} failed{batchGradeResult.stopped_on_failure ? "; stopped safely on the first failure" : ""}.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
         {flatMappings.length === 0 ? (
           <EmptyState message="No prepared answer mappings yet. Upload the complete script, then run local preparation." />
         ) : (
@@ -1962,6 +2034,20 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 );
                 const requiresThinkingRepair = Boolean(
                   visualRun?.normalized_result?.requires_thinking_repair,
+                );
+                const baselineHasUnresolvedEvidence = Boolean(
+                  visualRun && (
+                    visualRun.warnings.includes("visual_transcription_uncertain") ||
+                    visualRun.warnings.includes("uncertain_student_correction") ||
+                    [
+                      "[visibly crossed]",
+                      "[overwritten]",
+                      "[illegible crossed writing]",
+                      "[unclear correction]",
+                      "[illegible]",
+                      "[visible writing unresolved",
+                    ].some((marker) => (visualRun.draft_text ?? "").toLowerCase().includes(marker))
+                  ),
                 );
                 const confirmedRun = thinkingRepairRun?.status === "confirmed"
                   ? thinkingRepairRun
@@ -2121,7 +2207,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             ) : null}
                             {visualRun.warnings.includes("thinking_repair_required") ? (
                               <p className="rounded border border-amber-700 bg-amber-950/30 p-2 text-xs font-semibold text-amber-100">
-                                Possible edits need special attention. If this original transcript is already exact, you may use it as shown; otherwise compare it with the optional Thinking interpretation below.
+                                Possible cancellations or replacements were detected. Confirm this transcript only if it already contains exactly the student&apos;s surviving final work; otherwise run the Thinking comparison.
                               </p>
                             ) : null}
                             {visualRun.warnings.includes("student_replacement_detected") ? (
@@ -2134,9 +2220,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             ) : null}
                             {visualRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{visualRun.draft_text}</pre> : null}
                             {visualRun.status === "succeeded" && currentFinalIntentRun && thinkingRepairRun?.status !== "confirmed" ? <div className="flex flex-wrap gap-2">
-                              <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>{requiresThinkingRepair ? "Use original transcript exactly as shown" : "Use this faithful transcription"}</button>
+                              {!baselineHasUnresolvedEvidence ? <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>{requiresThinkingRepair ? "I verified this is the finalized surviving work" : "Confirm this final transcription"}</button> : null}
                               <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleRejectVisualTranscription(mapping, visualRun)}>None matches — block and upload clearer page</button>
                             </div> : null}
+                            {visualRun.status === "succeeded" && currentFinalIntentRun && baselineHasUnresolvedEvidence ? (
+                              <p className="text-xs text-amber-200">The baseline explicitly contains unresolved or crossed-writing markers, so it cannot be finalized directly. Use Thinking or upload a clearer complete page.</p>
+                            ) : null}
                           </div>
                         ) : null}
                         {visualRun && repairableFinalIntentRun && ["succeeded", "confirmed", "rejected"].includes(visualRun.status) && !hasCurrentThinkingRepairRun && thinkingRepairRun?.status !== "confirmed" && mapping.answer_region_id && !gradedRegionIds.has(mapping.answer_region_id) && !finalizedRegionIds.has(mapping.answer_region_id) ? (
@@ -2151,17 +2240,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               : thinkingRepairRun?.status === "failed"
                                 ? "Start corrected Thinking repair"
                                 : requiresThinkingRepair
-                                  ? "Compare with Qwen3.8 Thinking (recommended)"
-                                  : "Compare with Qwen3.8 Thinking (optional)"}
+                                  ? "Finalize surviving work with Qwen3.8 Thinking"
+                                  : "Check final intent with Qwen3.8 Thinking"}
                           </button>
                         ) : null}
                         {thinkingRepairRun ? (
                           <div className="grid gap-3 rounded border border-violet-600 bg-violet-950/20 p-3">
                             <div>
-                              <p className="font-semibold text-violet-100">Thinking-enabled cancellation repair · run #{thinkingRepairRun.id}</p>
-                              <p className="text-xs text-violet-200">{thinkingRepairRun.status} · {thinkingRepairRun.calls_used}/{thinkingRepairRun.call_limit} call · no question, solution, rubric, or marks were provided</p>
-                              <p className="mt-1 text-xs text-amber-200">Reasoning is advisory only. Verify every numbered visual box; mathematical plausibility is not evidence.</p>
-                              <p className="mt-1 text-xs text-slate-300">Thinking is a comparison, not an automatic upgrade. It may be worse than the original transcript; choose only the version that matches the images.</p>
+                              <p className="font-semibold text-violet-100">Finalized surviving-work candidate · run #{thinkingRepairRun.id}</p>
+                              <p className="text-xs text-violet-200">{thinkingRepairRun.status} · {thinkingRepairRun.calls_used}/{thinkingRepairRun.call_limit} calls · no question, solution, rubric, or marks were provided</p>
+                              <p className="mt-1 text-xs text-amber-200">Verify every numbered visual box. Only visible surviving work is retained; mathematical plausibility is never evidence.</p>
+                              <p className="mt-1 text-xs text-slate-300">Unresolved edits or uncertain surviving glyphs fail closed and cannot reach grading.</p>
                             </div>
                             {thinkingRepairRun.error ? <p className="text-xs text-red-200">{thinkingRepairRun.error}</p> : null}
                             {thinkingRepairFailureCode ? <p className="text-xs text-red-300">Failure category: {thinkingRepairFailureCode.replaceAll("_", " ")}</p> : null}
@@ -2192,10 +2281,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                   );
                                 })}
                               </fieldset>
-                            ) : thinkingRepairRun.status === "succeeded" ? (
-                              <p className="rounded border border-slate-700 p-2 text-xs text-slate-200">Thinking produced a whole-image alternative without reliable local edit boxes. Compare the complete transcript with every displayed image before choosing it.</p>
                             ) : null}
-                            {thinkingRepairRun.status === "succeeded" ? (
+                            {thinkingRepairRun.status === "succeeded" && thinkingRepairRun.prompt_version === CURRENT_THINKING_REPAIR_PROMPT_VERSION ? (
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   className={buttonClass}
@@ -2203,7 +2290,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                   disabled={confirmingVisualRunId === thinkingRepairRun.id || (reviewedRepairDecisions[thinkingRepairRun.id] ?? []).length !== repairDecisions.length}
                                   onClick={() => void handleConfirmThinkingRepair(mapping, thinkingRepairRun)}
                                 >
-                                  Use Thinking transcript after image review
+                                  Confirm finalized surviving-work transcription
                                 </button>
                                 <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === thinkingRepairRun.id} onClick={() => void handleRejectThinkingRepair(mapping, thinkingRepairRun)}>Discard Thinking alternative</button>
                               </div>
