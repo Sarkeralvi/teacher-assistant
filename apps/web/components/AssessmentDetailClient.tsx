@@ -1433,16 +1433,21 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           ) : null}
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
             {referencesReady
-              ? "References are ready. Upload student scripts and confirm each answer before requesting draft grading."
+              ? "References are ready. Grade a whole class from one ZIP — the run maps, transcribes, and drafts scores in the background and only stops to ask you about exceptions."
               : "Prepare and confirm the question, solution, and rubric before student work is unlocked."}
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
+          {referencesReady ? (
+            <Link
+              className="rounded bg-emerald-400 px-5 py-2.5 text-base font-semibold text-slate-950 shadow hover:bg-emerald-300"
+              href={`/assessments/${assessmentId}/bulk-evaluation`}
+            >
+              Grade a class from a ZIP
+            </Link>
+          ) : null}
           <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
             {referencesReady ? "Review references" : "Prepare references"}
-          </Link>
-          <Link className={buttonClass} href={`/assessments/${assessmentId}/bulk-evaluation`}>
-            Evaluate a ZIP of scripts
           </Link>
         </div>
       </section>
@@ -1799,7 +1804,19 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Student scripts</p>
           <h2 className="mt-1 text-xl font-semibold">Upload one answer script</h2>
-          <p className="text-sm text-slate-400">PDF, PNG, JPG, or JPEG. Uploading stores pages only; it does not grade them.</p>
+          <p className="text-sm text-slate-400">
+            PDF, PNG, JPG, or JPEG. Uploading stores pages only; it does not grade them.
+            This single-script form is for one student — reviewing a whole class here
+            means confirming every answer by hand.
+          </p>
+          <p className="mt-2 text-sm text-emerald-200">
+            Grading a class?{" "}
+            <Link className="font-semibold underline" href={`/assessments/${assessmentId}/bulk-evaluation`}>
+              Grade a class from a ZIP
+            </Link>{" "}
+            runs mapping, transcription, and draft scoring in the background and surfaces
+            only the answers that need you.
+          </p>
         </div>
         <input className={inputClass} name="student_identifier" placeholder="student_identifier" value={studentIdentifier} onChange={(event) => setStudentIdentifier(event.target.value)} required />
         <input className={inputClass} placeholder="Student name (optional)" value={studentName} onChange={(event) => setStudentName(event.target.value)} />
@@ -1821,11 +1838,28 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </form>
 
       <details className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-        <summary className="cursor-pointer font-semibold text-slate-200">Bulk upload a ZIP (optional)</summary>
+        <summary className="cursor-pointer font-semibold text-slate-200">
+          Import a ZIP without grading it (advanced)
+        </summary>
       <form onSubmit={handleZipUpload} className="mt-5 grid gap-4">
         <div>
-          <h2 className="text-xl font-semibold">Upload several scripts</h2>
-          <p className="text-sm text-slate-400">The ZIP may contain PDF, PNG, JPG, or JPEG files. Unsupported entries are reported and skipped.</p>
+          <h2 className="text-xl font-semibold">Import scripts only</h2>
+          {/* This path only creates submissions. Every imported script then needs
+              its regions checked, its transcription confirmed, and grading started
+              BY HAND, one answer at a time -- which is unusable for a class-sized
+              ZIP. Teachers reached for this because it was the only control in the
+              scripts area that mentioned a ZIP; the supervised run is what they
+              actually wanted, so it is named here explicitly. */}
+          <p className="rounded border border-amber-700/60 bg-amber-950/20 p-3 text-sm text-amber-100">
+            This imports pages only. You would then confirm regions, transcription, and
+            grading by hand for every answer of every script. To grade a class, use{" "}
+            <Link className="font-semibold underline" href={`/assessments/${assessmentId}/bulk-evaluation`}>
+              Grade a class from a ZIP
+            </Link>{" "}
+            instead — it does the mapping, transcription, and draft scoring for you and
+            asks only about the answers it could not read confidently.
+          </p>
+          <p className="mt-2 text-sm text-slate-400">The ZIP may contain PDF, PNG, JPG, or JPEG files. Unsupported entries are reported and skipped.</p>
         </div>
         <label className="grid gap-2 text-sm">
           Student identifier strategy
