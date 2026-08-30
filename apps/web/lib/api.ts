@@ -130,7 +130,103 @@ export type SubmissionZipUploadResponse = {
 };
 
 export type MarkingPolicy = "tough" | "general" | "easy";
-export type GradingRunMode = "custom_controlled" | "semi_automated" | "fully_automated";
+export type GradingRunMode =
+  | "custom_controlled"
+  | "bulk_supervised"
+  | "semi_automated"
+  | "fully_automated";
+
+export type BulkEvaluationStatus =
+  | "preflighting"
+  | "queued"
+  | "mapping"
+  | "transcribing"
+  | "grading"
+  | "review_ready"
+  | "completed_with_exceptions"
+  | "completed"
+  | "stopping"
+  | "stopped"
+  | "paused"
+  | "failed";
+
+export type BulkEvaluationItem = {
+  id: number;
+  run_id: number;
+  submission_id: number;
+  question_id: number;
+  mapping_id: number | null;
+  answer_region_id: number | null;
+  transcription_run_id: number | null;
+  grading_job_id: number | null;
+  grade_suggestion_id: number | null;
+  final_grade_id: number | null;
+  status: string;
+  stage: string;
+  verification_source: "bulk_policy" | "teacher" | null;
+  mapping_confidence: string | number | null;
+  transcription_confidence: string | number | null;
+  grading_confidence: string | number | null;
+  exception_codes: string[];
+  warnings: string[];
+  provider_call_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BulkEvaluationRun = {
+  id: number;
+  assessment_id: number;
+  grading_run_id: number;
+  provider: "llama_cpp_qwen38";
+  model_name: string;
+  marking_policy: MarkingPolicy;
+  policy_version: string;
+  reference_bundle_sha256: string;
+  review_snapshot_sha256: string | null;
+  archive_sha256: string;
+  status: BulkEvaluationStatus;
+  stage: string;
+  authorized_call_limit: number;
+  calls_used: number;
+  total_submissions: number;
+  total_pages: number;
+  total_items: number;
+  processed_items: number;
+  clean_item_count: number;
+  exception_count: number;
+  approved_count: number;
+  stop_requested: boolean;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  items: BulkEvaluationItem[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type BulkEvaluationException = {
+  item_id: number;
+  submission_id: number;
+  student_identifier: string | null;
+  question_id: number;
+  question_label: string;
+  answer_region_id: number | null;
+  stage: string;
+  exception_codes: string[];
+  warnings: string[];
+};
+
+export type BulkEvaluationApprovalResponse = {
+  run_id: number;
+  approved_count: number;
+  already_approved_count: number;
+  exception_count: number;
+  review_snapshot_sha256: string;
+};
 
 export type GradingRunWorkflowState = {
   materials_uploaded: boolean;
@@ -1074,6 +1170,33 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
   return (await response.json()) as T;
 }
 
+async function apiDownload(path: string): Promise<Blob> {
+  const token = getStoredAuthToken();
+  let response: Response;
+  try {
+    response = await fetch(`${resolveApiBaseUrl()}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(backendUnreachableMessage());
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      // Keep the HTTP status when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+  return response.blob();
+}
+
 export type UserCreate = Pick<User, "name" | "email"> & { role?: string };
 export type AuthRegister = UserCreate & { password: string };
 export type AuthLogin = Pick<User, "email"> & { password: string };
@@ -1625,6 +1748,87 @@ export function createVisualTranscriptionThinkingRepair(
       body: { expected_model: expectedModel, draft_only_confirmed: true },
     },
   );
+}
+
+export function createBulkEvaluationRun(
+  assessmentId: number,
+  payload: {
+    file: File;
+    grading_run_id: number;
+    expected_model: string;
+    marking_policy: MarkingPolicy;
+    maximum_provider_calls: number;
+  },
+) {
+  const formData = new FormData();
+  formData.append("file", payload.file);
+  formData.append("grading_run_id", String(payload.grading_run_id));
+  formData.append("provider", "llama_cpp_qwen38");
+  formData.append("expected_model", payload.expected_model);
+  formData.append("marking_policy", payload.marking_policy);
+  formData.append("maximum_provider_calls", String(payload.maximum_provider_calls));
+  formData.append("local_only_confirmed", "true");
+  formData.append("strict_auto_pass_confirmed", "true");
+  formData.append("draft_only_confirmed", "true");
+  return apiRequest<BulkEvaluationRun>(
+    `/assessments/${assessmentId}/bulk-evaluation-runs`,
+    { method: "POST", formData, authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE },
+  );
+}
+
+export function getBulkEvaluationRun(runId: number) {
+  return apiRequest<BulkEvaluationRun>(`/bulk-evaluation-runs/${runId}`);
+}
+
+export function listBulkEvaluationRuns(assessmentId: number) {
+  return apiRequest<BulkEvaluationRun[]>(
+    `/assessments/${assessmentId}/bulk-evaluation-runs`,
+  );
+}
+
+export function stopBulkEvaluationRun(runId: number) {
+  return apiRequest<BulkEvaluationRun>(`/bulk-evaluation-runs/${runId}/stop`, {
+    method: "POST",
+  });
+}
+
+export function resumeBulkEvaluationRun(runId: number) {
+  return apiRequest<BulkEvaluationRun>(`/bulk-evaluation-runs/${runId}/resume`, {
+    method: "POST",
+  });
+}
+
+export function listBulkEvaluationExceptions(runId: number) {
+  return apiRequest<BulkEvaluationException[]>(`/bulk-evaluation-runs/${runId}/exceptions`);
+}
+
+export function resumeBulkEvaluationItem(runId: number, itemId: number) {
+  return apiRequest<BulkEvaluationItem>(
+    `/bulk-evaluation-runs/${runId}/items/${itemId}/resume`,
+    { method: "POST" },
+  );
+}
+
+export function approveCleanBulkEvaluation(
+  runId: number,
+  suggestionIds: number[],
+  reviewSnapshotSha256: string,
+) {
+  return apiRequest<BulkEvaluationApprovalResponse>(
+    `/bulk-evaluation-runs/${runId}/approve-clean`,
+    {
+      method: "POST",
+      body: {
+        suggestion_ids: suggestionIds,
+        review_snapshot_sha256: reviewSnapshotSha256,
+        teacher_confirmed: true,
+      },
+    },
+  );
+}
+
+export function downloadBulkEvaluationResults(runId: number) {
+  return apiDownload(`/bulk-evaluation-runs/${runId}/results.xlsx`);
 }
 
 export function confirmVisualTranscriptionThinkingRepair(

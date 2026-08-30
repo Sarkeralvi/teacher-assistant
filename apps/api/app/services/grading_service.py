@@ -179,7 +179,15 @@ class GradingService:
             if question.assessment_id != submission.assessment_id:
                 blockers.append("answer region not linked to correct assessment/question")
         segments = _ordered_segments(region)
-        confirmed_segments = [segment for segment in segments if segment.confirmed]
+        bulk_mapping_verified = self.db.scalar(
+            select(AnswerRegionMapping.id).where(
+                AnswerRegionMapping.answer_region_id == region.id,
+                AnswerRegionMapping.bulk_policy_verified.is_(True),
+            )
+        ) is not None
+        confirmed_segments = [
+            segment for segment in segments if segment.confirmed or bulk_mapping_verified
+        ]
         segment_payloads = [_segment_payload(segment) for segment in segments]
         pages_covered = [
             page_no
@@ -206,7 +214,10 @@ class GradingService:
             "continuation_confirmed_not_needed",
         }:
             continuation_check_status = region.continuation_check_status
-        elif region.full_answer_confirmed:
+        elif (
+            region.full_answer_confirmed
+            or region.full_answer_verification_source == "bulk_policy"
+        ):
             continuation_check_status = (
                 "continuation_confirmed_included"
                 if len(confirmed_segments) > 1
@@ -218,13 +229,16 @@ class GradingService:
             continuation_check_status = "checked_no_continuation"
 
         packet_status = region.evidence_status
-        if region.full_answer_confirmed and packet_status == "unconfirmed":
+        if (
+            region.full_answer_confirmed
+            or region.full_answer_verification_source == "bulk_policy"
+        ) and packet_status == "unconfirmed":
             packet_status = "complete"
         crop_path = region.image_path
         if not confirmed_segments:
             blockers.append("missing confirmed answer segment")
         if not (region.manual_answer_text or "").strip():
-            blockers.append("missing teacher-approved answer evidence")
+            blockers.append("missing verified answer evidence")
         final_intent_run = self._confirmed_final_intent_run(region)
         latest_final_intent_source = self._latest_final_intent_source_run(region)
         latest_thinking_repair = self._latest_thinking_repair(region)
@@ -339,6 +353,9 @@ class GradingService:
                 "continuation_check_status": continuation_check_status,
                 "next_page_context_available": next_page_context_available,
                 "teacher_founder_confirmed_full_answer": region.full_answer_confirmed,
+                "bulk_policy_verified_full_answer": (
+                    region.full_answer_verification_source == "bulk_policy"
+                ),
                 "padded_grading_context_generated": False,
                 "context_completeness_status": "possibly_incomplete"
                 if continuation_check_status == "possible_continuation"
@@ -573,7 +590,17 @@ class GradingService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Evidence packet not ready for grading: {', '.join(blockers)}",
             )
-        confirmed_segments = [segment for segment in _ordered_segments(region) if segment.confirmed]
+        bulk_mapping_verified = self.db.scalar(
+            select(AnswerRegionMapping.id).where(
+                AnswerRegionMapping.answer_region_id == region.id,
+                AnswerRegionMapping.bulk_policy_verified.is_(True),
+            )
+        ) is not None
+        confirmed_segments = [
+            segment
+            for segment in _ordered_segments(region)
+            if segment.confirmed or bulk_mapping_verified
+        ]
         if not confirmed_segments:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -583,8 +610,7 @@ class GradingService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Evidence packet not ready for grading: missing teacher-approved "
-                    "answer evidence"
+                    "Evidence packet not ready for grading: missing verified answer evidence"
                 ),
             )
         return confirmed_segments
@@ -767,7 +793,10 @@ class GradingService:
             confidence_value = grade_result.get("confidence", 0)
             if isinstance(confidence_value, str):
                 confidence_map = {"high": 0.9, "medium": 0.6, "low": 0.3}
-                confidence = confidence_map.get(confidence_value.lower(), 0.0)
+                try:
+                    confidence = Decimal(confidence_value)
+                except (ArithmeticError, ValueError):
+                    confidence = confidence_map.get(confidence_value.lower(), 0.0)
             else:
                 confidence = confidence_value
             raw_response = grade_result
@@ -984,7 +1013,10 @@ class GradingService:
             select(AnswerRegionMapping.id).where(
                 AnswerRegionMapping.answer_region_id == region.id,
                 AnswerRegionMapping.provider == "llama_cpp_qwen38",
-                AnswerRegionMapping.teacher_confirmed.is_(True),
+                (
+                    AnswerRegionMapping.teacher_confirmed.is_(True)
+                    | AnswerRegionMapping.bulk_policy_verified.is_(True)
+                ),
             )
         ) is not None
 

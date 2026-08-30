@@ -27,6 +27,13 @@ class VisualTranscriptionError(RuntimeError):
     pass
 
 
+def _mapping_is_verified(mapping: AnswerRegionMapping | None) -> bool:
+    return bool(
+        mapping is not None
+        and (mapping.teacher_confirmed or mapping.bulk_policy_verified)
+    )
+
+
 def _sha256_joined(parts: list[str]) -> str:
     return hashlib.sha256("".join(parts).encode("ascii")).hexdigest()
 
@@ -101,7 +108,7 @@ class Qwen38VisualTranscriptionService:
     ) -> AnswerRegionOcrRun:
         self._assert_enabled(expected_model)
         mapping = self._mapping_for_region(region.id)
-        if mapping is None or not mapping.teacher_confirmed:
+        if not _mapping_is_verified(mapping):
             raise VisualTranscriptionError(
                 "Confirm the answer mapping before Qwen3.8 visual transcription"
             )
@@ -184,7 +191,7 @@ class Qwen38VisualTranscriptionService:
     ) -> AnswerRegionOcrRun:
         self._assert_thinking_repair_enabled(expected_model)
         mapping = self._mapping_for_region(region.id)
-        if mapping is None or not mapping.teacher_confirmed:
+        if not _mapping_is_verified(mapping):
             raise VisualTranscriptionError("Confirm the answer mapping before thinking repair")
         if region.grading_jobs or region.grade_suggestions:
             raise VisualTranscriptionError(
@@ -306,7 +313,7 @@ class Qwen38VisualTranscriptionService:
                     "Answer image changed after transcription was authorized"
                 )
             mapping = self._mapping_for_region(region.id)
-            if mapping is None or not mapping.teacher_confirmed:
+            if not _mapping_is_verified(mapping):
                 raise VisualTranscriptionError("Answer mapping is no longer confirmed")
             lease_holder_id = f"visual_transcription:{run.id}:{uuid4().hex}"
             lease = LocalModelLeaseService(self.db)
@@ -507,8 +514,7 @@ class Qwen38VisualTranscriptionService:
             )
         mapping = self._mapping_for_region(region.id)
         if (
-            mapping is None
-            or not mapping.teacher_confirmed
+            not _mapping_is_verified(mapping)
             or region.grading_jobs
             or region.grade_suggestions
         ):
@@ -567,7 +573,7 @@ class Qwen38VisualTranscriptionService:
                     "Answer image changed after thinking repair was authorized"
                 )
             mapping = self._mapping_for_region(region.id)
-            if mapping is None or not mapping.teacher_confirmed:
+            if not _mapping_is_verified(mapping):
                 raise VisualTranscriptionError("Answer mapping is no longer confirmed")
             source_run_id = (run.normalized_result or {}).get("source_run_id")
             source_run = self.db.get(AnswerRegionOcrRun, source_run_id)
@@ -790,8 +796,7 @@ class Qwen38VisualTranscriptionService:
             raise VisualTranscriptionError("Answer images changed after repair; start again")
         mapping = self._mapping_for_region(region.id)
         if (
-            mapping is None
-            or not mapping.teacher_confirmed
+            not _mapping_is_verified(mapping)
             or region.grading_jobs
             or region.grade_suggestions
         ):

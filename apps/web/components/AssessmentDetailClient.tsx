@@ -1437,9 +1437,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               : "Prepare and confirm the question, solution, and rubric before student work is unlocked."}
           </p>
         </div>
-        <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
-          {referencesReady ? "Review references" : "Prepare references"}
-        </Link>
+        <div className="flex flex-wrap gap-3">
+          <Link className={buttonClass} href={`/assessments/${assessmentId}/grading-run`}>
+            {referencesReady ? "Review references" : "Prepare references"}
+          </Link>
+          <Link className={buttonClass} href={`/assessments/${assessmentId}/bulk-evaluation`}>
+            Evaluate a ZIP of scripts
+          </Link>
+        </div>
       </section>
 
       {process.env.NEXT_PUBLIC_SHOW_LEGACY_REFERENCE_TOOLS === "true" ? <>

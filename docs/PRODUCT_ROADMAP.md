@@ -4,7 +4,8 @@
 
 Status date: 2026-08-25. This section is the canonical status for local OCR/Qwen and cohort safety; older validation notes remain historical records.
 
-- **Custom Controlled:** implemented as the only normal teacher workflow. Local draft evidence and local draft grading are integrated behind disabled-by-default flags and explicit teacher actions.
+- **Custom Controlled:** implemented for granular supervised review. Local draft evidence and local draft grading require explicit teacher actions.
+- **Bulk Supervised:** implemented as the exception-first cohort surface over the same Qwen3.8 safety pipeline. Clean evidence can progress under an explicit strict policy, but final grades still require exact-snapshot teacher approval. See `docs/BULK_SUPERVISED_RUNBOOK.md`.
 - **Active local model:** Qwen3.8-27B vision on port 8085 is the only model selectable by the supervised teacher workflow. PaddleOCR and Qwen3.6 are disabled rollback assets. Every Qwen3.8 call requires the matching fail-closed single-holder database lease; normal app startup never loads a model.
 - **Reference extraction:** the teacher uploads question, solution/model-answer, and rubric PDFs once. One thinking-disabled Qwen3.8 visual task creates review-only draft references. Existing teacher confirmation gates remain canonical; there is no OCR/text-model fallback or retry.
 - **Script workflow:** Qwen3.8 maps complete answer regions and ordered continuations from full pages. After separate geometry confirmation, a fresh thinking-disabled Qwen3.8 task first classifies visible cancellation/correction marks and then transcribes only the student's surviving final work. When that classification is unfaithful, an explicit one-call thinking repair may adjudicate visible edits without receiving the question, solution, rubric, marks, or grading context. Its numbered decisions and repaired transcript require separate teacher confirmation. Ambiguous overwrites stay `[unclear correction]`; mathematical context cannot repair them. Mapping, transcript fidelity, repair decisions, and complete-answer coverage are independent gates.
@@ -36,7 +37,7 @@ The product roadmap now separates grading into three workflow modes, documented 
 
 All modes must keep teacher review mandatory. The system must not auto-finalize grades without teacher approval. Fully automated grading must not be claimed reliable yet.
 
-Current product gating: Custom Controlled is the normal teacher workflow. Semi-Automated is experimental-only and blocked by default from normal entry points. Fully Automated is not available as a teacher workflow and should be treated as unreleased until the reactivation criteria in `docs/GRADING_WORKFLOW_MODES.md` are satisfied.
+Current product gating: Custom Controlled and Bulk Supervised are the supported teacher-supervised workflows. Semi-Automated is experimental-only and blocked by default from normal entry points. Fully Automated is not available as a teacher workflow and should be treated as unreleased until the reactivation criteria in `docs/GRADING_WORKFLOW_MODES.md` are satisfied.
 
 ### Marking policy roadmap
 

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes.answer_regions import router as answer_regions_router
 from app.api.routes.assessments import router as assessments_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.bulk_evaluations import router as bulk_evaluations_router
 from app.api.routes.courses import router as courses_router
 from app.api.routes.evidence_prep import router as evidence_prep_router
 from app.api.routes.extraction_runs import router as extraction_runs_router
@@ -48,6 +49,7 @@ app.include_router(extraction_runs_router)
 app.include_router(rubrics_router)
 app.include_router(submissions_router)
 app.include_router(answer_regions_router)
+app.include_router(bulk_evaluations_router)
 app.include_router(ocr_router)
 app.include_router(evidence_prep_router)
 app.include_router(grading_router)

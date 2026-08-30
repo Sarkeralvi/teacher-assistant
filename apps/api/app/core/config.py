@@ -251,6 +251,35 @@ class Settings(BaseSettings):
     local_qwen38_max_visual_calls: int = Field(
         default=25, alias="LOCAL_QWEN38_MAX_VISUAL_CALLS", ge=1, le=100
     )
+    bulk_supervised_enabled: bool = Field(default=False, alias="BULK_SUPERVISED_ENABLED")
+    bulk_max_submissions: int = Field(
+        default=50, alias="BULK_MAX_SUBMISSIONS", ge=1, le=50
+    )
+    bulk_max_pages: int = Field(default=500, alias="BULK_MAX_PAGES", ge=1, le=500)
+    bulk_max_archive_bytes: int = Field(
+        default=1_073_741_824, alias="BULK_MAX_ARCHIVE_BYTES", ge=1_048_576
+    )
+    bulk_max_provider_calls: int = Field(
+        default=2000, alias="BULK_MAX_PROVIDER_CALLS", ge=1, le=2000
+    )
+    bulk_mapping_auto_pass_min_confidence: Decimal = Field(
+        default=Decimal("0.90"),
+        alias="BULK_MAPPING_AUTO_PASS_MIN_CONFIDENCE",
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
+    bulk_transcription_auto_pass_min_confidence: Decimal = Field(
+        default=Decimal("0.90"),
+        alias="BULK_TRANSCRIPTION_AUTO_PASS_MIN_CONFIDENCE",
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
+    bulk_grading_clean_min_confidence: Decimal = Field(
+        default=Decimal("0.80"),
+        alias="BULK_GRADING_CLEAN_MIN_CONFIDENCE",
+        ge=Decimal("0"),
+        le=Decimal("1"),
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

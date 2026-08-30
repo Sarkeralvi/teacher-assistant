@@ -483,7 +483,12 @@ def test_one_click_grades_every_approved_answer_as_review_only_draft(
     assert payload["graded_count"] == 2
     assert payload["failed_count"] == 0
     assert adapter.calls == 2
-    assert db_session.scalars(select(GradeSuggestion)).all()
+    suggestions = db_session.scalars(select(GradeSuggestion)).all()
+    assert suggestions
+    # ``model_dump(mode="json")`` serializes Decimal confidence as a numeric
+    # string. Keep it numeric in the database rather than treating it as an
+    # unrecognised legacy high/medium/low label and silently storing zero.
+    assert {suggestion.confidence for suggestion in suggestions} == {Decimal("0.90")}
     assert db_session.scalars(select(FinalGrade)).all() == []
     lease = db_session.scalar(select(LocalModelLease))
     assert lease is not None

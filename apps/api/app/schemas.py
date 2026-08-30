@@ -229,6 +229,151 @@ BatchEvidencePrepRunStatus = Literal[
     "pending", "running", "completed", "completed_with_blockers", "failed"
 ]
 
+BulkEvaluationStatus = Literal[
+    "preflighting",
+    "queued",
+    "mapping",
+    "transcribing",
+    "grading",
+    "review_ready",
+    "completed_with_exceptions",
+    "completed",
+    "stopping",
+    "stopped",
+    "paused",
+    "failed",
+]
+BulkEvaluationStage = Literal[
+    "ingestion",
+    "mapping",
+    "evidence_verification",
+    "transcription",
+    "grading",
+    "review",
+    "complete",
+]
+BulkEvidenceVerificationSource = Literal["bulk_policy", "teacher"]
+BulkExceptionCode = Literal[
+    "unreadable_handwriting",
+    "ambiguous_symbol",
+    "uncertain_cancellation",
+    "incomplete_region",
+    "possible_continuation",
+    "unassigned_ink",
+    "missing_answer",
+    "probable_blank",
+    "cross_question_overlap",
+    "verification_disagreement",
+    "image_quality",
+    "provider_contract_failure",
+    "provider_unavailable",
+    "stale_evidence",
+]
+
+
+class BulkEvaluationRunCreate(BaseModel):
+    grading_run_id: int = Field(gt=0)
+    provider: Literal["llama_cpp_qwen38"]
+    expected_model: str = Field(min_length=1, max_length=255)
+    marking_policy: Literal["tough", "general", "easy"] = "general"
+    maximum_provider_calls: int = Field(ge=1, le=2000)
+    local_only_confirmed: Literal[True]
+    strict_auto_pass_confirmed: Literal[True]
+    draft_only_confirmed: Literal[True]
+
+
+class BulkEvaluationItemRead(ORMBase):
+    id: int
+    run_id: int
+    submission_id: int
+    question_id: int
+    mapping_id: int | None
+    answer_region_id: int | None
+    transcription_run_id: int | None
+    grading_job_id: int | None
+    grade_suggestion_id: int | None
+    final_grade_id: int | None
+    status: Literal[
+        "pending", "running", "clean", "exception", "uncertain", "graded", "approved", "stopped"
+    ]
+    stage: Literal["mapping", "transcription", "grading", "review", "complete"]
+    verification_source: BulkEvidenceVerificationSource | None
+    mapping_confidence: Decimal | None
+    transcription_confidence: Decimal | None
+    grading_confidence: Decimal | None
+    source_snapshot_sha256: str | None
+    evidence_snapshot_sha256: str | None
+    rubric_snapshot_sha256: str | None
+    exception_codes: list[BulkExceptionCode] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    provider_call_count: int
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BulkEvaluationRunRead(ORMBase):
+    id: int
+    assessment_id: int
+    grading_run_id: int
+    created_by_teacher_id: int
+    provider: Literal["llama_cpp_qwen38"]
+    model_name: str
+    marking_policy: Literal["tough", "general", "easy"]
+    policy_version: str
+    reference_bundle_sha256: str
+    review_snapshot_sha256: str | None
+    archive_sha256: str
+    manifest_sha256: str | None
+    status: BulkEvaluationStatus
+    stage: BulkEvaluationStage
+    authorized_call_limit: int
+    calls_used: int
+    total_submissions: int
+    total_pages: int
+    total_items: int
+    processed_items: int
+    clean_item_count: int
+    exception_count: int
+    approved_count: int
+    stop_requested: bool
+    heartbeat_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    error: str | None
+    items: list[BulkEvaluationItemRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class BulkEvaluationExceptionRead(BaseModel):
+    item_id: int
+    submission_id: int
+    student_identifier: str | None
+    question_id: int
+    question_label: str
+    answer_region_id: int | None
+    stage: str
+    exception_codes: list[BulkExceptionCode]
+    warnings: list[str]
+
+
+class BulkEvaluationApprovalRequest(BaseModel):
+    suggestion_ids: list[int] = Field(min_length=1, max_length=2000)
+    review_snapshot_sha256: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    teacher_confirmed: Literal[True]
+
+
+class BulkEvaluationApprovalResponse(BaseModel):
+    run_id: int
+    approved_count: int
+    already_approved_count: int
+    exception_count: int
+    review_snapshot_sha256: str
+
 
 class BatchEvidencePrepPacketSummary(BaseModel):
     submission_id: int
@@ -756,6 +901,8 @@ class AnswerRegionRead(ORMBase):
     image_path: str
     manual_answer_text: str | None = None
     full_answer_confirmed: bool = False
+    full_answer_verification_source: str | None = None
+    bulk_verification_run_id: int | None = None
     evidence_status: str = "unconfirmed"
     continuation_check_status: str = "not_checked"
     segments: list[AnswerRegionSegmentRead] = Field(default_factory=list)
@@ -928,6 +1075,8 @@ class AnswerRegionOcrRunRead(ORMBase):
     confirmed_text: str | None
     confirmed_by_teacher_id: int | None
     confirmed_at: datetime | None
+    verification_source: str | None = None
+    bulk_verification_run_id: int | None = None
     rejected_by_teacher_id: int | None
     rejection_reason_codes: list[str] = Field(default_factory=list)
     rejected_at: datetime | None
@@ -1060,6 +1209,8 @@ class AnswerRegionMappingRead(ORMBase):
     blocker_reason: str | None
     provider: str
     teacher_confirmed: bool
+    bulk_policy_verified: bool = False
+    bulk_verification_run_id: int | None = None
     created_at: datetime
     updated_at: datetime
     answer_region: AnswerRegionRead | None = None

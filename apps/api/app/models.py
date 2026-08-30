@@ -55,6 +55,9 @@ class User(TimestampMixin, Base):
         back_populates="created_by_teacher"
     )
     final_grades: Mapped[list[FinalGrade]] = relationship(back_populates="teacher")
+    bulk_evaluation_runs: Mapped[list[BulkEvaluationRun]] = relationship(
+        back_populates="created_by_teacher"
+    )
 
 
 class Course(TimestampMixin, Base):
@@ -112,13 +115,16 @@ class Assessment(TimestampMixin, Base):
     answer_region_mappings: Mapped[list[AnswerRegionMapping]] = relationship(
         back_populates="assessment"
     )
+    bulk_evaluation_runs: Mapped[list[BulkEvaluationRun]] = relationship(
+        back_populates="assessment"
+    )
 
 
 class GradingRun(TimestampMixin, Base):
     __tablename__ = "grading_runs"
     __table_args__ = (
         CheckConstraint(
-            "mode in ('custom_controlled', 'semi_automated')",
+            "mode in ('custom_controlled', 'semi_automated', 'bulk_supervised')",
             name="ck_grading_runs_mode",
         ),
         CheckConstraint(
@@ -196,6 +202,165 @@ class GradingRun(TimestampMixin, Base):
 
     assessment: Mapped[Assessment] = relationship(back_populates="grading_runs")
     created_by_teacher: Mapped[User] = relationship(back_populates="grading_runs")
+    bulk_evaluation_runs: Mapped[list[BulkEvaluationRun]] = relationship(
+        back_populates="grading_run"
+    )
+
+
+class BulkEvaluationRun(TimestampMixin, Base):
+    __tablename__ = "bulk_evaluation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('preflighting', 'queued', 'mapping', 'transcribing', 'grading', "
+            "'review_ready', 'completed_with_exceptions', 'completed', 'stopping', "
+            "'stopped', 'paused', 'failed')",
+            name="ck_bulk_evaluation_runs_status",
+        ),
+        CheckConstraint(
+            "stage in ('ingestion', 'mapping', 'evidence_verification', 'transcription', "
+            "'grading', 'review', 'complete')",
+            name="ck_bulk_evaluation_runs_stage",
+        ),
+        CheckConstraint(
+            "authorized_call_limit >= 1 and authorized_call_limit <= 2000",
+            name="ck_bulk_evaluation_runs_call_limit",
+        ),
+        CheckConstraint(
+            "calls_used >= 0 and calls_used <= authorized_call_limit",
+            name="ck_bulk_evaluation_runs_calls_used",
+        ),
+        Index("ix_bulk_evaluation_runs_assessment_id", "assessment_id"),
+        Index("ix_bulk_evaluation_runs_grading_run_id", "grading_run_id"),
+        Index(
+            "ux_bulk_evaluation_runs_active_archive",
+            "assessment_id",
+            "archive_sha256",
+            "reference_bundle_sha256",
+            unique=True,
+            postgresql_where=text(
+                "status in ('preflighting', 'queued', 'mapping', 'transcribing', "
+                "'grading', 'review_ready', 'stopping', 'paused')"
+            ),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    grading_run_id: Mapped[int] = mapped_column(
+        ForeignKey("grading_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    marking_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="general")
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    reference_bundle_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    archive_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    import_manifest: Mapped[dict[str, Any]] = mapped_column(
+        "import_manifest_json", JSONB, nullable=False, default=dict
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="preflighting")
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="ingestion")
+    authorized_call_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_submissions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    clean_item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    exception_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    approved_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stop_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    assessment: Mapped[Assessment] = relationship(back_populates="bulk_evaluation_runs")
+    grading_run: Mapped[GradingRun] = relationship(back_populates="bulk_evaluation_runs")
+    created_by_teacher: Mapped[User] = relationship(back_populates="bulk_evaluation_runs")
+    items: Mapped[list[BulkEvaluationItem]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="BulkEvaluationItem.id"
+    )
+
+
+class BulkEvaluationItem(TimestampMixin, Base):
+    __tablename__ = "bulk_evaluation_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'running', 'clean', 'exception', 'uncertain', "
+            "'graded', 'approved', 'stopped')",
+            name="ck_bulk_evaluation_items_status",
+        ),
+        CheckConstraint(
+            "stage in ('mapping', 'transcription', 'grading', 'review', 'complete')",
+            name="ck_bulk_evaluation_items_stage",
+        ),
+        UniqueConstraint(
+            "run_id", "submission_id", "question_id", name="uq_bulk_item_run_submission_question"
+        ),
+        Index("ix_bulk_evaluation_items_run_id", "run_id"),
+        Index("ix_bulk_evaluation_items_submission_id", "submission_id"),
+        Index("ix_bulk_evaluation_items_question_id", "question_id"),
+        Index("ix_bulk_evaluation_items_answer_region_id", "answer_region_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("bulk_evaluation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
+    )
+    mapping_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_region_mappings.id", ondelete="SET NULL"), nullable=True
+    )
+    answer_region_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_regions.id", ondelete="SET NULL"), nullable=True
+    )
+    transcription_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_region_ocr_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    grading_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("grading_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    grade_suggestion_id: Mapped[int | None] = mapped_column(
+        ForeignKey("grade_suggestions.id", ondelete="SET NULL"), nullable=True
+    )
+    final_grade_id: Mapped[int | None] = mapped_column(
+        ForeignKey("final_grades.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="mapping")
+    verification_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    mapping_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    transcription_confidence: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 4), nullable=True
+    )
+    grading_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    source_snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rubric_snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    exception_codes: Mapped[list[str]] = mapped_column(
+        "exception_codes_json", JSONB, nullable=False, default=list
+    )
+    warnings: Mapped[list[str]] = mapped_column(
+        "warnings_json", JSONB, nullable=False, default=list
+    )
+    provider_call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    run: Mapped[BulkEvaluationRun] = relationship(back_populates="items")
 
 
 class BatchEvidencePrepRun(TimestampMixin, Base):
@@ -547,6 +712,12 @@ class AnswerRegion(TimestampMixin, Base):
     image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     manual_answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     full_answer_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    full_answer_verification_source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    bulk_verification_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_evaluation_runs.id", ondelete="SET NULL"), nullable=True
+    )
     evidence_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unconfirmed")
     continuation_check_status: Mapped[str] = mapped_column(
         String(64), nullable=False, default="not_checked"
@@ -630,6 +801,10 @@ class AnswerRegionOcrRun(TimestampMixin, Base):
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    bulk_verification_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_evaluation_runs.id", ondelete="SET NULL"), nullable=True
+    )
     rejected_by_teacher_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
@@ -885,6 +1060,10 @@ class AnswerRegionMapping(TimestampMixin, Base):
         String(64), nullable=False, default="deterministic_layout"
     )
     teacher_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    bulk_policy_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    bulk_verification_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bulk_evaluation_runs.id", ondelete="SET NULL"), nullable=True
+    )
 
     assessment: Mapped[Assessment] = relationship(back_populates="answer_region_mappings")
     submission: Mapped[Submission] = relationship(back_populates="answer_region_mappings")
