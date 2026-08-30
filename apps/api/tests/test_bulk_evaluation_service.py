@@ -81,7 +81,7 @@ def test_bulk_zip_rejects_unsafe_paths(member: str) -> None:
         ),
         (
             {"student/a.pdf": b"a", "student/b.pdf": b"b"},
-            "contains multiple PDFs",
+            "unclear whether this is one student or several",
         ),
         ({"student/nested/page.png": b"image"}, "no nested folders"),
         ({"student/notes.txt": b"text"}, "Unsupported ZIP entry"),
@@ -95,6 +95,27 @@ def test_bulk_zip_rejects_ambiguous_or_unsupported_layouts(
     with zipfile.ZipFile(archive_path) as archive:
         with pytest.raises(BulkEvaluationError, match=message):
             _service()._inspect_archive(archive)
+
+
+def test_multiple_pdfs_in_one_folder_explains_both_valid_layouts(tmp_path: Path) -> None:
+    """A real teacher hit this with Scripts/a.pdf + Scripts/b.pdf -- a container
+    folder holding one PDF per student. The old message stated the rule but not
+    the remedy, so it did not say which of the two supported layouts to produce.
+    Refusing stays correct (guessing would merge or split students); the message
+    has to carry the fix."""
+    archive_path = tmp_path / "container.zip"
+    _write_zip(archive_path, {"Scripts/a.pdf": b"a", "Scripts/b.pdf": b"b"})
+    with zipfile.ZipFile(archive_path) as archive:
+        with pytest.raises(BulkEvaluationError) as caught:
+            _service()._inspect_archive(archive)
+
+    message = str(caught.value)
+    assert "Scripts" in message
+    # Names the separate-students remedy...
+    assert "top level" in message
+    # ...and the one-student remedy, so neither reading is left unaddressed.
+    assert "single PDF" in message
+    assert "numbered images" in message
 
 
 def test_manifest_rejects_duplicate_identifiers(tmp_path: Path) -> None:

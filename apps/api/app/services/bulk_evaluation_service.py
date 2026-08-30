@@ -430,7 +430,22 @@ class BulkEvaluationService:
             if pdfs and images:
                 raise BulkEvaluationError(f"Student folder {folder} mixes PDF and image pages")
             if len(pdfs) > 1:
-                raise BulkEvaluationError(f"Student folder {folder} contains multiple PDFs")
+                # One folder holding several PDFs is ambiguous and must not be
+                # guessed: it is either one student whose script was split
+                # across files, or -- far more commonly -- a container folder
+                # holding one PDF per student. Guessing wrong either merges two
+                # students into one submission or splits one student in two, so
+                # this stays an error. It says how to resolve it, because the
+                # bare rule sent a teacher back to the ZIP with no idea which
+                # of the two valid layouts they were supposed to produce.
+                raise BulkEvaluationError(
+                    f"Student folder {folder} contains {len(pdfs)} PDFs, so it is "
+                    "unclear whether this is one student or several. If each PDF "
+                    f"is a different student, move them to the top level of the ZIP "
+                    f"(delete the {folder} folder) so each PDF becomes one student. "
+                    "If they are all one student's script, export that student as a "
+                    "single PDF, or put their pages in the folder as numbered images."
+                )
             ordered = tuple(
                 info
                 for _, info in sorted(
