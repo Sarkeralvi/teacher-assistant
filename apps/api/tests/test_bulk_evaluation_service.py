@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core.config import get_settings
-from app.models import BulkEvaluationItem, BulkEvaluationRun
+from app.models import AnswerRegionOcrRun, BulkEvaluationItem, BulkEvaluationRun
 from app.services.bulk_evaluation_service import (
     BulkEvaluationError,
     BulkEvaluationService,
@@ -216,6 +217,103 @@ def test_interrupted_running_items_become_uncertain_without_retry() -> None:
     assert item.exception_codes == ["provider_contract_failure"]
     assert "explicit retry" in item.warnings[0]
     service._refresh_counts.assert_called_once()
+
+
+def test_interrupted_run_also_closes_the_transcription_row_it_was_waiting_on() -> None:
+    """Reclaiming the item alone leaves the provider ledger lying.
+
+    A real interrupted run left AnswerRegionOcrRun 88 with status "running" and
+    completed_at NULL from one day to the next, because recovery only ever
+    touched BulkEvaluationItem. Anything reading the ledger then believes a
+    provider call is still in flight for a process that no longer exists."""
+    db = MagicMock()
+    item = BulkEvaluationItem(
+        id=7,
+        run_id=3,
+        submission_id=2,
+        question_id=5,
+        status="running",
+        stage="transcription",
+        exception_codes=[],
+        warnings=[],
+        transcription_run_id=88,
+    )
+    orphan = AnswerRegionOcrRun(id=88, status="running", warnings=[])
+    db.scalars.return_value.all.return_value = [item]
+    db.get.return_value = orphan
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._refresh_counts = MagicMock()
+
+    service._mark_running_uncertain(
+        BulkEvaluationRun(id=3), "Interrupted call; explicit retry required"
+    )
+
+    assert orphan.status == "failed"
+    assert orphan.completed_at is not None
+    assert "interrupted_run_reclaimed" in orphan.warnings
+    assert orphan.error
+
+
+def test_recovery_heals_an_orphan_whose_item_was_already_reclaimed() -> None:
+    """The exact shape seen in production.
+
+    The pause had already flipped item 1 to "uncertain", so a recovery that
+    reconciles only *currently running* items found nothing to do and left
+    AnswerRegionOcrRun 88 running overnight. Reconciliation keys off ledger
+    state so the orphan is still closed."""
+    db = MagicMock()
+    already_reclaimed = BulkEvaluationItem(
+        id=1,
+        run_id=3,
+        submission_id=2,
+        question_id=5,
+        status="uncertain",
+        stage="transcription",
+        exception_codes=["provider_contract_failure"],
+        warnings=[],
+        transcription_run_id=88,
+    )
+    orphan = AnswerRegionOcrRun(id=88, status="running", warnings=[])
+    # No item is "running" any more; the sweep must still find the orphan.
+    db.scalars.return_value.all.return_value = [already_reclaimed]
+    db.get.return_value = orphan
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._refresh_counts = MagicMock()
+
+    service._release_orphaned_transcriptions(
+        BulkEvaluationRun(id=3), "Interrupted run closed", datetime.now(UTC)
+    )
+
+    assert orphan.status == "failed"
+    assert orphan.completed_at is not None
+    assert "interrupted_run_reclaimed" in orphan.warnings
+
+
+def test_interrupted_run_does_not_rewrite_a_finished_transcription() -> None:
+    """Only in-flight rows are reclaimed; a succeeded transcript is evidence
+    and must not be restamped as failed by a later recovery."""
+    db = MagicMock()
+    item = BulkEvaluationItem(
+        id=8,
+        run_id=3,
+        submission_id=2,
+        question_id=5,
+        status="running",
+        stage="transcription",
+        exception_codes=[],
+        warnings=[],
+        transcription_run_id=90,
+    )
+    finished = AnswerRegionOcrRun(id=90, status="succeeded", warnings=[])
+    db.scalars.return_value.all.return_value = [item]
+    db.get.return_value = finished
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._refresh_counts = MagicMock()
+
+    service._mark_running_uncertain(BulkEvaluationRun(id=3), "Interrupted call")
+
+    assert finished.status == "succeeded"
+    assert finished.error is None
 
 
 def test_bulk_audit_payload_records_hashes_and_counts_not_raw_answer_text() -> None:

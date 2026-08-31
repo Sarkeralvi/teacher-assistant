@@ -1557,14 +1557,52 @@ class BulkEvaluationService:
                 )
             ).all()
         )
+        now = datetime.now(UTC)
         for item in items:
             item.status = "uncertain"
             item.exception_codes = list(
                 dict.fromkeys([*(item.exception_codes or []), "provider_contract_failure"])
             )
             item.warnings = list(dict.fromkeys([*(item.warnings or []), warning]))
-            item.completed_at = datetime.now(UTC)
+            item.completed_at = now
+        self._release_orphaned_transcriptions(run, warning, now)
         self._refresh_counts(run)
+
+    def _release_orphaned_transcriptions(
+        self, run: BulkEvaluationRun, warning: str, now: datetime
+    ) -> None:
+        """Close transcription rows this run left marked in flight.
+
+        Reclaiming the item is not enough, and reclaiming only the items that
+        are *currently* running is not enough either. A real interrupted run
+        left AnswerRegionOcrRun 88 with status "running" and completed_at NULL
+        from one day to the next: the pause had already flipped its item to
+        "uncertain", so by the time recovery ran there was no running item left
+        pointing at it and the ledger kept claiming a provider call was in
+        flight for a process that had died. Reconciling by ledger state rather
+        than by item state heals that orphan and the fresh-interruption case
+        with one rule.
+        """
+        run_items = list(
+            self.db.scalars(
+                select(BulkEvaluationItem).where(BulkEvaluationItem.run_id == run.id)
+            ).all()
+        )
+        for item in run_items:
+            if not item.transcription_run_id:
+                continue
+            transcript_run = self.db.get(AnswerRegionOcrRun, item.transcription_run_id)
+            # Only in-flight rows are reclaimed. A succeeded transcript is
+            # evidence a teacher may already have seen; never restamp it.
+            if transcript_run is None or transcript_run.status != "running":
+                continue
+            transcript_run.status = "failed"
+            transcript_run.completed_at = now
+            transcript_run.heartbeat_at = now
+            transcript_run.error = warning
+            transcript_run.warnings = list(
+                dict.fromkeys([*(transcript_run.warnings or []), "interrupted_run_reclaimed"])
+            )
 
     def _refresh_counts(self, run: BulkEvaluationRun) -> None:
         items = list(
