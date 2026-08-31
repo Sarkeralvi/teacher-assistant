@@ -174,8 +174,8 @@ def test_critical_math_tokens_preserve_decimal_fraction_and_complement_signals()
 def test_workbook_contract_never_includes_raw_transcript_sheet() -> None:
     # The export contract is intentionally explicit: only these aggregate sheets
     # are created by build_results_workbook.
-    source = Path(
-        "apps/api/app/services/bulk_evaluation_service.py"
+    source = (
+        Path(__file__).resolve().parents[1] / "app/services/bulk_evaluation_service.py"
     ).read_text(encoding="utf-8")
     for sheet_name in ("Approved Scores", "Student Totals", "Exceptions", "Run Summary"):
         assert sheet_name in source

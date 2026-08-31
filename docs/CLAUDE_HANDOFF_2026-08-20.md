@@ -1,5 +1,10 @@
 # Claude Handoff - 2026-08-20
 
+> **SUPERSEDED on 2026-08-31 by `docs/CLAUDE_HANDOFF_2026-08-31.md`.** Retained
+> as a historical record. Its baseline is 82 commits out of date, the
+> reference-extraction failure it describes is resolved, and its fixed `12288`
+> context figure no longer applies. Do not use it to orient current work.
+
 ## Purpose
 
 This is the current operating handoff for ongoing development of Teacher Assistant / AEEM. It is deliberately concise and contains no credentials, private artifacts, uploaded PDFs, or model paths.

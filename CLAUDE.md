@@ -5,9 +5,10 @@ This repository is handed to Claude for ongoing development and problem solving.
 Before taking action, read these files in order:
 
 1. `AGENTS.md` - binding product, safety, engineering, and reporting rules.
-2. `docs/CLAUDE_HANDOFF_2026-08-20.md` - current state, recent fixes, known issues, and commands.
-3. `docs/WINDOWS_TEACHER_PILOT_RUNTIME.md` - the supported local Windows runtime.
-4. `docs/FOUNDER_PILOT_REHEARSAL.md` - mandatory sequence for any founder-supervised rehearsal.
+2. `docs/CLAUDE_HANDOFF_2026-08-31.md` - current state, recent fixes, known issues, and commands.
+3. `docs/REPOSITORY_OVERVIEW.md` - repository structure, architecture, and full project status.
+4. `docs/WINDOWS_TEACHER_PILOT_RUNTIME.md` - the supported local Windows runtime.
+5. `docs/FOUNDER_PILOT_REHEARSAL.md` - mandatory sequence for any founder-supervised rehearsal.
 
 ## Non-negotiable operating constraints
 
@@ -26,7 +27,7 @@ Make the local Custom Controlled workflow reliable for a founder-supervised, syn
 
 `reference materials -> teacher-confirmed drafts -> synthetic script -> confirmed answer evidence -> one local Qwen draft grade -> teacher review -> optional approval/export`
 
-The current immediate issue is the local Qwen3.8 reference-extraction latency/failure path. Read the handoff before retrying any provider call.
+The reference-extraction latency/failure path is resolved. The two remaining gates are a runnable, teacher-signed 20-case curated quality `PASS` and one completed end-to-end supervised rehearsal. Neither can be substituted by more engineering. Read the handoff before any provider call.
 
 ## Required final report
 

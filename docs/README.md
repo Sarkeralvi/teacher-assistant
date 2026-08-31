@@ -2,6 +2,12 @@
 
 Project documentation and decisions.
 
+## Start here
+
+- [Repository Overview and Project Status](REPOSITORY_OVERVIEW.md)
+- [Claude Handoff 2026-08-31](CLAUDE_HANDOFF_2026-08-31.md) — current working state
+- [Bulk Supervised Runbook](BULK_SUPERVISED_RUNBOOK.md)
+
 ## Custom Controlled V0 release-candidate docs
 
 - [Custom Controlled V0 Baseline](CUSTOM_CONTROLLED_V0_BASELINE.md)
