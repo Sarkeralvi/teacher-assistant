@@ -95,7 +95,7 @@ export type DraftQuestion = {
   needs_review: boolean;
 };
 
-export type QuestionImportProvider = "mock" | "codex_cli_question_extractor" | "llama_cpp_qwen38";
+export type QuestionImportProvider = string;
 
 export type QuestionImportJob = {
   id: number;
@@ -180,7 +180,7 @@ export type BulkEvaluationRun = {
   id: number;
   assessment_id: number;
   grading_run_id: number;
-  provider: "llama_cpp_qwen38";
+  provider: string;
   model_name: string;
   marking_policy: MarkingPolicy;
   policy_version: string;
@@ -466,7 +466,7 @@ export type ReferenceExtraction = {
   grading_run_id: number;
   status: "not_started" | "queued" | "running" | "succeeded" | "failed";
   stage: string;
-  provider: "local_paddle_qwen" | "llama_cpp_qwen38";
+  provider: string;
   model: string;
   ocr_device: string;
   question_run_id: number | null;
@@ -524,7 +524,7 @@ export type AnswerRegionOcrRun = {
   calls_used: number;
   candidate_set_sha256: string | null;
   output_sha256: string | null;
-  provider: "llama_cpp_qwen38" | string;
+  provider: string;
   model_name: string;
   layout_model_name: string | null;
   draft_text: string | null;
@@ -936,6 +936,12 @@ export type LocalAiServiceStatus = {
   transcription_enabled: boolean;
   thinking_repair_enabled: boolean;
   grading_enabled: boolean;
+  configured: boolean;
+  location: "mock" | "local" | "cloud" | "cli" | string;
+  capabilities: string[];
+  reference_extraction_enabled: boolean;
+  script_preparation_enabled: boolean;
+  bulk_evaluation_enabled: boolean;
 };
 
 export type LocalAiStatus = {
@@ -943,12 +949,13 @@ export type LocalAiStatus = {
   cohort_model_grading_enabled: boolean;
   local_script_preparation_enabled: boolean;
   local_single_answer_grading_enabled: boolean;
+  brain: LocalAiServiceStatus;
   paddle_ocr: LocalAiServiceStatus;
   qwen: LocalAiServiceStatus;
   qwen38: LocalAiServiceStatus;
 };
 
-export type CohortDispatchProvider = "mock" | "llama_cpp_qwen";
+export type CohortDispatchProvider = string;
 
 export type CohortDispatchRequest = {
   queue_run_id: number;
@@ -957,6 +964,7 @@ export type CohortDispatchRequest = {
   expected_model: string;
   call_limit: number;
   draft_only_confirmed: true;
+  provider_data_boundary_confirmed?: boolean;
 };
 
 export type CohortDispatchPreflightItem = {
@@ -1254,6 +1262,10 @@ export function getLocalAiStatus() {
   return apiRequest<LocalAiStatus>("/local-ai/status");
 }
 
+export function getBrainStatus() {
+  return apiRequest<LocalAiStatus>("/brain/status");
+}
+
 export async function logout() {
   const token = getStoredAuthToken();
   clearStoredAuthToken();
@@ -1321,10 +1333,12 @@ export function importQuestionsFromPaper(
   assessmentId: number,
   file: File,
   provider: QuestionImportProvider = "mock",
+  providerDataBoundaryConfirmed = false,
 ) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("provider", provider);
+  formData.append("provider_data_boundary_confirmed", String(providerDataBoundaryConfirmed));
   return apiRequest<QuestionImportJob>(`/assessments/${assessmentId}/question-imports`, {
     method: "POST",
     formData,
@@ -1564,6 +1578,7 @@ export function suggestAnswerRegionMappings(
 
 export type ScriptMappingProvider =
   | "deterministic_layout"
+  | "brain_visual"
   | "local_qwen38_visual";
 
 export function runSubmissionQuestionNodeMappings(
@@ -1576,6 +1591,7 @@ export function runSubmissionQuestionNodeMappings(
     expected_ocr_model?: string;
     expected_layout_model?: string;
     draft_only_confirmed?: boolean;
+    provider_data_boundary_confirmed?: boolean;
     maximum_ocr_calls?: number;
     maximum_text_mapping_calls?: number;
   } = {},
@@ -1598,6 +1614,7 @@ export function runAssessmentQuestionNodeMappings(
     expected_ocr_model?: string;
     expected_layout_model?: string;
     draft_only_confirmed?: boolean;
+    provider_data_boundary_confirmed?: boolean;
     maximum_ocr_calls?: number;
     maximum_text_mapping_calls?: number;
   } = {},
@@ -1670,14 +1687,19 @@ export function listAssessmentAnswerRegions(assessmentId: number, questionId?: n
   return apiRequest<AnswerRegion[]>(`/assessments/${assessmentId}/answer-regions${query}`);
 }
 
-export function startReferenceExtraction(gradingRunId: number) {
+export function startReferenceExtraction(
+  gradingRunId: number,
+  brain: { provider: string; model: string; location: string },
+  providerDataBoundaryConfirmed = false,
+) {
   return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
     method: "POST",
     body: {
-      provider: "llama_cpp_qwen38",
-      expected_model: "qwen3.8-27b-q4km",
+      provider: brain.provider,
+      expected_model: brain.model,
       materials_confirmed: true,
       draft_only_confirmed: true,
+      provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
     },
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
@@ -1707,10 +1729,20 @@ export function confirmReferenceExtraction(
   });
 }
 
-export function createVisualTranscriptionRun(answerRegionId: number, expectedModel: string) {
+export function createVisualTranscriptionRun(
+  answerRegionId: number,
+  expectedModel: string,
+  provider = "brain",
+  providerDataBoundaryConfirmed = false,
+) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/visual-transcription-runs`, {
     method: "POST",
-    body: { expected_model: expectedModel, draft_only_confirmed: true },
+    body: {
+      provider,
+      expected_model: expectedModel,
+      draft_only_confirmed: true,
+      provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
+    },
   });
 }
 
@@ -1740,12 +1772,19 @@ export function createVisualTranscriptionThinkingRepair(
   answerRegionId: number,
   sourceRunId: number,
   expectedModel: string,
+  provider = "brain",
+  providerDataBoundaryConfirmed = false,
 ) {
   return apiRequest<AnswerRegionOcrRun>(
     `/answer-regions/${answerRegionId}/visual-transcription-runs/${sourceRunId}/thinking-repair`,
     {
       method: "POST",
-      body: { expected_model: expectedModel, draft_only_confirmed: true },
+      body: {
+        provider,
+        expected_model: expectedModel,
+        draft_only_confirmed: true,
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
+      },
     },
   );
 }
@@ -1756,18 +1795,28 @@ export function createBulkEvaluationRun(
     file: File;
     grading_run_id: number;
     expected_model: string;
+    provider: string;
+    location: string;
     marking_policy: MarkingPolicy;
     maximum_provider_calls: number;
+    provider_data_boundary_confirmed: boolean;
   },
 ) {
   const formData = new FormData();
   formData.append("file", payload.file);
   formData.append("grading_run_id", String(payload.grading_run_id));
-  formData.append("provider", "llama_cpp_qwen38");
+  formData.append("provider", payload.provider);
   formData.append("expected_model", payload.expected_model);
   formData.append("marking_policy", payload.marking_policy);
   formData.append("maximum_provider_calls", String(payload.maximum_provider_calls));
-  formData.append("local_only_confirmed", "true");
+  formData.append(
+    "local_only_confirmed",
+    String(payload.location !== "cloud"),
+  );
+  formData.append(
+    "provider_data_boundary_confirmed",
+    String(payload.provider_data_boundary_confirmed),
+  );
   formData.append("strict_auto_pass_confirmed", "true");
   formData.append("draft_only_confirmed", "true");
   return apiRequest<BulkEvaluationRun>(
@@ -1978,6 +2027,7 @@ export function confirmAnswerRegionFullAnswer(
   );
 }
 
+/** Legacy no-body shortcut: always creates a deterministic mock draft. */
 export function gradeAnswerRegion(answerRegionId: number) {
   return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(`/answer-regions/${answerRegionId}/grade`, {
     method: "POST",
@@ -1988,7 +2038,7 @@ export function gradeAnswerRegionWithLocalQwen38(
   answerRegionId: number,
   payload: {
     grading_run_id: number;
-    provider: "llama_cpp_qwen38";
+    provider: string;
     expected_model: string;
     draft_only_confirmed: true;
   },
@@ -2004,7 +2054,28 @@ export function gradeAnswerRegionWithLocalQwen38(
   );
 }
 
-export type LocalQwenApprovedBatchGradeItem = {
+export function gradeAnswerRegionWithBrain(
+  answerRegionId: number,
+  payload: {
+    grading_run_id: number;
+    provider: string;
+    expected_model: string;
+    draft_only_confirmed: true;
+    provider_data_boundary_confirmed?: boolean;
+  },
+) {
+  return apiRequest<{ job: GradingJob; suggestion: GradeSuggestion }>(
+    `/answer-regions/${answerRegionId}/grade-brain`,
+    {
+      method: "POST",
+      body: payload,
+      token: getStoredAuthToken(),
+      authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+    },
+  );
+}
+
+export type BrainApprovedBatchGradeItem = {
   answer_region_id: number;
   status: "graded" | "skipped" | "failed" | "not_started";
   suggestion_id: number | null;
@@ -2012,7 +2083,7 @@ export type LocalQwenApprovedBatchGradeItem = {
   reason: string | null;
 };
 
-export type LocalQwenApprovedBatchGradeResponse = {
+export type BrainApprovedBatchGradeResponse = {
   assessment_id: number;
   grading_run_id: number;
   eligible_count: number;
@@ -2022,14 +2093,18 @@ export type LocalQwenApprovedBatchGradeResponse = {
   skipped_count: number;
   failed_count: number;
   stopped_on_failure: boolean;
-  items: LocalQwenApprovedBatchGradeItem[];
+  items: BrainApprovedBatchGradeItem[];
 };
+
+// Backward-compatible names for integrations that still import the local-Qwen API types.
+export type LocalQwenApprovedBatchGradeItem = BrainApprovedBatchGradeItem;
+export type LocalQwenApprovedBatchGradeResponse = BrainApprovedBatchGradeResponse;
 
 export function gradeAllApprovedAnswersWithLocalQwen38(
   assessmentId: number,
   payload: {
     grading_run_id: number;
-    provider: "llama_cpp_qwen38";
+    provider: string;
     expected_model: string;
     draft_only_confirmed: true;
     call_limit: number;
@@ -2038,6 +2113,29 @@ export function gradeAllApprovedAnswersWithLocalQwen38(
 ) {
   return apiRequest<LocalQwenApprovedBatchGradeResponse>(
     `/assessments/${assessmentId}/grade-approved-local-qwen38`,
+    {
+      method: "POST",
+      body: payload,
+      token: getStoredAuthToken(),
+      authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+    },
+  );
+}
+
+export function gradeAllApprovedAnswersWithBrain(
+  assessmentId: number,
+  payload: {
+    grading_run_id: number;
+    provider: string;
+    expected_model: string;
+    draft_only_confirmed: true;
+    provider_data_boundary_confirmed?: boolean;
+    call_limit: number;
+    stop_on_failure: true;
+  },
+) {
+  return apiRequest<BrainApprovedBatchGradeResponse>(
+    `/assessments/${assessmentId}/grade-approved-brain`,
     {
       method: "POST",
       body: payload,

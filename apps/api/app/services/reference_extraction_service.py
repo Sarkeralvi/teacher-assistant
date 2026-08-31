@@ -25,6 +25,7 @@ from app.models import (
     RubricExtractionCriterion,
 )
 from app.schemas import ReferenceExtractionConfirmationRequest
+from app.services.brain_execution import hold_brain_execution
 from app.services.document_extraction import (
     ExtractionProviderResult,
     apply_extraction_result,
@@ -33,11 +34,14 @@ from app.services.document_extraction import (
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.local_ocr_client import LocalOcrClient
-from app.services.local_reference_extraction import (
-    LOCAL_REFERENCE_PROVIDER,
-    LocalReferenceExtractor,
+from app.services.local_reference_extraction import LocalReferenceExtractor
+from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.capabilities import BrainCapability
+from packages.brain.policy import (
+    BrainPolicy,
+    brain_policy_from_settings,
+    configured_visual_provider,
 )
-from packages.brain.adapter import BrainAdapter
 
 _ACTIVE_REFERENCE_STATUSES = {"queued", "running"}
 # A whole page needs more room than a single answer crop, but not dramatically:
@@ -85,11 +89,12 @@ class ReferenceExtractionService:
         *,
         teacher_id: int,
         expected_model: str,
+        provider: str | None = None,
     ) -> dict[str, Any]:
-        self._assert_enabled(expected_model)
+        policy = self._assert_enabled(expected_model, provider=provider)
         if grading_run.mode != "custom_controlled":
             raise ReferenceExtractionError(
-                "Bundled local extraction is available only for Custom Controlled runs"
+                "Bundled brain extraction is available only for Custom Controlled runs"
             )
         if grading_run.reference_extraction_status in _ACTIVE_REFERENCE_STATUSES:
             raise ReferenceExtractionError("Reference extraction is already in progress")
@@ -110,7 +115,7 @@ class ReferenceExtractionService:
         )
         if active_dispatch is not None:
             raise ReferenceExtractionError(
-                "Wait for the active local grading dispatch to stop before extracting references"
+                "Wait for the active grading dispatch to stop before extracting references"
             )
 
         paths = self._material_paths(grading_run)
@@ -121,8 +126,11 @@ class ReferenceExtractionService:
             original_filename=grading_run.question_pdf_name or "question.pdf",
             content_type="application/pdf",
             extraction_type="question_paper",
-            provider=LOCAL_REFERENCE_PROVIDER,
+            provider=policy.provider,
             status="pending",
+            raw_output=json.dumps(
+                {"_brain": {"provider": policy.provider, "model": policy.model}}
+            ),
             blockers=[],
         )
         rubric_run = ExtractionRun(
@@ -131,8 +139,11 @@ class ReferenceExtractionService:
             original_filename=grading_run.rubric_pdf_name or "rubric.pdf",
             content_type="application/pdf",
             extraction_type="rubric",
-            provider=LOCAL_REFERENCE_PROVIDER,
+            provider=policy.provider,
             status="pending",
+            raw_output=json.dumps(
+                {"_brain": {"provider": policy.provider, "model": policy.model}}
+            ),
             blockers=[],
         )
         self.db.add_all((question_run, rubric_run))
@@ -186,7 +197,7 @@ class ReferenceExtractionService:
         self.db.commit()
 
         try:
-            self._assert_enabled(self.settings.local_qwen38_model)
+            policy = self._policy_for_grading_run(grading_run)
             paths = self._material_paths(grading_run)
             self._assert_material_hashes(grading_run, paths)
             self._set_stage(grading_run, "rendering_reference_pages")
@@ -195,8 +206,7 @@ class ReferenceExtractionService:
             name_map = {"question_paper": "QUESTION", "solution": "SOLUTION", "rubric": "RUBRIC"}
             total_pages = 0
             # Render once at the established high-detail local reference DPI.
-            # Qwen3.8 receives only these local page images; no OCR sidecar or
-            # text model is started in this workflow.
+            # The provider receives only rendered page images in this workflow.
             render_dpi = self.settings.local_ocr_render_dpi
             for source_name, document_name in name_map.items():
                 rendered = extractor.render_pages(
@@ -219,6 +229,7 @@ class ReferenceExtractionService:
                 documents,
                 render_dpi=render_dpi,
                 lease_holder_id=lease_holder_id,
+                policy=policy,
             )
 
             self._assert_material_hashes(grading_run, paths)
@@ -234,7 +245,8 @@ class ReferenceExtractionService:
                 payload={
                     "visual_page_count": total_pages,
                     "qwen_call_count": grading_run.reference_qwen_call_count,
-                    "provider": "llama_cpp_qwen38",
+                    "provider": policy.provider,
+                    "model": policy.model,
                 },
             )
             self.db.commit()
@@ -335,26 +347,21 @@ class ReferenceExtractionService:
         *,
         render_dpi: int,
         lease_holder_id: str,
+        policy: BrainPolicy,
     ) -> dict[str, Any]:
-        """Extract one teacher-reviewable reference bundle with Qwen3.8 vision."""
+        """Extract one teacher-reviewable bundle through the active visual brain."""
 
         del render_dpi  # Rendering is completed and hash-checked before this call.
-        self._set_stage(grading_run, "qwen38_visual_reference_extraction")
-        lease = LocalModelLeaseService(self.db)
-        with lease.hold(
-            model_phase="Qwen38",
+        self._set_stage(grading_run, "brain_visual_reference_extraction")
+        with hold_brain_execution(
+            db=self.db,
+            settings=self.settings,
+            adapter=policy.adapter,
             holder_kind="reference_extraction",
             holder_id=lease_holder_id,
-        ):
-            self._switch_phase("Qwen38", lease_holder_id=lease_holder_id)
-            adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-            adapter.verify_available_model()
-            extract = getattr(adapter.provider, "extract_reference_bundle_from_images", None)
-            if extract is None:
-                raise ReferenceExtractionError(
-                    "The configured Qwen3.8 provider cannot extract reference images"
-                )
-            lease.heartbeat(holder_id=lease_holder_id)
+            phase_manager=self.phase_manager,
+        ) as execution:
+            execution.heartbeat()
             # Persist the authorized provider attempt before entering the HTTP
             # call. A schema-invalid response is still a real model call and
             # must never be reported as zero after the surrounding transaction
@@ -365,17 +372,43 @@ class ReferenceExtractionService:
                 "reference_extraction_provider_call_started",
                 actor_type="worker",
                 payload={
-                    "provider": "llama_cpp_qwen38",
-                    "model": self.settings.local_qwen38_model,
+                    "provider": policy.provider,
+                    "model": policy.model,
                     "call_number": 1,
                 },
             )
             self.db.commit()
+            extract = getattr(
+                policy.adapter,
+                "extract_reference_bundle_from_images",
+                None,
+            )
+            if not callable(extract):
+                extract = getattr(
+                    policy.adapter.provider,
+                    "extract_reference_bundle_from_images",
+                    None,
+                )
+            if not callable(extract):
+                raise ReferenceExtractionError(
+                    "The configured brain does not implement visual reference extraction"
+                )
             result = extract(documents=documents)
-            lease.heartbeat(holder_id=lease_holder_id)
+            execution.heartbeat()
+        result["_brain"] = {"provider": policy.provider, "model": policy.model}
+        provider_label = (
+            "Qwen3.8 vision"
+            if policy.provider == "llama_cpp_qwen38"
+            else f"{policy.provider} visual brain"
+        )
+        reasoning_note = (
+            " with thinking disabled"
+            if policy.provider == "llama_cpp_qwen38"
+            else ""
+        )
         result["warnings"] = list(result.get("warnings") or []) + [
-            "Draft references were extracted directly by local Qwen3.8 vision with "
-            "thinking disabled; teacher confirmation is required."
+            f"Draft references were extracted by {provider_label}{reasoning_note}; teacher "
+            "confirmation is required."
         ]
         return result
 
@@ -790,19 +823,13 @@ class ReferenceExtractionService:
             if grading_run.reference_question_run_id is not None
             else None
         )
-        recorded_provider = (
-            extraction_run.provider if extraction_run is not None else LOCAL_REFERENCE_PROVIDER
+        metadata = self._runtime_metadata(grading_run)
+        recorded_provider = str(
+            metadata.get("provider")
+            or (extraction_run.provider if extraction_run is not None else "brain")
         )
-        recorded_model = (
-            self.settings.local_qwen_model
-            if recorded_provider == "local_paddle_qwen"
-            else self.settings.local_qwen38_model
-        )
-        recorded_device = (
-            "legacy_paddle_qwen_exclusive_phases"
-            if recorded_provider == "local_paddle_qwen"
-            else "qwen38_local_vision"
-        )
+        recorded_model = str(metadata.get("model") or "unknown")
+        recorded_device = str(metadata.get("location") or "provider_managed")
         nodes: list[QuestionNode] = []
         criteria: list[RubricExtractionCriterion] = []
         if grading_run.reference_question_run_id is not None:
@@ -878,13 +905,15 @@ class ReferenceExtractionService:
     ) -> None:
         questions = provider_result.get("questions")
         if not isinstance(questions, list) or not questions:
-            raise ReferenceExtractionError("Local Qwen extracted no gradable questions")
+            raise ReferenceExtractionError("The brain provider extracted no gradable questions")
         question_nodes: list[dict[str, Any]] = []
         rubric_criteria: list[dict[str, Any]] = []
         blockers: list[str] = []
         for item in questions:
             if not isinstance(item, dict):
-                raise ReferenceExtractionError("Local Qwen returned an invalid question draft")
+                raise ReferenceExtractionError(
+                    "The brain provider returned an invalid question draft"
+                )
             question_number = str(item.get("question_number", "")).strip()
             item_blockers = [str(value) for value in item.get("blockers", [])]
             if item.get("marks") is None:
@@ -911,7 +940,9 @@ class ReferenceExtractionService:
                         "source_question_pages": source_question_pages,
                         "source_solution_pages": item.get("source_solution_pages", []),
                         "model_answer_draft": item.get("model_answer"),
-                        "provider": LOCAL_REFERENCE_PROVIDER,
+                        "provider": (provider_result.get("_brain") or {}).get(
+                            "provider", "brain"
+                        ),
                         "teacher_review_required": True,
                     },
                     "confidence": item.get("confidence"),
@@ -931,7 +962,7 @@ class ReferenceExtractionService:
                     }
                 )
         if not rubric_criteria:
-            raise ReferenceExtractionError("Local Qwen extracted no rubric criteria")
+            raise ReferenceExtractionError("The brain provider extracted no rubric criteria")
 
         question_run = self.db.get(ExtractionRun, grading_run.reference_question_run_id)
         rubric_run = self.db.get(ExtractionRun, grading_run.reference_rubric_run_id)
@@ -960,19 +991,77 @@ class ReferenceExtractionService:
             ),
         )
 
-    def _assert_enabled(self, expected_model: str) -> None:
-        if not self.settings.brain_allow_real_providers:
-            raise ReferenceExtractionError("Real local providers are safety-disabled")
-        if not self.settings.local_reference_extraction_enabled:
-            raise ReferenceExtractionError("Local reference extraction is disabled")
-        if not self.settings.local_qwen38_enabled:
-            raise ReferenceExtractionError("Local Qwen3.8 must be enabled")
-        if not self.settings.local_qwen38_visual_preparation_enabled:
-            raise ReferenceExtractionError("Qwen3.8 visual preparation is disabled")
-        if expected_model != self.settings.local_qwen38_model:
-            raise ReferenceExtractionError(
-                "Expected Qwen3.8 model alias does not match configuration"
+    def _assert_enabled(
+        self,
+        expected_model: str,
+        *,
+        provider: str | None = None,
+    ) -> BrainPolicy:
+        try:
+            policy = brain_policy_from_settings(
+                self.settings,
+                requested_provider=provider or configured_visual_provider(self.settings),
             )
+            if expected_model != policy.model:
+                raise ReferenceExtractionError(
+                    "Expected brain model alias does not match configuration"
+                )
+            policy.validate_request(
+                requested_provider=provider or "active",
+                expected_model=expected_model,
+                capability=BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+                feature_enabled=(
+                    policy.reference_extraction_enabled
+                    and policy.visual_preparation_enabled
+                ),
+            )
+        except BrainProviderConfigurationError as exc:
+            raise ReferenceExtractionError(str(exc)) from exc
+        return policy
+
+    def _policy_for_grading_run(self, grading_run: GradingRun) -> BrainPolicy:
+        metadata = self._runtime_metadata(grading_run)
+        return self._assert_enabled(
+            str(metadata.get("model") or ""),
+            provider=str(metadata.get("provider") or ""),
+        )
+
+    def _runtime_metadata(self, grading_run: GradingRun) -> dict[str, Any]:
+        extraction_run = (
+            self.db.get(ExtractionRun, grading_run.reference_question_run_id)
+            if grading_run.reference_question_run_id is not None
+            else None
+        )
+        if extraction_run is not None and extraction_run.raw_output:
+            try:
+                payload = json.loads(extraction_run.raw_output)
+                metadata = payload.get("_brain") if isinstance(payload, dict) else None
+                if isinstance(metadata, dict):
+                    provider = str(metadata.get("provider") or extraction_run.provider)
+                    policy = brain_policy_from_settings(
+                        self.settings,
+                        requested_provider=provider,
+                    )
+                    return {
+                        "provider": provider,
+                        "model": metadata.get("model") or policy.model,
+                        "location": policy.location.value,
+                    }
+            except (BrainProviderConfigurationError, json.JSONDecodeError):
+                pass
+        try:
+            policy = brain_policy_from_settings(self.settings)
+            return {
+                "provider": policy.provider,
+                "model": policy.model,
+                "location": policy.location.value,
+            }
+        except BrainProviderConfigurationError:
+            return {
+                "provider": extraction_run.provider if extraction_run is not None else "brain",
+                "model": "unknown",
+                "location": "provider_managed",
+            }
 
     def _material_paths(self, grading_run: GradingRun) -> dict[str, Path]:
         storage_root = Path(self.settings.local_storage_root).resolve()
@@ -1039,10 +1128,11 @@ class ReferenceExtractionService:
         actor_id: int | None = None,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        metadata = self._runtime_metadata(grading_run)
         safe_payload: dict[str, Any] = {
             "assessment_id": grading_run.assessment_id,
-            "provider": LOCAL_REFERENCE_PROVIDER,
-            "model": self.settings.local_qwen38_model,
+            "provider": metadata["provider"],
+            "model": metadata["model"],
         }
         if payload:
             safe_payload.update(payload)

@@ -44,6 +44,7 @@ import httpx
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.llama_cpp_qwen_provider import (
     QwenReferenceCriterionDraft,
     QwenReferenceQuestionDraft,
@@ -698,6 +699,17 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
 
     provider_name = PROVIDER_NAME
     model_name = EXPECTED_ALIAS
+    execution_location = BrainExecutionLocation.LOCAL
+    managed_local_phase = "Qwen38"
+    capabilities = frozenset(
+        {
+            BrainCapability.GRADING,
+            BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+            BrainCapability.VISUAL_MAPPING,
+            BrainCapability.VISUAL_TRANSCRIPTION,
+            BrainCapability.TRANSCRIPTION_REPAIR,
+        }
+    )
 
     # ── Construction ──────────────────────────────────────────────────────
 

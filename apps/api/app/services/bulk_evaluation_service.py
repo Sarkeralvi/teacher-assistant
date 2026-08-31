@@ -36,10 +36,9 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from app.services.brain_execution import hold_brain_execution
 from app.services.final_grade_service import FinalGradeService
 from app.services.grading_service import GradingService, rubric_snapshot_hash
-from app.services.local_ai_phase_manager import LocalAiPhaseManager
-from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.local_script_preparation import (
     LocalScriptPreparationError,
     LocalScriptPreparationService,
@@ -50,15 +49,17 @@ from app.services.qwen38_visual_transcription_service import (
 )
 from app.services.storage import LocalStorage
 from app.services.submission_processing import extract_page_images
-from packages.brain.adapter import (
-    BrainAdapter,
-    BrainProviderConfigurationError,
-    sanitize_provider_error,
+from packages.brain.adapter import BrainProviderConfigurationError, sanitize_provider_error
+from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
+from packages.brain.policy import (
+    BrainPolicy,
+    brain_policy_from_settings,
+    configured_visual_provider,
 )
 from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
 from packages.ocr.coverage import measure_uncovered_ink
 
-BULK_POLICY_VERSION = "bulk-supervised-qwen38-v1"
+BULK_POLICY_VERSION = "bulk-supervised-brain-v2"
 _UNCERTAIN_PROVIDER_WARNING = (
     "Provider work stopped without a safely persisted result; "
     "explicit item retry required"
@@ -140,8 +141,13 @@ class BulkEvaluationService:
         expected_model: str,
         marking_policy: str,
         maximum_provider_calls: int,
+        provider: str | None = None,
     ) -> BulkEvaluationRun:
-        self._assert_enabled(expected_model, maximum_provider_calls)
+        policy = self._assert_enabled(
+            expected_model,
+            maximum_provider_calls,
+            provider=provider,
+        )
         questions, reference_hash = self._load_references(assessment_id, grading_run)
         staged_path, archive_hash = self._stage_archive(upload)
         created_submission_ids: list[int] = []
@@ -164,8 +170,8 @@ class BulkEvaluationService:
                     assessment_id=assessment_id,
                     grading_run_id=grading_run.id,
                     created_by_teacher_id=teacher.id,
-                    provider="llama_cpp_qwen38",
-                    model_name=expected_model,
+                    provider=policy.provider,
+                    model_name=policy.model,
                     marking_policy=marking_policy,
                     policy_version=BULK_POLICY_VERSION,
                     reference_bundle_sha256=reference_hash,
@@ -243,7 +249,10 @@ class BulkEvaluationService:
                             "page_count": total_pages,
                             "item_count": run.total_items,
                             "authorized_call_limit": maximum_provider_calls,
-                            "local_only": True,
+                            "local_only": (
+                                policy.location is BrainExecutionLocation.LOCAL
+                            ),
+                            "provider_location": policy.location.value,
                             "draft_only": True,
                         },
                     )
@@ -279,41 +288,68 @@ class BulkEvaluationService:
         _, value = self._load_references(assessment_id, grading_run)
         return value
 
-    def _assert_enabled(self, expected_model: str, maximum_calls: int) -> None:
+    def _assert_enabled(
+        self,
+        expected_model: str,
+        maximum_calls: int,
+        *,
+        provider: str | None = None,
+    ) -> BrainPolicy:
         settings = self.settings
-        if not settings.bulk_supervised_enabled:
-            raise BulkEvaluationError("Bulk supervised evaluation is disabled")
-        if not settings.brain_allow_real_providers:
-            raise BulkEvaluationError("Real local providers are disabled")
-        if not (
-            settings.local_qwen38_enabled
-            and settings.local_qwen38_visual_preparation_enabled
-            and settings.local_qwen38_transcription_enabled
-            and settings.local_qwen38_grading_enabled
-        ):
-            raise BulkEvaluationError("Required local Qwen3.8 capabilities are disabled")
-        if expected_model != settings.local_qwen38_model:
-            raise BulkEvaluationError("Expected local Qwen3.8 model alias does not match")
+        try:
+            policy = brain_policy_from_settings(
+                settings,
+                requested_provider=provider or configured_visual_provider(settings),
+            )
+            feature_enabled = bool(
+                policy.bulk_evaluation_enabled
+                and policy.script_preparation_enabled
+                and policy.visual_preparation_enabled
+                and policy.transcription_enabled
+                and policy.grading_enabled
+            )
+            for capability in (
+                BrainCapability.VISUAL_MAPPING,
+                BrainCapability.VISUAL_TRANSCRIPTION,
+                BrainCapability.GRADING,
+            ):
+                policy.validate_request(
+                    requested_provider=provider or "active",
+                    expected_model=expected_model,
+                    capability=capability,
+                    feature_enabled=feature_enabled,
+                )
+        except BrainProviderConfigurationError as exc:
+            raise BulkEvaluationError(str(exc)) from exc
         if maximum_calls > settings.bulk_max_provider_calls:
             raise BulkEvaluationError("Requested provider calls exceed the bulk server ceiling")
         holder_id = f"bulk_preflight:{uuid4().hex}"
-        lease = LocalModelLeaseService(self.db)
         try:
-            with lease.hold(
-                model_phase="Qwen38",
+            with hold_brain_execution(
+                db=self.db,
+                settings=settings,
+                adapter=policy.adapter,
                 holder_kind="bulk_evaluation_preflight",
                 holder_id=holder_id,
-            ):
-                if settings.local_ai_phase_switch_enabled:
-                    LocalAiPhaseManager(settings=settings, db=self.db).switch(
-                        "Qwen38", lease_holder_id=holder_id
-                    )
-                BrainAdapter.for_provider(
-                    settings, "llama_cpp_qwen38"
-                ).verify_available_model()
-                lease.heartbeat(holder_id=holder_id)
+            ) as execution:
+                execution.heartbeat()
         except (BrainProviderConfigurationError, RuntimeError) as exc:
-            raise BulkEvaluationError("Local Qwen3.8 is unavailable or mismatched") from exc
+            raise BulkEvaluationError("The brain provider is unavailable or mismatched") from exc
+        return policy
+
+    def _policy_for_run(self, run: BulkEvaluationRun) -> BrainPolicy:
+        try:
+            policy = brain_policy_from_settings(
+                self.settings,
+                requested_provider=run.provider,
+            )
+            if policy.model != run.model_name:
+                raise BrainProviderConfigurationError(
+                    "Configured brain model changed after bulk authorization"
+                )
+            return policy
+        except BrainProviderConfigurationError as exc:
+            raise BulkEvaluationError(str(exc)) from exc
 
     def _load_references(
         self, assessment_id: int, grading_run: GradingRun
@@ -1111,6 +1147,7 @@ class BulkEvaluationService:
                 expected_model=run.model_name,
                 replace_existing=False,
                 maximum_ocr_calls=remaining,
+                provider=run.provider,
             )
             calls = self._latest_mapping_call_count(submission.id)
             self._consume_calls(run, max(len(submission.pages), calls))
@@ -1213,7 +1250,11 @@ class BulkEvaluationService:
             self.db.commit()
             return
         elif (
-            reused := self._reusable_transcription(region, service._source_hash(region))
+            reused := self._reusable_transcription(
+                region,
+                service._source_hash(region),
+                run,
+            )
         ) is not None:
             # Same images, same prompt, same model assets, and a transcript that
             # already cleared the acceptance gate. Re-reading them at 4.35 tok/s
@@ -1234,7 +1275,12 @@ class BulkEvaluationService:
             )
         else:
             self._require_calls(run, 1)
-            transcript_run = service.create(region, teacher=teacher, expected_model=run.model_name)
+            transcript_run = service.create(
+                region,
+                teacher=teacher,
+                expected_model=run.model_name,
+                provider=run.provider,
+            )
             item.transcription_run_id = transcript_run.id
             self.db.commit()
             service.run(transcript_run.id)
@@ -1260,6 +1306,7 @@ class BulkEvaluationService:
                     transcript_run,
                     teacher=teacher,
                     expected_model=run.model_name,
+                    provider=run.provider,
                 )
                 item.transcription_run_id = repair.id
                 item.status = "pending"
@@ -1284,7 +1331,10 @@ class BulkEvaluationService:
         self.db.commit()
 
     def _reusable_transcription(
-        self, region: AnswerRegion, source_hash: str
+        self,
+        region: AnswerRegion,
+        source_hash: str,
+        run: BulkEvaluationRun | None = None,
     ) -> AnswerRegionOcrRun | None:
         """A prior transcription of these exact images that already passed the gate.
 
@@ -1295,6 +1345,21 @@ class BulkEvaluationService:
         Matching the prompt version and both model asset hashes keeps a transcript
         from outliving the model or prompt that produced it.
         """
+        if run is not None and run.provider:
+            policy = self._policy_for_run(run)
+            model_hash = policy.model_asset_sha256
+            auxiliary_hash = policy.auxiliary_model_asset_sha256
+        else:
+            model_hash = (
+                self.settings.brain_model_sha256
+                or self.settings.local_qwen38_model_sha256
+                or None
+            )
+            auxiliary_hash = (
+                self.settings.brain_aux_model_sha256
+                or self.settings.local_qwen38_mmproj_sha256
+                or None
+            )
         return self.db.scalar(
             select(AnswerRegionOcrRun)
             .where(
@@ -1304,9 +1369,9 @@ class BulkEvaluationService:
                 AnswerRegionOcrRun.source_image_sha256 == source_hash,
                 AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
                 AnswerRegionOcrRun.model_asset_sha256
-                == (self.settings.local_qwen38_model_sha256 or None),
+                == model_hash,
                 AnswerRegionOcrRun.mmproj_asset_sha256
-                == (self.settings.local_qwen38_mmproj_sha256 or None),
+                == auxiliary_hash,
             )
             .order_by(AnswerRegionOcrRun.id.desc())
             .limit(1)
@@ -1398,11 +1463,12 @@ class BulkEvaluationService:
         region: AnswerRegion,
         source_run: AnswerRegionOcrRun,
     ) -> bool:
+        policy = self._policy_for_run(run)
         self._require_calls(run, 1)
         verification = AnswerRegionOcrRun(
             answer_region_id=region.id,
             requested_by_teacher_id=run.created_by_teacher_id,
-            request_id=f"qwen38-bulk-verify-{region.id}-{uuid4().hex}",
+            request_id=f"brain-bulk-verify-{region.id}-{uuid4().hex}",
             status="running",
             profile="qwen38_formula_verification",
             task_kind="visual_transcription_verification",
@@ -1411,33 +1477,28 @@ class BulkEvaluationService:
             source_image_sha256=source_run.source_image_sha256,
             source_image_hashes=source_run.source_image_hashes,
             input_manifest_sha256=source_run.input_manifest_sha256,
-            model_asset_sha256=self.settings.local_qwen38_model_sha256 or None,
-            mmproj_asset_sha256=self.settings.local_qwen38_mmproj_sha256 or None,
+            model_asset_sha256=policy.model_asset_sha256,
+            mmproj_asset_sha256=policy.auxiliary_model_asset_sha256,
             queued_at=datetime.now(UTC),
             started_at=datetime.now(UTC),
             heartbeat_at=datetime.now(UTC),
             call_limit=1,
             calls_used=1,
-            provider="llama_cpp_qwen38",
+            provider=run.provider,
             model_name=run.model_name,
             warnings=["bulk_formula_verification"],
         )
         self.db.add(verification)
         self.db.commit()
         holder_id = f"bulk_formula_verify:{verification.id}:{uuid4().hex}"
-        lease = LocalModelLeaseService(self.db)
         try:
-            with lease.hold(
-                model_phase="Qwen38",
+            with hold_brain_execution(
+                db=self.db,
+                settings=self.settings,
+                adapter=policy.adapter,
                 holder_kind="visual_transcription",
                 holder_id=holder_id,
-            ):
-                if self.settings.local_ai_phase_switch_enabled:
-                    LocalAiPhaseManager(settings=self.settings, db=self.db).switch(
-                        "Qwen38", lease_holder_id=holder_id
-                    )
-                adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-                adapter.verify_available_model()
+            ) as execution:
                 images: list[tuple[bytes, str]] = []
                 for segment in sorted(region.segments, key=lambda value: value.order_index):
                     images.append(
@@ -1446,12 +1507,12 @@ class BulkEvaluationService:
                             "image/png",
                         )
                     )
-                lease.heartbeat(holder_id=holder_id)
-                result = adapter.provider.transcribe_images(
+                execution.heartbeat()
+                result = policy.adapter.transcribe_images(
                     images=images,
                     label=region.question.question_no,
                 )
-                lease.heartbeat(holder_id=holder_id)
+                execution.heartbeat()
             verification.status = "succeeded"
             verification.completed_at = datetime.now(UTC)
             verification.heartbeat_at = verification.completed_at
@@ -1512,7 +1573,8 @@ class BulkEvaluationService:
         item.status = "running"
         item.started_at = item.started_at or datetime.now(UTC)
         self.db.commit()
-        adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
+        policy = self._policy_for_run(run)
+        adapter = policy.adapter
         grading = GradingService(self.db, adapter=adapter)
         rubric = self.db.scalar(
             select(Rubric)
@@ -1543,8 +1605,9 @@ class BulkEvaluationService:
             **(suggestion.raw_response_json or {}),
             "bulk_evaluation_run_id": run.id,
             "bulk_policy_version": run.policy_version,
-            "image_input_disabled": True,
-            "local_provider": True,
+            "image_input_disabled": not adapter.image_input_enabled,
+            "local_provider": policy.location is BrainExecutionLocation.LOCAL,
+            "provider_location": policy.location.value,
             "teacher_review_required": True,
         }
         if (

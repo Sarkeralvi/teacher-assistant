@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
+from app.core.config import get_settings
 from app.core.ownership import (
     get_owned_assessment_or_404,
     get_owned_extraction_run_or_404,
@@ -22,6 +23,7 @@ from app.schemas import (
     RubricExtractionCriterionRead,
     RubricExtractionCriterionUpdate,
 )
+from app.services.brain_execution import hold_brain_execution
 from app.services.document_extraction import (
     BridgeUnavailableError,
     DocumentExtractionError,
@@ -32,12 +34,14 @@ from app.services.document_extraction import (
     mark_extraction_run_failed,
 )
 from app.services.storage import LocalStorage
+from packages.brain.capabilities import BrainExecutionLocation
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 ExtractionFile = Annotated[UploadFile, File(...)]
 ExtractionTypeValue = Annotated[str, Form()]
 ExtractionProviderValue = Annotated[str | None, Form()]
+ProviderDataBoundaryConfirmed = Annotated[bool, Form()]
 
 router = APIRouter(tags=["document-extraction"])
 
@@ -54,6 +58,7 @@ def create_extraction_run(
     current_user: CurrentUser,
     file: ExtractionFile,
     provider: ExtractionProviderValue = None,
+    provider_data_boundary_confirmed: ProviderDataBoundaryConfirmed = False,
 ) -> ExtractionRun:
     get_owned_assessment_or_404(assessment_id, db, current_user)
     suffix = allowed_extraction_content_types().get(file.content_type or "")
@@ -71,6 +76,16 @@ def create_extraction_run(
         extractor = build_document_extractor(requested_provider=provider)
     except DocumentExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    adapter = getattr(extractor, "adapter", None)
+    if (
+        adapter is not None
+        and adapter.runtime.location is BrainExecutionLocation.CLOUD
+        and not provider_data_boundary_confirmed
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cloud provider data transfer must be explicitly confirmed",
+        )
 
     storage = LocalStorage()
     stored = storage.save_question_import(file, assessment_id, suffix)
@@ -88,7 +103,21 @@ def create_extraction_run(
     db.flush()
 
     try:
-        result = extractor.extract(stored.absolute_path, extraction_type, run.content_type)
+        if adapter is None:
+            result = extractor.extract(stored.absolute_path, extraction_type, run.content_type)
+        else:
+            with hold_brain_execution(
+                db=db,
+                settings=get_settings(),
+                adapter=adapter,
+                holder_kind="document_extraction",
+                holder_id=f"document_extraction:{run.id}",
+            ):
+                result = extractor.extract(
+                    stored.absolute_path,
+                    extraction_type,
+                    run.content_type,
+                )
         apply_extraction_result(db, run, result)
     except BridgeUnavailableError as exc:
         mark_extraction_run_blocked(run, str(exc))

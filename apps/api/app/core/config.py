@@ -20,6 +20,60 @@ class Settings(BaseSettings):
     artifacts_dir: str = Field(default="/data/artifacts", alias="ARTIFACTS_DIR")
     brain_provider: str = Field(default="mock", alias="BRAIN_PROVIDER")
     brain_allow_real_providers: bool = Field(default=False, alias="BRAIN_ALLOW_REAL_PROVIDERS")
+    # Universal provider profile. Non-empty values override the corresponding
+    # legacy provider-specific setting. Existing Qwen/OpenAI/Gemini deployments
+    # therefore keep working while new OpenAI-compatible endpoints need only
+    # BRAIN_PROVIDER, BRAIN_MODEL, BRAIN_BASE_URL, and (when required) a key.
+    brain_model: str = Field(default="", alias="BRAIN_MODEL")
+    brain_api_key: str = Field(default="", alias="BRAIN_API_KEY")
+    brain_base_url: str = Field(default="", alias="BRAIN_BASE_URL")
+    brain_timeout_seconds: float = Field(
+        default=120.0, alias="BRAIN_TIMEOUT_SECONDS", gt=0
+    )
+    brain_endpoint_type: str = Field(default="auto", alias="BRAIN_ENDPOINT_TYPE")
+    brain_image_input_enabled: bool | None = Field(
+        default=None, alias="BRAIN_IMAGE_INPUT_ENABLED"
+    )
+    brain_structured_output_mode: str = Field(
+        default="json_schema", alias="BRAIN_STRUCTURED_OUTPUT_MODE"
+    )
+    brain_verify_model_on_start: bool = Field(
+        default=False, alias="BRAIN_VERIFY_MODEL_ON_START"
+    )
+    brain_managed_local_phase: str = Field(
+        default="", alias="BRAIN_MANAGED_LOCAL_PHASE"
+    )
+    brain_job_timeout_seconds: int | None = Field(
+        default=None, alias="BRAIN_JOB_TIMEOUT_SECONDS", ge=30, le=3600
+    )
+    brain_model_sha256: str = Field(default="", alias="BRAIN_MODEL_SHA256")
+    brain_aux_model_sha256: str = Field(default="", alias="BRAIN_AUX_MODEL_SHA256")
+    # Generic product/capability switches. ``None`` means use the matching
+    # legacy switch for backward compatibility; false is an explicit disable.
+    brain_reference_extraction_enabled: bool | None = Field(
+        default=None, alias="BRAIN_REFERENCE_EXTRACTION_ENABLED"
+    )
+    brain_script_preparation_enabled: bool | None = Field(
+        default=None, alias="BRAIN_SCRIPT_PREPARATION_ENABLED"
+    )
+    brain_single_answer_grading_enabled: bool | None = Field(
+        default=None, alias="BRAIN_SINGLE_ANSWER_GRADING_ENABLED"
+    )
+    brain_visual_preparation_enabled: bool | None = Field(
+        default=None, alias="BRAIN_VISUAL_PREPARATION_ENABLED"
+    )
+    brain_transcription_enabled: bool | None = Field(
+        default=None, alias="BRAIN_TRANSCRIPTION_ENABLED"
+    )
+    brain_thinking_repair_enabled: bool | None = Field(
+        default=None, alias="BRAIN_THINKING_REPAIR_ENABLED"
+    )
+    brain_grading_enabled: bool | None = Field(
+        default=None, alias="BRAIN_GRADING_ENABLED"
+    )
+    brain_bulk_evaluation_enabled: bool | None = Field(
+        default=None, alias="BRAIN_BULK_EVALUATION_ENABLED"
+    )
     local_qwen_enabled: bool = Field(default=False, alias="LOCAL_QWEN_ENABLED")
     local_qwen_base_url: str = Field(
         # Not 8080: a separate Qwen3.6 coding-assistant bridge commonly holds
@@ -282,7 +336,11 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

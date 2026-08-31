@@ -4,12 +4,29 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.core.auth import get_current_user
 from app.core.config import Settings
+from app.main import app
 from app.schemas import LocalAiStatusRead
 from app.services.local_ai_status_service import LocalAiStatusService
 from packages.brain.adapter import BrainAdapter
+
+
+def test_brain_status_alias_exposes_the_provider_neutral_runtime_contract() -> None:
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
+    try:
+        response = TestClient(app).get("/brain/status")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    brain = response.json()["brain"]
+    assert {"provider", "model", "location", "capabilities", "configured"} <= set(
+        brain
+    )
 
 
 def test_local_ai_status_defaults_are_disabled_and_do_not_expose_secrets_or_paths() -> None:

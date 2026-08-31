@@ -85,17 +85,29 @@ from app.worker.jobs import (
     run_qwen38_visual_transcription_job,
 )
 from app.worker.rq_app import get_default_queue
-from packages.brain.adapter import sanitize_provider_error
+from packages.brain.adapter import BrainProviderConfigurationError, sanitize_provider_error
 from packages.brain.answer_region_suggestion_codex_provider import (
     CodexAnswerRegionSuggestionProvider,
     CodexAnswerRegionSuggestionProviderError,
 )
+from packages.brain.policy import brain_policy_from_settings, configured_visual_provider
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 router = APIRouter(tags=["answer-regions"])
 logger = logging.getLogger(__name__)
+
+
+def _resolved_visual_brain_provider(settings, provider: str | None) -> str:
+    """Translate only historical visual-route aliases before policy lookup."""
+
+    normalized = (provider or "").strip().lower()
+    if normalized in {"", "brain", "active", "brain_visual"}:
+        return configured_visual_provider(settings)
+    if normalized == "local_qwen38_visual":
+        return "llama_cpp_qwen38"
+    return normalized
 
 
 def get_submission_page_or_404(page_id: int, db: Session) -> SubmissionPage:
@@ -1047,17 +1059,43 @@ def run_submission_question_node_mappings(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 "PaddleOCR and Qwen3.6 script preparation is retired and cannot run. "
-                "Use the explicit local_qwen38_visual provider."
+                "Use local_qwen38_visual for the legacy local profile or brain_visual "
+                "for the active universal provider."
             ),
         )
-    if request.provider in {"local_paddle_qwen", "local_qwen38_visual"} and not (
+    if request.provider in {
+        "brain_visual",
+        "local_paddle_qwen",
+        "local_qwen38_visual",
+    } and not (
         request.draft_only_confirmed
     ):
+        detail = (
+            "Local model mapping requires explicit draft-only confirmation"
+            if request.provider == "local_qwen38_visual"
+            else "Brain-assisted mapping requires explicit draft-only confirmation"
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Local model mapping requires explicit draft-only confirmation",
+            detail=detail,
         )
-    if request.provider == "local_qwen38_visual":
+    if request.provider in {"brain_visual", "local_qwen38_visual"}:
+        settings = get_settings()
+        try:
+            policy = brain_policy_from_settings(
+                settings,
+                requested_provider=_resolved_visual_brain_provider(
+                    settings, request.provider
+                ),
+            )
+            policy.require_data_boundary_confirmation(
+                confirmed=request.provider_data_boundary_confirmed
+            )
+        except BrainProviderConfigurationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
         service = LocalScriptPreparationService(db)
         try:
             mappings = service.prepare(
@@ -1067,6 +1105,11 @@ def run_submission_question_node_mappings(
                 replace_existing=request.replace_existing,
                 repair_unconfirmed_only=request.repair_unconfirmed_only,
                 maximum_ocr_calls=request.maximum_ocr_calls,
+                provider=(
+                    "llama_cpp_qwen38"
+                    if request.provider == "local_qwen38_visual"
+                    else None
+                ),
             )
         except LocalScriptPreparationError as exc:
             raise HTTPException(
@@ -1075,16 +1118,16 @@ def run_submission_question_node_mappings(
             ) from exc
         except Exception as exc:
             logger.exception(
-                "Local Qwen3.8 visual mapping rescue failed safely: %s",
+                "Brain visual mapping failed safely: %s",
                 sanitize_provider_error(str(exc)),
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Local Qwen3.8 visual mapping rescue failed",
+                detail="Brain visual mapping failed",
             ) from exc
         return AnswerRegionMappingRunResponse(
             message=(
-                "Qwen3.8 visually remapped unresolved answer boundaries. Compare every "
+                "The active brain visually mapped unresolved answer boundaries. Compare every "
                 "rectangle with the complete source page before confirmation."
             ),
             created_count=len(mappings),
@@ -1363,7 +1406,14 @@ def confirm_question_node_mapping(
                         "transcription has a separate integrity-checked gate"
                     ),
                 )
-        elif mapping.provider == "llama_cpp_qwen38":
+        elif (
+            (mapping.source_reference or {}).get("text_source")
+            in {
+                "brain_visual_mapping_pending_transcription",
+                "qwen38_visual_mapping_pending_transcription",
+            }
+            or mapping.provider in {"llama_cpp_qwen38", "local_qwen38_visual"}
+        ):
             # Mapping and visual evidence are intentionally separate gates.
             # The transcript can only be copied by the dedicated hash-checked
             # visual-transcription confirmation endpoint.
@@ -1575,23 +1625,42 @@ def create_visual_transcription_run(
     current_user: CurrentUser,
 ) -> AnswerRegionOcrRun:
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    settings = get_settings()
+    try:
+        policy = brain_policy_from_settings(
+            settings,
+            requested_provider=_resolved_visual_brain_provider(settings, payload.provider),
+        )
+        policy.require_data_boundary_confirmation(
+            confirmed=payload.provider_data_boundary_confirmed
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     service = Qwen38VisualTranscriptionService(db)
     try:
-        run = service.create(region, teacher=current_user, expected_model=payload.expected_model)
+        run = service.create(
+            region,
+            teacher=current_user,
+            expected_model=payload.expected_model,
+            provider=payload.provider,
+        )
         get_default_queue().enqueue(
             run_qwen38_visual_transcription_job,
             run.id,
             retry=None,
-            job_timeout=get_settings().local_qwen38_visual_job_timeout_seconds,
+            job_timeout=policy.job_timeout_seconds,
         )
         return run
     except VisualTranscriptionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("Qwen3.8 visual transcription could not be queued")
+        logger.exception("Brain visual transcription could not be queued")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Qwen3.8 visual transcription could not be queued",
+            detail="Brain visual transcription could not be queued",
         ) from exc
 
 
@@ -1633,6 +1702,20 @@ def create_visual_transcription_thinking_repair(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Source visual transcription run not found",
         )
+    settings = get_settings()
+    try:
+        policy = brain_policy_from_settings(
+            settings,
+            requested_provider=_resolved_visual_brain_provider(settings, payload.provider),
+        )
+        policy.require_data_boundary_confirmation(
+            confirmed=payload.provider_data_boundary_confirmed
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     service = Qwen38VisualTranscriptionService(db)
     try:
         run = service.create_thinking_repair(
@@ -1640,21 +1723,22 @@ def create_visual_transcription_thinking_repair(
             source_run,
             teacher=current_user,
             expected_model=payload.expected_model,
+            provider=payload.provider,
         )
         get_default_queue().enqueue(
             run_qwen38_thinking_repair_job,
             run.id,
             retry=None,
-            job_timeout=get_settings().local_qwen38_visual_job_timeout_seconds,
+            job_timeout=policy.job_timeout_seconds,
         )
         return run
     except VisualTranscriptionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("Qwen3.8 thinking repair could not be queued")
+        logger.exception("Brain thinking repair could not be queued")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Qwen3.8 thinking repair could not be queued",
+            detail="Brain thinking repair could not be queued",
         ) from exc
 
 

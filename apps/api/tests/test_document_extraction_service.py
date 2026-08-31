@@ -8,6 +8,7 @@ from app.services.document_extraction import (
     BridgeUnavailableError,
     DocumentExtractionError,
     HostBridgeCodexDocumentExtractor,
+    _normalize_provider_document_result,
     build_document_extractor,
     validate_normalized_output,
 )
@@ -171,3 +172,62 @@ def test_validate_normalized_output_accepts_rubric_sample() -> None:
 
     assert payload["criteria"][0]["question_number"] == "Q1(a)"
     assert payload["criteria"][0]["criterion_label"] == "Correct answer"
+
+
+def test_provider_question_tree_is_flattened_into_canonical_nodes() -> None:
+    payload = _normalize_provider_document_result(
+        "question_paper",
+        {
+            "questions": [
+                {
+                    "question_number": "1",
+                    "question_text": "Answer both parts.",
+                    "marks": 10,
+                    "sub_questions": [
+                        {
+                            "question_number": "1(a)",
+                            "question_text": "State the result.",
+                            "marks": 4,
+                            "sub_questions": [],
+                        }
+                    ],
+                }
+            ],
+            "warnings": ["Page number was faint"],
+        },
+    )
+
+    assert [item["question_number"] for item in payload["question_nodes"]] == [
+        "1",
+        "1(a)",
+    ]
+    assert payload["question_nodes"][1]["parent_question_number"] == "1"
+    assert payload["question_nodes"][1]["node_type"] == "subquestion"
+    assert payload["blockers"] == ["Page number was faint"]
+
+
+def test_provider_rubric_tree_is_flattened_into_canonical_criteria() -> None:
+    payload = _normalize_provider_document_result(
+        "rubric",
+        {
+            "criteria": [
+                {
+                    "question_number": "1",
+                    "criterion_text": "Uses the correct method.",
+                    "max_marks": 3,
+                    "sub_criteria": [
+                        {
+                            "question_number": "1(a)",
+                            "criterion_text": "Shows the substitution.",
+                            "max_marks": 1,
+                            "sub_criteria": [],
+                        }
+                    ],
+                }
+            ],
+            "warnings": [],
+        },
+    )
+
+    assert [item["question_number"] for item in payload["criteria"]] == ["1", "1(a)"]
+    assert payload["criteria"][1]["description"] == "Shows the substitution."

@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import (
     GradeSuggestionOutput,
@@ -300,6 +301,16 @@ class LlamaCppQwenProvider(BrainProvider):
     """Text-only Qwen provider behind llama.cpp's OpenAI-compatible API."""
 
     provider_name = "llama_cpp_qwen"
+    execution_location = BrainExecutionLocation.LOCAL
+    managed_local_phase = "Qwen"
+    capabilities = frozenset(
+        {
+            BrainCapability.GRADING,
+            BrainCapability.OCR_REFERENCE_EXTRACTION,
+            BrainCapability.OCR_ANSWER_MAPPING,
+            BrainCapability.OCR_ANSWER_PREPARATION,
+        }
+    )
 
     def __init__(
         self,

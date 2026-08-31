@@ -10,6 +10,11 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from packages.brain.capabilities import (
+    BrainCapability,
+    BrainExecutionLocation,
+    BrainImageInputMode,
+)
 from packages.brain.prompt_registry import (
     build_dependent_rubric_guidance,
     build_handwritten_math_stat_guidance,
@@ -42,6 +47,9 @@ class CodexCliProviderError(RuntimeError):
 
 class CodexCliProvider(BrainProvider):
     provider_name = "codex_cli"
+    execution_location = BrainExecutionLocation.CLI
+    image_input_mode = BrainImageInputMode.FILE_PATH
+    capabilities = frozenset({BrainCapability.GRADING})
 
     def __init__(
         self,

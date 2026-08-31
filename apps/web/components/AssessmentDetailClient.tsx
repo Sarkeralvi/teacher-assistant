@@ -31,11 +31,11 @@ import {
   getEvidencePrepSummary,
   getGradingEvidencePacket,
   getGradingQueueSummary,
-  getLocalAiStatus,
+  getBrainStatus,
   getSubmissionPageImageUrl,
   getStoredAuthToken,
-  gradeAllApprovedAnswersWithLocalQwen38,
-  gradeAnswerRegionWithLocalQwen38,
+  gradeAllApprovedAnswersWithBrain,
+  gradeAnswerRegionWithBrain,
   importQuestionsFromPaper,
   listAssessmentAnswerRegions,
   listAssessmentGradingRuns,
@@ -75,7 +75,7 @@ import {
   type GradingQueueRun,
   type GradingRun,
   type LocalAiStatus,
-  type LocalQwenApprovedBatchGradeResponse,
+  type BrainApprovedBatchGradeResponse,
   type Question,
   type QuestionImportJob,
   type QuestionImportProvider,
@@ -187,7 +187,10 @@ function localMappingWarnings(mapping: AnswerRegionMapping): string[] {
 // which one did — gating on the vision provider alone hid the panel for tiered
 // mappings and left the teacher no way to confirm or grade them.
 function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
-  return mapping.provider === "local_paddle_qwen" || mapping.provider === "llama_cpp_qwen38";
+  const source = mapping.source_reference?.text_source;
+  return mapping.provider === "local_paddle_qwen"
+    || source === "brain_visual_mapping_pending_transcription"
+    || source === "qwen38_visual_mapping_pending_transcription";
 }
 
 const CURRENT_FINAL_INTENT_PROMPT_VERSION = "qwen38-visible-evidence-structured-v5";
@@ -239,7 +242,7 @@ function safeVisualTranscriptionError(error: string | null): string | null {
     error.includes("content starts:") ||
     error.includes("data:image/")
   ) {
-    return "Qwen3.8 output did not match the safe transcription contract. No transcript was accepted.";
+    return "The brain output did not match the safe transcription contract. No transcript was accepted.";
   }
   return error;
 }
@@ -277,7 +280,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [scriptPreparationMessage, setScriptPreparationMessage] = useState<string | null>(null);
   const [gradingRegionId, setGradingRegionId] = useState<number | null>(null);
   const [gradingAllApproved, setGradingAllApproved] = useState(false);
-  const [batchGradeResult, setBatchGradeResult] = useState<LocalQwenApprovedBatchGradeResponse | null>(null);
+  const [batchGradeResult, setBatchGradeResult] = useState<BrainApprovedBatchGradeResponse | null>(null);
   const [confirmingMappingId, setConfirmingMappingId] = useState<number | null>(null);
   const [confirmingVisualRunId, setConfirmingVisualRunId] = useState<number | null>(null);
   const [answerRegionImageStates, setAnswerRegionImageStates] = useState<Record<number, AnswerRegionImageLoadState>>({});
@@ -305,6 +308,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [questionImportProvider, setQuestionImportProvider] = useState<QuestionImportProvider>("mock");
   const [questionImportJob, setQuestionImportJob] = useState<QuestionImportJob | null>(null);
   const [localAiStatus, setLocalAiStatus] = useState<LocalAiStatus | null>(null);
+  const [providerDataBoundaryConfirmed, setProviderDataBoundaryConfirmed] = useState(false);
   const [draftQuestionEdits, setDraftQuestionEdits] = useState<Record<string, DraftQuestionEdit>>({});
   const [importingQuestions, setImportingQuestions] = useState(false);
   const [acceptingQuestions, setAcceptingQuestions] = useState(false);
@@ -417,15 +421,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     .filter((run) => run.mode === "custom_controlled")
     .sort((left, right) => right.id - left.id)[0] ?? null;
   const localScriptPreparationAuthorized = Boolean(
-    localAiStatus?.real_providers_allowed &&
-    localAiStatus.local_script_preparation_enabled &&
-    localAiStatus.qwen38.enabled &&
-    localAiStatus.qwen38.visual_preparation_enabled,
+    localAiStatus?.brain.enabled &&
+    localAiStatus.brain.script_preparation_enabled &&
+    localAiStatus.brain.visual_preparation_enabled &&
+    localAiStatus.brain.capabilities.includes("visual_mapping"),
   );
   const localVisualMappingAuthorized = Boolean(
-    localAiStatus?.real_providers_allowed &&
-    localAiStatus.qwen38.enabled &&
-    localAiStatus.qwen38.visual_preparation_enabled,
+    localAiStatus?.brain.enabled &&
+    localAiStatus.brain.visual_preparation_enabled &&
+    localAiStatus.brain.capabilities.includes("visual_mapping"),
   );
   const unresolvedMappingSubmissionIds = Array.from(
     new Set(
@@ -439,11 +443,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     (submission) => !preparedSubmissionIds.has(submission.id),
   );
   const localSingleGradeAuthorized = Boolean(
-    localAiStatus?.real_providers_allowed &&
-    localAiStatus.local_single_answer_grading_enabled &&
-    localAiStatus.qwen38.enabled &&
-    localAiStatus.qwen38.grading_enabled,
+    localAiStatus?.brain.enabled &&
+    localAiStatus.brain.grading_enabled &&
+    localAiStatus.brain.capabilities.includes("grading"),
   );
+  const brainCloudDataBoundaryRequired = localAiStatus?.brain.location === "cloud";
+  const providerDataBoundaryReady = !brainCloudDataBoundaryRequired || providerDataBoundaryConfirmed;
   const approvedBatchRegionIds = answerRegions
     .filter((region) => (
       Boolean(evidencePackets[region.id]?.readiness_result.ready_for_grading) &&
@@ -540,7 +545,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           getAssessmentReviewQueue(assessmentId),
           getEvidencePrepSummary(assessmentId).catch(() => null),
           getGradingQueueSummary(assessmentId).catch(() => null),
-          getLocalAiStatus().catch(() => null),
+          getBrainStatus().catch(() => null),
           listAssessmentGradingRuns(assessmentId).catch(() => [] as GradingRun[]),
         ]);
 
@@ -623,6 +628,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   useEffect(() => {
     void load();
   }, [assessmentId]);
+
+  useEffect(() => {
+    setProviderDataBoundaryConfirmed(false);
+  }, [
+    localAiStatus?.brain.location,
+    localAiStatus?.brain.model,
+    localAiStatus?.brain.provider,
+  ]);
 
   useEffect(() => {
     const activeRegionIds = Object.entries(ocrRunsByRegionId)
@@ -903,7 +916,15 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     setImportingQuestions(true);
     setError(null);
     try {
-      const job = await importQuestionsFromPaper(assessmentId, selectedFile, questionImportProvider);
+      if (questionImportProvider === "brain" && !requireProviderDataBoundaryConfirmation()) {
+        return;
+      }
+      const job = await importQuestionsFromPaper(
+        assessmentId,
+        selectedFile,
+        questionImportProvider,
+        questionImportProvider === "brain" && providerDataBoundaryConfirmed,
+      );
       setQuestionImportJob(job);
       setDraftQuestionEdits(createDraftQuestionEdits(job.draft_questions));
     } catch (err) {
@@ -956,7 +977,18 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  function requireProviderDataBoundaryConfirmation(): boolean {
+    if (!providerDataBoundaryReady) {
+      setError(
+        "Confirm cloud provider data transfer before sending student evidence to the configured brain.",
+      );
+      return false;
+    }
+    return true;
+  }
+
   async function handleRunAutomaticMappings(repairUnconfirmedOnly = false) {
+    if (!requireProviderDataBoundaryConfirmation()) return;
     setRunningMappings(true);
     setError(null);
     setScriptPreparationMessage(null);
@@ -964,23 +996,25 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       const responses = await runAssessmentQuestionNodeMappings(assessmentId, {
         replace_existing: !repairUnconfirmedOnly,
         repair_unconfirmed_only: repairUnconfirmedOnly,
-        provider: "local_qwen38_visual",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        provider: "brain_visual",
+        expected_model: localAiStatus?.brain.model ?? "",
         draft_only_confirmed: true,
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         maximum_ocr_calls: 25,
       });
       setScriptPreparationMessage(
-        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} Qwen3.8 answer regions prepared${repairUnconfirmedOnly ? " while preserving confirmed evidence" : ""}. Confirm each complete boundary, then request its verbatim Qwen3.8 transcription.`,
+        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answer regions prepared by ${localAiStatus?.brain.provider ?? "the configured brain"}${repairUnconfirmedOnly ? " while preserving confirmed evidence" : ""}. Confirm each complete boundary, then request its verbatim transcription.`,
       );
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to prepare the answer script with local AI");
+      setError(err instanceof Error ? err.message : "Failed to prepare the answer script with the configured brain");
     } finally {
       setRunningMappings(false);
     }
   }
 
   async function handleRunVisualMappingRescue(submissionId: number) {
+    if (!requireProviderDataBoundaryConfirmation()) return;
     setRunningMappings(true);
     setError(null);
     setScriptPreparationMessage(null);
@@ -989,23 +1023,25 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       const response = await runSubmissionQuestionNodeMappings(submissionId, {
         replace_existing: false,
         repair_unconfirmed_only: true,
-        provider: "local_qwen38_visual",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        provider: "brain_visual",
+        expected_model: localAiStatus?.brain.model ?? "",
         draft_only_confirmed: true,
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         maximum_ocr_calls: Math.min(Math.max(submission?.pages.length ?? 1, 1), 25),
       });
       setScriptPreparationMessage(
-        `Qwen3.8 visually repaired submission #${submissionId}: ${response.mappings.filter((mapping) => mapping.answer_region_id != null).length} review-only regions. Compare every red boundary with the complete page; no transcription or grade was created.`,
+        `The configured brain visually repaired submission #${submissionId}: ${response.mappings.filter((mapping) => mapping.answer_region_id != null).length} review-only regions. Compare every red boundary with the complete page; no transcription or grade was created.`,
       );
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to repair answer boundaries with local Qwen3.8");
+      setError(err instanceof Error ? err.message : "Failed to repair answer boundaries with the configured brain");
     } finally {
       setRunningMappings(false);
     }
   }
 
   async function handlePrepareSubmissionWithQwen38(submissionId: number) {
+    if (!requireProviderDataBoundaryConfirmation()) return;
     setRunningMappings(true);
     setError(null);
     setScriptPreparationMessage(null);
@@ -1014,17 +1050,18 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       const response = await runSubmissionQuestionNodeMappings(submissionId, {
         replace_existing: false,
         repair_unconfirmed_only: false,
-        provider: "local_qwen38_visual",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        provider: "brain_visual",
+        expected_model: localAiStatus?.brain.model ?? "",
         draft_only_confirmed: true,
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         maximum_ocr_calls: Math.min(Math.max(submission?.pages.length ?? 1, 1), 25),
       });
       setScriptPreparationMessage(
-        `Qwen3.8 prepared submission #${submissionId}: ${response.mappings.filter((mapping) => mapping.answer_region_id != null).length} review-only answer regions. Existing submissions and approved grades were not changed.`,
+        `The configured brain prepared submission #${submissionId}: ${response.mappings.filter((mapping) => mapping.answer_region_id != null).length} review-only answer regions. Existing submissions and approved grades were not changed.`,
       );
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to prepare this answer script with local Qwen3.8");
+      setError(err instanceof Error ? err.message : "Failed to prepare this answer script with the configured brain");
     } finally {
       setRunningMappings(false);
     }
@@ -1045,21 +1082,23 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   async function handleLocalQwenGrade(answerRegionId: number) {
     if (!activeGradingRun) {
-      setError("Start a Custom Controlled grading run before local Qwen grading.");
+      setError("Start a Custom Controlled grading run before brain grading.");
       return;
     }
+    if (!requireProviderDataBoundaryConfirmation()) return;
     setGradingRegionId(answerRegionId);
     setError(null);
     try {
-      await gradeAnswerRegionWithLocalQwen38(answerRegionId, {
+      await gradeAnswerRegionWithBrain(answerRegionId, {
         grading_run_id: activeGradingRun.id,
-        provider: "llama_cpp_qwen38",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        provider: localAiStatus?.brain.provider ?? "brain",
+        expected_model: localAiStatus?.brain.model ?? "",
         draft_only_confirmed: true,
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
       });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local Qwen3.8 grading failed");
+      setError(err instanceof Error ? err.message : "Brain grading failed");
     } finally {
       setGradingRegionId(null);
     }
@@ -1067,29 +1106,31 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   async function handleGradeAllApproved() {
     if (!activeGradingRun) {
-      setError("Start a Custom Controlled grading run before local Qwen grading.");
+      setError("Start a Custom Controlled grading run before brain grading.");
       return;
     }
     if (approvedBatchRegionIds.length === 0) {
       setError("No ungraded answer has both approved final-intent transcription and full-answer confirmation.");
       return;
     }
+    if (!requireProviderDataBoundaryConfirmation()) return;
     setGradingAllApproved(true);
     setBatchGradeResult(null);
     setError(null);
     try {
-      const result = await gradeAllApprovedAnswersWithLocalQwen38(assessmentId, {
+      const result = await gradeAllApprovedAnswersWithBrain(assessmentId, {
         grading_run_id: activeGradingRun.id,
-        provider: "llama_cpp_qwen38",
-        expected_model: localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        provider: localAiStatus?.brain.provider ?? "brain",
+        expected_model: localAiStatus?.brain.model ?? "",
         draft_only_confirmed: true,
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         call_limit: Math.min(approvedBatchRegionIds.length, 25),
         stop_on_failure: true,
       });
       setBatchGradeResult(result);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "One-click local Qwen3.8 grading failed");
+      setError(err instanceof Error ? err.message : "One-click brain grading failed");
     } finally {
       setGradingAllApproved(false);
     }
@@ -1097,13 +1138,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
 
   async function handleRunVisualTranscription(mapping: AnswerRegionMapping) {
     if (!mapping.answer_region_id) return;
+    if (!requireProviderDataBoundaryConfirmation()) return;
     const regionId = mapping.answer_region_id;
     setRunningOcrRegionId(regionId);
     setError(null);
     try {
       let run = await createVisualTranscriptionRun(
         regionId,
-        localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        localAiStatus?.brain.model ?? "",
+        localAiStatus?.brain.provider ?? "brain",
+        providerDataBoundaryConfirmed,
       );
       setOcrRunsByRegionId((current) => ({
         ...current,
@@ -1123,7 +1167,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         setError(run.error ?? "Visual transcription did not complete safely.");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Qwen3.8 visual transcription could not start");
+      setError(err instanceof Error ? err.message : "Brain visual transcription could not start");
     } finally {
       setRunningOcrRegionId(null);
     }
@@ -1175,6 +1219,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     sourceRun: AnswerRegionOcrRun,
   ) {
     if (!mapping.answer_region_id) return;
+    if (!requireProviderDataBoundaryConfirmation()) return;
     const regionId = mapping.answer_region_id;
     setRepairingOcrRegionId(regionId);
     setError(null);
@@ -1182,7 +1227,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       let run = await createVisualTranscriptionThinkingRepair(
         regionId,
         sourceRun.id,
-        localAiStatus?.qwen38.model ?? "qwen3.8-27b-q4km",
+        localAiStatus?.brain.model ?? "",
+        localAiStatus?.brain.provider ?? "brain",
+        providerDataBoundaryConfirmed,
       );
       rememberVisualRun(regionId, run);
       for (let attempt = 0; attempt < 360 && ["queued", "running"].includes(run.status); attempt += 1) {
@@ -1196,7 +1243,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         setError(run.error ?? "Thinking repair did not complete safely.");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Qwen3.8 thinking repair could not start");
+      setError(err instanceof Error ? err.message : "Brain thinking repair could not start");
     } finally {
       setRepairingOcrRegionId(null);
     }
@@ -1459,7 +1506,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <p className="mt-2 text-emerald-100">Teacher supplies question, model answer, active rubric, and student answer evidence before grading.</p>
         <p className="mt-1 text-amber-100">Manual answer text is required for V0 reliable grading.</p>
         <p className="mt-1 text-amber-100">Every real-provider result is a draft GradeSuggestion only.</p>
-        <p className="mt-1 text-amber-100">Local Qwen cohort dispatch is available only from the grading-run page after an explicit capped preflight.</p>
+        <p className="mt-1 text-amber-100">Brain cohort dispatch is available only from the grading-run page after an explicit capped preflight.</p>
         <p className="mt-1 text-amber-100">Teacher review is required. No autonomous mode, automatic FinalGrade, or export without teacher approval.</p>
       </section>
 
@@ -1529,7 +1576,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <h2 className="text-xl font-semibold">Step 2 helper: Import questions from reference paper</h2>
           <p className="text-sm text-amber-200">Draft extraction. Teacher review required.</p>
-          <p className="text-sm text-slate-400">Default extraction is mock/simple. The supervised thinking-disabled Qwen3.8 visual reference workflow is available from the Custom Controlled run screen.</p>
+          <p className="text-sm text-slate-400">Default extraction is mock/simple. The supervised visual reference workflow for the configured brain is available from the Custom Controlled run screen.</p>
           <p className="text-sm text-slate-400">Drafts never become canonical until the teacher selects, edits, and accepts them below.</p>
         </div>
         <form onSubmit={handleQuestionImport} className="grid gap-3">
@@ -1541,8 +1588,26 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               onChange={(event) => setQuestionImportProvider(event.target.value as QuestionImportProvider)}
             >
               <option value="mock">Mock/simple (default)</option>
+              {localAiStatus?.brain.available && localAiStatus.brain.capabilities.includes("question_pdf_extraction") ? (
+                <option value="brain">
+                  Configured brain ({localAiStatus.brain.provider} · {localAiStatus.brain.model} · {localAiStatus.brain.location})
+                </option>
+              ) : null}
             </select>
           </label>
+          {questionImportProvider === "brain" && brainCloudDataBoundaryRequired ? (
+            <label className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/20 p-3 text-sm text-amber-100">
+              <input
+                className="mt-1"
+                type="checkbox"
+                checked={providerDataBoundaryConfirmed}
+                onChange={(event) => setProviderDataBoundaryConfirmed(event.target.checked)}
+              />
+              <span>
+                I authorize the configured cloud provider to receive this question paper for draft-only extraction.
+              </span>
+            </label>
+          ) : null}
           <label className="grid gap-2 text-sm">
             Question paper file
             <input
@@ -1558,7 +1623,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           ) : null}
           <button
             className={buttonClass}
-            disabled={importingQuestions || !questionImportFile}
+            disabled={
+              importingQuestions
+              || !questionImportFile
+              || (questionImportProvider === "brain" && !providerDataBoundaryReady)
+            }
             type="submit"
           >
             {importingQuestions ? "Extracting draft questions..." : "Extract draft questions"}
@@ -1935,7 +2004,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <div className="max-w-3xl">
             <h2 className="text-xl font-semibold">Prepare complete answer scripts</h2>
             <p className="mt-1 text-sm text-slate-300">
-              Qwen3.8 vision reads each complete script page and maps one complete answer region to each finalized question, including ordered continuation segments. You do not crop, enter coordinates, or retype an answer.
+              The configured visual brain reads each complete script page and maps one complete answer region to each finalized question, including ordered continuation segments. You do not crop, enter coordinates, or retype an answer.
             </p>
             <p className="mt-1 text-sm text-amber-200">
               Review the prepared image and evidence, then approve or reject it. The finalized question, solution, and rubric are reused automatically and remain read-only here.
@@ -1947,12 +2016,12 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 key={`prepare-submission-${submission.id}`}
                 className={buttonClass}
                 type="button"
-                disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || submission.pages.length === 0}
+                disabled={runningMappings || !localScriptPreparationAuthorized || !providerDataBoundaryReady || !referencesReady || submission.pages.length === 0}
                 onClick={() => void handlePrepareSubmissionWithQwen38(submission.id)}
               >
                 {runningMappings
-                  ? "Qwen3.8 vision is preparing a script..."
-                  : `Prepare submission #${submission.id} with Qwen3.8 vision`}
+                  ? "The visual brain is preparing a script..."
+                  : `Prepare submission #${submission.id} with ${localAiStatus?.brain.provider ?? "the visual brain"}`}
               </button>
             ))}
             {unpreparedSubmissions.length === 0 ? (
@@ -1965,10 +2034,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             <button
               className="rounded border border-amber-700 px-3 py-2 text-sm text-amber-100 hover:border-amber-500"
               type="button"
-              disabled={runningMappings || !localScriptPreparationAuthorized || !referencesReady || pages.length === 0}
+              disabled={runningMappings || !localScriptPreparationAuthorized || !providerDataBoundaryReady || !referencesReady || pages.length === 0}
               onClick={() => void handleRunAutomaticMappings(true)}
             >
-              {runningMappings ? "Repairing unresolved mappings..." : "Repair unconfirmed boundaries with Qwen3.8 vision"}
+              {runningMappings ? "Repairing unresolved mappings..." : "Repair unconfirmed boundaries with the visual brain"}
             </button>
           ) : null}
           {unresolvedMappingSubmissionIds.map((submissionId) => (
@@ -1976,34 +2045,49 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               key={`visual-mapping-rescue-${submissionId}`}
               className="rounded border border-violet-600 px-3 py-2 text-sm text-violet-100 hover:border-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
-              disabled={runningMappings || !localVisualMappingAuthorized}
+              disabled={runningMappings || !localVisualMappingAuthorized || !providerDataBoundaryReady}
               onClick={() => void handleRunVisualMappingRescue(submissionId)}
             >
               {runningMappings
-                ? "Qwen3.8 boundary repair running..."
-                : `Repair submission #${submissionId} boundaries with Qwen3.8 vision`}
+                ? "Visual boundary repair running..."
+                : `Repair submission #${submissionId} boundaries with the visual brain`}
             </button>
           ))}
         </div>
         <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-3">
           <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
           <p>Script pages: {pages.length}</p>
-          <p>Qwen3.8 standalone: {localAiStatus?.qwen38.available ? "ready" : localAiStatus?.qwen38.enabled ? "configured · starts on explicit action" : "disabled"}</p>
+          <p>Brain: {localAiStatus?.brain.available ? `${localAiStatus.brain.provider} · ${localAiStatus.brain.model} · ${localAiStatus.brain.location}` : localAiStatus?.brain.enabled ? "configured" : "disabled"}</p>
         </div>
-        <p className="text-xs text-amber-200">Mapping, transcription, and grading are separate Qwen3.8 calls with fresh context and no retries. Repair preserves teacher-confirmed or graded evidence and never creates a transcript or grade.</p>
+        {brainCloudDataBoundaryRequired ? (
+          <label className="flex items-start gap-3 rounded border border-amber-700/60 bg-amber-950/20 p-3 text-sm text-amber-100">
+            <input
+              className="mt-1"
+              type="checkbox"
+              checked={providerDataBoundaryConfirmed}
+              onChange={(event) => setProviderDataBoundaryConfirmed(event.target.checked)}
+            />
+            <span>
+              I authorize {localAiStatus?.brain.provider ?? "the configured cloud provider"} to
+              receive student answer images, transcriptions, and draft-grading inputs for these
+              explicitly requested calls. No final grade will be created automatically.
+            </span>
+          </label>
+        ) : null}
+        <p className="text-xs text-amber-200">Mapping, transcription, and grading are separate brain calls with fresh context and no retries. Repair preserves teacher-confirmed or graded evidence and never creates a transcript or grade.</p>
         {flatMappings.length > 0 ? (
           <p className="text-xs text-slate-300">
-            Confirmed mappings are protected. Use Qwen3.8 boundary repair only for unconfirmed regions; it cannot replace confirmed evidence and creates no transcript or grade.
+            Confirmed mappings are protected. Use visual boundary repair only for unconfirmed regions; it cannot replace confirmed evidence and creates no transcript or grade.
           </p>
         ) : null}
         {(unresolvedMappingSubmissionIds.length > 0 || unpreparedSubmissions.length > 0) && !localVisualMappingAuthorized ? (
           <p className="rounded border border-violet-900 bg-violet-950/20 p-3 text-sm text-violet-100">
-            Qwen3.8 visual mapping is disabled in the host configuration. It must be explicitly enabled before scripts can be prepared or repaired.
+            Visual mapping is disabled for the configured brain. It must be explicitly enabled before scripts can be prepared or repaired.
           </p>
         ) : null}
         {!localScriptPreparationAuthorized ? (
           <p className="rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-100">
-            Local script preparation is disabled in the host configuration. It must be explicitly enabled for this supervised rehearsal.
+            Script preparation is disabled for the configured brain. It must be explicitly enabled before this supervised workflow can run.
           </p>
         ) : null}
         {scriptPreparationMessage ? (
@@ -2021,11 +2105,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               <button
                 className={buttonClass}
                 type="button"
-                disabled={gradingAllApproved || !localSingleGradeAuthorized || !activeGradingRun || approvedBatchRegionIds.length === 0 || approvedBatchRegionIds.length > 25}
+                disabled={gradingAllApproved || !localSingleGradeAuthorized || !providerDataBoundaryReady || !activeGradingRun || approvedBatchRegionIds.length === 0 || approvedBatchRegionIds.length > 25}
                 onClick={() => void handleGradeAllApproved()}
               >
                 {gradingAllApproved
-                  ? "Qwen3.8 is grading approved answers sequentially..."
+                  ? "The brain is grading approved answers sequentially..."
                   : `Grade all approved transcriptions (${approvedBatchRegionIds.length})`}
               </button>
               <span className="text-xs text-slate-400">Server ceiling: 25 calls · no retries · no automatic final grades</span>
@@ -2041,7 +2125,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           </section>
         ) : null}
         {flatMappings.length === 0 ? (
-          <EmptyState message="No prepared answer mappings yet. Upload the complete script, then run local preparation." />
+          <EmptyState message="No prepared answer mappings yet. Upload the complete script, then run brain-assisted preparation." />
         ) : (
           <div className="grid gap-3">
             {questionNodeMappings.flatMap((group) =>
@@ -2153,7 +2237,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     </div>
                     {blankSafetyGate ? (
                       <p className="rounded border border-emerald-900 bg-emerald-950/20 p-3 text-sm text-emerald-100">
-                        No visible answer was found. This question is excluded from local Qwen grading; no answer text will be fabricated.
+                        No visible answer was found. This question is excluded from brain grading; no answer text will be fabricated.
                       </p>
                     ) : mapping.blocker_reason ? <p className="text-sm text-amber-200">{mapping.blocker_reason}</p> : null}
                     {mapping.answer_region_id ? (
@@ -2211,11 +2295,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                       <section className="grid gap-3 rounded border border-cyan-700 bg-slate-950/50 p-3 text-sm">
                         <div>
                           <p className="font-semibold text-slate-100">
-                            Qwen3.8 visual mapping and grading
+                            Brain-assisted visual mapping and grading
                           </p>
                           <p className="text-xs text-amber-200">Mapping, visible-evidence transcription, cancellation review, and full-answer coverage are separate teacher gates.</p>
                           <p className="text-xs text-slate-300">The thinking-disabled pass preserves visible student writing and only flags possible edits. If crossing, overwriting, or unresolved writing is present, a separate Thinking review must determine the final intended answer. Neither pass repairs the mathematics.</p>
-                          {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm it; use the explicit Qwen3.8 visual boundary rescue for this submission.</p> : null}
+                          {mapping.answer_region?.continuation_check_status === "possible_continuation" ? <p className="mt-2 rounded border border-red-800 bg-red-950/30 p-2 text-xs text-red-100">Incomplete mapping suspected: this crop reaches a page boundary while the next page has unassigned handwriting. Do not confirm it; use the explicit visual boundary rescue for this submission.</p> : null}
                         </div>
                         {!mapping.teacher_confirmed ? (
                           <button className={buttonClass} type="button" disabled={confirmingMappingId === mapping.id || segmentCropsState !== "loaded" || sourcePagesState !== "loaded" || !boundaryReviewed} onClick={() => void handleConfirmMapping(mapping)}>
@@ -2223,14 +2307,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           </button>
                         ) : null}
                         {mapping.teacher_confirmed && (!visualRun || legacyRetranscriptionRequired || failedCurrentRetranscriptionRequired) ? (
-                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
+                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !localAiStatus?.brain.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
                             {runningOcrRegionId === mapping.answer_region_id
-                              ? "Qwen3.8 is resolving corrections and transcribing..."
+                              ? "The brain is resolving corrections and transcribing..."
                               : failedCurrentRetranscriptionRequired
                                 ? "Re-run evidence-preserving transcription"
                                 : legacyRetranscriptionRequired
                                   ? "Re-transcribe with evidence-preserving rules"
-                                  : "Transcribe visible answer evidence with Qwen3.8 vision"}
+                                  : "Transcribe visible answer evidence with the visual brain"}
                           </button>
                         ) : null}
                         {visualRun ? (
@@ -2274,16 +2358,16 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           <button
                             className="rounded border border-violet-500 bg-violet-950/40 px-3 py-2 font-semibold text-violet-100 disabled:opacity-50"
                             type="button"
-                            disabled={repairingOcrRegionId === mapping.answer_region_id || !localAiStatus?.qwen38.thinking_repair_enabled}
+                            disabled={repairingOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !localAiStatus?.brain.thinking_repair_enabled}
                             onClick={() => void handleRunThinkingRepair(mapping, visualRun)}
                           >
                             {repairingOcrRegionId === mapping.answer_region_id
-                              ? "Qwen3.8 Thinking is adjudicating visible edits..."
+                              ? "The brain is adjudicating visible edits..."
                               : thinkingRepairRun?.status === "failed"
                                 ? "Start corrected Thinking repair"
                                 : requiresThinkingRepair
-                                  ? "Finalize surviving work with Qwen3.8 Thinking"
-                                  : "Check final intent with Qwen3.8 Thinking"}
+                                  ? "Finalize surviving work with brain reasoning"
+                                  : "Check final intent with brain reasoning"}
                           </button>
                         ) : null}
                         {thinkingRepairRun ? (
@@ -2344,7 +2428,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           {mapping.answer_region?.full_answer_confirmed ? hasDraftSuggestion ? (
                             <Link className={buttonClass} href={`/assessments/${assessmentId}/review`}>Draft ready — open review queue</Link>
                           ) : (
-                            <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id || !localSingleGradeAuthorized} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "Qwen3.8 is grading..." : "Grade confirmed answer with Qwen3.8"}</button>
+                            <button className={buttonClass} type="button" disabled={gradingRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !localSingleGradeAuthorized} onClick={() => void handleLocalQwenGrade(mapping.answer_region_id!)}>{gradingRegionId === mapping.answer_region_id ? "The brain is grading..." : "Grade confirmed answer with the configured brain"}</button>
                           ) : null}
                         </div> : null}
                       </section>
@@ -2382,7 +2466,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           <p>workflow ready: {expectedMappingCount > 0 && teacherConfirmedMappingCount >= expectedMappingCount && uncertainMappingCount === 0 && blockedMappingCount === 0 ? "yes" : "no"}</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <button className={buttonClass} type="button" disabled={runningMappings || submissions.length === 0 || confirmedQuestionSubquestionNodes.length === 0} onClick={() => void handleRunAutomaticMappings()}>
+          <button className={buttonClass} type="button" disabled={runningMappings || !providerDataBoundaryReady || submissions.length === 0 || confirmedQuestionSubquestionNodes.length === 0} onClick={() => void handleRunAutomaticMappings()}>
             {runningMappings ? "Running mapping..." : "Run automatic mapping"}
           </button>
         </div>
@@ -2448,7 +2532,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         <div>
           <h2 className="text-xl font-semibold">Review prepared answer evidence</h2>
           <p className="text-sm text-slate-400">Review the answer image and model-prepared evidence for each student × grading unit. Multi-page answers stay in reading order and require confirmation before grading.</p>
-          <p className="text-sm text-amber-200">Teacher confirmation is required before local Qwen can create a draft score.</p>
+          <p className="text-sm text-amber-200">Teacher confirmation is required before the brain can create a draft score.</p>
           <p className="mt-1 text-sm text-slate-400">
             Total answer regions: {answerRegions.length} · mapped questions: {mappedQuestionCount}/{questions.length} · unmapped questions: {unmappedQuestionCount} · mapped submissions: {mappedSubmissionCount}/{submissions.length}
           </p>
@@ -2727,7 +2811,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     </p>
                   ) : manualAnswerMissing ? (
                     <p className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-100">
-                      Confirm a faithful Qwen3.8 visual transcription before confirming full-answer coverage.
+                      Confirm a faithful visual transcription before confirming full-answer coverage.
                     </p>
                   ) : null}
                   <div className="flex flex-wrap gap-2">
@@ -2737,24 +2821,24 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     <button className={buttonClass} type="button" disabled={!mappingGeometryConfirmed} onClick={() => void handleEvidenceCorrection(() => confirmAnswerRegionFullAnswer(region.id, { full_answer_confirmed: false, packet_status: "blank" }))}>Mark blank</button>
                   </div>
                   <div className="rounded border border-cyan-800 bg-cyan-950/20 p-3">
-                    <p className="font-semibold text-cyan-100">Local Qwen3.8 draft grading</p>
+                    <p className="font-semibold text-cyan-100">Brain-assisted draft grading</p>
                     <p className="mt-1 text-xs text-slate-300">
-                      Qwen3.8 receives the finalized question, solution, active rubric, and only the teacher-confirmed answer text in a fresh text-only context. It creates a review-required draft and cannot finalize a grade.
+                      The configured brain receives the finalized question, solution, active rubric, and teacher-confirmed answer evidence in a fresh context. It creates a review-required draft and cannot finalize a grade.
                     </p>
                     <button
                       className={`mt-3 ${buttonClass}`}
                       type="button"
-                      disabled={!readyForRealDraftGrading || !localSingleGradeAuthorized || !activeGradingRun || gradingRegionId === region.id || gradedRegionIds.has(region.id) || finalizedRegionIds.has(region.id)}
+                      disabled={!readyForRealDraftGrading || !localSingleGradeAuthorized || !providerDataBoundaryReady || !activeGradingRun || gradingRegionId === region.id || gradedRegionIds.has(region.id) || finalizedRegionIds.has(region.id)}
                       onClick={() => void handleLocalQwenGrade(region.id)}
                     >
                       {gradingRegionId === region.id
-                        ? "Starting Qwen3.8 and grading..."
+                        ? "Starting the brain and grading..."
                         : gradedRegionIds.has(region.id) || finalizedRegionIds.has(region.id)
                           ? "Draft already created"
-                          : "Grade confirmed answer with local Qwen3.8"}
+                          : "Grade confirmed answer with the configured brain"}
                     </button>
                     {!localSingleGradeAuthorized ? (
-                      <p className="mt-2 text-xs text-red-200">Local Qwen3.8 single-answer grading is disabled in the host configuration.</p>
+                      <p className="mt-2 text-xs text-red-200">Single-answer grading is disabled for the configured brain.</p>
                     ) : null}
                   </div>
                 </section>
@@ -2767,7 +2851,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       {answerRegions.length > 0 ? <>
       <details className="rounded border border-slate-800 bg-slate-900 p-5">
         <summary className="cursor-pointer font-semibold text-slate-200">Advanced: batch readiness and queue diagnostics</summary>
-        <p className="mt-2 text-sm text-slate-400">These diagnostics are optional for single-answer supervised local Qwen grading.</p>
+        <p className="mt-2 text-sm text-slate-400">These diagnostics are optional for single-answer supervised brain grading.</p>
         <div className="mt-4 grid gap-4">
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">

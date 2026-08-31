@@ -1,12 +1,13 @@
+import json
 import os
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -61,7 +62,7 @@ CLEANUP_MODELS = (
 )
 
 
-def test_local_single_grade_contract_allows_only_qwen38() -> None:
+def test_single_grade_contract_accepts_any_registered_provider_name() -> None:
     request = LocalQwenGradeRequest.model_validate(
         {
             "grading_run_id": 1,
@@ -72,19 +73,121 @@ def test_local_single_grade_contract_allows_only_qwen38() -> None:
     )
     assert request.provider == "llama_cpp_qwen38"
 
-    with pytest.raises(ValidationError):
-        LocalQwenGradeRequest.model_validate(
-            {
-                "grading_run_id": 1,
-                "provider": "llama_cpp_qwen",
-                "expected_model": "qwen3.6-35b-a3b-q4km",
-                "draft_only_confirmed": True,
-            }
+    generic = LocalQwenGradeRequest.model_validate(
+        {
+            "grading_run_id": 1,
+            "provider": "openai_compatible",
+            "expected_model": "teacher-selected-model",
+            "draft_only_confirmed": True,
+        }
+    )
+    assert generic.provider == "openai_compatible"
+
+
+def test_brain_grade_refuses_cloud_evidence_without_explicit_confirmation(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    monkeypatch.setenv("BRAIN_PROVIDER", "gemini")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_API_KEY", "test-only-gemini-key")
+    monkeypatch.setenv("BRAIN_MODEL", "gemini-test-model")
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
+    get_settings.cache_clear()
+
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-brain",
+        headers=region["_auth_headers"],
+        json={
+            "grading_run_id": 999,
+            "provider": "gemini",
+            "expected_model": "gemini-test-model",
+            "draft_only_confirmed": True,
+            "provider_data_boundary_confirmed": False,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Cloud provider data transfer" in response.json()["detail"]
+
+
+def test_brain_grade_runs_a_gemini_key_profile_through_the_universal_route(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_run = create_brain_grading_run(db_session, region)
+    expected_model = "gemini-test-model"
+    provider_output = GradeSuggestionOutput(
+        score=Decimal("5.00"),
+        max_score=Decimal("5.00"),
+        confidence=Decimal("0.90"),
+        needs_review=True,
+        rubric_breakdown=[
+            RubricBreakdownItem(
+                criterion_id="holistic",
+                criterion="Holistic assessment",
+                max_marks=Decimal("5.00"),
+                awarded_marks=Decimal("5.00"),
+                reason="Answer meets the rubric.",
+                confidence=Decimal("0.90"),
+            )
+        ],
+        detected_answer_summary="Complete answer.",
+        major_errors=[],
+        feedback_to_student="Draft for teacher review.",
+        review_flags=["teacher_review_required"],
+        model_provider="ignored-by-gemini-provider",
+        model_name="ignored-by-gemini-provider",
+        prompt_version="ignored-by-gemini-provider",
+    )
+
+    def fake_generate(_self: object, _contents: object, **_kwargs: object) -> object:
+        return SimpleNamespace(
+            text=json.dumps(provider_output.model_dump(mode="json")),
+            usage_metadata=SimpleNamespace(prompt_token_count=12, candidates_token_count=8),
         )
 
+    monkeypatch.setenv("BRAIN_PROVIDER", "gemini")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_API_KEY", "test-only-gemini-key")
+    monkeypatch.setenv("BRAIN_MODEL", expected_model)
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "packages.brain.gemini_provider.GeminiBrainProvider._generate",
+        fake_generate,
+    )
 
-def test_local_qwen38_grade_route_honors_model_specific_kill_switch(
-    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-brain",
+        headers=region["_auth_headers"],
+        json=controlled_brain_grade_payload(
+            grading_run,
+            provider="gemini",
+            expected_model=expected_model,
+        ),
+    )
+
+    assert response.status_code == 201
+    suggestion = response.json()["suggestion"]
+    assert suggestion["model_provider"] == "gemini"
+    assert suggestion["model_name"] == expected_model
+    assert suggestion["needs_review"] is True
+
+
+@pytest.mark.parametrize("route_suffix", ["grade-brain", "grade-local-qwen38"])
+def test_local_qwen38_grade_routes_honor_model_specific_kill_switch(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route_suffix: str,
 ) -> None:
     region = create_answer_region_with_optional_rubric(client, tmp_path)
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
@@ -95,7 +198,7 @@ def test_local_qwen38_grade_route_honors_model_specific_kill_switch(
     get_settings.cache_clear()
 
     response = client.post(
-        f"/answer-regions/{region['id']}/grade-local-qwen38",
+        f"/answer-regions/{region['id']}/{route_suffix}",
         headers=region["_auth_headers"],
         json={
             "grading_run_id": 1,
@@ -400,6 +503,28 @@ def create_custom_grading_run(db: Session, assessment_id: int) -> GradingRun:
     return run
 
 
+def create_brain_grading_run(db: Session, region: dict[str, object]) -> GradingRun:
+    answer_region = db.get(AnswerRegion, int(region["id"]))
+    assert answer_region is not None
+    return create_custom_grading_run(db, answer_region.submission.assessment_id)
+
+
+def controlled_brain_grade_payload(
+    grading_run: GradingRun,
+    *,
+    provider: str,
+    expected_model: str,
+    provider_data_boundary_confirmed: bool = True,
+) -> dict[str, object]:
+    return {
+        "grading_run_id": grading_run.id,
+        "provider": provider,
+        "expected_model": expected_model,
+        "draft_only_confirmed": True,
+        "provider_data_boundary_confirmed": provider_data_boundary_confirmed,
+    }
+
+
 def enable_local_qwen38_grading(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("LOCAL_SINGLE_ANSWER_GRADING_ENABLED", "true")
@@ -661,12 +786,10 @@ def test_grade_answer_region_creates_job_and_mock_suggestion(
     assert set(raw["review_flags"]) == {
         "mock_provider",
         "teacher_review_required",
-        "grading_crop_padded",
         "marking_policy:general",
     }
     assert raw["marking_policy"] == "general"
-    assert raw["grading_context"]["original_image_path"] == region["image_path"]
-    assert "grading_context" in raw["grading_context"]["answer_image_path"]
+    assert "grading_context" not in raw
     assert [item["criterion_id"] for item in raw["rubric_breakdown"]] == ["concept", "clarity"]
 
     db_session.expire_all()
@@ -1069,34 +1192,35 @@ def test_grade_suggestion_and_job_read_endpoints(client: TestClient, tmp_path: P
     assert job_response.json()["status"] == "succeeded"
 
 
-def test_grade_answer_region_marks_job_failed_on_provider_error(
+def test_legacy_grade_route_stays_mock_when_real_provider_is_configured(
     client: TestClient,
     tmp_path: Path,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FailingAdapter:
-        def grade_answer_region(self, **_: object) -> object:
-            raise RuntimeError("provider failed with key sk-secret-value")
+    initialized = False
 
-    class FailingBrainAdapterFactory:
-        @classmethod
-        def from_settings(cls, settings: object) -> FailingAdapter:
-            return FailingAdapter()
+    def forbidden_provider(**_kwargs: object) -> object:
+        nonlocal initialized
+        initialized = True
+        raise AssertionError("legacy mock route must not initialize a real provider")
 
+    monkeypatch.setenv("BRAIN_PROVIDER", "gemini")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_API_KEY", "test-only-key")
+    monkeypatch.setenv("BRAIN_MODEL", "gemini-test-model")
+    get_settings.cache_clear()
+    monkeypatch.setattr("packages.brain.adapter.GeminiBrainProvider", forbidden_provider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
-    monkeypatch.setattr("app.services.grading_service.BrainAdapter", FailingBrainAdapterFactory)
 
     response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
 
-    assert response.status_code == 502
-    assert "provider failed" in response.text
-    assert "sk-secret-value" not in response.text
+    assert response.status_code == 201
+    assert response.json()["suggestion"]["model_provider"] == "mock"
+    assert initialized is False
     db_session.expire_all()
     job = db_session.scalars(select(GradingJob)).one()
-    assert job.status == "failed"
-    assert job.error is not None
-    assert "sk-secret-value" not in job.error
+    assert job.status == "succeeded"
 
 
 def test_grade_answer_region_with_mocked_openai_image_input_creates_suggestion(
@@ -1127,11 +1251,22 @@ def test_grade_answer_region_with_mocked_openai_image_input_creates_suggestion(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-test")
     monkeypatch.setenv("OPENAI_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.OpenAICompatibleProvider", provider_factory)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_run = create_brain_grading_run(db_session, region)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-brain",
+        headers=region["_auth_headers"],
+        json=controlled_brain_grade_payload(
+            grading_run,
+            provider="openai",
+            expected_model="gpt-test",
+        ),
+    )
 
     assert response.status_code == 201
     suggestion = response.json()["suggestion"]
@@ -1255,15 +1390,24 @@ def test_unwritable_grading_context_blocks_before_provider_call(
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_run = create_brain_grading_run(db_session, region)
     grading_context_root = tmp_path / "storage" / "artifacts" / "grading_context"
     grading_context_root.mkdir(parents=True, exist_ok=True)
     grading_context_root.chmod(0o500)
     try:
         response = client.post(
-            f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"]
+            f"/answer-regions/{region['id']}/grade-brain",
+            headers=region["_auth_headers"],
+            json=controlled_brain_grade_payload(
+                grading_run,
+                provider="codex_cli",
+                expected_model="codex-cli",
+            ),
         )
     finally:
         grading_context_root.chmod(0o700)
@@ -1297,12 +1441,23 @@ def test_grade_answer_region_with_codex_cli_mocked_subprocess_creates_suggestion
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FakeCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_run = create_brain_grading_run(db_session, region)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-brain",
+        headers=region["_auth_headers"],
+        json=controlled_brain_grade_payload(
+            grading_run,
+            provider="codex_cli",
+            expected_model="codex-cli",
+        ),
+    )
 
     assert response.status_code == 201
     payload = response.json()
@@ -1335,11 +1490,22 @@ def test_grade_answer_region_codex_cli_subprocess_failure_marks_job_failed(
 
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", FailingCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_run = create_brain_grading_run(db_session, region)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-brain",
+        headers=region["_auth_headers"],
+        json=controlled_brain_grade_payload(
+            grading_run,
+            provider="codex_cli",
+            expected_model="codex-cli",
+        ),
+    )
 
     assert response.status_code == 502
     assert "Codex CLI exited with status 2" in response.text
@@ -1370,11 +1536,22 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
     monkeypatch.setenv("BRAIN_PROVIDER", "codex_cli")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("CODEX_CLI_IMAGE_INPUT_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_SINGLE_ANSWER_GRADING_ENABLED", "true")
+    monkeypatch.setenv("BRAIN_GRADING_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr("packages.brain.adapter.CodexCliProvider", ImageUnsupportedCodexCliProvider)
     region = create_answer_region_with_optional_rubric(client, tmp_path)
+    grading_run = create_brain_grading_run(db_session, region)
 
-    response = client.post(f"/answer-regions/{region['id']}/grade", headers=region["_auth_headers"])
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-brain",
+        headers=region["_auth_headers"],
+        json=controlled_brain_grade_payload(
+            grading_run,
+            provider="codex_cli",
+            expected_model="codex-cli",
+        ),
+    )
 
     assert response.status_code == 502
     assert "image input is not supported" in response.text

@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from app.core.config import Settings, get_settings
 from app.schemas import DraftQuestion
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.capabilities import BrainCapability
 
 QUESTION_PATTERN = re.compile(
     r"^\s*(?:Q\.?\s*|Question\s+)?(?P<number>\d+)[\.)\:]?\s*(?P<text>.*)$",
@@ -203,8 +204,31 @@ class CodexQuestionExtractor(QuestionExtractor):
         return _normalize_codex_result(parsed)
 
 
-class ProviderQuestionExtractor(CodexQuestionExtractor):
-    pass
+class ProviderQuestionExtractor:
+    def __init__(self, *, settings: Settings, requested_provider: str) -> None:
+        resolved = (
+            settings.brain_provider
+            if requested_provider in {"brain", "active"}
+            else requested_provider
+        )
+        try:
+            self.adapter = BrainAdapter.for_provider(settings, resolved)
+            self.adapter.require_capability(BrainCapability.QUESTION_PDF_EXTRACTION)
+        except BrainProviderConfigurationError as exc:
+            if str(exc).startswith("Unsupported BRAIN_PROVIDER:"):
+                raise CodexQuestionExtractionError(
+                    f"Unsupported question import provider: {requested_provider}"
+                ) from exc
+            raise CodexQuestionExtractionError(str(exc)) from exc
+        self.provider = self.adapter.runtime.provider
+
+    def extract(self, file_path: Path, content_type: str) -> QuestionExtractionResult:
+        del content_type
+        try:
+            result = self.adapter.extract_questions_from_document(str(file_path))
+        except Exception as exc:
+            raise CodexQuestionExtractionError(str(exc)) from exc
+        return _normalize_provider_result(result)
 
 
 
@@ -325,7 +349,10 @@ def build_question_extractor(
             "local_paddle_qwen provider has been removed. "
             "Visual question import will be provided by Qwen3.8."
         )
-    raise CodexQuestionExtractionError(f"Unsupported question import provider: {provider}")
+    return ProviderQuestionExtractor(
+        settings=resolved_settings,
+        requested_provider=provider,
+    )
 
 def extract_text_lines(file_path: Path, content_type: str) -> list[tuple[int, str]]:
     if content_type == "application/pdf":

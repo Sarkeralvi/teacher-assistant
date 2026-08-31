@@ -215,6 +215,32 @@ def test_openai_provider_without_image_input_does_not_include_image_payload() ->
     assert "image_input_disabled" in result.review_flags
 
 
+def test_openai_compatible_prompt_only_mode_omits_response_format() -> None:
+    client = FakeOpenAIClient(valid_openai_payload())
+    provider = OpenAICompatibleProvider(
+        api_key="",
+        model_name="local-test-model",
+        base_url="http://127.0.0.1:9000/v1",
+        client=client,
+        structured_output_mode="prompt_only",
+    )
+
+    provider.grade(
+        task_name="answer_region_grading",
+        model_policy=ModelPolicy.REAL_GRADING,
+        messages=[],
+        question_text="Explain the concept.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="artifacts/region.png",
+        prompt_version=get_prompt_version(ModelPolicy.REAL_GRADING),
+    )
+
+    request_json = client.requests[0]["json"]
+    assert isinstance(request_json, dict)
+    assert "response_format" not in request_json
+
+
 def test_openai_provider_with_image_input_includes_data_url_payload() -> None:
     client = FakeOpenAIClient(valid_openai_payload())
     provider = OpenAICompatibleProvider(

@@ -17,16 +17,19 @@ from app.schemas import (
     QuestionImportAcceptResponse,
     QuestionImportJobRead,
 )
+from app.services.brain_execution import hold_brain_execution
 from app.services.question_import_extractor import (
     CodexQuestionExtractionError,
     build_question_extractor,
 )
 from app.services.storage import LocalStorage
+from packages.brain.capabilities import BrainExecutionLocation
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 QuestionImportFile = Annotated[UploadFile, File(...)]
 QuestionImportProvider = Annotated[str | None, Form()]
+ProviderDataBoundaryConfirmed = Annotated[bool, Form()]
 
 router = APIRouter(tags=["question-imports"])
 
@@ -48,6 +51,7 @@ def create_question_import(
     current_user: CurrentUser,
     file: QuestionImportFile,
     provider: QuestionImportProvider = None,
+    provider_data_boundary_confirmed: ProviderDataBoundaryConfirmed = False,
 ) -> QuestionImportJob:
     get_owned_assessment_or_404(assessment_id, db, current_user)
     suffix = ALLOWED_CONTENT_TYPES.get(file.content_type or "")
@@ -57,14 +61,25 @@ def create_question_import(
             detail="Question paper must be a PDF, PNG, JPG, or JPEG file",
         )
 
-    storage = LocalStorage()
-    stored = storage.save_question_import(file, assessment_id, suffix)
     try:
         extractor = build_question_extractor(
             settings=get_settings(), requested_provider=provider
         )
     except CodexQuestionExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    adapter = getattr(extractor, "adapter", None)
+    if (
+        adapter is not None
+        and adapter.runtime.location is BrainExecutionLocation.CLOUD
+        and not provider_data_boundary_confirmed
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cloud provider data transfer must be explicitly confirmed",
+        )
+
+    storage = LocalStorage()
+    stored = storage.save_question_import(file, assessment_id, suffix)
     job = QuestionImportJob(
         assessment_id=assessment_id,
         status="uploaded",
@@ -78,7 +93,17 @@ def create_question_import(
     db.add(job)
     db.flush()
     try:
-        result = extractor.extract(stored.absolute_path, job.content_type)
+        if adapter is None:
+            result = extractor.extract(stored.absolute_path, job.content_type)
+        else:
+            with hold_brain_execution(
+                db=db,
+                settings=get_settings(),
+                adapter=adapter,
+                holder_kind="question_import",
+                holder_id=f"question_import:{job.id}",
+            ):
+                result = extractor.extract(stored.absolute_path, job.content_type)
         job.draft_questions = [draft.model_dump(mode="json") for draft in result.draft_questions]
         job.provider_warnings = result.warnings
         job.status = "drafted"

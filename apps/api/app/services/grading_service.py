@@ -1,4 +1,3 @@
-import re
 import statistics
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -25,11 +24,13 @@ from app.services.answer_region_processing import (
     create_composite_grading_context_image,
     crop_grading_context_image,
 )
+from app.services.brain_execution import hold_brain_execution
 from app.services.grading_integrity import canonical_json_hash, rubric_snapshot_hash
-from app.services.local_ai_phase_manager import LocalAiPhaseManager
-from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
+from app.services.local_model_lease_service import LocalModelLeaseError
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter
+from packages.brain.adapter import sanitize_provider_error as sanitize_brain_provider_error
+from packages.brain.policy import normalize_brain_adapter
 from packages.brain.schemas_qwen38 import (
     SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS,
     SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS,
@@ -42,14 +43,9 @@ class GradingEvidenceChangedError(RuntimeError):
     """Raised when evidence changes while a local model is being prepared."""
 
 
-
-_API_KEY_PATTERN = re.compile(r"(?:sk|key)-[A-Za-z0-9_\-]+", re.IGNORECASE)
-_DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+")
-
-
 def sanitize_provider_error(message: str) -> str:
-    without_keys = _API_KEY_PATTERN.sub("[REDACTED]", message)
-    return _DATA_URL_PATTERN.sub("[IMAGE_DATA_REDACTED]", without_keys)
+    return sanitize_brain_provider_error(message)
+
 
 def _decimal_or_none(value: object) -> Decimal | None:
     if value is None:
@@ -138,6 +134,15 @@ class GradingService:
                 if use_configured_adapter
                 else BrainAdapter()
             )
+        provider_name = str(
+            getattr(getattr(self.adapter, "provider", None), "provider_name", "mock")
+            or "mock"
+        )
+        self.adapter = normalize_brain_adapter(
+            self.adapter,
+            settings=get_settings(),
+            requested_provider=provider_name,
+        )
 
     def grade_answer_region(
         self, answer_region_id: int, *, marking_policy: str = "general"
@@ -389,6 +394,22 @@ class GradingService:
             self.adapter = original_adapter
 
     def grade_assessment_ungraded_regions_mock(
+        self, assessment_id: int, *, marking_policy: str = "general"
+    ) -> dict[str, object]:
+        # This service is also called by compatibility routes.  Enforce the
+        # method's mock-only name here instead of relying on every caller to
+        # construct the service with a mock adapter.
+        original_adapter = self.adapter
+        self.adapter = BrainAdapter()
+        try:
+            return self._grade_assessment_ungraded_regions_mock(
+                assessment_id,
+                marking_policy=marking_policy,
+            )
+        finally:
+            self.adapter = original_adapter
+
+    def _grade_assessment_ungraded_regions_mock(
         self, assessment_id: int, *, marking_policy: str = "general"
     ) -> dict[str, object]:
         if self.db.get(Assessment, assessment_id) is None:
@@ -700,16 +721,18 @@ class GradingService:
         evidence_packet_hash = canonical_json_hash(
             self.get_grading_evidence_packet(region.id)
         )
+        provider_name = str(
+            getattr(getattr(self.adapter, "provider", None), "provider_name", "mock")
+            or "mock"
+        )
+        self.adapter = normalize_brain_adapter(
+            self.adapter,
+            settings=settings,
+            requested_provider=provider_name,
+        )
 
-        # Local Qwen providers grade only teacher-confirmed text. Generating a
-        # crop or composite here is unnecessary, creates a second student-data
-        # artifact, and can fail on deeply nested Windows evaluation paths
-        # before the text-only provider is ever called.
-        provider_name = getattr(getattr(self.adapter, "provider", None), "provider_name", "")
-        if provider_name in {
-            "llama_cpp_qwen",
-            "llama_cpp_qwen38",
-        }:
+        # Text-only providers do not need a second student-data artifact.
+        if not self.adapter.image_input_enabled:
             grading_answer_image_path = "[image input disabled]"
             grading_context: dict[str, object] | None = None
         else:
@@ -725,49 +748,31 @@ class GradingService:
         self.db.commit()
         self.db.refresh(job)
 
-        lease: LocalModelLeaseService | None = None
-        lease_holder_id: str | None = None
-        lease_acquired = False
         try:
-            phase = self._local_model_phase()
-            if phase is not None:
-                lease_holder_id = f"grading_job:{job.id}:{uuid4().hex}"
-                lease = LocalModelLeaseService(self.db)
-                lease.acquire(
-                    model_phase=phase,
-                    holder_kind="grading",
-                    holder_id=lease_holder_id,
-                )
-                lease_acquired = True
-                if settings.local_ai_phase_switch_enabled:
-                    LocalAiPhaseManager(settings=settings, db=self.db).switch(
-                        phase, lease_holder_id=lease_holder_id
-                    )
-                self.adapter.verify_available_model()
-                lease.heartbeat(holder_id=lease_holder_id)
-                if (
+            lease_holder_id = f"grading_job:{job.id}:{uuid4().hex}"
+            with hold_brain_execution(
+                db=self.db,
+                settings=settings,
+                adapter=self.adapter,
+                holder_kind="grading",
+                holder_id=lease_holder_id,
+            ) as execution:
+                if self.adapter.runtime.is_managed_local and (
                     canonical_json_hash(self.get_grading_evidence_packet(region.id))
                     != evidence_packet_hash
                 ):
                     raise GradingEvidenceChangedError(
-                        "Grading evidence changed while local Qwen was starting"
+                        "Grading evidence changed while the brain provider was starting"
                     )
-            adapter_output = self.adapter.grade_answer_region(
-                question_text=question_text,
-                question_total_marks=question_total_marks,
-                rubric_json=rubric_payload,
-                answer_image_path=grading_answer_image_path,
-                student_answer_text=student_answer_text,
-                marking_policy=marking_policy,
-            )
-            if lease is not None and lease_holder_id is not None:
-                lease.heartbeat(holder_id=lease_holder_id)
-                # The provider is finished. Release before committing the
-                # terminal job/suggestion so an API process interruption after
-                # that commit cannot leave every later teacher action blocked
-                # by an idle model slot until the lease expires.
-                lease.release(holder_id=lease_holder_id)
-                lease_acquired = False
+                adapter_output = self.adapter.grade_answer_region(
+                    question_text=question_text,
+                    question_total_marks=question_total_marks,
+                    rubric_json=rubric_payload,
+                    answer_image_path=grading_answer_image_path,
+                    student_answer_text=student_answer_text,
+                    marking_policy=marking_policy,
+                )
+                execution.heartbeat()
             output = adapter_output.model_dump(mode="json")
             grade_result = {
                 "score": output.get("score"),
@@ -867,7 +872,7 @@ class GradingService:
                 self.db.commit()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Grading evidence changed while local Qwen was starting",
+                detail="Grading evidence changed while the brain provider was starting",
             ) from exc
         except Exception as exc:
             self.db.rollback()
@@ -882,17 +887,9 @@ class GradingService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"AI provider failed: {sanitized_error}",
             ) from exc
-        finally:
-            if lease_acquired and lease is not None and lease_holder_id is not None:
-                lease.release(holder_id=lease_holder_id)
 
     def _local_model_phase(self) -> str | None:
-        provider_name = getattr(self.adapter.provider, "provider_name", "")
-        if provider_name == "llama_cpp_qwen":
-            return "Qwen"
-        if provider_name == "llama_cpp_qwen38":
-            return "Qwen38"
-        return None
+        return self.adapter.runtime.managed_local_phase
 
     def _prepare_grading_context(
         self,
@@ -1009,16 +1006,30 @@ class GradingService:
         return self.db.scalars(statement).first()
 
     def _requires_final_intent_transcription(self, region: AnswerRegion) -> bool:
-        return self.db.scalar(
-            select(AnswerRegionMapping.id).where(
+        mappings = self.db.scalars(
+            select(AnswerRegionMapping).where(
                 AnswerRegionMapping.answer_region_id == region.id,
-                AnswerRegionMapping.provider == "llama_cpp_qwen38",
                 (
                     AnswerRegionMapping.teacher_confirmed.is_(True)
                     | AnswerRegionMapping.bulk_policy_verified.is_(True)
                 ),
             )
-        ) is not None
+        ).all()
+        return any(
+            (
+                (mapping.source_reference or {}).get("text_source")
+                in {
+                    "brain_visual_mapping_pending_transcription",
+                    "qwen38_visual_mapping_pending_transcription",
+                }
+                or mapping.provider
+                in {
+                    "llama_cpp_qwen38",
+                    "local_qwen38_visual",
+                }
+            )
+            for mapping in mappings
+        )
 
     def _confirmed_final_intent_run(
         self, region: AnswerRegion

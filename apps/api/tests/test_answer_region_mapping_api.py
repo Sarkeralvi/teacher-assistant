@@ -627,6 +627,7 @@ def test_thinking_repair_route_is_owned_explicit_and_enqueued_without_retry(
 
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "key-local-test")
     monkeypatch.setenv("LOCAL_QWEN38_TRANSCRIPTION_ENABLED", "true")
     monkeypatch.setenv("LOCAL_QWEN38_THINKING_REPAIR_ENABLED", "true")
     get_settings.cache_clear()

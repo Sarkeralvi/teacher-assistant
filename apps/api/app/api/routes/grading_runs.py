@@ -45,6 +45,9 @@ from app.services.reference_extraction_service import (
 from app.services.storage import LocalStorage
 from app.worker.jobs import run_reference_extraction_job
 from app.worker.rq_app import get_default_queue
+from packages.brain.adapter import BrainProviderConfigurationError
+from packages.brain.capabilities import BrainExecutionLocation
+from packages.brain.policy import brain_policy_from_settings
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -682,12 +685,28 @@ def start_reference_extraction(
     current_user: CurrentUser,
 ) -> dict[str, Any]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    try:
+        policy = brain_policy_from_settings(
+            get_settings(),
+            requested_provider=payload.provider,
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if (
+        policy.location is BrainExecutionLocation.CLOUD
+        and not payload.provider_data_boundary_confirmed
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cloud provider data transfer must be explicitly confirmed",
+        )
     service = ReferenceExtractionService(db)
     try:
         result = service.create(
             grading_run,
             teacher_id=current_user.id,
             expected_model=payload.expected_model,
+            provider=payload.provider,
         )
     except ReferenceExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -695,7 +714,7 @@ def start_reference_extraction(
         get_default_queue().enqueue(
             run_reference_extraction_job,
             grading_run.id,
-            job_timeout=get_settings().local_reference_job_timeout_seconds,
+            job_timeout=policy.job_timeout_seconds,
         )
     except Exception as exc:
         service.mark_enqueue_failed(grading_run.id)
@@ -831,7 +850,9 @@ def grade_grading_run_ready_regions_mock(
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
     require_grading_mode_available(grading_run.mode)
     ensure_grading_ready(grading_run, db)
-    result = GradingService(db).grade_assessment_ungraded_regions_mock(
+    result = GradingService(
+        db, use_configured_adapter=False
+    ).grade_assessment_ungraded_regions_mock(
         grading_run.assessment_id,
         marking_policy=grading_run.marking_policy,
     )

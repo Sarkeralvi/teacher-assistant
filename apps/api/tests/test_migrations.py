@@ -8,7 +8,7 @@ from sqlalchemy import CheckConstraint
 
 from app.models import Base
 
-EXPECTED_REVISION_ID = "0026_bulk_supervised_evaluation"
+EXPECTED_REVISION_ID = "0027_universal_brain"
 WIDENING_REVISION_ID = "0024_model_lease_page_evidence"
 
 
@@ -46,11 +46,6 @@ def test_initial_alembic_migration_exists_and_is_importable() -> None:
     ("table_name", "constraint_name", "migration_attribute"),
     [
         (
-            "extraction_runs",
-            "ck_extraction_runs_provider",
-            "_EXTRACTION_PROVIDERS_NEW",
-        ),
-        (
             "answer_region_ocr_candidates",
             "ck_ocr_candidate_engine",
             "_CANDIDATE_ENGINES_NEW",
@@ -71,3 +66,14 @@ def test_widened_check_constraints_match_the_migration_that_widened_them(
     metadata_values = _quoted_values(_metadata_constraint(table_name, constraint_name))
 
     assert metadata_values == migration_values
+
+
+def test_extraction_provider_is_not_a_database_enum() -> None:
+    table = Base.metadata.tables["extraction_runs"]
+    names = {
+        constraint.name
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "ck_extraction_runs_provider" not in names

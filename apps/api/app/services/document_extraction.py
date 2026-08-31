@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.models import ExtractionRun, QuestionNode, RubricExtractionCriterion
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.capabilities import BrainCapability
 
 QUESTION_PAPER_EXTRACTION_TYPE = "question_paper"
 RUBRIC_EXTRACTION_TYPE = "rubric"
@@ -26,10 +27,6 @@ MOCK_EXTRACTION_PROVIDER = "mock"
 DISABLED_EXTRACTION_PROVIDER = "disabled"
 
 _NODE_TYPES = {"question", "subquestion", "instruction"}
-_ALLOWED_PROVIDERS = {
-    MOCK_EXTRACTION_PROVIDER,
-    DISABLED_EXTRACTION_PROVIDER,
-    }
 _ALLOWED_CONTENT_TYPES = {
     "application/pdf": ".pdf",
     "image/png": ".png",
@@ -71,6 +68,7 @@ class RubricCriterionPayload(BaseModel):
     description: str = Field(min_length=1)
     max_marks: Decimal | None = Field(default=None, ge=Decimal("0"))
     confidence: Decimal | None = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
+
 
 class QuestionPaperExtractionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -134,25 +132,38 @@ class MockDocumentExtractor(DocumentExtractor):
 
 
 class ProviderDocumentExtractor(DocumentExtractor):
-    provider = "gemini"
+    def __init__(self, *, settings: Settings, requested_provider: str) -> None:
+        self.settings = settings
+        resolved = (
+            settings.brain_provider
+            if requested_provider in {"brain", "active"}
+            else requested_provider
+        )
+        try:
+            self.adapter = BrainAdapter.for_provider(settings, resolved)
+        except BrainProviderConfigurationError as exc:
+            if str(exc).startswith("Unsupported BRAIN_PROVIDER:"):
+                raise DocumentExtractionError(
+                    f"Unsupported extraction provider: {requested_provider}"
+                ) from exc
+            raise DocumentExtractionError(str(exc)) from exc
+        self.provider = self.adapter.runtime.provider
 
     def extract(
         self, file_path: Path, extraction_type: str, content_type: str
     ) -> ExtractionProviderResult:
-        try:
-            adapter = BrainAdapter.from_settings(get_settings())
-        except BrainProviderConfigurationError as e:
-            raise HTTPException(status_code=503, detail=f"AI provider unavailable: {e}") from e
         pdf_path = str(file_path)
         try:
             if extraction_type == QUESTION_PAPER_EXTRACTION_TYPE:
-                ai_result = adapter.extract_questions_from_document(pdf_path)
+                self.adapter.require_capability(BrainCapability.QUESTION_PDF_EXTRACTION)
+                ai_result = self.adapter.extract_questions_from_document(pdf_path)
                 result_key = "questions"
                 zero_detail = (
                     "AI extracted zero questions. Check the PDF quality or page content."
                 )
             elif extraction_type == RUBRIC_EXTRACTION_TYPE:
-                ai_result = adapter.extract_rubric_from_document(pdf_path)
+                self.adapter.require_capability(BrainCapability.RUBRIC_PDF_EXTRACTION)
+                ai_result = self.adapter.extract_rubric_from_document(pdf_path)
                 result_key = "criteria"
                 zero_detail = (
                     "AI extracted zero rubric criteria. Check the PDF quality or "
@@ -166,16 +177,19 @@ class ProviderDocumentExtractor(DocumentExtractor):
             raise HTTPException(status_code=422, detail=str(e)) from e
         except NotImplementedError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
+        except BrainProviderConfigurationError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except DocumentExtractionError:
             raise
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"AI provider unavailable: {e}") from e
         if not ai_result.get(result_key):
             raise HTTPException(status_code=422, detail=zero_detail)
+        normalized = _normalize_provider_document_result(extraction_type, ai_result)
         return ExtractionProviderResult(
             raw_output=json.dumps(ai_result),
-            normalized_output=ai_result,
-            blockers=ai_result.get("warnings", []),
+            normalized_output=normalized,
+            blockers=normalized.get("blockers", []),
         )
 
 
@@ -252,14 +266,15 @@ def build_document_extractor(
             bridge_command=resolved_settings.codex_extraction_bridge_command,
             timeout_seconds=resolved_settings.codex_cli_timeout_seconds,
         )
-    if provider == "gemini":
-        return ProviderDocumentExtractor()
     if provider == "local_paddle_qwen":
         raise DocumentExtractionError(
             "local_paddle_qwen provider has been removed. "
             "Visual document extraction will be provided by Qwen3.8."
         )
-    raise DocumentExtractionError(f"Unsupported extraction provider: {provider}")
+    return ProviderDocumentExtractor(
+        settings=resolved_settings,
+        requested_provider=provider,
+    )
 
 
 def validate_normalized_output(extraction_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -267,6 +282,95 @@ def validate_normalized_output(extraction_type: str, payload: dict[str, Any]) ->
         return QuestionPaperExtractionPayload.model_validate(payload).model_dump(mode="json")
     if extraction_type == RUBRIC_EXTRACTION_TYPE:
         return RubricExtractionPayload.model_validate(payload).model_dump(mode="json")
+    raise DocumentExtractionError(f"Unsupported extraction type: {extraction_type}")
+
+
+def _normalize_provider_document_result(
+    extraction_type: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Translate a provider's compact tree into the application's stable schema."""
+
+    if extraction_type == QUESTION_PAPER_EXTRACTION_TYPE:
+        if "question_nodes" in payload:
+            return validate_normalized_output(extraction_type, payload)
+        nodes: list[dict[str, Any]] = []
+
+        def add_question(raw: object, parent: str | None = None) -> None:
+            if not isinstance(raw, dict):
+                raise ValueError("Provider question entries must be JSON objects")
+            number = str(raw.get("question_number") or raw.get("label") or "").strip()
+            question_text = str(raw.get("question_text") or raw.get("text") or "").strip()
+            if not number or not question_text:
+                raise ValueError("Every extracted question needs a number and text")
+            nodes.append(
+                {
+                    "question_number": number,
+                    "parent_question_number": parent,
+                    "label": str(raw.get("label") or number).strip(),
+                    "text": question_text,
+                    "marks": raw.get("marks"),
+                    "node_type": "subquestion" if parent else "question",
+                    "source_page": raw.get("source_page"),
+                    "source_reference": raw.get("source_reference"),
+                    "confidence": raw.get("confidence"),
+                    "teacher_confirmed": False,
+                }
+            )
+            children = raw.get("sub_questions") or raw.get("children") or []
+            if not isinstance(children, list):
+                raise ValueError("Provider sub_questions must be a JSON list")
+            for child in children:
+                add_question(child, number)
+
+        for question in payload.get("questions") or []:
+            add_question(question)
+        return validate_normalized_output(
+            extraction_type,
+            {
+                "question_nodes": nodes,
+                "blockers": [str(item) for item in payload.get("warnings") or []],
+            },
+        )
+
+    if extraction_type == RUBRIC_EXTRACTION_TYPE:
+        criteria: list[dict[str, Any]] = []
+
+        def add_criterion(raw: object) -> None:
+            if not isinstance(raw, dict):
+                raise ValueError("Provider rubric entries must be JSON objects")
+            description = str(
+                raw.get("description") or raw.get("criterion_text") or ""
+            ).strip()
+            if not description:
+                raise ValueError("Every extracted rubric criterion needs a description")
+            number = str(raw.get("question_number") or "").strip() or None
+            label = str(raw.get("criterion_label") or number or description[:255]).strip()
+            criteria.append(
+                {
+                    "question_number": number,
+                    "criterion_label": label,
+                    "description": description,
+                    "max_marks": raw.get("max_marks"),
+                    "confidence": raw.get("confidence"),
+                }
+            )
+            children = raw.get("sub_criteria") or raw.get("children") or []
+            if not isinstance(children, list):
+                raise ValueError("Provider sub_criteria must be a JSON list")
+            for child in children:
+                add_criterion(child)
+
+        for criterion in payload.get("criteria") or []:
+            add_criterion(criterion)
+        return validate_normalized_output(
+            extraction_type,
+            {
+                "criteria": criteria,
+                "blockers": [str(item) for item in payload.get("warnings") or []],
+            },
+        )
+
     raise DocumentExtractionError(f"Unsupported extraction type: {extraction_type}")
 
 

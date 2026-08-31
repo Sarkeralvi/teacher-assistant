@@ -31,6 +31,8 @@ from app.services.grading_integrity import rubric_snapshot_hash
 from app.services.grading_queue_service import GradingQueueService
 from app.services.grading_service import GradingService, sanitize_provider_error
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.capabilities import BrainCapability
+from packages.brain.policy import brain_policy_from_settings
 
 
 class GradingDispatchService:
@@ -80,8 +82,8 @@ class GradingDispatchService:
             assessment_id=assessment_id,
             question_id=question_id,
             created_by_teacher_id=teacher_id,
-            provider=request.provider,
-            model_name=request.expected_model,
+            provider=str(context["provider"]),
+            model_name=str(context["model_name"]),
             marking_policy=grading_run.marking_policy,
             maximum_calls=request.call_limit,
             draft_only_confirmed=request.draft_only_confirmed,
@@ -139,8 +141,8 @@ class GradingDispatchService:
                     "queue_run_id": queue_run.id,
                     "grading_run_id": grading_run.id,
                     "question_id": question_id,
-                    "provider": request.provider,
-                    "model": request.expected_model,
+                    "provider": context["provider"],
+                    "model": context["model_name"],
                     "maximum_calls": request.call_limit,
                     "selected_count": run.selected_count,
                     "draft_only_confirmed": True,
@@ -477,9 +479,34 @@ class GradingDispatchService:
                 detail="Question must have exactly one active rubric",
             )
         try:
-            adapter = BrainAdapter.for_provider(self.settings, request.provider)
+            policy = brain_policy_from_settings(
+                self.settings,
+                requested_provider=request.provider,
+            )
+            policy.validate_request(
+                requested_provider=request.provider,
+                expected_model=request.expected_model,
+                capability=BrainCapability.GRADING,
+                feature_enabled=self.settings.cohort_model_grading_enabled,
+            )
         except BrainProviderConfigurationError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            detail = str(exc)
+            status_code = (
+                status.HTTP_409_CONFLICT
+                if "Expected model does not match" in detail
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        try:
+            policy.require_data_boundary_confirmation(
+                confirmed=request.provider_data_boundary_confirmed
+            )
+        except BrainProviderConfigurationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        adapter = policy.adapter
         actual_model = getattr(adapter.provider, "model_name", "")
         if request.expected_model != actual_model:
             raise HTTPException(
@@ -508,7 +535,7 @@ class GradingDispatchService:
             "grading_run": grading_run,
             "question": question,
             "rubric": rubrics[0],
-            "provider": request.provider,
+            "provider": adapter.runtime.provider,
             "model_name": actual_model,
         }
 

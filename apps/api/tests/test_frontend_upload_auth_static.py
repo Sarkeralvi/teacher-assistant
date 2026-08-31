@@ -83,6 +83,28 @@ def test_controlled_grading_upload_refreshes_material_state_after_success() -> N
     assert "getReferenceExtraction(updated.id)" in upload_handler
 
 
+def test_cloud_transfer_confirmation_is_carried_from_teacher_actions() -> None:
+    api_source = _read(WEB_API)
+    reference_start = api_source.index("export function startReferenceExtraction")
+    reference_end = api_source.index("export function listAnswerRegionTranscriptionRuns")
+    reference_helper = api_source[reference_start:reference_end]
+    assert "provider_data_boundary_confirmed: providerDataBoundaryConfirmed" in reference_helper
+    assert 'brain.location === "cloud"' not in reference_helper
+
+    bulk_start = api_source.index("export function createBulkEvaluationRun")
+    bulk_end = api_source.index("export function getBulkEvaluationRun")
+    bulk_helper = api_source[bulk_start:bulk_end]
+    assert "String(payload.provider_data_boundary_confirmed)" in bulk_helper
+    assert 'String(payload.location === "cloud")' not in bulk_helper
+
+    controlled_source = _read(CONTROLLED_WIZARD)
+    assert "startReferenceExtraction(" in controlled_source
+    assert "materialsConfirmed," in controlled_source
+
+    bulk_workspace = _read(REPO_ROOT / "apps" / "web" / "components" / "BulkEvaluationClient.tsx")
+    assert "provider_data_boundary_confirmed: authorized" in bulk_workspace
+
+
 def test_assessment_workflow_has_stable_browser_target_markers() -> None:
     source = _read(REPO_ROOT / "apps" / "web" / "components" / "AssessmentDetailClient.tsx")
     assert 'data-testid="answer-region-page-select"' in source
@@ -110,9 +132,9 @@ def test_teacher_review_ui_excludes_obsolete_mock_and_codex_actions() -> None:
 
     assert "batchMockGradeAssessment" not in review_source
     assert "gradeAnswerRegionWithCodexDev" not in review_source
-    assert "Local Qwen suggested score" in review_source
-    assert "gradeAnswerRegionWithLocalQwen" in assessment_source
-    assert "Grade confirmed answer with local Qwen" in assessment_source
+    assert "Brain-suggested score" in review_source
+    assert "gradeAnswerRegionWithBrain" in assessment_source
+    assert "Grade confirmed answer with the configured brain" in assessment_source
 
 
 def test_frontend_has_no_direct_codex_or_llm_calls() -> None:

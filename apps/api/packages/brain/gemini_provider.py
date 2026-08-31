@@ -7,12 +7,24 @@ extraction (question paper / rubric) sends rasterized page images.
 
 import base64
 import json
+import time
 from decimal import Decimal
 from typing import Any
 
+from pydantic import BaseModel
+
+from packages.brain.capabilities import (
+    BrainCapability,
+    BrainExecutionLocation,
+    BrainImageInputMode,
+)
 from packages.brain.cost_tracker import estimate_gemini_cost
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.universal_vision import (
+    UniversalVisionCompletion,
+    UniversalVisionProviderMixin,
+)
 
 QUESTION_EXTRACTION_PROMPT = """
 You are an expert exam paper analyser.
@@ -116,38 +128,131 @@ def _data_url_to_inline_part(image_data_url: str) -> dict[str, Any]:
     return {"inline_data": {"mime_type": mime_type, "data": payload}}
 
 
-class GeminiBrainProvider(BrainProvider):
+class GeminiBrainProvider(UniversalVisionProviderMixin, BrainProvider):
     provider_name = "gemini"
+    execution_location = BrainExecutionLocation.CLOUD
+    image_input_mode = BrainImageInputMode.DATA_URL
+    _VISION_CAPABILITIES = frozenset(
+        {
+            BrainCapability.QUESTION_PDF_EXTRACTION,
+            BrainCapability.RUBRIC_PDF_EXTRACTION,
+            BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+            BrainCapability.VISUAL_MAPPING,
+            BrainCapability.VISUAL_TRANSCRIPTION,
+            BrainCapability.TRANSCRIPTION_REPAIR,
+        }
+    )
 
     def __init__(
         self,
         *,
         api_key: str,
         model_name: str = "gemini-2.0-flash",
+        timeout_seconds: float = 120.0,
+        image_input_enabled: bool = False,
+        structured_output_mode: str = "json_schema",
+        verify_model_on_start: bool = False,
     ) -> None:
         if not api_key:
             raise ValueError("Gemini provider requires an API key")
         self.api_key = api_key
         self.model_name = model_name
+        self.timeout_seconds = timeout_seconds
+        self.vision_enabled = image_input_enabled
+        self.verify_model_on_start = verify_model_on_start
+        normalized_mode = structured_output_mode.strip().lower()
+        if normalized_mode not in {"json_schema", "json_object", "prompt_only"}:
+            raise ValueError(
+                "Structured output mode must be json_schema, json_object, or prompt_only"
+            )
+        self.structured_output_mode = normalized_mode
+        capabilities = {BrainCapability.GRADING}
+        if image_input_enabled:
+            capabilities.update(self._VISION_CAPABILITIES)
+        self.capabilities = frozenset(capabilities)
         self._client: Any = None
 
     def _get_client(self) -> Any:
         if self._client is None:
             from google import genai
 
-            self._client = genai.Client(api_key=self.api_key)
+            self._client = genai.Client(
+                api_key=self.api_key,
+                http_options={"timeout": int(self.timeout_seconds * 1000)},
+            )
         return self._client
 
-    def _generate(self, contents: list[Any]) -> Any:
+    def _generate(
+        self,
+        contents: list[Any],
+        *,
+        config: dict[str, Any] | None = None,
+    ) -> Any:
         return self._get_client().models.generate_content(
-            model=self.model_name, contents=contents
+            model=self.model_name,
+            contents=contents,
+            config=config,
         )
+
+    def _structured_config(
+        self,
+        *,
+        response_model: type[BaseModel] | None,
+        max_tokens: int | None,
+    ) -> dict[str, Any]:
+        config: dict[str, Any] = {"temperature": 0}
+        if self.structured_output_mode != "prompt_only":
+            config["response_mime_type"] = "application/json"
+        if self.structured_output_mode == "json_schema" and response_model is not None:
+            config["response_json_schema"] = response_model.model_json_schema()
+        if max_tokens is not None:
+            config["max_output_tokens"] = max_tokens
+        return config
 
     def _usage_cost(self, response: Any) -> Decimal:
         usage = getattr(response, "usage_metadata", None)
         input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
         output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
         return estimate_gemini_cost(input_tokens=input_tokens, output_tokens=output_tokens)
+
+    def _complete_structured_vision(
+        self,
+        *,
+        prompt: str,
+        images: list[tuple[bytes, str]],
+        response_model: type[BaseModel] | None,
+        schema_name: str,
+        max_tokens: int | None = None,
+    ) -> UniversalVisionCompletion:
+        del schema_name
+        if not self.vision_enabled:
+            raise RuntimeError("Image input is disabled for the Gemini provider")
+        contents: list[Any] = [
+            {
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                }
+            }
+            for image_bytes, mime_type in images
+        ]
+        contents.append(prompt)
+        started = time.perf_counter()
+        response = self._generate(
+            contents,
+            config=self._structured_config(
+                response_model=response_model,
+                max_tokens=max_tokens,
+            ),
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        usage = getattr(response, "usage_metadata", None)
+        return UniversalVisionCompletion(
+            payload=_parse_strict_json(response.text),
+            latency_ms=latency_ms,
+            prompt_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+            completion_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+        )
 
     def grade(
         self,
@@ -172,7 +277,10 @@ class GeminiBrainProvider(BrainProvider):
         contents: list[Any] = [prompt_text]
         if image_data_url:
             contents.insert(0, _data_url_to_inline_part(image_data_url))
-        response = self._generate(contents)
+        response = self._generate(
+            contents,
+            config=self._structured_config(response_model=None, max_tokens=None),
+        )
         raw_output = _parse_strict_json(response.text)
         raw_output["model_provider"] = self.provider_name
         raw_output["model_name"] = self.model_name
@@ -190,9 +298,14 @@ class GeminiBrainProvider(BrainProvider):
         return GradeSuggestionOutput.model_validate(raw_output)
 
     def extract_questions_from_pdf(self, pdf_path: str) -> dict[str, Any]:
+        if not self.vision_enabled:
+            raise RuntimeError("Image input is disabled for the Gemini provider")
         parts = _pdf_to_image_parts(pdf_path)
         parts.append(QUESTION_EXTRACTION_PROMPT)
-        response = self._generate(parts)
+        response = self._generate(
+            parts,
+            config=self._structured_config(response_model=None, max_tokens=None),
+        )
         result = _parse_strict_json(response.text)
         if "questions" not in result:
             raise ValueError(
@@ -202,9 +315,14 @@ class GeminiBrainProvider(BrainProvider):
         return result
 
     def extract_rubric_from_pdf(self, pdf_path: str) -> dict[str, Any]:
+        if not self.vision_enabled:
+            raise RuntimeError("Image input is disabled for the Gemini provider")
         parts = _pdf_to_image_parts(pdf_path)
         parts.append(RUBRIC_EXTRACTION_PROMPT)
-        response = self._generate(parts)
+        response = self._generate(
+            parts,
+            config=self._structured_config(response_model=None, max_tokens=None),
+        )
         result = _parse_strict_json(response.text)
         if "criteria" not in result:
             raise ValueError(
@@ -212,3 +330,7 @@ class GeminiBrainProvider(BrainProvider):
                 f"Raw response: {response.text[:300]}"
             )
         return result
+
+    def verify_available_model(self) -> None:
+        if self.verify_model_on_start:
+            self._get_client().models.get(model=self.model_name)

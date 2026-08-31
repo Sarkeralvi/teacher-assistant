@@ -1,15 +1,25 @@
-from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any
 
+from packages.brain.capabilities import (
+    BrainCapability,
+    BrainExecutionLocation,
+    BrainImageInputMode,
+)
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
 
-class BrainProvider(ABC):
+class BrainProvider:
     provider_name: str
     model_name: str
+    capabilities: frozenset[BrainCapability] = frozenset()
+    execution_location: BrainExecutionLocation = BrainExecutionLocation.CLOUD
+    image_input_mode: BrainImageInputMode = BrainImageInputMode.NONE
+    managed_local_phase: str | None = None
 
-    @abstractmethod
+    def supports(self, capability: BrainCapability) -> bool:
+        return capability in self.capabilities
+
     def grade(
         self,
         *,
@@ -25,7 +35,9 @@ class BrainProvider(ABC):
         image_data_url: str | None = None,
         marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
-        """Return a validated structured grading suggestion."""
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support grading"
+        )
 
     def extract_questions_from_pdf(self, pdf_path: str) -> dict[str, Any]:
         raise NotImplementedError(

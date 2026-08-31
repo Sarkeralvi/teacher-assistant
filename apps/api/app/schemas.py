@@ -22,6 +22,12 @@ class LocalAiServiceStatusRead(BaseModel):
     transcription_enabled: bool = False
     thinking_repair_enabled: bool = False
     grading_enabled: bool = False
+    configured: bool = False
+    location: str = "local"
+    capabilities: list[str] = Field(default_factory=list)
+    reference_extraction_enabled: bool = False
+    script_preparation_enabled: bool = False
+    bulk_evaluation_enabled: bool = False
 
 
 class LocalAiStatusRead(BaseModel):
@@ -29,6 +35,7 @@ class LocalAiStatusRead(BaseModel):
     cohort_model_grading_enabled: bool
     local_script_preparation_enabled: bool = False
     local_single_answer_grading_enabled: bool = False
+    brain: LocalAiServiceStatusRead
     paddle_ocr: LocalAiServiceStatusRead
     qwen: LocalAiServiceStatusRead
     qwen38: LocalAiServiceStatusRead
@@ -273,11 +280,12 @@ BulkExceptionCode = Literal[
 
 class BulkEvaluationRunCreate(BaseModel):
     grading_run_id: int = Field(gt=0)
-    provider: Literal["llama_cpp_qwen38"]
+    provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     marking_policy: Literal["tough", "general", "easy"] = "general"
     maximum_provider_calls: int = Field(ge=1, le=2000)
-    local_only_confirmed: Literal[True]
+    local_only_confirmed: bool = False
+    provider_data_boundary_confirmed: bool = False
     strict_auto_pass_confirmed: Literal[True]
     draft_only_confirmed: Literal[True]
 
@@ -318,7 +326,7 @@ class BulkEvaluationRunRead(ORMBase):
     assessment_id: int
     grading_run_id: int
     created_by_teacher_id: int
-    provider: Literal["llama_cpp_qwen38"]
+    provider: str
     model_name: str
     marking_policy: Literal["tough", "general", "easy"]
     policy_version: str
@@ -911,10 +919,11 @@ class AnswerRegionRead(ORMBase):
 
 
 class ReferenceExtractionStartRequest(BaseModel):
-    provider: Literal["llama_cpp_qwen38"]
+    provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     materials_confirmed: Literal[True]
     draft_only_confirmed: Literal[True]
+    provider_data_boundary_confirmed: bool = False
 
 
 class ReferenceRubricCriterionDraftRead(BaseModel):
@@ -942,7 +951,7 @@ class ReferenceExtractionRead(BaseModel):
     grading_run_id: int
     status: str
     stage: str
-    provider: Literal["local_paddle_qwen", "llama_cpp_qwen38"]
+    provider: str
     model: str
     ocr_device: str
     question_run_id: int | None
@@ -1108,8 +1117,10 @@ class PaddleOcrRejectionRequest(BaseModel):
 
 
 class VisualTranscriptionRunRequest(BaseModel):
+    provider: str = Field(default="brain", min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
+    provider_data_boundary_confirmed: bool = False
 
 
 class VisualTranscriptionConfirmationRequest(BaseModel):
@@ -1129,8 +1140,10 @@ class VisualTranscriptionRejectionRequest(BaseModel):
 
 
 class VisualTranscriptionThinkingRepairRequest(BaseModel):
+    provider: str = Field(default="brain", min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
+    provider_data_boundary_confirmed: bool = False
 
 
 class VisualTranscriptionThinkingRepairConfirmationRequest(BaseModel):
@@ -1155,16 +1168,19 @@ class AnswerRegionMappingRunRequest(BaseModel):
     # A repair preserves previously teacher-confirmed mappings and replaces only
     # unresolved drafts. It remains an explicit teacher-authorized operation.
     repair_unconfirmed_only: bool = False
-    # Qwen3.8 vision is the only active local-model mapping provider. The retired
-    # Paddle/Qwen3.6 value remains accepted by the schema solely so the API can
-    # return an explicit fail-closed retirement message to stale clients.
+    # The active brain visual provider is selected in configuration. The retired
+    # Paddle/Qwen3.6 value remains accepted solely for a clear stale-client error.
     provider: Literal[
-        "deterministic_layout", "local_paddle_qwen", "local_qwen38_visual"
+        "deterministic_layout",
+        "brain_visual",
+        "local_paddle_qwen",
+        "local_qwen38_visual",
     ] = "deterministic_layout"
     expected_model: str | None = Field(default=None, max_length=255)
     expected_ocr_model: str | None = Field(default=None, max_length=255)
     expected_layout_model: str | None = Field(default=None, max_length=255)
     draft_only_confirmed: bool = False
+    provider_data_boundary_confirmed: bool = False
     maximum_ocr_calls: int = Field(default=25, ge=1, le=100)
     # The first call assigns PaddleOCR blocks. A second, bounded coverage pass
     # may assign only blocks left unassigned by the first pass to unresolved or
@@ -1463,9 +1479,10 @@ class GradeAnswerRegionResponse(BaseModel):
 
 class LocalQwenGradeRequest(BaseModel):
     grading_run_id: int = Field(gt=0)
-    provider: Literal["llama_cpp_qwen38"]
+    provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
+    provider_data_boundary_confirmed: bool = False
 
 
 class LocalQwenApprovedBatchGradeRequest(LocalQwenGradeRequest):
@@ -1522,10 +1539,11 @@ class CohortGradeDispatchResponse(BaseModel):
 class CohortDispatchRequest(BaseModel):
     queue_run_id: int = Field(gt=0)
     grading_run_id: int = Field(gt=0)
-    provider: Literal["mock", "llama_cpp_qwen"]
+    provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     call_limit: int = Field(ge=1, le=25)
     draft_only_confirmed: Literal[True]
+    provider_data_boundary_confirmed: bool = False
 
 
 class CohortDispatchPreflightItem(BaseModel):

@@ -56,6 +56,7 @@ for (const symbol of [
   "createVisualTranscriptionRun",
   "confirmVisualTranscriptionRun",
   "confirmAnswerRegionFullAnswer",
+  "getBrainStatus",
   "createEvidencePrepRun",
   "createGradingQueueRun",
   "preflightCohortDispatch",
@@ -63,6 +64,9 @@ for (const symbol of [
   "getAssessmentReviewQueue",
   "approveGradeSuggestion",
   "getAssessmentFinalGradesExportUrl",
+  "gradeAnswerRegionWithBrain",
+  "gradeAllApprovedAnswersWithBrain",
+  "provider_data_boundary_confirmed",
 ]) {
   if (!api.includes(symbol)) {
     throw new Error(`API client missing ${symbol}`);
@@ -97,13 +101,13 @@ for (const marker of [
   "Rubric",
   "You do not need to upload the question paper anywhere else.",
   "Confirm files and extract drafts",
-  "thinking-disabled Qwen3.8 vision task",
+  "one configured visual-brain task",
   "Confirm and extract drafts",
   "Review questions, model answers, and rubric",
   "Confirm grading references",
   "Continue to student evidence",
   "This screen cannot grade students, approve marks, or create final grades.",
-  "No cloud provider or retry is allowed.",
+  "Provider location is shown before authorization and no retry is allowed.",
   "startReferenceExtraction",
   "getReferenceExtraction",
   "confirmReferenceExtraction",
@@ -118,11 +122,13 @@ if (referencePage.includes("localAi.paddle_ocr.enabled")) {
   throw new Error("Qwen3.8 reference extraction must not depend on retired PaddleOCR");
 }
 for (const marker of [
-  "localAi.qwen38.available",
-  "localAi.qwen38.visual_preparation_enabled",
+  "localAi.brain.configured",
+  "localAi.brain.available",
+  "localAi.brain.reference_extraction_enabled",
+  'localAi.brain.capabilities.includes("visual_reference_extraction")',
 ]) {
   if (!referencePage.includes(marker)) {
-    throw new Error(`Reference preparation readiness is missing Qwen3.8 marker: ${marker}`);
+    throw new Error(`Reference preparation readiness is missing brain marker: ${marker}`);
   }
 }
 
@@ -146,11 +152,11 @@ for (const marker of [
   "Manual reference editing (advanced)",
   "Upload submission",
   "Upload script ZIP",
-  "Qwen3.8 visual mapping and grading",
+  "Brain-assisted visual mapping and grading",
   "AuthenticatedAnswerRegionImage",
   "AuthenticatedAnswerRegionSegmentImage",
   "Loading every source page and answer segment...",
-  "Repair unconfirmed boundaries with Qwen3.8 vision",
+  "Repair unconfirmed boundaries with the visual brain",
   "Prepare submission #",
   "Existing submissions and approved grades were not changed.",
   "Confirmed mappings are protected.",
@@ -160,7 +166,7 @@ for (const marker of [
   "Complete prepared answer",
   "Review every segment below in order.",
   "Incomplete mapping suspected",
-  "Transcribe visible answer evidence with Qwen3.8 vision",
+  "Transcribe visible answer evidence with the visual brain",
   "Confirm this final transcription",
   "preserves visible student writing",
   "repairs the mathematics",
@@ -173,7 +179,7 @@ for (const marker of [
   "older combined transcription/cancellation policy",
   "cannot replace confirmed evidence and creates no transcript or grade",
   "!finalizedRegionIds.has(mapping.answer_region_id)",
-  "Finalize surviving work with Qwen3.8 Thinking",
+  "Finalize surviving work with brain reasoning",
   "qwen38-final-intent-thinking-repair-v9",
   "Start corrected Thinking repair",
   "Failure category:",
@@ -207,8 +213,8 @@ for (const marker of [
 }
 
 // Every Paddle transcription and candidate surface is retired from the active
-// teacher workflow. Qwen3.8 handles mapping, verbatim transcription, and draft
-// grading as three separately authorized calls.
+// teacher workflow. The configured brain handles mapping, verbatim transcription,
+// and draft grading as three separately authorized calls.
 for (const retired of [
   "Draft text with local PaddleOCR",
   "PaddleOCR evidence review",
@@ -231,23 +237,39 @@ for (const retired of [
 
 for (const marker of [
   '"local_qwen38_visual"',
-  'provider: "llama_cpp_qwen38"',
+  '"brain_visual"',
+  "getBrainStatus",
+  "/brain/status",
+  "gradeAnswerRegionWithBrain",
+  "gradeAllApprovedAnswersWithBrain",
+  "/grade-brain",
+  "/grade-approved-brain",
+  "provider_data_boundary_confirmed",
+  "getAnswerRegionSegmentImageUrl",
+]) {
+  if (!api.includes(marker)) {
+    throw new Error(`API client missing provider-neutral brain marker: ${marker}`);
+  }
+}
+
+for (const marker of [
   "gradeAnswerRegionWithLocalQwen38",
   "gradeAllApprovedAnswersWithLocalQwen38",
   "/grade-local-qwen38",
   "/grade-approved-local-qwen38",
-  "getAnswerRegionSegmentImageUrl",
 ]) {
   if (!api.includes(marker)) {
-    throw new Error(`API client missing active Qwen3.8 workflow marker: ${marker}`);
+    throw new Error(`API client missing backward-compatible Qwen marker: ${marker}`);
   }
 }
 
 for (const marker of [
   "Repair submission #",
-  "boundaries with Qwen3.8 vision",
+  "boundaries with the visual brain",
   "no transcription or grade was created",
   "localVisualMappingAuthorized",
+  "providerDataBoundaryConfirmed",
+  "cloud provider data transfer",
 ]) {
   if (!assessment.includes(marker)) {
     throw new Error(`Assessment UI missing explicit visual boundary rescue marker: ${marker}`);
@@ -256,7 +278,7 @@ for (const marker of [
 
 const review = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
 for (const marker of [
-  "Review local Qwen draft grades",
+  "Review brain-assisted draft grades",
   "Every score here is a review-required draft.",
   "Approve AI suggestion",
   "Edit score and save final grade",

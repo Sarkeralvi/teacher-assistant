@@ -12,10 +12,15 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings, get_settings
 from app.models import AnswerRegion, AnswerRegionMapping, AnswerRegionOcrRun, AuditLog, User
-from app.services.local_ai_phase_manager import LocalAiPhaseManager
-from app.services.local_model_lease_service import LocalModelLeaseService
+from app.services.brain_execution import hold_brain_execution
 from app.services.storage import LocalStorage
-from packages.brain.adapter import BrainAdapter, sanitize_provider_error
+from packages.brain.adapter import BrainProviderConfigurationError, sanitize_provider_error
+from packages.brain.capabilities import BrainCapability
+from packages.brain.policy import (
+    BrainPolicy,
+    brain_policy_from_settings,
+    configured_visual_provider,
+)
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
     SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS,
@@ -104,13 +109,22 @@ class Qwen38VisualTranscriptionService:
         self.storage = LocalStorage()
 
     def create(
-        self, region: AnswerRegion, *, teacher: User, expected_model: str
+        self,
+        region: AnswerRegion,
+        *,
+        teacher: User,
+        expected_model: str,
+        provider: str | None = None,
     ) -> AnswerRegionOcrRun:
-        self._assert_enabled(expected_model)
+        policy = (
+            self._assert_enabled(expected_model)
+            if provider is None
+            else self._assert_enabled(expected_model, provider=provider)
+        )
         mapping = self._mapping_for_region(region.id)
         if not _mapping_is_verified(mapping):
             raise VisualTranscriptionError(
-                "Confirm the answer mapping before Qwen3.8 visual transcription"
+                "Confirm the answer mapping before visual transcription"
             )
         if region.grading_jobs or region.grade_suggestions:
             raise VisualTranscriptionError(
@@ -144,7 +158,7 @@ class Qwen38VisualTranscriptionService:
         run = AnswerRegionOcrRun(
             answer_region_id=region.id,
             requested_by_teacher_id=teacher.id,
-            request_id=f"qwen38-visual-{region.id}-{time.time_ns()}",
+            request_id=f"brain-visual-{region.id}-{time.time_ns()}",
             status="queued",
             profile="qwen38_verbatim_visual",
             task_kind="visual_transcription",
@@ -153,13 +167,13 @@ class Qwen38VisualTranscriptionService:
             source_image_sha256=source_hash,
             source_image_hashes=self._source_hashes(region),
             input_manifest_sha256=source_hash,
-            model_asset_sha256=self.settings.local_qwen38_model_sha256 or None,
-            mmproj_asset_sha256=self.settings.local_qwen38_mmproj_sha256 or None,
+            model_asset_sha256=policy.model_asset_sha256,
+            mmproj_asset_sha256=policy.auxiliary_model_asset_sha256,
             queued_at=datetime.now(UTC),
             call_limit=1,
             calls_used=0,
-            provider="llama_cpp_qwen38",
-            model_name=self.settings.local_qwen38_model,
+            provider=policy.provider,
+            model_name=policy.model,
             layout_model_name=None,
             warnings=[],
         )
@@ -188,8 +202,16 @@ class Qwen38VisualTranscriptionService:
         *,
         teacher: User,
         expected_model: str,
+        provider: str | None = None,
     ) -> AnswerRegionOcrRun:
-        self._assert_thinking_repair_enabled(expected_model)
+        policy = (
+            self._assert_thinking_repair_enabled(expected_model)
+            if provider is None
+            else self._assert_thinking_repair_enabled(
+                expected_model,
+                provider=provider,
+            )
+        )
         mapping = self._mapping_for_region(region.id)
         if not _mapping_is_verified(mapping):
             raise VisualTranscriptionError("Confirm the answer mapping before thinking repair")
@@ -247,7 +269,7 @@ class Qwen38VisualTranscriptionService:
         run = AnswerRegionOcrRun(
             answer_region_id=region.id,
             requested_by_teacher_id=teacher.id,
-            request_id=f"qwen38-thinking-repair-{region.id}-{time.time_ns()}",
+            request_id=f"brain-thinking-repair-{region.id}-{time.time_ns()}",
             status="queued",
             profile="qwen38_thinking_repair",
             task_kind="visual_transcription_thinking_repair",
@@ -256,13 +278,13 @@ class Qwen38VisualTranscriptionService:
             source_image_sha256=source_hash,
             source_image_hashes=self._source_hashes(region),
             input_manifest_sha256=input_hash,
-            model_asset_sha256=self.settings.local_qwen38_model_sha256 or None,
-            mmproj_asset_sha256=self.settings.local_qwen38_mmproj_sha256 or None,
+            model_asset_sha256=policy.model_asset_sha256,
+            mmproj_asset_sha256=policy.auxiliary_model_asset_sha256,
             queued_at=datetime.now(UTC),
             call_limit=3,
             calls_used=0,
-            provider="llama_cpp_qwen38",
-            model_name=self.settings.local_qwen38_model,
+            provider=policy.provider,
+            model_name=policy.model,
             warnings=["teacher_review_required", "thinking_repair_pending"],
             normalized_result={
                 "task_kind": "visual_transcription_thinking_repair",
@@ -307,7 +329,7 @@ class Qwen38VisualTranscriptionService:
             )
             if region is None:
                 raise VisualTranscriptionError("Answer region no longer exists")
-            self._assert_enabled(run.model_name)
+            policy = self._assert_enabled(run.model_name, provider=run.provider)
             if run.source_image_sha256 != self._source_hash(region):
                 raise VisualTranscriptionError(
                     "Answer image changed after transcription was authorized"
@@ -316,19 +338,13 @@ class Qwen38VisualTranscriptionService:
             if not _mapping_is_verified(mapping):
                 raise VisualTranscriptionError("Answer mapping is no longer confirmed")
             lease_holder_id = f"visual_transcription:{run.id}:{uuid4().hex}"
-            lease = LocalModelLeaseService(self.db)
-            with lease.hold(
-                model_phase="Qwen38",
+            with hold_brain_execution(
+                db=self.db,
+                settings=self.settings,
+                adapter=policy.adapter,
                 holder_kind="visual_transcription",
                 holder_id=lease_holder_id,
-            ):
-                if self.settings.local_ai_phase_switch_enabled:
-                    LocalAiPhaseManager(settings=self.settings, db=self.db).switch(
-                        "Qwen38", lease_holder_id=lease_holder_id
-                    )
-                adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-                adapter.verify_available_model()
-                provider = adapter.provider
+            ) as execution:
                 images: list[tuple[bytes, str]] = []
                 image_hashes: list[str] = []
                 for segment in sorted(region.segments, key=lambda item: item.order_index):
@@ -336,17 +352,17 @@ class Qwen38VisualTranscriptionService:
                     image_bytes = path.read_bytes()
                     images.append((image_bytes, "image/png"))
                     image_hashes.append(hashlib.sha256(image_bytes).hexdigest())
-                lease.heartbeat(holder_id=lease_holder_id)
+                execution.heartbeat()
                 # Count the provider attempt before the call. A timeout or
                 # malformed response still consumed the one authorized call.
                 run.calls_used = 1
                 run.heartbeat_at = datetime.now(UTC)
                 self.db.commit()
-                result = provider.transcribe_images(
+                result = policy.adapter.transcribe_images(
                     images=images,
                     label=region.question.question_no,
                 )
-                lease.heartbeat(holder_id=lease_holder_id)
+                execution.heartbeat()
             draft_hash = hashlib.sha256(result.draft_text.encode("utf-8")).hexdigest()
             run.status = "succeeded"
             run.completed_at = datetime.now(UTC)
@@ -599,37 +615,36 @@ class Qwen38VisualTranscriptionService:
                     "Source visual edit locations changed after authorization"
                 )
 
+            policy = self._assert_thinking_repair_enabled(
+                run.model_name,
+                provider=run.provider,
+            )
+
             lease_holder_id = f"visual_transcription_repair:{run.id}:{uuid4().hex}"
-            lease = LocalModelLeaseService(self.db)
-            with lease.hold(
-                model_phase="Qwen38",
+            with hold_brain_execution(
+                db=self.db,
+                settings=self.settings,
+                adapter=policy.adapter,
                 holder_kind="visual_transcription_repair",
                 holder_id=lease_holder_id,
-            ):
-                if self.settings.local_ai_phase_switch_enabled:
-                    LocalAiPhaseManager(settings=self.settings, db=self.db).switch(
-                        "Qwen38", lease_holder_id=lease_holder_id
-                    )
-                adapter = BrainAdapter.for_provider(self.settings, "llama_cpp_qwen38")
-                adapter.verify_available_model()
-                provider = adapter.provider
+            ) as execution:
                 images: list[tuple[bytes, str]] = []
                 image_hashes: list[str] = []
                 for segment in sorted(region.segments, key=lambda item: item.order_index):
                     image_bytes = self.storage.resolve_relative(segment.image_path).read_bytes()
                     images.append((image_bytes, "image/png"))
                     image_hashes.append(hashlib.sha256(image_bytes).hexdigest())
-                lease.heartbeat(holder_id=lease_holder_id)
+                execution.heartbeat()
                 run.calls_used = 1
                 run.heartbeat_at = datetime.now(UTC)
                 self.db.commit()
-                result = provider.repair_transcription_images(
+                result = policy.adapter.repair_transcription_images(
                     images=images,
                     rejected_transcript=_repair_source_text(source_run),
                     source_editing_marks=source_editing_marks,
                 )
                 run.calls_used = result.provider_calls_used
-                lease.heartbeat(holder_id=lease_holder_id)
+                execution.heartbeat()
 
             draft_hash = hashlib.sha256(result.draft_text.encode("utf-8")).hexdigest()
             decisions = [item.model_dump(mode="json") for item in result.editing_marks]
@@ -884,28 +899,59 @@ class Qwen38VisualTranscriptionService:
         )
         self.db.commit()
 
-    def _assert_enabled(self, expected_model: str) -> None:
-        if not self.settings.brain_allow_real_providers:
-            raise VisualTranscriptionError("Real local providers are disabled")
-        if (
-            not self.settings.local_qwen38_enabled
-            or not self.settings.local_qwen38_transcription_enabled
-        ):
-            raise VisualTranscriptionError("Qwen3.8 visual transcription rescue is disabled")
-        if expected_model != self.settings.local_qwen38_model:
-            raise VisualTranscriptionError("Expected Qwen3.8 model alias does not match")
+    def _assert_enabled(
+        self,
+        expected_model: str,
+        *,
+        provider: str | None = None,
+    ) -> BrainPolicy:
+        requested_provider = _resolve_visual_provider(self.settings, provider)
+        try:
+            policy = brain_policy_from_settings(
+                self.settings,
+                requested_provider=requested_provider,
+            )
+            policy.validate_request(
+                requested_provider=provider or "active",
+                expected_model=expected_model,
+                capability=BrainCapability.VISUAL_TRANSCRIPTION,
+                feature_enabled=policy.transcription_enabled,
+            )
+        except BrainProviderConfigurationError as exc:
+            raise VisualTranscriptionError(str(exc)) from exc
+        return policy
 
-    def _assert_thinking_repair_enabled(self, expected_model: str) -> None:
-        if not self.settings.brain_allow_real_providers:
-            raise VisualTranscriptionError("Real local providers are disabled")
+    def _assert_thinking_repair_enabled(
+        self,
+        expected_model: str,
+        *,
+        provider: str | None = None,
+    ) -> BrainPolicy:
+        requested_provider = _resolve_visual_provider(self.settings, provider)
         if (
-            not self.settings.local_qwen38_enabled
-            or not self.settings.local_qwen38_transcription_enabled
-            or not self.settings.local_qwen38_thinking_repair_enabled
+            (provider or "").strip().lower() in {"", "brain", "active"}
+            and self.settings.brain_thinking_repair_enabled is None
+            and not self.settings.local_qwen38_thinking_repair_enabled
         ):
-            raise VisualTranscriptionError("Qwen3.8 thinking repair is disabled")
-        if expected_model != self.settings.local_qwen38_model:
-            raise VisualTranscriptionError("Expected Qwen3.8 model alias does not match")
+            raise VisualTranscriptionError("Brain thinking repair is disabled")
+        try:
+            policy = brain_policy_from_settings(
+                self.settings,
+                requested_provider=requested_provider,
+            )
+            if not (policy.transcription_enabled and policy.thinking_repair_enabled):
+                raise VisualTranscriptionError("Brain thinking repair is disabled")
+            policy.validate_request(
+                requested_provider=provider or "active",
+                expected_model=expected_model,
+                capability=BrainCapability.TRANSCRIPTION_REPAIR,
+                feature_enabled=(
+                    policy.transcription_enabled and policy.thinking_repair_enabled
+                ),
+            )
+        except BrainProviderConfigurationError as exc:
+            raise VisualTranscriptionError(str(exc)) from exc
+        return policy
 
     def _mapping_for_region(self, region_id: int) -> AnswerRegionMapping | None:
         return self.db.scalar(
@@ -941,3 +987,10 @@ class Qwen38VisualTranscriptionService:
                 payload_json=payload,
             )
         )
+
+
+def _resolve_visual_provider(settings: Settings, provider: str | None) -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized in {"", "brain", "active"}:
+        return configured_visual_provider(settings)
+    return normalized

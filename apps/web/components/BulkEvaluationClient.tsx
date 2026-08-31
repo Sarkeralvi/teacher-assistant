@@ -7,7 +7,7 @@ import {
   approveCleanBulkEvaluation,
   createBulkEvaluationRun,
   downloadBulkEvaluationResults,
-  getLocalAiStatus,
+  getBrainStatus,
   listAssessmentGradingRuns,
   listBulkEvaluationExceptions,
   listBulkEvaluationRuns,
@@ -56,7 +56,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
     const [runRows, gradingRows, status] = await Promise.all([
       listBulkEvaluationRuns(assessmentId),
       listAssessmentGradingRuns(assessmentId),
-      getLocalAiStatus(),
+      getBrainStatus(),
     ]);
     setRuns(runRows);
     setGradingRuns(gradingRows);
@@ -92,7 +92,16 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
     return () => window.clearInterval(interval);
   }, [activeRun, refresh]);
 
-  const expectedModel = localAi?.qwen38.models[0] ?? "";
+  const brain = localAi?.brain;
+  const expectedModel = brain?.model ?? "";
+  const brainReady = Boolean(
+    brain?.enabled
+      && brain.configured
+      && brain.bulk_evaluation_enabled
+      && brain.capabilities.includes("visual_mapping")
+      && brain.capabilities.includes("visual_transcription")
+      && brain.capabilities.includes("grading"),
+  );
   const cleanSuggestionIds = useMemo(
     () =>
       activeRun?.items
@@ -122,8 +131,11 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         file,
         grading_run_id: gradingRunId,
         expected_model: expectedModel,
+        provider: brain?.provider ?? "brain",
+        location: brain?.location ?? "provider_managed",
         marking_policy: markingPolicy,
         maximum_provider_calls: callLimit,
+        provider_data_boundary_confirmed: authorized,
       });
       setActiveRunId(run.id);
       setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
@@ -197,7 +209,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         </p>
         <h1 className="mt-2 text-3xl font-semibold">Upload once. Review exceptions first.</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-          Qwen3.8 maps, transcribes, and creates draft scores sequentially. Unreadable,
+          The configured brain maps, transcribes, and creates draft scores sequentially. Unreadable,
           incomplete, or contradictory evidence is quarantined and never silently graded.
         </p>
       </header>
@@ -206,7 +218,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
       {loading ? <p className="text-sm text-slate-400">Loading bulk evaluation state…</p> : null}
 
       <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-6 lg:grid-cols-4">
-        <StatusCard label="Qwen3.8" value={localAi?.qwen38.available ? "Ready" : localAi?.qwen38.enabled ? "Starts on authorization" : "Disabled"} />
+        <StatusCard label="Brain" value={brain?.available ? `${brain.provider} · ${brain.model}` : brain?.enabled ? "Configured, unavailable" : "Disabled"} />
         <StatusCard label="References" value={gradingRunId ? "Finalized" : "Blocked"} />
         <StatusCard label="Active run" value={activeRun ? `#${activeRun.id}` : "None"} />
         <StatusCard label="Safety" value="Draft only" />
@@ -233,9 +245,13 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         </div>
         <label className="flex items-start gap-3 rounded-lg border border-amber-700/60 bg-amber-950/20 p-4 text-sm text-amber-100">
           <input className="mt-1" type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} />
-          <span>I authorize local-only Qwen3.8 processing under strict auto-pass rules. All scores remain drafts until I approve them.</span>
+          <span>
+            I authorize {brain?.provider ?? "the configured provider"} processing
+            ({brain?.location ?? "provider-managed"}). {brain?.location === "cloud" ? "Student evidence will be transferred to the cloud provider. " : ""}
+            Strict auto-pass rules apply and all scores remain drafts until I approve them.
+          </span>
         </label>
-        <button className={buttonClass} disabled={busy || !file || !gradingRunId || !expectedModel || !authorized || !localAi?.qwen38.enabled} type="button" onClick={() => void createRun()}>
+        <button className={buttonClass} disabled={busy || !file || !gradingRunId || !expectedModel || !authorized || !brainReady} type="button" onClick={() => void createRun()}>
           {busy ? "Working…" : "Start bulk evaluation"}
         </button>
       </section>

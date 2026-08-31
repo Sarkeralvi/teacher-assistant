@@ -9,7 +9,7 @@ import {
   createCustomGradingRun,
   getAssessment,
   getGradingRun,
-  getLocalAiStatus,
+  getBrainStatus,
   getReferenceExtraction,
   listAssessmentGradingRuns,
   startReferenceExtraction,
@@ -21,14 +21,13 @@ import {
   type ReferenceQuestionConfirmation,
 } from "../lib/api";
 
-const EXPECTED_MODEL = "qwen3.8-27b-q4km";
-
 const stageLabels: Record<string, string> = {
   not_started: "Not started",
   queued: "Waiting for the local worker",
   validating_materials: "Checking the three uploaded files",
   rendering_reference_pages: "Rendering the three uploaded reference files",
-  qwen38_visual_reference_extraction: "Qwen3.8 vision is drafting questions, solutions, and rubric links",
+  qwen38_visual_reference_extraction: "The visual brain is drafting questions, solutions, and rubric links",
+  brain_visual_reference_extraction: "The configured brain is drafting questions, solutions, and rubric links",
   teacher_review_required: "Drafts ready for teacher review",
   teacher_confirmed: "Teacher confirmed",
   failed: "Extraction stopped",
@@ -58,11 +57,12 @@ export function CustomControlledGradingRunClient({
   const extractionActive = extraction?.status === "queued" || extraction?.status === "running";
   const activeRunId = run?.id;
   const referencesConfirmed = Boolean(run?.questions_confirmed_at && run.rubrics_confirmed_at);
-  const localProviderConfigured = Boolean(
+  const brainProviderConfigured = Boolean(
     localAi?.real_providers_allowed
-      && localAi.qwen38.enabled
-      && localAi.qwen38.available
-      && localAi.qwen38.visual_preparation_enabled,
+      && localAi.brain.configured
+      && localAi.brain.available
+      && localAi.brain.reference_extraction_enabled
+      && localAi.brain.capabilities.includes("visual_reference_extraction"),
   );
 
   const load = useCallback(async () => {
@@ -72,7 +72,7 @@ export function CustomControlledGradingRunClient({
       const [assessmentData, runs, localStatus] = await Promise.all([
         getAssessment(assessmentId),
         listAssessmentGradingRuns(assessmentId),
-        getLocalAiStatus().catch(() => null),
+        getBrainStatus().catch(() => null),
       ]);
       const currentRun = runs.at(-1) ?? null;
       setAssessment(assessmentData);
@@ -182,19 +182,25 @@ export function CustomControlledGradingRunClient({
   }
 
   async function handleStartExtraction() {
-    if (!run || !materialsUploaded || !materialsConfirmed) {
+    if (!run || !materialsUploaded || !materialsConfirmed || !localAi?.brain) {
       setError("Confirm that the three uploaded files are correct before extraction.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      setExtraction(await startReferenceExtraction(run.id));
+      setExtraction(
+        await startReferenceExtraction(
+          run.id,
+          localAi.brain,
+          materialsConfirmed,
+        ),
+      );
       setRun(await getGradingRun(run.id));
       setMaterialsConfirmed(false);
       setDraftsConfirmed(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start local extraction");
+      setError(err instanceof Error ? err.message : "Could not start brain extraction");
     } finally {
       setBusy(false);
     }
@@ -308,7 +314,7 @@ export function CustomControlledGradingRunClient({
       <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 px-5 py-4 text-sm text-amber-100">
         <p className="font-semibold">Teacher control is mandatory</p>
         <p className="mt-1 text-amber-100/80">
-          Qwen3.8 creates review-only drafts. This screen cannot grade students, approve marks, or create final grades.
+          The configured brain creates review-only drafts. This screen cannot grade students, approve marks, or create final grades.
         </p>
       </div>
 
@@ -364,7 +370,9 @@ export function CustomControlledGradingRunClient({
             {materialsUploaded ? (
               <span className="text-sm text-emerald-300">All three references are stored.</span>
             ) : (
-              <span className="text-sm text-slate-400">PDF only. Files remain on this machine.</span>
+              <span className="text-sm text-slate-400">
+                PDF only. Files are stored by this deployment; provider transfer happens only after explicit extraction authorization.
+              </span>
             )}
           </div>
         </form>
@@ -375,7 +383,7 @@ export function CustomControlledGradingRunClient({
           <SectionHeading
             number="2"
             title="Confirm files and extract drafts"
-            description="The worker renders each local page and uses one thinking-disabled Qwen3.8 vision task to draft questions, solutions, and rubric links. No cloud provider or retry is allowed."
+            description="The worker renders each page and uses one configured visual-brain task to draft questions, solutions, and rubric links. Provider location is shown before authorization and no retry is allowed."
             complete={extraction?.status === "succeeded"}
           />
 
@@ -393,21 +401,21 @@ export function CustomControlledGradingRunClient({
                   onChange={(event) => setMaterialsConfirmed(event.target.checked)}
                 />
                 <span>
-                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize one draft-only, thinking-disabled local Qwen3.8 visual extraction ({EXPECTED_MODEL}).
+                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize one draft-only visual extraction with {localAi?.brain.provider ?? "the configured brain"} ({localAi?.brain.model ?? "model unavailable"}, {localAi?.brain.location ?? "provider-managed"}){localAi?.brain.location === "cloud" ? ", including transfer of these reference pages to that cloud provider" : ""}.
                 </span>
               </label>
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   className={buttonClass}
-                  disabled={busy || !materialsConfirmed || !localProviderConfigured}
+                  disabled={busy || !materialsConfirmed || !brainProviderConfigured}
                   type="button"
                   onClick={() => void handleStartExtraction()}
                 >
                   {busy ? "Starting\u2026" : extraction?.status === "failed" ? "Start a new extraction" : "Confirm and extract drafts"}
                 </button>
-                {!localProviderConfigured ? (
+                {!brainProviderConfigured ? (
                   <span className="text-sm text-amber-200">
-                    Qwen3.8 visual extraction is not ready. Check the local AI status and backend safety switches.
+                    Visual brain extraction is not ready. Check the brain status, capabilities, and backend safety switches.
                   </span>
                 ) : null}
               </div>
@@ -421,7 +429,7 @@ export function CustomControlledGradingRunClient({
           <SectionHeading
             number="3"
             title="Review questions, model answers, and rubric"
-            description="Edit anything Qwen3.8 read or linked incorrectly. Confirmation creates the canonical grading references, but still does not grade a student."
+            description="Edit anything the brain read or linked incorrectly. Confirmation creates the canonical grading references, but still does not grade a student."
             complete={referencesConfirmed}
           />
 
@@ -439,7 +447,7 @@ export function CustomControlledGradingRunClient({
               <article className="grid gap-4 rounded-xl border border-slate-700 bg-slate-950/35 p-5" key={question.id}>
                 {(!question.model_answer.trim() || !String(question.total_marks).trim()) ? (
                   <p className="rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">
-                    Qwen could not link every required answer or mark. Complete the highlighted empty fields before confirmation.
+                    The brain provider could not link every required answer or mark. Complete the highlighted empty fields before confirmation.
                   </p>
                 ) : null}
                 <div className="grid gap-4 md:grid-cols-[10rem_1fr]">
@@ -659,34 +667,34 @@ function ExtractionStatus({ extraction }: Readonly<{ extraction: ReferenceExtrac
         {!failed && !complete ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" aria-label="Working" /> : null}
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400">
-        <span>Local page images: {extraction.ocr_call_count}</span>
-        <span>Qwen3.8 visual calls: {extraction.qwen_call_count} / 1</span>
-        <span>Provider: local only</span>
+        <span>Rendered page images: {extraction.ocr_call_count}</span>
+        <span>Brain calls: {extraction.qwen_call_count} / 1</span>
+        <span>Provider: {extraction.provider} · {extraction.ocr_device}</span>
       </div>
     </div>
   );
 }
 
 function friendlyExtractionError(error: string | null): string {
-  if (!error) return "Local extraction stopped before drafts were created.";
+  if (!error) return "Brain extraction stopped before drafts were created.";
   if (error.toLowerCase().includes("timed out")) {
-    return "Local Qwen took too long to finish. No partial draft was saved and no retry was made.";
+    return "The brain provider took too long to finish. No partial draft was saved and no retry was made.";
   }
   return error;
 }
 
 function RuntimeBadge({ status }: Readonly<{ status: LocalAiStatus | null }>) {
-  const phase = status?.qwen38.available
-    ? `Qwen3.8 active \u00b7 ${status.qwen38.device}`
-      : "Local models load on demand";
+  const phase = status?.brain.available
+    ? `${status.brain.provider} · ${status.brain.model} · ${status.brain.location}`
+    : "The configured brain is unavailable";
   const configured = Boolean(
     status?.real_providers_allowed &&
-    status.qwen38.enabled &&
-    status.qwen38.visual_preparation_enabled,
+    status.brain.enabled &&
+    status.brain.reference_extraction_enabled,
   );
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${configured ? "border-emerald-800 bg-emerald-950/30 text-emerald-200" : "border-amber-800 bg-amber-950/30 text-amber-200"}`}>
-      <p className="font-semibold">{configured ? "Local AI configured" : "Local AI unavailable"}</p>
+      <p className="font-semibold">{configured ? "Brain configured" : "Brain unavailable"}</p>
       <p className="mt-1 text-xs opacity-80">{phase}</p>
     </div>
   );

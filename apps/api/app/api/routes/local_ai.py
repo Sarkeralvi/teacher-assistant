@@ -12,6 +12,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 router = APIRouter(tags=["local-ai"])
 
 
+@router.get("/brain/status", response_model=LocalAiStatusRead)
 @router.get("/local-ai/status", response_model=LocalAiStatusRead)
 def read_local_ai_status(current_user: CurrentUser) -> dict[str, object]:
     del current_user

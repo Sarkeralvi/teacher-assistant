@@ -1,17 +1,29 @@
+import base64
 import json
 import re
+import time
 from decimal import Decimal
 from typing import Any
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from packages.brain.capabilities import (
+    BrainCapability,
+    BrainExecutionLocation,
+    BrainImageInputMode,
+)
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.universal_vision import (
+    UniversalVisionCompletion,
+    UniversalVisionProviderMixin,
+)
 
 
-class OpenAICompatibleProvider(BrainProvider):
+class OpenAICompatibleProvider(UniversalVisionProviderMixin, BrainProvider):
     provider_name = "openai"
+    image_input_mode = BrainImageInputMode.DATA_URL
 
     def __init__(
         self,
@@ -21,9 +33,39 @@ class OpenAICompatibleProvider(BrainProvider):
         base_url: str | None = None,
         timeout_seconds: float = 30.0,
         client: Any | None = None,
+        provider_name: str = "openai",
+        execution_location: BrainExecutionLocation = BrainExecutionLocation.CLOUD,
+        image_input_enabled: bool = False,
+        structured_output_mode: str = "json_schema",
+        verify_model_on_start: bool = False,
+        managed_local_phase: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.model_name = model_name
+        self.provider_name = provider_name
+        self.execution_location = execution_location
+        self.managed_local_phase = managed_local_phase
+        self.vision_enabled = image_input_enabled
+        self.verify_model_on_start = verify_model_on_start
+        normalized_mode = structured_output_mode.strip().lower()
+        if normalized_mode not in {"json_schema", "json_object", "prompt_only"}:
+            raise ValueError(
+                "Structured output mode must be json_schema, json_object, or prompt_only"
+            )
+        self.structured_output_mode = normalized_mode
+        capabilities = {BrainCapability.GRADING}
+        if image_input_enabled:
+            capabilities.update(
+                {
+                    BrainCapability.QUESTION_PDF_EXTRACTION,
+                    BrainCapability.RUBRIC_PDF_EXTRACTION,
+                    BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+                    BrainCapability.VISUAL_MAPPING,
+                    BrainCapability.VISUAL_TRANSCRIPTION,
+                    BrainCapability.TRANSCRIPTION_REPAIR,
+                }
+            )
+        self.capabilities = frozenset(capabilities)
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
         self.client = client or httpx.Client(base_url=self.base_url, timeout=timeout_seconds)
 
@@ -50,16 +92,18 @@ class OpenAICompatibleProvider(BrainProvider):
             model_policy,
             marking_policy,
         )
+        request_json: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": self._with_optional_image(messages or [], image_data_url),
+            "temperature": 0,
+        }
+        if self.structured_output_mode != "prompt_only":
+            request_json["response_format"] = {"type": "json_object"}
         try:
             response = self.client.post(
                 "/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "model": self.model_name,
-                    "messages": self._with_optional_image(messages or [], image_data_url),
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                },
+                headers=self._headers(),
+                json=request_json,
             )
             response.raise_for_status()
         except Exception as exc:
@@ -83,6 +127,84 @@ class OpenAICompatibleProvider(BrainProvider):
             return GradeSuggestionOutput.model_validate(raw_output)
         except ValidationError:
             raise
+
+    def _complete_structured_vision(
+        self,
+        *,
+        prompt: str,
+        images: list[tuple[bytes, str]],
+        response_model: type[BaseModel] | None,
+        schema_name: str,
+        max_tokens: int | None = None,
+    ) -> UniversalVisionCompletion:
+        if not self.vision_enabled:
+            raise RuntimeError("Image input is disabled for this OpenAI-compatible provider")
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image_bytes, mime_type in images:
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                }
+            )
+        request_json: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0,
+        }
+        if self.structured_output_mode == "json_schema" and response_model is not None:
+            request_json["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": response_model.model_json_schema(),
+                },
+            }
+        elif self.structured_output_mode in {"json_schema", "json_object"}:
+            request_json["response_format"] = {"type": "json_object"}
+        if max_tokens is not None:
+            request_json["max_tokens"] = max_tokens
+        started = time.perf_counter()
+        try:
+            response = self.client.post(
+                "/chat/completions",
+                headers=self._headers(),
+                json=request_json,
+            )
+            response.raise_for_status()
+            body = response.json()
+            payload = json.loads(self._extract_content(body))
+        except Exception as exc:
+            raise RuntimeError(self._sanitize_error(str(exc))) from exc
+        if not isinstance(payload, dict):
+            raise ValueError("OpenAI-compatible structured response must be a JSON object")
+        usage = body.get("usage") if isinstance(body, dict) else None
+        return UniversalVisionCompletion(
+            payload=payload,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            prompt_tokens=_optional_usage(usage, "prompt_tokens"),
+            completion_tokens=_optional_usage(usage, "completion_tokens"),
+        )
+
+    def verify_available_model(self) -> None:
+        if not self.verify_model_on_start:
+            return
+        try:
+            response = self.client.get("/models", headers=self._headers())
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            raise RuntimeError(self._sanitize_error(str(exc))) from exc
+        models = payload.get("data") if isinstance(payload, dict) else None
+        model_ids = {
+            item.get("id")
+            for item in (models or [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        if self.model_name not in model_ids:
+            raise RuntimeError("Configured provider model alias was not advertised")
 
     def _with_optional_image(
         self, messages: list[dict[str, Any]], image_data_url: str | None
@@ -126,6 +248,11 @@ class OpenAICompatibleProvider(BrainProvider):
         if flag not in review_flags:
             review_flags.append(flag)
 
+    def _headers(self) -> dict[str, str]:
+        if not self.api_key:
+            return {}
+        return {"Authorization": f"Bearer {self.api_key}"}
+
     def _sanitize_error(self, message: str) -> str:
         sanitized = message.replace(self.api_key, "[REDACTED]") if self.api_key else message
         sanitized = re.sub(r"sk-[A-Za-z0-9_\-]+", "[REDACTED]", sanitized)
@@ -150,3 +277,10 @@ class OpenAICompatibleProvider(BrainProvider):
             return Decimal("0")
         total_tokens = usage.get("total_tokens") or 0
         return Decimal(str(total_tokens)) * Decimal("0")
+
+
+def _optional_usage(usage: object, key: str) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    value = usage.get(key)
+    return value if isinstance(value, int) and value >= 0 else None

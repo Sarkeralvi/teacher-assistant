@@ -216,7 +216,7 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         <Link className="text-sm text-cyan-300 underline" href={`/assessments/${assessmentId}`}>
           Back to assessment setup
         </Link>
-        <h1 className="mt-3 text-3xl font-semibold">Review local Qwen draft grades</h1>
+        <h1 className="mt-3 text-3xl font-semibold">Review brain-assisted draft grades</h1>
         <p className="mt-2 text-sm text-amber-200">
           Every score here is a review-required draft. Approve, edit, or reject each one before it can appear in the final export.
         </p>
@@ -481,7 +481,7 @@ function ReviewCard({
         <SummaryMetric label="grading unit" value={formatReviewQuestion(item.question)} />
         <SummaryMetric label="grading unit max marks" value={item.question.total_marks} />
         <SummaryMetric label="review status" value={status.label} />
-        <SummaryMetric label="Local Qwen draft" value={scoreText} />
+        <SummaryMetric label="Brain draft" value={scoreText} />
         <SummaryMetric label="Final score if finalized" value={finalScoreText} />
       </div>
 
@@ -494,7 +494,7 @@ function ReviewCard({
 
       {suggestion ? (
         <section className="grid gap-3 rounded border border-amber-800 bg-amber-950/20 p-3">
-          <h3 className="font-semibold text-amber-200">Local Qwen suggested score — not final</h3>
+          <h3 className="font-semibold text-amber-200">Brain-suggested score — not final</h3>
           {suggestion.prompt_version !== CURRENT_REAL_GRADING_PROMPT_VERSION ? (
             <p className="rounded border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">
               This draft used an older grading policy ({suggestion.prompt_version}). It may

@@ -44,6 +44,12 @@ from app.services.grading_service import GradingService
 from app.worker.jobs import run_grade_answer_region_job, run_grading_dispatch_job
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.capabilities import BrainCapability
+from packages.brain.policy import brain_policy_from_settings
+
+# Retained as a module attribute for integrations that patch the adapter factory
+# at this route boundary; provider selection itself is delegated to BrainPolicy.
+_BRAIN_ADAPTER_COMPAT = BrainAdapter
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -106,7 +112,9 @@ def get_grading_evidence_packet(
     answer_region_id: int, db: DbSession, current_user: CurrentUser
 ) -> dict[str, object]:
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
-    return GradingService(db).get_grading_evidence_packet(answer_region_id)
+    return GradingService(db, use_configured_adapter=False).get_grading_evidence_packet(
+        answer_region_id
+    )
 
 
 @router.post(
@@ -115,13 +123,38 @@ def get_grading_evidence_packet(
     status_code=status.HTTP_201_CREATED,
 )
 def grade_answer_region(
-    answer_region_id: int, db: DbSession, current_user: CurrentUser
+    answer_region_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    payload: LocalQwenGradeRequest | None = None,
 ) -> dict[str, object]:
+    """Keep the no-body compatibility route deterministic and mock-only.
+
+    Older clients call this endpoint without a controlled provider request.  They
+    must not accidentally send student evidence to whichever real provider is in
+    the server environment.  A client that supplies the universal request shape
+    is deliberately forwarded through the same guarded Brain flow as
+    ``/grade-brain``.
+    """
+    if payload is not None:
+        return grade_answer_region_with_local_qwen38(
+            answer_region_id,
+            payload,
+            db,
+            current_user,
+        )
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
-    job, suggestion = GradingService(db).grade_answer_region(answer_region_id)
+    job, suggestion = GradingService(
+        db, use_configured_adapter=False
+    ).grade_answer_region(answer_region_id)
     return {"job": job, "suggestion": suggestion}
 
 
+@router.post(
+    "/answer-regions/{answer_region_id}/grade-brain",
+    response_model=GradeAnswerRegionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 @router.post(
     "/answer-regions/{answer_region_id}/grade-local-qwen38",
     response_model=GradeAnswerRegionResponse,
@@ -135,20 +168,33 @@ def grade_answer_region_with_local_qwen38(
 ) -> dict[str, object]:
     region = assert_teacher_owns_answer_region(answer_region_id, db, current_user)
     settings = get_settings()
-    if not settings.brain_allow_real_providers:
-        raise HTTPException(status_code=409, detail="Real local providers are disabled")
-    if not settings.local_single_answer_grading_enabled:
-        raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
-    if not settings.local_qwen38_grading_enabled:
+    if (
+        payload.provider == "llama_cpp_qwen38"
+        and settings.brain_grading_enabled is None
+        and not settings.local_qwen38_grading_enabled
+    ):
         raise HTTPException(status_code=409, detail="Local Qwen3.8 grading is disabled")
-    enabled = settings.local_qwen38_enabled
-    expected_model = settings.local_qwen38_model
-    if not enabled:
-        raise HTTPException(status_code=409, detail="Local Qwen3.8 provider is disabled")
-    if payload.expected_model != expected_model:
-        raise HTTPException(
-            status_code=409, detail="Expected local Qwen3.8 model alias does not match"
+    try:
+        policy = brain_policy_from_settings(
+            settings,
+            requested_provider=payload.provider,
         )
+        policy.validate_request(
+            requested_provider=payload.provider,
+            expected_model=payload.expected_model,
+            capability=BrainCapability.GRADING,
+            feature_enabled=(
+                policy.single_answer_grading_enabled and policy.grading_enabled
+            ),
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        policy.require_data_boundary_confirmation(
+            confirmed=payload.provider_data_boundary_confirmed
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     grading_run = db.get(GradingRun, payload.grading_run_id)
     if (
         grading_run is None
@@ -180,18 +226,15 @@ def grade_answer_region_with_local_qwen38(
                 "provider": payload.provider,
                 "expected_model": payload.expected_model,
                 "draft_only": True,
+                "provider_data_boundary_confirmed": (
+                    payload.provider_data_boundary_confirmed
+                ),
                 "evidence_hash": before_hash,
             },
         )
     )
     db.commit()
-    try:
-        adapter = BrainAdapter.for_provider(settings, payload.provider)
-    except BrainProviderConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Local Qwen3.8 could not be prepared with the expected model",
-        ) from exc
+    adapter = policy.adapter
 
     region = assert_teacher_owns_answer_region(answer_region_id, db, current_user)
     grading_service = GradingService(db, adapter=adapter)
@@ -199,7 +242,7 @@ def grade_answer_region_with_local_qwen38(
     if canonical_json_hash(after_packet) != before_hash:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Grading evidence changed while local Qwen3.8 was starting",
+            detail="Grading evidence changed while the brain provider was starting",
         )
     rubric = db.scalars(
         select(Rubric)
@@ -240,6 +283,10 @@ def grade_answer_region_with_local_qwen38(
 
 
 @router.post(
+    "/assessments/{assessment_id}/grade-approved-brain",
+    response_model=LocalQwenApprovedBatchGradeResponse,
+)
+@router.post(
     "/assessments/{assessment_id}/grade-approved-local-qwen38",
     response_model=LocalQwenApprovedBatchGradeResponse,
 )
@@ -249,7 +296,7 @@ def grade_all_approved_answers_with_local_qwen38(
     db: DbSession,
     current_user: CurrentUser,
 ) -> dict[str, object]:
-    """Create review-only Qwen3.8 drafts for every currently approved packet.
+    """Create review-only brain drafts for every currently approved packet.
 
     Execution is intentionally sequential, capped at 25 calls, and stops on
     the first integrity or provider failure. It never retries and never creates
@@ -257,18 +304,12 @@ def grade_all_approved_answers_with_local_qwen38(
     """
     assessment = get_owned_assessment_or_404(assessment_id, db, current_user)
     settings = get_settings()
-    if not settings.brain_allow_real_providers:
-        raise HTTPException(status_code=409, detail="Real local providers are disabled")
-    if not settings.local_single_answer_grading_enabled:
-        raise HTTPException(status_code=409, detail="Local single-answer grading is disabled")
-    if not settings.local_qwen38_grading_enabled:
+    if (
+        payload.provider == "llama_cpp_qwen38"
+        and settings.brain_grading_enabled is None
+        and not settings.local_qwen38_grading_enabled
+    ):
         raise HTTPException(status_code=409, detail="Local Qwen3.8 grading is disabled")
-    if not settings.local_qwen38_enabled:
-        raise HTTPException(status_code=409, detail="Local Qwen3.8 provider is disabled")
-    if payload.expected_model != settings.local_qwen38_model:
-        raise HTTPException(
-            status_code=409, detail="Expected local Qwen3.8 model alias does not match"
-        )
     grading_run = db.get(GradingRun, payload.grading_run_id)
     if (
         grading_run is None
@@ -376,6 +417,28 @@ def grade_all_approved_answers_with_local_qwen38(
             ),
         )
 
+    try:
+        policy = brain_policy_from_settings(
+            settings,
+            requested_provider=payload.provider,
+        )
+        policy.validate_request(
+            requested_provider=payload.provider,
+            expected_model=payload.expected_model,
+            capability=BrainCapability.GRADING,
+            feature_enabled=(
+                policy.single_answer_grading_enabled and policy.grading_enabled
+            ),
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        policy.require_data_boundary_confirmation(
+            confirmed=payload.provider_data_boundary_confirmed
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     db.add(
         AuditLog(
             actor_type="teacher",
@@ -388,6 +451,9 @@ def grade_all_approved_answers_with_local_qwen38(
                 "provider": payload.provider,
                 "expected_model": payload.expected_model,
                 "draft_only": True,
+                "provider_data_boundary_confirmed": (
+                    payload.provider_data_boundary_confirmed
+                ),
                 "call_limit": payload.call_limit,
                 "eligible_count": len(candidates),
                 "answer_region_ids": [item["region_id"] for item in candidates],
@@ -412,13 +478,7 @@ def grade_all_approved_answers_with_local_qwen38(
             "items": items,
         }
 
-    try:
-        adapter = BrainAdapter.for_provider(settings, payload.provider)
-    except BrainProviderConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Local Qwen3.8 could not be prepared with the expected model",
-        ) from exc
+    adapter = policy.adapter
 
     grading_service = GradingService(db, adapter=adapter)
     calls_completed = 0
@@ -559,7 +619,12 @@ def grade_answer_region_async(
     answer_region_id: int, db: DbSession, current_user: CurrentUser
 ) -> GradingJob:
     assert_teacher_owns_answer_region(answer_region_id, db, current_user)
-    job = GradingService(db).create_queued_grading_job(answer_region_id)
+    # The legacy queue payload does not carry the explicit provider/model/data
+    # boundary authorization required for real Brain calls.  It therefore remains
+    # a deterministic mock path; controlled real grading uses /grade-brain.
+    job = GradingService(db, use_configured_adapter=False).create_queued_grading_job(
+        answer_region_id
+    )
     get_default_queue().enqueue(run_grade_answer_region_job, job.id)
     return job
 

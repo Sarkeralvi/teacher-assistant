@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
+from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.cost_tracker import estimate_mock_cost
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
@@ -9,6 +10,14 @@ from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 class MockBrainProvider(BrainProvider):
     provider_name = "mock"
     model_name = "mock-grader-v1"
+    execution_location = BrainExecutionLocation.MOCK
+    capabilities = frozenset(
+        {
+            BrainCapability.GRADING,
+            BrainCapability.QUESTION_PDF_EXTRACTION,
+            BrainCapability.RUBRIC_PDF_EXTRACTION,
+        }
+    )
 
     def grade(
         self,

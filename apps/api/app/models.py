@@ -514,15 +514,6 @@ class ExtractionRun(TimestampMixin, Base):
             "extraction_type in ('question_paper', 'rubric')",
             name="ck_extraction_runs_type",
         ),
-        # Must stay in step with 0024_model_lease_page_evidence, which widened
-        # this constraint in the database. Metadata that disagrees with the
-        # migration builds a schema that rejects writes the real database
-        # accepts, so the two lists are one fact in two places.
-        CheckConstraint(
-            "provider in ('host_bridge_codex', 'mock', 'disabled', 'gemini', "
-            "'local_paddle_qwen', 'llama_cpp_qwen38', 'llama_cpp_qwen')",
-            name="ck_extraction_runs_provider",
-        ),
         CheckConstraint(
             "status in ('pending', 'succeeded', 'failed', 'blocked')",
             name="ck_extraction_runs_status",

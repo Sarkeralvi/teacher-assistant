@@ -29,6 +29,9 @@ from app.schemas import (
 from app.services.bulk_evaluation_service import BulkEvaluationError, BulkEvaluationService
 from app.worker.jobs import run_bulk_evaluation_next_job
 from app.worker.rq_app import get_default_queue
+from packages.brain.adapter import BrainProviderConfigurationError
+from packages.brain.capabilities import BrainExecutionLocation
+from packages.brain.policy import brain_policy_from_settings
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -50,13 +53,17 @@ def _owned_run(run_id: int, db: Session, teacher: User) -> BulkEvaluationRun:
     return run
 
 
-def _enqueue(run_id: int) -> None:
+def _enqueue(run_id: int, provider: str) -> None:
     settings = get_settings()
+    timeout = brain_policy_from_settings(
+        settings,
+        requested_provider=provider,
+    ).job_timeout_seconds
     get_default_queue().enqueue(
         run_bulk_evaluation_next_job,
         run_id,
         retry=None,
-        job_timeout=max(3600, settings.local_qwen38_visual_job_timeout_seconds),
+        job_timeout=max(3600, timeout),
     )
 
 
@@ -71,22 +78,41 @@ def create_bulk_evaluation_run(
     current_user: CurrentUser,
     file: Annotated[UploadFile, File()],
     grading_run_id: Annotated[int, Form(gt=0)],
-    provider: Annotated[Literal["llama_cpp_qwen38"], Form()],
+    provider: Annotated[str, Form(min_length=1, max_length=64)],
     expected_model: Annotated[str, Form(min_length=1, max_length=255)],
     marking_policy: Annotated[Literal["tough", "general", "easy"], Form()] = "general",
     maximum_provider_calls: Annotated[int, Form(ge=1, le=2000)] = 2000,
     local_only_confirmed: Annotated[bool, Form()] = False,
+    provider_data_boundary_confirmed: Annotated[bool, Form()] = False,
     strict_auto_pass_confirmed: Annotated[bool, Form()] = False,
     draft_only_confirmed: Annotated[bool, Form()] = False,
 ) -> BulkEvaluationRun:
     get_owned_assessment_or_404(assessment_id, db, current_user)
-    if not (local_only_confirmed and strict_auto_pass_confirmed and draft_only_confirmed):
+    if not (strict_auto_pass_confirmed and draft_only_confirmed):
         raise HTTPException(
             status_code=422,
-            detail="Local-only, strict auto-pass, and draft-only authorization are required",
+            detail="Strict auto-pass and draft-only authorization are required",
         )
-    if provider != "llama_cpp_qwen38":
-        raise HTTPException(status_code=422, detail="Bulk evaluation is local Qwen3.8 only")
+    try:
+        policy = brain_policy_from_settings(
+            get_settings(),
+            requested_provider=provider,
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if (
+        policy.location is BrainExecutionLocation.CLOUD
+        and not provider_data_boundary_confirmed
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Cloud provider data transfer must be explicitly confirmed",
+        )
+    if policy.location is not BrainExecutionLocation.CLOUD and not local_only_confirmed:
+        raise HTTPException(
+            status_code=422,
+            detail="Local/provider-managed processing must be explicitly confirmed",
+        )
     grading_run = db.get(GradingRun, grading_run_id)
     if (
         grading_run is None
@@ -104,8 +130,9 @@ def create_bulk_evaluation_run(
             expected_model=expected_model,
             marking_policy=marking_policy,
             maximum_provider_calls=maximum_provider_calls,
+            provider=provider,
         )
-        _enqueue(created_run.id)
+        _enqueue(created_run.id, created_run.provider)
         return created_run
     except BulkEvaluationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -160,7 +187,7 @@ def resume_bulk_evaluation_run(
     run = _owned_run(run_id, db, current_user)
     try:
         resumed = BulkEvaluationService(db).resume(run, teacher_id=current_user.id)
-        _enqueue(run.id)
+        _enqueue(run.id, run.provider)
         return resumed
     except BulkEvaluationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -229,7 +256,7 @@ def resume_bulk_evaluation_item(
         resumed = BulkEvaluationService(db).resume_item(
             run, item, teacher_id=current_user.id
         )
-        _enqueue(run.id)
+        _enqueue(run.id, run.provider)
         return resumed
     except BulkEvaluationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

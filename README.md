@@ -15,16 +15,14 @@ FinalGrade exists or is exported.
 - Storage: local filesystem behind future storage adapter
 - AI boundary: the Brain Adapter (`apps/api/packages/brain`) is the only
   module allowed to call grading/extraction language-model providers.
-  Providers include `mock` (default), `gemini`, `openai`, `codex_cli`, and
-  loopback-only `llama_cpp_qwen` (Qwen3.6 text) and `llama_cpp_qwen38`
-  (Qwen3.8 vision). Qwen3.8 performs non-thinking final-intent transcription
-  that excludes deliberately cancelled work while preserving surviving mistakes.
-  A separately authorized, one-call thinking repair may adjudicate visible
-  cancellations after a teacher finds that draft unfaithful; it receives no
-  question, solution, rubric, marks, or grading context and remains review-only;
-  Qwen3.6/Qwen3.8 grading receives teacher-confirmed text
-  only. The retired PaddleOCR sidecar is not part of the active workflow. All
-  real/local providers are off unless explicitly configured.
+  Built-ins include `mock` (default), `gemini`, `openai`,
+  `openai_compatible`, `codex_cli`, and legacy managed-local Qwen profiles.
+  Workflows request capabilities rather than vendor or model names, so a local
+  or cloud OpenAI-compatible endpoint, Gemini, or a registered future provider
+  can use the same review-only evidence and grading contracts. Local model leases
+  apply only to application-managed Qwen profiles. All real providers are off
+  unless explicitly configured, and cloud evidence transfer requires an explicit
+  teacher confirmation for the requested action.
 
 ## First Run
 

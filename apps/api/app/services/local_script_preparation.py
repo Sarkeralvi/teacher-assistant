@@ -25,11 +25,18 @@ from app.models import (
     User,
 )
 from app.services.answer_region_processing import crop_answer_region_image
+from app.services.brain_execution import hold_brain_execution
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError, LocalModelLeaseService
 from app.services.local_ocr_client import LocalOcrClient
 from app.services.storage import LocalStorage
-from packages.brain.adapter import BrainAdapter
+from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.capabilities import BrainCapability
+from packages.brain.policy import (
+    BrainPolicy,
+    brain_policy_from_settings,
+    configured_visual_provider,
+)
 
 
 class LocalScriptPreparationError(RuntimeError):
@@ -114,13 +121,14 @@ class LocalScriptPreparationService:
         replace_existing: bool,
         repair_unconfirmed_only: bool = False,
         maximum_ocr_calls: int,
+        provider: str | None = None,
     ) -> list[AnswerRegionMapping]:
-        """Create review-only Qwen3.8 visual mappings from complete script pages.
+        """Create review-only visual mappings from complete script pages.
 
         This deliberately performs no transcription and no grading.  Mapping and
         verbatim evidence are independent teacher gates.
         """
-        self._validate_authorization(expected_model)
+        policy = self._validate_authorization(expected_model, provider=provider)
         pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
         if not pages:
             raise LocalScriptPreparationError("The uploaded script has no rendered pages")
@@ -170,30 +178,26 @@ class LocalScriptPreparationService:
         open_continuations: list[str] = []
         calls_used = 0
         lease_holder_id = f"script_preparation:{submission.id}:{uuid4().hex}"
-        lease = LocalModelLeaseService(self.db)
         try:
-            with lease.hold(
-                model_phase="Qwen38",
+            adapter = self._qwen_adapter or policy.adapter
+            with hold_brain_execution(
+                db=self.db,
+                settings=self.settings,
+                adapter=adapter,
                 holder_kind="script_preparation",
                 holder_id=lease_holder_id,
-            ):
-                if self.settings.local_ai_phase_switch_enabled:
-                    self.phase_manager.switch("Qwen38", lease_holder_id=lease_holder_id)
-
-                adapter = self._qwen_adapter or BrainAdapter.for_provider(
-                    self.settings, "llama_cpp_qwen38"
+                phase_manager=self.phase_manager,
+            ) as execution:
+                provider = (
+                    adapter
+                    if callable(getattr(adapter, "map_page_answer_regions", None))
+                    else adapter.provider
                 )
-                adapter.verify_available_model()
-                provider = adapter.provider
-                if not hasattr(provider, "map_page_answer_regions"):
-                    raise LocalScriptPreparationError(
-                        "Configured local provider cannot map visual script pages"
-                    )
                 for page in pages:
                     image_path = self.storage.resolve_relative(page.image_path)
                     image_bytes = image_path.read_bytes()
                     try:
-                        lease.heartbeat(holder_id=lease_holder_id)
+                        execution.heartbeat(holder_id=lease_holder_id)
                         result = provider.map_page_answer_regions(
                             image_bytes=image_bytes,
                             mime_type=_image_content_type(image_path),
@@ -201,10 +205,10 @@ class LocalScriptPreparationService:
                             question_references=references,
                             open_continuations=open_continuations,
                         )
-                        lease.heartbeat(holder_id=lease_holder_id)
+                        execution.heartbeat(holder_id=lease_holder_id)
                     except Exception as exc:
                         raise LocalScriptPreparationError(
-                            f"Qwen3.8 visual mapping failed safely: {exc}"
+                            f"Brain visual mapping failed safely: {exc}"
                         ) from exc
                     calls_used += 1
                     seen: set[str] = set()
@@ -213,13 +217,13 @@ class LocalScriptPreparationService:
                         label = region.question_label.casefold()
                         if label in seen:
                             raise LocalScriptPreparationError(
-                                "Qwen3.8 split one answer into multiple page regions"
+                                "The brain provider split one answer into multiple page regions"
                             )
                         seen.add(label)
                         question = question_by_label.get(label)
                         if question is None:
                             raise LocalScriptPreparationError(
-                                "Qwen3.8 returned an unknown finalized question"
+                                "The brain provider returned an unknown finalized question"
                             )
                     with Image.open(image_path) as image:
                         page_height = image.height
@@ -258,7 +262,7 @@ class LocalScriptPreparationService:
                     questions=questions,
                     references=references,
                     provider=provider,
-                    lease=lease,
+                    lease=execution,
                     lease_holder_id=lease_holder_id,
                     maximum_calls=max(0, maximum_ocr_calls - calls_used),
                     segments_by_question=segments_by_question,
@@ -332,6 +336,8 @@ class LocalScriptPreparationService:
                 draft_text="",
                 ocr_warnings=[],
                 qwen_warnings=page_warnings,
+                provider=policy.provider,
+                text_source="brain_visual_mapping_pending_transcription",
             )
             created.append(mapping)
 
@@ -352,7 +358,8 @@ class LocalScriptPreparationService:
                 entity_id=submission.id,
                 payload_json={
                     "assessment_id": submission.assessment_id,
-                    "provider": "llama_cpp_qwen38",
+                    "provider": policy.provider,
+                    "expected_model": expected_model,
                     "expected_qwen_model": expected_model,
                     "visual_mapping_call_count": calls_used,
                     "visual_boundary_recovery_call_count": max(0, calls_used - len(pages)),
@@ -1517,15 +1524,30 @@ class LocalScriptPreparationService:
                 )
         return findings
 
-    def _validate_authorization(self, expected_model: str) -> None:
-        if not self.settings.brain_allow_real_providers:
-            raise LocalScriptPreparationError("Real local providers are disabled")
-        if not self.settings.local_qwen38_visual_preparation_enabled:
-            raise LocalScriptPreparationError("Qwen3.8 visual preparation is disabled")
-        if not self.settings.local_qwen38_enabled:
-            raise LocalScriptPreparationError("Qwen3.8 must be enabled")
-        if expected_model != self.settings.local_qwen38_model:
-            raise LocalScriptPreparationError("Expected local Qwen model alias does not match")
+    def _validate_authorization(
+        self,
+        expected_model: str,
+        *,
+        provider: str | None = None,
+    ) -> BrainPolicy:
+        try:
+            policy = brain_policy_from_settings(
+                self.settings,
+                requested_provider=provider or configured_visual_provider(self.settings),
+                adapter_override=self._qwen_adapter,
+            )
+            policy.validate_request(
+                requested_provider=provider or "active",
+                expected_model=expected_model,
+                capability=BrainCapability.VISUAL_MAPPING,
+                feature_enabled=(
+                    policy.script_preparation_enabled
+                    and policy.visual_preparation_enabled
+                ),
+            )
+        except BrainProviderConfigurationError as exc:
+            raise LocalScriptPreparationError(str(exc)) from exc
+        return policy
 
     def _load_finalized_references(
         self, submission: Submission
@@ -2024,8 +2046,8 @@ class LocalScriptPreparationService:
         draft_text: str,
         ocr_warnings: list[str],
         qwen_warnings: list[str],
-        provider: str = "llama_cpp_qwen38",
-        text_source: str = "qwen38_visual_mapping_pending_transcription",
+        provider: str = "brain",
+        text_source: str = "brain_visual_mapping_pending_transcription",
         possible_continuation: bool = False,
     ) -> AnswerRegionMapping:
         status = "blocked" if not segments else str(draft["status"])
@@ -2421,7 +2443,7 @@ def _valid_bbox(value: Any) -> bool:
     return (
         isinstance(value, list)
         and len(value) == 4
-        and all(isinstance(item, (int, float)) for item in value)
+        and all(isinstance(item, int | float) for item in value)
         and float(value[2]) > float(value[0])
         and float(value[3]) > float(value[1])
     )

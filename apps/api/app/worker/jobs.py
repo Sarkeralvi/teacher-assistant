@@ -15,7 +15,13 @@ from app.worker.rq_app import get_default_queue
 def run_grade_answer_region_job(grading_job_id: int, *, marking_policy: str = "general") -> None:
     db = SessionLocal()
     try:
-        GradingService(db).run_queued_job(grading_job_id, marking_policy=marking_policy)
+        # The legacy async route stores no explicit real-provider authorization.
+        # Keep its worker execution mock-only; Brain-authorized grading uses the
+        # dedicated controlled routes.
+        GradingService(db, use_configured_adapter=False).run_queued_job(
+            grading_job_id,
+            marking_policy=marking_policy,
+        )
     finally:
         db.close()
 

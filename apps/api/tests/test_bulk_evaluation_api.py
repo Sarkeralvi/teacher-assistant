@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.routes import bulk_evaluations as bulk_routes
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
@@ -79,6 +80,18 @@ def db_session() -> Iterator[Session]:
 def client(db_session: Session) -> TestClient:
     del db_session
     return TestClient(app)
+
+
+@pytest.fixture()
+def qwen38_policy(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "key-local-test")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -177,14 +190,54 @@ def test_bulk_create_requires_explicit_authorization(client: TestClient) -> None
     assert "draft-only authorization" in response.json()["detail"]
 
 
-def test_bulk_create_enqueues_only_its_own_run_and_hides_it_from_other_teachers(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_bulk_cloud_provider_requires_explicit_data_boundary_confirmation(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    teacher, run = _teacher_and_run(client, "CloudBoundary")
+    monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
+    monkeypatch.setenv("BRAIN_API_KEY", "test-only-gemini-key")
+    monkeypatch.setenv("BRAIN_MODEL", "gemini-test-model")
+    get_settings.cache_clear()
+    data = _multipart(int(run["id"]))
+    data.update(
+        {
+            "provider": "gemini",
+            "expected_model": "gemini-test-model",
+            "local_only_confirmed": "false",
+            "provider_data_boundary_confirmed": "false",
+        }
+    )
+
+    try:
+        response = client.post(
+            f"/assessments/{teacher['assessment']['id']}/bulk-evaluation-runs",
+            headers=_headers(str(teacher["token"])),
+            data=data,
+            files={"file": ("scripts.zip", b"not-transferred", "application/zip")},
+        )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 422
+    assert "Cloud provider data transfer" in response.json()["detail"]
+
+
+def test_bulk_create_enqueues_only_its_own_run_and_hides_it_from_other_teachers(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    qwen38_policy: None,
+) -> None:
+    del qwen38_policy
     teacher, grading_run = _teacher_and_run(client, "Owner")
     intruder, _ = _teacher_and_run(client, "Intruder")
     enqueued: list[int] = []
     monkeypatch.setattr(bulk_routes.BulkEvaluationService, "create_from_zip", _fake_create)
-    monkeypatch.setattr(bulk_routes, "_enqueue", lambda run_id: enqueued.append(run_id))
+    monkeypatch.setattr(
+        bulk_routes,
+        "_enqueue",
+        lambda run_id, _provider: enqueued.append(run_id),
+    )
 
     response = client.post(
         f"/assessments/{teacher['assessment']['id']}/bulk-evaluation-runs",
@@ -205,8 +258,12 @@ def test_bulk_create_enqueues_only_its_own_run_and_hides_it_from_other_teachers(
 
 
 def test_bulk_enqueue_failure_pauses_only_the_newly_created_run(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    qwen38_policy: None,
 ) -> None:
+    del qwen38_policy
     teacher, grading_run = _teacher_and_run(client, "QueueFailure")
     other_teacher, other_grading_run = _teacher_and_run(client, "Unrelated")
     unrelated_grading_run = db_session.get(GradingRun, int(other_grading_run["id"]))
@@ -222,7 +279,7 @@ def test_bulk_enqueue_failure_pauses_only_the_newly_created_run(
     )
     monkeypatch.setattr(bulk_routes.BulkEvaluationService, "create_from_zip", _fake_create)
 
-    def fail_enqueue(_run_id: int) -> None:
+    def fail_enqueue(_run_id: int, _provider: str) -> None:
         raise RuntimeError("RQ down")
 
     monkeypatch.setattr(bulk_routes, "_enqueue", fail_enqueue)
