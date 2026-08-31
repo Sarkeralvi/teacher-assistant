@@ -30,21 +30,39 @@ function Get-PilotPaths {
 function Import-PilotEnvironment {
     param([Parameter(Mandatory = $true)][hashtable]$Paths)
 
+    function Import-EnvironmentFile {
+        param([Parameter(Mandatory = $true)][string]$Path)
+
+        foreach ($line in Get-Content -LiteralPath $Path) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith("#")) {
+                continue
+            }
+            $parts = $trimmed.Split("=", 2)
+            if ($parts.Count -ne 2 -or -not $parts[0].Trim()) {
+                throw "Invalid configuration line in $Path."
+            }
+            Set-Item -LiteralPath ("Env:" + $parts[0].Trim()) `
+                -Value $parts[1].Trim().Trim('"').Trim("'")
+        }
+    }
+
     $localAiConfig = Join-Path $Paths.RepositoryRoot ".env.local-ai"
     if (-not (Test-Path -LiteralPath $localAiConfig -PathType Leaf)) {
         throw "Local AI configuration is missing: $localAiConfig"
     }
-    foreach ($line in Get-Content -LiteralPath $localAiConfig) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith("#")) {
-            continue
-        }
-        $parts = $trimmed.Split("=", 2)
-        if ($parts.Count -ne 2 -or -not $parts[0].Trim()) {
-            throw "Invalid local AI configuration line."
-        }
-        Set-Item -LiteralPath ("Env:" + $parts[0].Trim()) `
-            -Value $parts[1].Trim().Trim('"').Trim("'")
+    Import-EnvironmentFile -Path $localAiConfig
+
+    # The root profile selects the active Brain provider.  Load it after
+    # machine-specific local-AI values so a teacher's ignored .env can switch
+    # between Gemini, OpenAI-compatible, and local endpoints without editing
+    # this pilot launcher.  Host-only database and storage values below still
+    # intentionally override Compose-oriented defaults from that file.
+    $applicationConfig = Join-Path $Paths.RepositoryRoot ".env"
+    if (Test-Path -LiteralPath $applicationConfig -PathType Leaf) {
+        Import-EnvironmentFile -Path $applicationConfig
+    } else {
+        $env:BRAIN_PROVIDER = "mock"
     }
 
     $env:APP_ENV = "development"
@@ -61,7 +79,6 @@ function Import-PilotEnvironment {
     # address in the browser avoids intermittent localhost IPv6 resolution
     # failures during the assessment's parallel API requests.
     $env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8000"
-    $env:BRAIN_PROVIDER = "mock"
     $nodeDirectory = Split-Path -Parent $Paths.Node
     if (-not (($env:Path -split ";") -contains $nodeDirectory)) {
         $env:Path = $nodeDirectory + ";" + $env:Path
