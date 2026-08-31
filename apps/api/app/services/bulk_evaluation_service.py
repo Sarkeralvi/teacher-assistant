@@ -1011,6 +1011,25 @@ class BulkEvaluationService:
             .limit(1)
         )
 
+    def _existing_submission_mappings(self, submission_id: int) -> list[AnswerRegionMapping]:
+        """Mappings already on record for a script, with the geometry loaded.
+
+        Segments are eager-loaded because the caller re-derives overlap and the
+        mapping snapshot hash from them without a second provider call.
+        """
+        return list(
+            self.db.scalars(
+                select(AnswerRegionMapping)
+                .options(
+                    selectinload(AnswerRegionMapping.answer_region).selectinload(
+                        AnswerRegion.segments
+                    )
+                )
+                .where(AnswerRegionMapping.submission_id == submission_id)
+                .order_by(AnswerRegionMapping.id)
+            ).all()
+        )
+
     def _process_mapping(self, run: BulkEvaluationRun) -> None:
         submission_id = self._next_mapping_submission(run)
         if submission_id is None:
@@ -1023,40 +1042,67 @@ class BulkEvaluationService:
         teacher = self.db.get(User, run.created_by_teacher_id)
         if submission is None or teacher is None:
             raise BulkEvaluationError("Bulk mapping ownership context is unavailable")
-        remaining = run.authorized_call_limit - run.calls_used
-        if len(submission.pages) > remaining:
-            self._pause(run, "Provider-call budget is insufficient for the next script")
-            return
-        run.status = "mapping"
-        run.stage = "mapping"
-        self.db.execute(
-            BulkEvaluationItem.__table__.update()
-            .where(
-                BulkEvaluationItem.run_id == run.id,
-                BulkEvaluationItem.submission_id == submission.id,
-                BulkEvaluationItem.stage == "mapping",
-            )
-            .values(status="running", started_at=datetime.now(UTC))
-        )
-        self.db.commit()
-
-        mappings = LocalScriptPreparationService(self.db).prepare(
-            submission=submission,
-            teacher=teacher,
-            expected_model=run.model_name,
-            replace_existing=False,
-            maximum_ocr_calls=remaining,
-        )
-        calls = self._latest_mapping_call_count(submission.id)
-        self._consume_calls(run, max(len(submission.pages), calls))
         items = list(
             self.db.scalars(
                 select(BulkEvaluationItem).where(
                     BulkEvaluationItem.run_id == run.id,
                     BulkEvaluationItem.submission_id == submission.id,
+                    BulkEvaluationItem.stage == "mapping",
+                    BulkEvaluationItem.status.in_(("pending", "running")),
                 )
             ).all()
         )
+        if not items:
+            return
+        run.status = "mapping"
+        run.stage = "mapping"
+
+        mappings = self._existing_submission_mappings(submission.id)
+        if mappings:
+            # Re-entry, not a first pass. A teacher who resumes a flagged item
+            # puts it back into this stage while the rest of the script is
+            # already mapped, and LocalScriptPreparationService refuses to
+            # prepare over its own output ("Draft mappings already exist").
+            # That refusal used to escape as a run-level failure, which marked
+            # every in-flight item -- on this script and on any other -- with a
+            # provider_contract_failure that no provider had produced, burying
+            # the real finding underneath it.
+            #
+            # Re-running the mapper would be pointless anyway: same pages, same
+            # locked references, same answer. So settle the resumed items
+            # against the mapping already on record, for no provider call, and
+            # let each one land on its true finding.
+            self._audit_run(
+                run,
+                "bulk_evaluation_mapping_reused",
+                None,
+                {
+                    "submission_id": submission.id,
+                    "item_count": len(items),
+                    "mapping_count": len(mappings),
+                },
+                actor_type="worker",
+            )
+        else:
+            remaining = run.authorized_call_limit - run.calls_used
+            if len(submission.pages) > remaining:
+                self._pause(run, "Provider-call budget is insufficient for the next script")
+                return
+            started = datetime.now(UTC)
+            for item in items:
+                item.status = "running"
+                item.started_at = started
+            self.db.commit()
+
+            mappings = LocalScriptPreparationService(self.db).prepare(
+                submission=submission,
+                teacher=teacher,
+                expected_model=run.model_name,
+                replace_existing=False,
+                maximum_ocr_calls=remaining,
+            )
+            calls = self._latest_mapping_call_count(submission.id)
+            self._consume_calls(run, max(len(submission.pages), calls))
         mapping_by_question = {mapping.question_id: mapping for mapping in mappings}
         overlap_questions = self._overlapping_question_ids(mappings)
         for item in items:
@@ -1077,6 +1123,12 @@ class BulkEvaluationService:
             mapping.bulk_verification_run_id = run.id
             item.status = "pending"
             item.stage = "transcription"
+            # A re-settled item can arrive carrying the finding that flagged it
+            # last time; it cleared this stage now, so it must not hand a stale
+            # code down to transcription.
+            item.exception_codes = []
+            item.warnings = []
+            item.completed_at = None
             item.verification_source = "bulk_policy"
             item.source_snapshot_sha256 = self._mapping_snapshot_hash(mapping)
             item.provider_call_count += 0
@@ -1116,7 +1168,16 @@ class BulkEvaluationService:
             self._consume_calls(run, used)
             item.provider_call_count += used
             if current_run is None or current_run.status != "succeeded":
-                raise VisualTranscriptionError("Thinking repair failed its provider contract")
+                error_msg = (
+                    current_run.error
+                    if current_run and current_run.error
+                    else "Thinking repair could not resolve visual evidence"
+                )
+                self._quarantine(item, "ambiguous_symbol", error_msg)
+                run.heartbeat_at = datetime.now(UTC)
+                self._refresh_counts(run)
+                self.db.commit()
+                return
             if self._formula_dense(current_run.draft_text or ""):
                 if not self._verify_formula_transcription(run, item, region, current_run):
                     self._quarantine(

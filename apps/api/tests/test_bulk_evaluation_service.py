@@ -10,7 +10,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core.config import get_settings
-from app.models import AnswerRegionOcrRun, BulkEvaluationItem, BulkEvaluationRun
+from app.models import (
+    AnswerRegion,
+    AnswerRegionMapping,
+    AnswerRegionOcrRun,
+    BulkEvaluationItem,
+    BulkEvaluationRun,
+    Submission,
+    User,
+)
 from app.services.bulk_evaluation_service import (
     BulkEvaluationError,
     BulkEvaluationService,
@@ -218,7 +226,6 @@ def test_interrupted_running_items_become_uncertain_without_retry() -> None:
     assert "explicit retry" in item.warnings[0]
     service._refresh_counts.assert_called_once()
 
-
 def test_interrupted_run_also_closes_the_transcription_row_it_was_waiting_on() -> None:
     """Reclaiming the item alone leaves the provider ledger lying.
 
@@ -337,3 +344,132 @@ def test_bulk_audit_payload_records_hashes_and_counts_not_raw_answer_text() -> N
     assert audit.payload_json["calls_used"] == 12
     assert audit.payload_json["evidence_sha256"] == "a" * 64
     assert "answer" not in " ".join(audit.payload_json).casefold()
+
+
+def test_process_mapping_reuses_existing_mappings_without_calling_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=2,
+        authorized_call_limit=20,
+        calls_used=4,
+        created_by_teacher_id=1,
+        model_name="qwen3.8-27b-q4km",
+    )
+    submission = Submission(id=62)
+    teacher = User(id=1)
+    region = AnswerRegion(id=101, segments=[])
+    mapping = AnswerRegionMapping(
+        id=201,
+        submission_id=62,
+        question_id=72,
+        answer_region_id=101,
+        confidence=Decimal("0.95"),
+        answer_region=region,
+        blocker_reason=None,
+    )
+    item = BulkEvaluationItem(
+        id=15,
+        run_id=2,
+        submission_id=62,
+        question_id=72,
+        stage="mapping",
+        status="pending",
+        provider_call_count=0,
+    )
+
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._next_mapping_submission = MagicMock(return_value=62)
+    db.scalar.return_value = submission
+    db.get.return_value = teacher
+    db.scalars.side_effect = [
+        MagicMock(all=MagicMock(return_value=[item])),  # items
+        MagicMock(all=MagicMock(return_value=[mapping])),  # existing mappings
+    ]
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+
+    mock_prep = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.LocalScriptPreparationService",
+        mock_prep,
+    )
+
+    service._process_mapping(run)
+
+    mock_prep.assert_not_called()
+    assert item.status == "pending"
+    assert item.stage == "transcription"
+    assert item.mapping_id == 201
+    assert item.answer_region_id == 101
+    assert mapping.bulk_policy_verified is True
+    assert mapping.bulk_verification_run_id == 2
+    service._audit_run.assert_called_once()
+    assert service._audit_run.call_args[0][1] == "bulk_evaluation_mapping_reused"
+
+
+def test_failed_thinking_repair_quarantines_item_as_ambiguous_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=2,
+        authorized_call_limit=20,
+        calls_used=4,
+        created_by_teacher_id=1,
+        model_name="qwen3.8-27b-q4km",
+    )
+    region = AnswerRegion(id=101, question_id=72)
+    teacher = User(id=1)
+    ocr_run = AnswerRegionOcrRun(
+        id=102,
+        profile="qwen38_thinking_repair",
+        call_limit=3,
+        calls_used=3,
+        status="failed",
+        error=(
+            "The surviving pixels remain visually unresolved after bounded reasoning. "
+            "No transcript was accepted."
+        ),
+        warnings=["teacher_review_required", "thinking_repair_visual_resolution_unresolved"],
+    )
+    item = BulkEvaluationItem(
+        id=15,
+        run_id=2,
+        submission_id=62,
+        question_id=72,
+        stage="transcription",
+        status="running",
+        answer_region_id=101,
+        transcription_run_id=102,
+        provider_call_count=1,
+        exception_codes=[],
+        warnings=[],
+    )
+
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._next_transcription_item = MagicMock(return_value=item)
+    service._refresh_counts = MagicMock()
+
+    db.get.side_effect = lambda model, pk: {
+        (AnswerRegion, 101): region,
+        (User, 1): teacher,
+        (AnswerRegionOcrRun, 102): ocr_run,
+    }.get((model, pk))
+
+    mock_qwen_service = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.Qwen38VisualTranscriptionService",
+        lambda _db: mock_qwen_service,
+    )
+
+    service._process_transcription(run)
+
+    mock_qwen_service.run_thinking_repair.assert_called_once_with(102)
+    assert item.status == "exception"
+    assert "ambiguous_symbol" in item.exception_codes
+    assert "The surviving pixels remain visually unresolved" in item.warnings[0]
+    assert run.calls_used == 7  # 4 + 3 consumed
+    assert item.provider_call_count == 4  # 1 + 3
+    service._refresh_counts.assert_called_once()
