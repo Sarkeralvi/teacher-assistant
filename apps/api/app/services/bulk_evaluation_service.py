@@ -55,6 +55,8 @@ from packages.brain.adapter import (
     BrainProviderConfigurationError,
     sanitize_provider_error,
 )
+from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
+from packages.ocr.coverage import measure_uncovered_ink
 
 BULK_POLICY_VERSION = "bulk-supervised-qwen38-v1"
 _UNCERTAIN_PROVIDER_WARNING = (
@@ -1000,6 +1002,15 @@ class BulkEvaluationService:
         )
 
     def _next_grading_item(self, run: BulkEvaluationRun) -> BulkEvaluationItem | None:
+        """The next answer to grade, taken question-major rather than student-major.
+
+        Items are created student-major (``for submission: for question:``), so
+        ordering by id alone would swap the question, model answer and rubric on
+        every consecutive call.  Those three are the largest constant block in the
+        grading prompt, and the host serves one slot, so llama.cpp can only reuse
+        the cached prefix when successive calls share that header.  Grading every
+        student for one question before moving on keeps it stable.
+        """
         return self.db.scalar(
             select(BulkEvaluationItem)
             .where(
@@ -1007,7 +1018,7 @@ class BulkEvaluationService:
                 BulkEvaluationItem.status == "pending",
                 BulkEvaluationItem.stage == "grading",
             )
-            .order_by(BulkEvaluationItem.id)
+            .order_by(BulkEvaluationItem.question_id, BulkEvaluationItem.id)
             .limit(1)
         )
 
@@ -1189,6 +1200,38 @@ class BulkEvaluationService:
                     self.db.commit()
                     return
             self._accept_or_quarantine_transcription(run, item, region, current_run)
+        elif self._region_has_no_ink(region):
+            # A region with no ink at all reaches the same place the post-call
+            # blank check sends it, so spending the call to be told "is_blank"
+            # buys nothing. The curated protocol already requires blanks be
+            # refused before dispatch rather than transcribed.
+            self._quarantine(
+                item, "probable_blank", "Probable blank answer needs teacher review"
+            )
+            run.heartbeat_at = datetime.now(UTC)
+            self._refresh_counts(run)
+            self.db.commit()
+            return
+        elif (
+            reused := self._reusable_transcription(region, service._source_hash(region))
+        ) is not None:
+            # Same images, same prompt, same model assets, and a transcript that
+            # already cleared the acceptance gate. Re-reading them at 4.35 tok/s
+            # to obtain a byte-identical result is the whole cost of not looking.
+            original_run_id = reused.bulk_verification_run_id
+            item.transcription_run_id = reused.id
+            self._accept_or_quarantine_transcription(run, item, region, reused)
+            self._audit_run(
+                run,
+                "bulk_evaluation_transcription_reused",
+                run.created_by_teacher_id,
+                {
+                    "answer_region_id": region.id,
+                    "transcription_run_id": reused.id,
+                    "originating_bulk_run_id": original_run_id,
+                    "source_image_sha256": reused.source_image_sha256,
+                },
+            )
         else:
             self._require_calls(run, 1)
             transcript_run = service.create(region, teacher=teacher, expected_model=run.model_name)
@@ -1239,6 +1282,57 @@ class BulkEvaluationService:
         run.heartbeat_at = datetime.now(UTC)
         self._refresh_counts(run)
         self.db.commit()
+
+    def _reusable_transcription(
+        self, region: AnswerRegion, source_hash: str
+    ) -> AnswerRegionOcrRun | None:
+        """A prior transcription of these exact images that already passed the gate.
+
+        ``confirmed`` is the discriminator that makes this safe. A run that merely
+        succeeded may still have been quarantined afterwards for low confidence,
+        an ambiguous symbol, or a formula-verification disagreement; only
+        ``_accept_or_quarantine_transcription`` promotes a run to ``confirmed``.
+        Matching the prompt version and both model asset hashes keeps a transcript
+        from outliving the model or prompt that produced it.
+        """
+        return self.db.scalar(
+            select(AnswerRegionOcrRun)
+            .where(
+                AnswerRegionOcrRun.answer_region_id == region.id,
+                AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
+                AnswerRegionOcrRun.status == "confirmed",
+                AnswerRegionOcrRun.source_image_sha256 == source_hash,
+                AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
+                AnswerRegionOcrRun.model_asset_sha256
+                == (self.settings.local_qwen38_model_sha256 or None),
+                AnswerRegionOcrRun.mmproj_asset_sha256
+                == (self.settings.local_qwen38_mmproj_sha256 or None),
+            )
+            .order_by(AnswerRegionOcrRun.id.desc())
+            .limit(1)
+        )
+
+    def _region_has_no_ink(self, region: AnswerRegion) -> bool:
+        """True only when every segment of this answer is provably empty.
+
+        Deliberately strict: a single ink pixel anywhere is enough to send the
+        region to the model. The asymmetry is the reason -- calling on a blank
+        wastes one call, while skipping a faint real answer would put a student's
+        work in front of the teacher as "blank". Anything unreadable or unknown
+        therefore falls through to the provider rather than short-circuiting.
+        """
+        segments = list(region.segments or [])
+        if not segments:
+            return False
+        for segment in segments:
+            try:
+                image_bytes = self.storage.resolve_relative(segment.image_path).read_bytes()
+            except OSError:
+                return False
+            coverage = measure_uncovered_ink(image_bytes, [])
+            if coverage is None or not coverage.is_blank:
+                return False
+        return True
 
     def _accept_or_quarantine_transcription(
         self,

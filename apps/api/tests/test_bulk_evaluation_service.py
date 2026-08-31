@@ -14,6 +14,7 @@ from app.models import (
     AnswerRegion,
     AnswerRegionMapping,
     AnswerRegionOcrRun,
+    AnswerRegionSegment,
     BulkEvaluationItem,
     BulkEvaluationRun,
     Submission,
@@ -199,6 +200,205 @@ def test_provider_call_budget_is_hard_and_never_overruns() -> None:
         service._consume_calls(run, 2)
 
     assert run.calls_used == 3
+
+
+def test_grading_is_drained_question_major_so_the_prompt_prefix_stays_cacheable() -> None:
+    # Items are created student-major, so ordering by id alone would swap the
+    # question, model answer and rubric on every consecutive grading call. The
+    # host serves one slot; a stable header is what makes prefix reuse possible.
+    db = MagicMock()
+    db.scalar.return_value = None
+    service = _service()
+    service.db = db
+
+    service._next_grading_item(BulkEvaluationRun(id=3, created_by_teacher_id=1))
+
+    statement = str(db.scalar.call_args[0][0])
+    assert (
+        "ORDER BY bulk_evaluation_items.question_id, bulk_evaluation_items.id"
+        in statement
+    )
+
+
+def test_bulk_items_are_created_student_major() -> None:
+    # The pairing that makes the grading order above load-bearing: if item
+    # creation ever became question-major, _next_grading_item's ordering would be
+    # a no-op rather than a correction, and this test should be revisited.
+    source = (
+        Path(__file__).resolve().parents[1] / "app/services/bulk_evaluation_service.py"
+    ).read_text(encoding="utf-8")
+    nested_loop = "for submission in submissions:\n                    for question in questions:"
+    assert nested_loop in source
+
+
+def _png(tmp_path: Path, name: str, *, inked: bool) -> Path:
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (40, 40), color=255)
+    if inked:
+        ImageDraw.Draw(image).rectangle((10, 10, 20, 20), fill=0)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    target = tmp_path / name
+    target.write_bytes(buffer.getvalue())
+    return target
+
+
+def test_blank_region_is_refused_before_the_provider_call(tmp_path: Path) -> None:
+    blank = _png(tmp_path, "blank.png", inked=False)
+    service = _service()
+    service.storage.resolve_relative = MagicMock(return_value=blank)
+    region = AnswerRegion(
+        id=101, segments=[AnswerRegionSegment(image_path="blank.png", order_index=1)]
+    )
+
+    assert service._region_has_no_ink(region) is True
+
+
+def test_region_with_any_ink_still_goes_to_the_provider(tmp_path: Path) -> None:
+    inked = _png(tmp_path, "inked.png", inked=True)
+    service = _service()
+    service.storage.resolve_relative = MagicMock(return_value=inked)
+    region = AnswerRegion(
+        id=102, segments=[AnswerRegionSegment(image_path="inked.png", order_index=1)]
+    )
+
+    assert service._region_has_no_ink(region) is False
+
+
+def test_unreadable_segment_falls_through_to_the_provider(tmp_path: Path) -> None:
+    # Fail open. "Unknown" must never be treated as "blank", because the cost of
+    # a wrong blank is a student's answer presented to the teacher as empty.
+    service = _service()
+    service.storage.resolve_relative = MagicMock(return_value=tmp_path / "missing.png")
+    region = AnswerRegion(
+        id=103, segments=[AnswerRegionSegment(image_path="missing.png", order_index=1)]
+    )
+
+    assert service._region_has_no_ink(region) is False
+
+
+def test_region_without_segments_is_not_treated_as_blank() -> None:
+    assert _service()._region_has_no_ink(AnswerRegion(id=104, segments=[])) is False
+
+
+def test_blank_short_circuit_consumes_no_provider_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    blank = _png(tmp_path, "blank.png", inked=False)
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=4,
+        authorized_call_limit=20,
+        calls_used=0,
+        created_by_teacher_id=1,
+        model_name="qwen3.8-27b-q4km",
+    )
+    item = BulkEvaluationItem(
+        id=21, run_id=4, submission_id=62, question_id=72, stage="transcription",
+        status="pending", provider_call_count=0, exception_codes=[], warnings=[],
+    )
+    region = AnswerRegion(
+        id=105, segments=[AnswerRegionSegment(image_path="blank.png", order_index=1)]
+    )
+
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service.storage.resolve_relative = MagicMock(return_value=blank)
+    service._next_transcription_item = MagicMock(return_value=item)
+    service._refresh_counts = MagicMock()
+    db.get.side_effect = lambda model, _id: region if model is AnswerRegion else User(id=1)
+
+    transcription = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.Qwen38VisualTranscriptionService",
+        transcription,
+    )
+
+    service._process_transcription(run)
+
+    transcription.return_value.create.assert_not_called()
+    transcription.return_value.run.assert_not_called()
+    assert run.calls_used == 0
+    assert item.provider_call_count == 0
+    assert item.status == "exception"
+    assert item.exception_codes == ["probable_blank"]
+
+
+def test_confirmed_transcription_of_identical_images_is_reused_without_a_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    inked = _png(tmp_path, "inked.png", inked=True)
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=9,
+        authorized_call_limit=20,
+        calls_used=0,
+        created_by_teacher_id=1,
+        model_name="qwen3.8-27b-q4km",
+    )
+    item = BulkEvaluationItem(
+        id=31, run_id=9, submission_id=62, question_id=72, stage="transcription",
+        status="pending", provider_call_count=0, exception_codes=[], warnings=[],
+    )
+    region = AnswerRegion(
+        id=106, segments=[AnswerRegionSegment(image_path="inked.png", order_index=1)]
+    )
+    reused = AnswerRegionOcrRun(
+        id=555,
+        answer_region_id=106,
+        profile="qwen38_verbatim_visual",
+        status="confirmed",
+        draft_text="x = 4",
+        bulk_verification_run_id=8,
+        normalized_result={"confidence": "0.97"},
+    )
+
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service.storage.resolve_relative = MagicMock(return_value=inked)
+    service._next_transcription_item = MagicMock(return_value=item)
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+    db.get.side_effect = lambda model, _id: region if model is AnswerRegion else User(id=1)
+    db.scalar.return_value = reused
+
+    transcription = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.Qwen38VisualTranscriptionService",
+        transcription,
+    )
+
+    service._process_transcription(run)
+
+    transcription.return_value.create.assert_not_called()
+    assert run.calls_used == 0
+    assert item.provider_call_count == 0
+    assert item.transcription_run_id == 555
+    assert item.stage == "grading"
+    assert region.manual_answer_text == "x = 4"
+    assert service._audit_run.call_args[0][1] == "bulk_evaluation_transcription_reused"
+    # The reuse audit keeps the link to the run that actually paid for the call.
+    assert service._audit_run.call_args[0][3]["originating_bulk_run_id"] == 8
+
+
+def test_reuse_never_accepts_a_merely_succeeded_transcription() -> None:
+    # A run can succeed and still have been quarantined afterwards for low
+    # confidence, an ambiguous symbol, or a formula disagreement. Only
+    # _accept_or_quarantine_transcription promotes one to "confirmed", so that
+    # is the status the reuse query is allowed to match.
+    db = MagicMock()
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+
+    service._reusable_transcription(AnswerRegion(id=107, segments=[]), "abc123")
+
+    statement = str(db.scalar.call_args[0][0])
+    assert "answer_region_ocr_runs.status = " in statement
+    assert "answer_region_ocr_runs.prompt_version = " in statement
+    assert "answer_region_ocr_runs.model_asset_sha256" in statement
+    assert "answer_region_ocr_runs.mmproj_asset_sha256" in statement
+    params = db.scalar.call_args[0][0].compile().params
+    assert "confirmed" in params.values()
 
 
 def test_interrupted_running_items_become_uncertain_without_retry() -> None:
