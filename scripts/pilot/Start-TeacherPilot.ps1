@@ -156,6 +156,7 @@ $backendSourceTimestamp = Get-NewestSourceWriteTimeUtc -SourcePaths @(
     (Join-Path $paths.ApiDirectory "packages"),
     (Join-Path $paths.ApiDirectory "alembic"),
     (Join-Path $paths.ApiDirectory "alembic.ini"),
+    (Join-Path $paths.RepositoryRoot ".env"),
     (Join-Path $paths.RepositoryRoot ".env.local-ai")
 )
 $existingApi = Get-PilotOwnedProcess -Paths $paths -Name "api" `
