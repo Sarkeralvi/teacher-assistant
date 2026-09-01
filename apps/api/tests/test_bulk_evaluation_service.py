@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -521,6 +521,165 @@ def test_interrupted_run_does_not_rewrite_a_finished_transcription() -> None:
 
     assert finished.status == "succeeded"
     assert finished.error is None
+
+
+def test_stale_resume_preserves_completed_calls_and_reclaims_the_orphaned_ledger_row() -> None:
+    """A restart may continue never-started work, but never repeat the lost call."""
+
+    db = MagicMock()
+    completed = BulkEvaluationItem(
+        id=1,
+        run_id=3,
+        submission_id=2,
+        question_id=5,
+        status="graded",
+        stage="review",
+        provider_call_count=1,
+        exception_codes=[],
+        warnings=[],
+    )
+    interrupted = BulkEvaluationItem(
+        id=2,
+        run_id=3,
+        submission_id=2,
+        question_id=6,
+        status="running",
+        stage="transcription",
+        transcription_run_id=88,
+        exception_codes=[],
+        warnings=[],
+    )
+    never_started = BulkEvaluationItem(
+        id=3,
+        run_id=3,
+        submission_id=2,
+        question_id=7,
+        status="pending",
+        stage="grading",
+        exception_codes=[],
+        warnings=[],
+    )
+    run = BulkEvaluationRun(
+        id=3,
+        created_by_teacher_id=1,
+        status="grading",
+        stage="grading",
+        authorized_call_limit=1800,
+        calls_used=720,
+        heartbeat_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    run.items = [completed, interrupted, never_started]
+    orphan = AnswerRegionOcrRun(id=88, status="running", warnings=[])
+    db.scalars.return_value.all.return_value = [interrupted]
+    db.get.side_effect = lambda model, _id: orphan if model is AnswerRegionOcrRun else None
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+    service.get_run = MagicMock(return_value=run)
+
+    resumed = service.resume(run, teacher_id=1)
+
+    assert resumed is run
+    assert run.calls_used == 720
+    assert completed.status == "graded"
+    assert completed.provider_call_count == 1
+    assert interrupted.status == "uncertain"
+    assert interrupted.exception_codes == ["provider_contract_failure"]
+    assert orphan.status == "failed"
+    assert "interrupted_run_reclaimed" in orphan.warnings
+    assert never_started.status == "pending"
+    assert run.status == "grading"
+
+
+def test_page_read_resume_item_reuses_persisted_evidence_without_spending_a_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The page-read restart path only re-settles durable artifacts."""
+
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=4,
+        created_by_teacher_id=1,
+        status="review_ready",
+        stage="review",
+        authorized_call_limit=1800,
+        calls_used=720,
+        import_manifest={"visual_evidence_path": "page_read"},
+    )
+    item = BulkEvaluationItem(
+        id=21,
+        run_id=4,
+        submission_id=62,
+        question_id=72,
+        mapping_id=201,
+        answer_region_id=101,
+        status="uncertain",
+        stage="read",
+        exception_codes=["provider_contract_failure"],
+        warnings=["interrupted"],
+    )
+    run.items = [item]
+    region = AnswerRegion(id=101, question_id=72, segments=[])
+    mapping = AnswerRegionMapping(
+        id=201,
+        submission_id=62,
+        question_id=72,
+        answer_region_id=101,
+        answer_region=region,
+        confidence=Decimal("0.95"),
+        blocker_reason=None,
+        source_reference={},
+    )
+    transcript = AnswerRegionOcrRun(
+        id=555,
+        answer_region_id=101,
+        profile="qwen38_visual_page_read",
+        status="confirmed",
+        draft_text="synthetic persisted evidence",
+        normalized_result={"confidence": "0.95"},
+    )
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._page_read_runs_by_question = MagicMock(return_value={72: transcript})
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+    db.get.side_effect = lambda model, _id: {
+        AnswerRegionMapping: mapping,
+        AnswerRegion: region,
+    }.get(model)
+
+    resumed = service.resume_item(run, item, teacher_id=1)
+
+    assert resumed is item
+    assert item.status == "pending"
+    assert item.stage == "read"
+    assert run.status == "mapping"
+    assert run.calls_used == 720
+
+    # Simulate the next worker unit after restart. Existing mappings plus the
+    # confirmed page-read artifact must take the reuse branch rather than call
+    # LocalScriptPageReadService again.
+    submission = Submission(id=62, pages=[])
+    teacher = User(id=1)
+    db.scalar.return_value = submission
+    db.scalars.return_value.all.return_value = [item]
+    db.get.side_effect = lambda model, _id: teacher if model is User else None
+    service._next_read_submission = MagicMock(return_value=62)
+    service._existing_submission_mappings = MagicMock(return_value=[mapping])
+    service._page_read_runs_by_question = MagicMock(return_value={72: transcript})
+    service._overlapping_question_ids = MagicMock(return_value=set())
+    service._accept_or_quarantine_transcription = MagicMock()
+    page_read = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.LocalScriptPageReadService",
+        page_read,
+    )
+
+    service._process_read(run)
+
+    page_read.assert_not_called()
+    assert run.calls_used == 720
+    assert item.mapping_id == 201
+    assert item.answer_region_id == 101
 
 
 def test_bulk_audit_payload_records_hashes_and_counts_not_raw_answer_text() -> None:

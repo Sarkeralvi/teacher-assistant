@@ -81,7 +81,7 @@ def create_bulk_evaluation_run(
     provider: Annotated[str, Form(min_length=1, max_length=64)],
     expected_model: Annotated[str, Form(min_length=1, max_length=255)],
     marking_policy: Annotated[Literal["tough", "general", "easy"], Form()] = "general",
-    maximum_provider_calls: Annotated[int, Form(ge=1, le=2000)] = 2000,
+    maximum_provider_calls: Annotated[int, Form(ge=1, le=2000)] = 1800,
     local_only_confirmed: Annotated[bool, Form()] = False,
     provider_data_boundary_confirmed: Annotated[bool, Form()] = False,
     strict_auto_pass_confirmed: Annotated[bool, Form()] = False,

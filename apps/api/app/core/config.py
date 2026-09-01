@@ -310,14 +310,14 @@ class Settings(BaseSettings):
     )
     bulk_supervised_enabled: bool = Field(default=False, alias="BULK_SUPERVISED_ENABLED")
     bulk_max_submissions: int = Field(
-        default=50, alias="BULK_MAX_SUBMISSIONS", ge=1, le=50
+        default=180, alias="BULK_MAX_SUBMISSIONS", ge=1, le=180
     )
-    bulk_max_pages: int = Field(default=500, alias="BULK_MAX_PAGES", ge=1, le=500)
+    bulk_max_pages: int = Field(default=720, alias="BULK_MAX_PAGES", ge=1, le=720)
     bulk_max_archive_bytes: int = Field(
         default=1_073_741_824, alias="BULK_MAX_ARCHIVE_BYTES", ge=1_048_576
     )
     bulk_max_provider_calls: int = Field(
-        default=2000, alias="BULK_MAX_PROVIDER_CALLS", ge=1, le=2000
+        default=1800, alias="BULK_MAX_PROVIDER_CALLS", ge=1, le=2000
     )
     bulk_mapping_auto_pass_min_confidence: Decimal = Field(
         default=Decimal("0.90"),

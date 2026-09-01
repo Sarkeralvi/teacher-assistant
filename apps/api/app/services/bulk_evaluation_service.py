@@ -725,24 +725,11 @@ class BulkEvaluationService:
             seconds=self.settings.cohort_dispatch_heartbeat_timeout_seconds
         )
         if run.status in active and run.heartbeat_at and run.heartbeat_at < stale_before:
-            running_items = list(
-                self.db.scalars(
-                    select(BulkEvaluationItem).where(
-                        BulkEvaluationItem.run_id == run.id,
-                        BulkEvaluationItem.status == "running",
-                    )
-                ).all()
-            )
-            for item in running_items:
-                item.status = "uncertain"
-                item.exception_codes = list(
-                    dict.fromkeys([*item.exception_codes, "provider_contract_failure"])
-                )
-                item.warnings = [
-                    *item.warnings,
-                    "Worker heartbeat expired during a provider call; explicit item retry required",
-                ]
-                item.completed_at = datetime.now(UTC)
+            # Keep stale-run recovery on the same path as a provider failure.
+            # In particular, it must also close any in-flight OCR ledger row;
+            # changing only the bulk item would leave the evidence ledger
+            # claiming a call was still running after the worker died.
+            self._mark_running_uncertain(run, _UNCERTAIN_PROVIDER_WARNING)
             run.status = "paused"
             run.error = "Interrupted provider work was quarantined as uncertain"
             self.db.commit()

@@ -305,7 +305,7 @@ class BulkEvaluationItemRead(ORMBase):
     status: Literal[
         "pending", "running", "clean", "exception", "uncertain", "graded", "approved", "stopped"
     ]
-    stage: Literal["mapping", "transcription", "grading", "review", "complete"]
+    stage: Literal["read", "mapping", "transcription", "grading", "review", "complete"]
     verification_source: BulkEvidenceVerificationSource | None
     mapping_confidence: Decimal | None
     transcription_confidence: Decimal | None
