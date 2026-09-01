@@ -54,6 +54,54 @@ def _output(*blocks: VisualPageBlock, blank: bool = False) -> VisualPageTranscri
     return VisualPageTranscriptOutput(blocks=list(blocks), is_blank_page=blank)
 
 
+def test_omitted_label_source_defaults_without_discarding_the_page() -> None:
+    # A real read returned null here and the schema error threw away every block
+    # on the page plus the call that paid for it. An unlabelled block has only
+    # one valid source; a labelled one degrades to the value that cannot
+    # auto-pass, so the omission costs a teacher review rather than the page.
+    payload = {
+        "blocks": [
+            {
+                "question_label": None,
+                "bbox": [0, 0, 1000, 400],
+                "text": "carries on from the previous page",
+                "continues_from_previous": True,
+                "label_source": None,
+                "confidence": "0.95",
+            },
+            {
+                "question_label": "Q2",
+                "bbox": [0, 400, 1000, 900],
+                "text": "the answer to two",
+                "continues_from_previous": False,
+                "label_source": None,
+                "confidence": "0.95",
+            },
+        ],
+        "is_blank_page": False,
+    }
+
+    output = VisualPageTranscriptOutput.model_validate(payload)
+
+    assert output.blocks[0].label_source == "continuation"
+    assert output.blocks[1].label_source == "inferred"
+
+
+def test_supplied_label_source_is_never_overridden() -> None:
+    block = VisualPageBlock.model_validate(
+        {
+            "question_label": "Q1",
+            "bbox": [0, 0, 500, 500],
+            "text": "seen heading",
+            "continues_from_previous": False,
+            "label_source": "heading",
+            "confidence": "0.99",
+        }
+    )
+
+    assert block.label_source == "heading"
+
+
 def _service() -> LocalScriptPageReadService:
     storage = SimpleNamespace(resolve_relative=lambda path: Path(path))
     return LocalScriptPageReadService(

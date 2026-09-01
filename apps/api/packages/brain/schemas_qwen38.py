@@ -9,7 +9,7 @@ grading output.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -198,8 +198,28 @@ class VisualPageBlock(BaseModel):
     bbox: list[int] = Field(min_length=4, max_length=4)
     text: str
     continues_from_previous: bool
-    label_source: Literal["heading", "continuation", "inferred"]
+    label_source: Literal["heading", "continuation", "inferred"] = "inferred"
     confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_absent_label_source(cls, data: Any) -> Any:
+        """Fill an omitted label_source instead of discarding the whole page.
+
+        A real read returned ``null`` here and the schema error threw away every
+        block on the page, along with the call that paid for it. Only one value
+        is ever correct for an unlabelled block, and for a labelled one the safe
+        reading is the one that cannot auto-pass, so an omission degrades to
+        teacher review rather than to a lost page or a silent pass.
+        """
+        if isinstance(data, dict) and data.get("label_source") is None:
+            data = {
+                **data,
+                "label_source": (
+                    "continuation" if data.get("question_label") is None else "inferred"
+                ),
+            }
+        return data
 
     @model_validator(mode="after")
     def bbox_is_normalized_box(self) -> VisualPageBlock:
