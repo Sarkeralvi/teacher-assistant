@@ -43,6 +43,7 @@ from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
     THINKING_REPAIR_PROMPT_VERSION,
+    VISUAL_PAGE_READ_PROMPT_VERSION,
 )
 
 CLEANUP_MODELS = (
@@ -1056,6 +1057,106 @@ def test_qwen38_mapping_requires_matching_final_intent_transcription_before_grad
     assert (
         "confirmed final-intent transcription no longer matches evidence"
         in changed_repair_packet["readiness_result"]["blockers"]
+    )
+
+
+def test_page_read_transcription_satisfies_the_grading_evidence_gate(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    """One-call-per-page evidence must clear the same gate as a crop transcript.
+
+    Both profiles produce one confirmed transcript per region carrying the same
+    confirmed_text. A real bulk run stalled here because the gate matched only
+    the two-pass profile, so evidence that had genuinely been confirmed was
+    refused. Mocked stages never reach this check, which is why it needs a test
+    against a real readiness packet.
+    """
+    from app.services.grading_service import GradingService
+
+    region_payload = create_answer_region_with_optional_rubric(client, tmp_path)
+    region = db_session.get(AnswerRegion, region_payload["id"])
+    assert region is not None
+    submission = db_session.get(Submission, region.submission_id)
+    teacher = db_session.scalars(select(User)).one()
+    assert submission is not None
+
+    extraction = ExtractionRun(
+        assessment_id=submission.assessment_id,
+        artifact_file_path="tests/question.pdf",
+        original_filename="question.pdf",
+        content_type="application/pdf",
+        extraction_type="question_paper",
+        provider="llama_cpp_qwen38",
+        status="succeeded",
+        blockers=[],
+    )
+    db_session.add(extraction)
+    db_session.flush()
+    node = QuestionNode(
+        assessment_id=submission.assessment_id,
+        extraction_run_id=extraction.id,
+        question_number="1",
+        label="1",
+        text="Explain.",
+        marks=Decimal("5"),
+        node_type="question",
+        teacher_confirmed=True,
+    )
+    db_session.add(node)
+    db_session.flush()
+    db_session.add(
+        AnswerRegionMapping(
+            assessment_id=submission.assessment_id,
+            submission_id=submission.id,
+            question_node_id=node.id,
+            question_id=region.question_id,
+            answer_region_id=region.id,
+            mapping_status="mapped",
+            provider="llama_cpp_qwen38",
+            bulk_policy_verified=True,
+        )
+    )
+    page_read = AnswerRegionOcrRun(
+        answer_region_id=region.id,
+        requested_by_teacher_id=teacher.id,
+        request_id="page-read-grading-evidence",
+        status="confirmed",
+        profile="qwen38_visual_page_read",
+        task_kind="visual_transcription",
+        reasoning_mode="off",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        provider="llama_cpp_qwen38",
+        model_name="qwen3.8-27b-q4km",
+        draft_text=region.manual_answer_text,
+        confirmed_text=region.manual_answer_text,
+        warnings=[],
+        call_limit=1,
+        calls_used=1,
+    )
+    db_session.add(page_read)
+    db_session.commit()
+
+    service = GradingService(db_session, use_configured_adapter=False)
+    packet = service.get_grading_evidence_packet(region.id)
+
+    assert (
+        "Qwen3.8 final-intent transcription must be confirmed"
+        not in packet["readiness_result"]["blockers"]
+    )
+    assert packet["student_answer_evidence"]["final_intent_transcription_confirmed"]
+    assert (
+        packet["student_answer_evidence"]["final_intent_prompt_version"]
+        == VISUAL_PAGE_READ_PROMPT_VERSION
+    )
+
+    # The tamper check must still bite on this profile.
+    page_read.confirmed_text = "changed after confirmation"
+    db_session.commit()
+    tampered = service.get_grading_evidence_packet(region.id)
+    assert tampered["readiness_result"]["ready_for_grading"] is False
+    assert (
+        "confirmed final-intent transcription no longer matches evidence"
+        in tampered["readiness_result"]["blockers"]
     )
 
 

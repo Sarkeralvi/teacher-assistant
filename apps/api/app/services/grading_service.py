@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import Settings, get_settings
@@ -34,6 +34,7 @@ from packages.brain.policy import normalize_brain_adapter
 from packages.brain.schemas_qwen38 import (
     SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS,
     SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS,
+    VISUAL_PAGE_READ_PROMPT_VERSION,
 )
 
 MODEL_ANSWER_REQUIRED_BLOCKER = "missing solution/model answer"
@@ -1045,13 +1046,32 @@ class GradingService:
     def _latest_final_intent_source_run(
         self, region: AnswerRegion
     ) -> AnswerRegionOcrRun | None:
+        """The transcription this region's grade must be traceable to.
+
+        Two profiles can produce it. ``qwen38_verbatim_visual`` is the two-pass
+        path, where a crop of an already-mapped region is read on its own. The
+        one-call-per-page path reads text and geometry together, so its evidence
+        arrives as ``qwen38_visual_page_read``; the row is still one confirmed
+        transcript per region, carrying the same ``confirmed_text``, and it
+        clears the same acceptance gate before it is written. Accepting only the
+        older profile silently blocked grading on evidence that had in fact been
+        confirmed.
+        """
         return self.db.scalars(
             select(AnswerRegionOcrRun)
             .where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
-                AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
-                AnswerRegionOcrRun.prompt_version.in_(
-                    SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
+                or_(
+                    and_(
+                        AnswerRegionOcrRun.profile == "qwen38_verbatim_visual",
+                        AnswerRegionOcrRun.prompt_version.in_(
+                            SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
+                        ),
+                    ),
+                    and_(
+                        AnswerRegionOcrRun.profile == "qwen38_visual_page_read",
+                        AnswerRegionOcrRun.prompt_version == VISUAL_PAGE_READ_PROMPT_VERSION,
+                    ),
                 ),
             )
             .order_by(AnswerRegionOcrRun.id.desc())
