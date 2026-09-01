@@ -87,6 +87,24 @@ def test_omitted_label_source_defaults_without_discarding_the_page() -> None:
     assert output.blocks[1].label_source == "inferred"
 
 
+def test_null_label_with_contradictory_source_is_reconciled_not_rejected() -> None:
+    # A real read returned a null question_label alongside "heading", which is
+    # self-contradictory. The provider rejected it and the whole page was lost.
+    # An unlabelled block has exactly one coherent source, so impose it.
+    block = VisualPageBlock.model_validate(
+        {
+            "question_label": None,
+            "bbox": [0, 0, 800, 300],
+            "text": "continues from the block above",
+            "continues_from_previous": True,
+            "label_source": "heading",
+            "confidence": "0.93",
+        }
+    )
+
+    assert block.label_source == "continuation"
+
+
 def test_supplied_label_source_is_never_overridden() -> None:
     block = VisualPageBlock.model_validate(
         {

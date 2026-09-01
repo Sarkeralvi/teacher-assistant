@@ -203,22 +203,26 @@ class VisualPageBlock(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def default_absent_label_source(cls, data: Any) -> Any:
-        """Fill an omitted label_source instead of discarding the whole page.
+    def reconcile_label_source(cls, data: Any) -> Any:
+        """Settle label_source from the label instead of discarding the page.
 
-        A real read returned ``null`` here and the schema error threw away every
-        block on the page, along with the call that paid for it. Only one value
-        is ever correct for an unlabelled block, and for a labelled one the safe
-        reading is the one that cannot auto-pass, so an omission degrades to
-        teacher review rather than to a lost page or a silent pass.
+        Two real reads were lost here: one omitted the field, and one returned a
+        null question_label alongside a non-continuation source, which is
+        self-contradictory. Either way the whole page and the call that paid to
+        read it were thrown away over one metadata field.
+
+        An unlabelled block has exactly one coherent source, so that value is
+        imposed rather than trusted. A labelled block that states its source
+        keeps it; one that omits it takes the reading that cannot auto-pass, so
+        the cost of a missing value is a teacher review, not a lost page.
         """
-        if isinstance(data, dict) and data.get("label_source") is None:
-            data = {
-                **data,
-                "label_source": (
-                    "continuation" if data.get("question_label") is None else "inferred"
-                ),
-            }
+        if not isinstance(data, dict):
+            return data
+        if data.get("question_label") is None:
+            if data.get("label_source") != "continuation":
+                data = {**data, "label_source": "continuation"}
+        elif data.get("label_source") is None:
+            data = {**data, "label_source": "inferred"}
         return data
 
     @model_validator(mode="after")
