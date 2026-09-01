@@ -299,7 +299,7 @@ class BulkEvaluationItem(TimestampMixin, Base):
             name="ck_bulk_evaluation_items_status",
         ),
         CheckConstraint(
-            "stage in ('mapping', 'transcription', 'grading', 'review', 'complete')",
+            "stage in ('read', 'mapping', 'transcription', 'grading', 'review', 'complete')",
             name="ck_bulk_evaluation_items_stage",
         ),
         UniqueConstraint(

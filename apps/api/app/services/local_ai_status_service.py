@@ -76,6 +76,7 @@ class LocalAiStatusService:
                 "models": [runtime.model],
                 "capabilities": sorted(item.value for item in runtime.capabilities),
                 "visual_preparation_enabled": policy.visual_preparation_enabled,
+                "page_read_enabled": policy.page_read_enabled,
                 "transcription_enabled": policy.transcription_enabled,
                 "thinking_repair_enabled": policy.thinking_repair_enabled,
                 "grading_enabled": policy.grading_enabled,
@@ -166,6 +167,7 @@ class LocalAiStatusService:
             "detail": None,
             "models": [self.settings.local_qwen38_model],
             "visual_preparation_enabled": self.settings.local_qwen38_visual_preparation_enabled,
+            "page_read_enabled": self.settings.local_qwen38_page_read_enabled,
             "transcription_enabled": self.settings.local_qwen38_transcription_enabled,
             "thinking_repair_enabled": self.settings.local_qwen38_thinking_repair_enabled,
             "grading_enabled": self.settings.local_qwen38_grading_enabled,
@@ -197,6 +199,7 @@ class LocalAiStatusService:
             self.settings.local_qwen38_transcription_enabled
             or self.settings.local_qwen38_thinking_repair_enabled
             or self.settings.local_qwen38_visual_preparation_enabled
+            or self.settings.local_qwen38_page_read_enabled
         ):
             base["detail"] = "ready_features_disabled"
         else:

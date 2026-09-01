@@ -39,6 +39,10 @@ from app.models import (
 from app.services.brain_execution import hold_brain_execution
 from app.services.final_grade_service import FinalGradeService
 from app.services.grading_service import GradingService, rubric_snapshot_hash
+from app.services.local_script_page_read import (
+    LocalScriptPageReadError,
+    LocalScriptPageReadService,
+)
 from app.services.local_script_preparation import (
     LocalScriptPreparationError,
     LocalScriptPreparationService,
@@ -216,7 +220,9 @@ class BulkEvaluationService:
                                 submission_id=submission.id,
                                 question_id=question.id,
                                 status="pending",
-                                stage="mapping",
+                                stage=(
+                                    "read" if policy.page_read_enabled else "mapping"
+                                ),
                                 exception_codes=[],
                                 warnings=[],
                             )
@@ -227,6 +233,11 @@ class BulkEvaluationService:
                 run.status = "queued"
                 run.stage = "mapping"
                 run.import_manifest = {
+                    "visual_evidence_path": (
+                        "page_read"
+                        if policy.page_read_enabled
+                        else "mapping_transcription"
+                    ),
                     "units": manifest_payload,
                     "submission_ids": [submission.id for submission in submissions],
                 }
@@ -301,18 +312,30 @@ class BulkEvaluationService:
                 settings,
                 requested_provider=provider or configured_visual_provider(settings),
             )
+            use_page_read = policy.page_read_enabled
             feature_enabled = bool(
                 policy.bulk_evaluation_enabled
                 and policy.script_preparation_enabled
-                and policy.visual_preparation_enabled
-                and policy.transcription_enabled
                 and policy.grading_enabled
+                and (
+                    policy.page_read_enabled
+                    if use_page_read
+                    else (
+                        policy.visual_preparation_enabled
+                        and policy.transcription_enabled
+                    )
+                )
             )
-            for capability in (
-                BrainCapability.VISUAL_MAPPING,
-                BrainCapability.VISUAL_TRANSCRIPTION,
-                BrainCapability.GRADING,
-            ):
+            capabilities = (
+                (BrainCapability.VISUAL_PAGE_READ, BrainCapability.GRADING)
+                if use_page_read
+                else (
+                    BrainCapability.VISUAL_MAPPING,
+                    BrainCapability.VISUAL_TRANSCRIPTION,
+                    BrainCapability.GRADING,
+                )
+            )
+            for capability in capabilities:
                 policy.validate_request(
                     requested_provider=provider or "active",
                     expected_model=expected_model,
@@ -643,7 +666,9 @@ class BulkEvaluationService:
             return False
         run.heartbeat_at = datetime.now(UTC)
         try:
-            if self._next_mapping_submission(run) is not None:
+            if self._next_read_submission(run) is not None:
+                self._process_read(run)
+            elif self._next_mapping_submission(run) is not None:
                 self._process_mapping(run)
             elif self._next_transcription_item(run) is not None:
                 self._process_transcription(run)
@@ -652,7 +677,11 @@ class BulkEvaluationService:
             else:
                 self._finish_processing(run)
                 return False
-        except (LocalScriptPreparationError, VisualTranscriptionError) as exc:
+        except (
+            LocalScriptPreparationError,
+            LocalScriptPageReadError,
+            VisualTranscriptionError,
+        ) as exc:
             self.db.rollback()
             current = self.db.get(BulkEvaluationRun, run_id)
             if current is not None:
@@ -739,7 +768,23 @@ class BulkEvaluationService:
             raise BulkEvaluationError("Only an exception or uncertain item can be resumed")
         mapping = self.db.get(AnswerRegionMapping, item.mapping_id) if item.mapping_id else None
         region = self.db.get(AnswerRegion, item.answer_region_id) if item.answer_region_id else None
-        if mapping is None or not (mapping.teacher_confirmed or mapping.bulk_policy_verified):
+        if self._uses_page_read(run):
+            # A page-read call is never retried. Resuming may only re-settle
+            # immutable evidence that was already persisted by the successful
+            # one-call-per-page pass.
+            page_read_runs = (
+                self._page_read_runs_by_question([mapping]) if mapping is not None else {}
+            )
+            if (
+                mapping is None
+                or mapping.answer_region is None
+                or item.question_id not in page_read_runs
+            ):
+                raise BulkEvaluationError(
+                    "Page-read provider work cannot be retried; create a newly authorized run"
+                )
+            item.stage = "read"
+        elif mapping is None or not (mapping.teacher_confirmed or mapping.bulk_policy_verified):
             item.stage = "mapping"
         elif region is None or not (region.manual_answer_text or "").strip():
             item.stage = "transcription"
@@ -757,7 +802,7 @@ class BulkEvaluationService:
         )
         if run.status in {"review_ready", "completed_with_exceptions"}:
             run.status = self._status_for_pending_stage(run)
-            run.stage = item.stage
+            run.stage = "mapping" if item.stage == "read" else item.stage
             run.completed_at = None
         self._refresh_counts(run)
         self.db.commit()
@@ -1025,6 +1070,22 @@ class BulkEvaluationService:
             .limit(1)
         )
 
+    def _next_read_submission(self, run: BulkEvaluationRun) -> int | None:
+        return self.db.scalar(
+            select(BulkEvaluationItem.submission_id)
+            .where(
+                BulkEvaluationItem.run_id == run.id,
+                BulkEvaluationItem.status == "pending",
+                BulkEvaluationItem.stage == "read",
+            )
+            .order_by(BulkEvaluationItem.submission_id)
+            .limit(1)
+        )
+
+    @staticmethod
+    def _uses_page_read(run: BulkEvaluationRun) -> bool:
+        return (run.import_manifest or {}).get("visual_evidence_path") == "page_read"
+
     def _next_transcription_item(self, run: BulkEvaluationRun) -> BulkEvaluationItem | None:
         return self.db.scalar(
             select(BulkEvaluationItem)
@@ -1076,6 +1137,148 @@ class BulkEvaluationService:
                 .order_by(AnswerRegionMapping.id)
             ).all()
         )
+
+    def _page_read_runs_by_question(
+        self,
+        mappings: list[AnswerRegionMapping],
+    ) -> dict[int, AnswerRegionOcrRun]:
+        """Find persisted shared-read transcript artifacts without re-reading pages."""
+
+        result: dict[int, AnswerRegionOcrRun] = {}
+        for mapping in mappings:
+            if mapping.question_id is None or mapping.answer_region_id is None:
+                continue
+            transcript = self.db.scalar(
+                select(AnswerRegionOcrRun)
+                .where(
+                    AnswerRegionOcrRun.answer_region_id == mapping.answer_region_id,
+                    AnswerRegionOcrRun.profile == "qwen38_visual_page_read",
+                    AnswerRegionOcrRun.status.in_(("succeeded", "confirmed")),
+                )
+                .order_by(AnswerRegionOcrRun.id.desc())
+                .limit(1)
+            )
+            if transcript is not None:
+                result[mapping.question_id] = transcript
+        return result
+
+    def _process_read(self, run: BulkEvaluationRun) -> None:
+        """Run the opt-in one-call-per-page mapping/transcription path."""
+
+        if not self._uses_page_read(run):
+            raise BulkEvaluationError(
+                "A bulk item requested page-read work without page-read authorization"
+            )
+        submission_id = self._next_read_submission(run)
+        if submission_id is None:
+            return
+        submission = self.db.scalar(
+            select(Submission)
+            .options(selectinload(Submission.pages))
+            .where(Submission.id == submission_id)
+        )
+        teacher = self.db.get(User, run.created_by_teacher_id)
+        if submission is None or teacher is None:
+            raise BulkEvaluationError("Bulk page-read ownership context is unavailable")
+        items = list(
+            self.db.scalars(
+                select(BulkEvaluationItem).where(
+                    BulkEvaluationItem.run_id == run.id,
+                    BulkEvaluationItem.submission_id == submission.id,
+                    BulkEvaluationItem.stage == "read",
+                    BulkEvaluationItem.status.in_(("pending", "running")),
+                )
+            ).all()
+        )
+        if not items:
+            return
+        run.status = "mapping"
+        run.stage = "mapping"
+
+        mappings = self._existing_submission_mappings(submission.id)
+        transcription_runs: dict[int, AnswerRegionOcrRun] = {}
+        if mappings:
+            transcription_runs = self._page_read_runs_by_question(mappings)
+            expected_question_ids = {item.question_id for item in items}
+            if not expected_question_ids.issubset(transcription_runs):
+                raise BulkEvaluationError(
+                    "Existing answer mappings are not reusable page-read evidence"
+                )
+            self._audit_run(
+                run,
+                "bulk_evaluation_page_read_reused",
+                None,
+                {
+                    "submission_id": submission.id,
+                    "item_count": len(items),
+                    "mapping_count": len(mappings),
+                },
+                actor_type="worker",
+            )
+        else:
+            remaining = run.authorized_call_limit - run.calls_used
+            if len(submission.pages) > remaining:
+                self._pause(run, "Provider-call budget is insufficient for the next script")
+                return
+            started = datetime.now(UTC)
+            for item in items:
+                item.status = "running"
+                item.started_at = started
+            self.db.commit()
+            result = LocalScriptPageReadService(
+                self.db,
+                settings=self.settings,
+                storage=self.storage,
+            ).prepare(
+                submission=submission,
+                teacher=teacher,
+                expected_model=run.model_name,
+                replace_existing=False,
+                maximum_page_read_calls=remaining,
+                provider=run.provider,
+            )
+            mappings = result.mappings
+            transcription_runs = result.transcription_runs_by_question
+            self._consume_calls(run, result.calls_used)
+
+        mapping_by_question = {mapping.question_id: mapping for mapping in mappings}
+        overlap_questions = self._overlapping_question_ids(mappings)
+        for item in items:
+            mapping = mapping_by_question.get(item.question_id)
+            codes = self._mapping_exception_codes(mapping, overlap_questions)
+            item.mapping_id = mapping.id if mapping else None
+            item.answer_region_id = mapping.answer_region_id if mapping else None
+            item.mapping_confidence = mapping.confidence if mapping else None
+            if codes:
+                item.status = "exception"
+                item.stage = "read"
+                item.exception_codes = codes
+                item.warnings = self._mapping_warnings(mapping)
+                item.completed_at = datetime.now(UTC)
+                continue
+            assert mapping is not None and mapping.answer_region is not None
+            mapping.bulk_policy_verified = True
+            mapping.bulk_verification_run_id = run.id
+            item.source_snapshot_sha256 = self._mapping_snapshot_hash(mapping)
+            transcript = transcription_runs.get(item.question_id)
+            if transcript is None:
+                self._quarantine(
+                    item,
+                    "missing_transcription",
+                    "Page-read transcription artifact is unavailable",
+                )
+                item.stage = "read"
+                continue
+            item.transcription_run_id = transcript.id
+            self._accept_or_quarantine_transcription(
+                run,
+                item,
+                mapping.answer_region,
+                transcript,
+            )
+        run.heartbeat_at = datetime.now(UTC)
+        self._refresh_counts(run)
+        self.db.commit()
 
     def _process_mapping(self, run: BulkEvaluationRun) -> None:
         submission_id = self._next_mapping_submission(run)
@@ -1415,6 +1618,7 @@ class BulkEvaluationService:
         editing = normalized.get("editing_analysis") or {}
         unresolved = bool(
             normalized.get("uncertain_glyphs")
+            or normalized.get("requires_thinking_repair")
             or (isinstance(editing, dict) and editing.get("uncertain_correction_detected"))
             or any(
                 marker in (transcript_run.draft_text or "").casefold()
@@ -1662,6 +1866,13 @@ class BulkEvaluationService:
             codes.append("possible_continuation")
         if "outside every prepared" in warnings or "not assigned" in warnings:
             codes.append("unassigned_ink")
+        if (
+            "uncovered ink outside every page-read answer band" in warnings
+            or "uncovered_ink_hard_blocker" in warnings
+        ):
+            codes.append("unassigned_ink")
+        if "inferred_question_label_requires_teacher_review" in warnings:
+            codes.append("inferred_question_label")
         if mapping.confidence is None or (
             mapping.confidence < self.settings.bulk_mapping_auto_pass_min_confidence
         ):
@@ -1843,6 +2054,8 @@ class BulkEvaluationService:
             if item.status in {"pending", "running"}
         }
         if "mapping" in stages:
+            return "mapping"
+        if "read" in stages:
             return "mapping"
         if "transcription" in stages:
             return "transcribing"

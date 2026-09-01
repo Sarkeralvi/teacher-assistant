@@ -26,6 +26,7 @@ class BrainPolicy:
     script_preparation_enabled: bool
     single_answer_grading_enabled: bool
     visual_preparation_enabled: bool
+    page_read_enabled: bool
     transcription_enabled: bool
     thinking_repair_enabled: bool
     grading_enabled: bool
@@ -123,6 +124,9 @@ def brain_policy_from_settings(
         if is_qwen38
         else script_enabled or reference_enabled,
     )
+    page_read_enabled = (
+        bool(settings.local_qwen38_page_read_enabled) if is_qwen38 else False
+    )
     transcription_enabled = _coalesce(
         settings.brain_transcription_enabled,
         settings.local_qwen38_transcription_enabled if is_qwen38 else False,
@@ -141,6 +145,7 @@ def brain_policy_from_settings(
     )
     if not vision_transport_enabled:
         visual_enabled = False
+        page_read_enabled = False
         transcription_enabled = False
         thinking_enabled = False
 
@@ -163,6 +168,7 @@ def brain_policy_from_settings(
         script_preparation_enabled=script_enabled,
         single_answer_grading_enabled=single_grade_enabled,
         visual_preparation_enabled=visual_enabled,
+        page_read_enabled=page_read_enabled,
         transcription_enabled=transcription_enabled,
         thinking_repair_enabled=thinking_enabled,
         grading_enabled=grading_enabled,
@@ -231,6 +237,7 @@ def _legacy_runtime(
         "extract_rubric_from_pdf": BrainCapability.RUBRIC_PDF_EXTRACTION,
         "extract_reference_bundle_from_images": BrainCapability.VISUAL_REFERENCE_EXTRACTION,
         "map_page_answer_regions": BrainCapability.VISUAL_MAPPING,
+        "read_page": BrainCapability.VISUAL_PAGE_READ,
         "transcribe_images": BrainCapability.VISUAL_TRANSCRIPTION,
         "repair_transcription_images": BrainCapability.TRANSCRIPTION_REPAIR,
     }
@@ -254,6 +261,8 @@ def _legacy_runtime(
         capabilities.add(BrainCapability.GRADING)
     if callable(getattr(adapter, "map_page_answer_regions", None)):
         capabilities.add(BrainCapability.VISUAL_MAPPING)
+    if callable(getattr(adapter, "read_page", None)):
+        capabilities.add(BrainCapability.VISUAL_PAGE_READ)
     if callable(getattr(adapter, "transcribe_images", None)):
         capabilities.add(BrainCapability.VISUAL_TRANSCRIPTION)
     if callable(getattr(adapter, "repair_transcription_images", None)):

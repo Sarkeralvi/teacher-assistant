@@ -290,6 +290,9 @@ class Settings(BaseSettings):
     local_qwen38_visual_preparation_enabled: bool = Field(
         default=False, alias="LOCAL_QWEN38_VISUAL_PREPARATION_ENABLED"
     )
+    local_qwen38_page_read_enabled: bool = Field(
+        default=False, alias="LOCAL_QWEN38_PAGE_READ_ENABLED"
+    )
     local_qwen38_transcription_enabled: bool = Field(
         default=False, alias="LOCAL_QWEN38_TRANSCRIPTION_ENABLED"
     )

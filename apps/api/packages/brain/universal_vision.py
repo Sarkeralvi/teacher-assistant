@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,9 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from packages.brain.llama_cpp_qwen_provider import QwenReferenceBundlePayload
 from packages.brain.schemas_qwen38 import (
+    UNRESOLVED_VISIBLE_WRITING,
     EditingMark,
     UncertainGlyph,
+    VisualPageBlock,
     VisualPageMappingOutput,
+    VisualPageTranscriptOutput,
     VisualTranscriptionOutput,
 )
 
@@ -52,6 +57,49 @@ Extract every marking criterion from the supplied rubric pages. Return JSON only
 criteria and warnings. Each criterion needs question_number, criterion_text, max_marks, and
 sub_criteria. Preserve printed numbering exactly. Never invent missing marks or grade work.
 """.strip()
+
+_PAGE_READ_BASE_TOKENS = 1200
+_PAGE_READ_TOKENS_PER_LABEL = 220
+_PAGE_READ_TOKENS_PER_CONTENT_UNIT = 220
+_PAGE_READ_MIN_TOKENS = 2200
+_PAGE_READ_MAX_TOKENS = 6500
+
+
+def _page_read_content_units(image_bytes: bytes) -> int:
+    """Estimate visual density before asking a provider to transcribe a page.
+
+    The estimate is deliberately image-only and conservative. It cannot decide
+    whether handwriting is meaningful, but it lets the response budget grow for
+    pages carrying visibly more ink instead of recreating a fixed-cap truncation
+    failure.
+    """
+
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            grayscale = image.convert("L")
+            grayscale.thumbnail((1000, 1000))
+            histogram = grayscale.histogram()
+        pixels = sum(histogram)
+        if pixels <= 0:
+            return 1
+        ink_ratio = sum(histogram[:129]) / pixels
+        return max(1, min(16, math.ceil(ink_ratio * 100)))
+    except Exception:
+        # Invalid input will still be rejected by the concrete transport. A
+        # conservative nonzero estimate keeps a generic provider from falling
+        # back to a small flat token cap before it reports that failure.
+        return 1
+
+
+def _page_read_completion_budget(*, image_bytes: bytes, label_count: int) -> int:
+    content_need = (
+        _PAGE_READ_BASE_TOKENS
+        + _PAGE_READ_TOKENS_PER_LABEL * max(label_count, 1)
+        + _PAGE_READ_TOKENS_PER_CONTENT_UNIT * _page_read_content_units(image_bytes)
+    )
+    return min(max(content_need, _PAGE_READ_MIN_TOKENS), _PAGE_READ_MAX_TOKENS)
 
 
 class UniversalVisionProviderMixin:
@@ -148,6 +196,100 @@ class UniversalVisionProviderMixin:
             schema_name="visual_page_mapping",
         )
         return VisualPageMappingOutput.model_validate(completion.payload)
+
+    def read_page(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
+        open_continuations: list[str] | None = None,
+    ) -> VisualPageTranscriptOutput:
+        """Read complete-page evidence once, preserving text and block geometry."""
+
+        if not question_labels:
+            raise ValueError("Finalized question labels are required for page reading")
+        canonical_labels = {
+            label.strip().casefold(): label.strip()
+            for label in question_labels
+            if label.strip()
+        }
+        if len(canonical_labels) != len(question_labels):
+            raise ValueError("Finalized question labels must be nonempty and unique")
+        canonical_open_continuations: list[str] = []
+        for raw_label in open_continuations or []:
+            label = str(raw_label).strip()
+            canonical = canonical_labels.get(label.casefold())
+            if canonical is None:
+                raise ValueError("Open continuation is not a finalized question label")
+            if canonical not in canonical_open_continuations:
+                canonical_open_continuations.append(canonical)
+        references = [
+            {
+                "question_no": str(item.get("question_no") or "").strip(),
+                "question_text": str(item.get("question_text") or "").strip(),
+            }
+            for item in (question_references or [])
+            if str(item.get("question_no") or "").strip().casefold() in canonical_labels
+        ]
+        prompt = (
+            "Read this complete handwritten mathematics exam-script page once. Return every "
+            "visible answer block in top-to-bottom visual order, with both its normalized "
+            "[x1,y1,x2,y2] geometry and verbatim text. Question identity is supplied by the "
+            "caller: every non-null question_label must be exactly one FINALIZED LABEL below; "
+            "never invent, transcribe, or use a handwritten label outside that set. Use null "
+            "only for a continuation of the nearest labelled block above it. The supplied "
+            "OPEN CONTINUATIONS may continue at the page top until a new labelled block begins. "
+            "For a label read from a handwritten heading rather than a carried continuation, "
+            "set label_source to inferred so it cannot auto-pass; use continuation only for "
+            "null labels. Preserve crossed-out and overwritten work verbatim with "
+            "[visibly crossed], [overwritten], or [illegible crossed writing]. Never solve, "
+            "correct, complete, simplify, normalize, summarize, or grade. If visible writing "
+            "cannot be faithfully read, return exactly "
+            + repr(UNRESOLVED_VISIBLE_WRITING)
+            + " for that block. "
+            "An actually blank page has is_blank_page=true and an empty blocks array. Every "
+            "response requires teacher review.\nFINALIZED LABELS: "
+            + json.dumps(question_labels, ensure_ascii=False)
+            + "\nFINALIZED QUESTIONS (identity only): "
+            + json.dumps(references, ensure_ascii=False)
+            + "\nOPEN CONTINUATIONS: "
+            + json.dumps(canonical_open_continuations, ensure_ascii=False)
+            + "\nReturn JSON matching this schema exactly: "
+            + json.dumps(VisualPageTranscriptOutput.model_json_schema(), ensure_ascii=False)
+        )
+        completion = self._complete_structured_vision(
+            prompt=prompt,
+            images=[(image_bytes, mime_type)],
+            response_model=VisualPageTranscriptOutput,
+            schema_name="visual_page_read",
+            max_tokens=_page_read_completion_budget(
+                image_bytes=image_bytes,
+                label_count=len(question_labels),
+            ),
+        )
+        output = VisualPageTranscriptOutput.model_validate(completion.payload)
+        if output.is_blank_page and output.blocks:
+            raise ValueError("Visual page read marked a nonempty block list as blank")
+        blocks: list[VisualPageBlock] = []
+        for block in output.blocks:
+            if block.question_label is None:
+                if block.label_source != "continuation":
+                    raise ValueError(
+                        "Visual page read used a null label without a continuation source"
+                    )
+                blocks.append(block)
+                continue
+            canonical = canonical_labels.get(block.question_label.strip().casefold())
+            if canonical is None:
+                raise ValueError("Visual page read returned an unknown finalized question label")
+            if block.label_source == "continuation":
+                raise ValueError(
+                    "Visual page read marked a labelled block as a continuation"
+                )
+            blocks.append(block.model_copy(update={"question_label": canonical}))
+        return output.model_copy(update={"blocks": blocks, "needs_review": True})
 
     def transcribe_image(
         self,

@@ -258,6 +258,19 @@ def test_gemini_does_not_advertise_image_capabilities_when_image_input_is_disabl
     assert not adapter.supports(BrainCapability.VISUAL_MAPPING)
 
 
+def test_visual_page_read_is_not_a_default_universal_provider_capability() -> None:
+    adapter = BrainAdapter.from_settings(
+        Settings(
+            BRAIN_PROVIDER="gemini",
+            BRAIN_ALLOW_REAL_PROVIDERS=True,
+            BRAIN_API_KEY="test-only-key",
+            BRAIN_IMAGE_INPUT_ENABLED=True,
+        )
+    )
+
+    assert not adapter.supports(BrainCapability.VISUAL_PAGE_READ)
+
+
 def test_gemini_structured_vision_honors_schema_and_token_budget() -> None:
     class SmallOutput(BaseModel):
         ok: bool

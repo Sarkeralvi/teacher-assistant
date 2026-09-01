@@ -11,6 +11,7 @@ from PIL import Image
 
 from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter
+from packages.brain.capabilities import BrainCapability
 from packages.brain.llama_cpp_qwen38_vision_provider import (
     LlamaCppQwen38VisionProvider,
     Qwen38ThinkingRepairOutputError,
@@ -301,6 +302,7 @@ def test_configured_qwen38_adapter_enforces_the_provider_lease_guard() -> None:
 
     assert isinstance(adapter.provider, LlamaCppQwen38VisionProvider)
     assert adapter.provider.require_model_lease is True
+    assert adapter.supports(BrainCapability.VISUAL_PAGE_READ)
 
 
 def test_qwen38_model_check_refuses_an_invalid_api_key() -> None:
@@ -1488,6 +1490,125 @@ def test_page_mapping_request_carries_the_scaled_budget() -> None:
     # The real failure on assessment 61: 7 labels against a flat 900.
     assert client.requests[0]["max_tokens"] == 1040
     assert client.requests[0]["chat_template_kwargs"]["enable_thinking"] is False
+
+
+def test_page_read_returns_text_and_geometry_with_a_content_scaled_budget() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "blocks": [
+                                {
+                                    "question_label": "1(a)",
+                                    "bbox": [40, 80, 960, 860],
+                                    "text": "[visibly crossed] x = 3\nx = 4",
+                                    "continues_from_previous": False,
+                                    "label_source": "inferred",
+                                    "confidence": 0.91,
+                                }
+                            ],
+                            "is_blank_page": False,
+                            "needs_review": True,
+                        }
+                    )
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 1450, "completion_tokens": 320},
+    }
+    provider, client = provider_with(completion)
+
+    result = provider.read_page(
+        image_bytes=valid_png_bytes(),
+        mime_type="image/png",
+        question_labels=["1(a)"],
+        open_continuations=[],
+    )
+
+    assert result.needs_review is True
+    assert result.blocks[0].question_label == "1(a)"
+    assert result.blocks[0].text == "[visibly crossed] x = 3\nx = 4"
+    assert result.blocks[0].label_source == "inferred"
+    request = client.requests[0]
+    assert request["max_tokens"] > 900
+    assert request["chat_template_kwargs"]["enable_thinking"] is False
+    prompt = request["messages"][1]["content"][0]["text"]
+    assert "never invent" in prompt
+    assert "[illegible crossed writing]" in prompt
+    assert "[visible writing unresolved" in prompt
+    assert "label_source=inferred" in prompt
+
+
+def test_page_read_token_budget_grows_with_visible_ink() -> None:
+    provider = LlamaCppQwen38VisionProvider(api_key="test-key")
+    blank = valid_png_bytes()
+    dense_image = Image.new("RGB", (1000, 1000), "white")
+    for x in range(100, 900):
+        for y in range(100, 900):
+            dense_image.putpixel((x, y), (0, 0, 0))
+    dense_buffer = io.BytesIO()
+    dense_image.save(dense_buffer, format="PNG")
+
+    blank_budget = provider._page_read_token_budget(2, image_bytes=blank)
+    dense_budget = provider._page_read_token_budget(
+        2,
+        image_bytes=dense_buffer.getvalue(),
+    )
+
+    assert blank_budget >= 2200
+    assert dense_budget > blank_budget
+    assert dense_budget <= 6500
+
+
+def test_page_read_rejects_unknown_labels_and_truncated_output() -> None:
+    unknown_completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": (
+                        '{"blocks":[{"question_label":"unknown","bbox":[1,1,999,999],'
+                        '"text":"x","continues_from_previous":false,'
+                        '"label_source":"heading","confidence":0.9}],'
+                        '"is_blank_page":false,"needs_review":true}'
+                    )
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 20},
+    }
+    provider, client = provider_with(unknown_completion)
+
+    with pytest.raises(ValueError, match="unknown finalized question"):
+        provider.read_page(
+            image_bytes=valid_png_bytes(),
+            mime_type="image/png",
+            question_labels=["1(a)"],
+        )
+
+    assert client.requests
+    truncated_completion = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": '{"blocks":[{"question_label":"1(a)"'},
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 2200},
+    }
+    truncated_provider, truncated_client = provider_with(truncated_completion)
+
+    with pytest.raises(ValueError, match="cut off before finishing"):
+        truncated_provider.read_page(
+            image_bytes=valid_png_bytes(),
+            mime_type="image/png",
+            question_labels=["1(a)"],
+        )
+
+    assert truncated_client.requests[0]["max_tokens"] > 900
 
 
 def test_page_mapping_uses_question_identity_without_grading_student_work() -> None:

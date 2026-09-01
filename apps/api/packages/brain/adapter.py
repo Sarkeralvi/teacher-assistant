@@ -140,6 +140,7 @@ class BrainAdapter:
                 BrainCapability.VISUAL_REFERENCE_EXTRACTION
             ),
             "map_page_answer_regions": BrainCapability.VISUAL_MAPPING,
+            "read_page": BrainCapability.VISUAL_PAGE_READ,
             "transcribe_images": BrainCapability.VISUAL_TRANSCRIPTION,
             "repair_transcription_images": BrainCapability.TRANSCRIPTION_REPAIR,
         }
@@ -364,6 +365,13 @@ class BrainAdapter:
         return self._call_capability(
             BrainCapability.VISUAL_MAPPING,
             "map_page_answer_regions",
+            **kwargs,
+        )
+
+    def read_page(self, **kwargs: Any) -> Any:
+        return self._call_capability(
+            BrainCapability.VISUAL_PAGE_READ,
+            "read_page",
             **kwargs,
         )
 

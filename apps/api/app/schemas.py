@@ -19,6 +19,7 @@ class LocalAiServiceStatusRead(BaseModel):
     detail: str | None = None
     models: list[str] = Field(default_factory=list)
     visual_preparation_enabled: bool = False
+    page_read_enabled: bool = False
     transcription_enabled: bool = False
     thinking_repair_enabled: bool = False
     grading_enabled: bool = False

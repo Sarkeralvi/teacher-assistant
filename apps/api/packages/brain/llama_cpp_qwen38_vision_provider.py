@@ -35,6 +35,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import re
 import time
 from decimal import Decimal
@@ -56,8 +57,10 @@ from packages.brain.schemas_qwen38 import (
     UNRESOLVED_VISIBLE_WRITING,
     EditingMark,
     UncertainGlyph,
+    VisualPageBlock,
     VisualPageMappingOutput,
     VisualPageRegion,
+    VisualPageTranscriptOutput,
     VisualTranscriptionOutput,
 )
 
@@ -114,6 +117,18 @@ _PAGE_MAPPING_BASE_TOKENS = 200
 _PAGE_MAPPING_TOKENS_PER_LABEL = 120
 _PAGE_MAPPING_MIN_TOKENS = 900
 _PAGE_MAPPING_MAX_TOKENS_CEILING = 4000
+
+# A complete-page read emits every visual block's text as well as geometry, so
+# its response grows with both the number of possible labels and the amount of
+# visible ink. A fixed mapping-sized cap would recreate the 900-token
+# truncation failure in a larger JSON shape. Ink density is deliberately only a
+# budget estimate; it never drives answer ownership or grading.
+_PAGE_READ_BASE_TOKENS = 1200
+_PAGE_READ_TOKENS_PER_LABEL = 220
+_PAGE_READ_TOKENS_PER_CONTENT_UNIT = 220
+_PAGE_READ_MIN_TOKENS = 2200
+_PAGE_READ_MAX_TOKENS_CEILING = 6500
+_PAGE_READ_PROMPT_OVERHEAD_TOKENS = 900
 
 
 class _Qwen38ReferenceQuestionDraft(QwenReferenceQuestionDraft):
@@ -348,6 +363,16 @@ class _Qwen38PageMappingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     regions: list[VisualPageRegion]
+    needs_review: bool | None = None
+
+
+class _Qwen38PageReadPayload(BaseModel):
+    """Model-owned page-read fields; review status is forced by the server."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[VisualPageBlock]
+    is_blank_page: bool
     needs_review: bool | None = None
 
 
@@ -706,6 +731,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             BrainCapability.GRADING,
             BrainCapability.VISUAL_REFERENCE_EXTRACTION,
             BrainCapability.VISUAL_MAPPING,
+            BrainCapability.VISUAL_PAGE_READ,
             BrainCapability.VISUAL_TRANSCRIPTION,
             BrainCapability.TRANSCRIPTION_REPAIR,
         }
@@ -1581,6 +1607,126 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             provider_calls_used=provider_calls_used,
         )
 
+    def read_page(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
+        open_continuations: list[str] | None = None,
+    ) -> VisualPageTranscriptOutput:
+        """Read one complete page once, returning verbatim blocks and geometry.
+
+        This is deliberately a page-level evidence read, not a grading task.
+        The caller owns canonical identity; the provider may only select from
+        those labels or explicitly return an unlabeled continuation.
+        """
+
+        if not question_labels:
+            raise ValueError("Finalized question labels are required for page reading")
+        canonical_labels = {
+            label.strip().casefold(): label.strip()
+            for label in question_labels
+            if label.strip()
+        }
+        if len(canonical_labels) != len(question_labels):
+            raise ValueError("Finalized question labels must be nonempty and unique")
+        image_part, _digest = self._image_part(image_bytes, mime_type)
+        references = [
+            {
+                "question_no": str(item.get("question_no") or "").strip(),
+                "question_text": str(item.get("question_text") or "").strip(),
+            }
+            for item in (question_references or [])
+            if str(item.get("question_no") or "").strip().casefold() in canonical_labels
+        ]
+        canonical_open_continuations: list[str] = []
+        for raw_label in open_continuations or []:
+            label = str(raw_label).strip()
+            canonical = canonical_labels.get(label.casefold())
+            if canonical is None:
+                raise ValueError("Open continuation is not a finalized question label")
+            if canonical not in canonical_open_continuations:
+                canonical_open_continuations.append(canonical)
+
+        reference_text = "\n".join(
+            f"- {item['question_no']}: {item['question_text']}" for item in references
+        )
+        prompt = (
+            "This is one complete handwritten mathematics exam-script page. Read every visible "
+            "student answer block in top-to-bottom visual order and return BOTH its verbatim "
+            "text and normalized [x1,y1,x2,y2] box. The caller, not handwriting, supplies "
+            "question identity. Every non-null question_label MUST be exactly one supplied "
+            "FINALIZED LABEL; never invent, copy, normalize, or emit an unknown label. Use "
+            "question_label=null only for a continuation of the nearest labelled block above. "
+            "OPEN CONTINUATIONS identify the only possible owner of leading continuation work "
+            "from the prior page; a new label ends that previous answer immediately. Set "
+            "label_source=continuation only for null labels. If a non-null label was inferred "
+            "from a handwritten heading, set label_source=inferred so it cannot auto-pass; use "
+            "heading only for a clear non-handwritten canonical page heading. Include all "
+            "visible work in each block: wrong, partial, crossed-out, overwritten, irrelevant, "
+            "and final work. Preserve readable edits verbatim with [visibly crossed] or "
+            "[overwritten], and use [illegible crossed writing] for unreadable crossed work. "
+            "Never solve, correct, complete, simplify, normalize, summarize, grade, or compare "
+            "against an expected answer. If visible writing cannot be faithfully read, use "
+            f"exactly {UNRESOLVED_VISIBLE_WRITING} as that block's "
+            "text. A truly blank page has is_blank_page=true and blocks=[]. Every result needs "
+            "teacher review. Boxes must cover the complete visible block, not only a final "
+            "formula, and use 0..1000 coordinates.\n\n"
+            f"FINALIZED LABELS: {', '.join(question_labels)}\n"
+            f"FINALIZED QUESTIONS (identity only):\n{reference_text or '[labels only]'}\n"
+            "OPEN CONTINUATIONS FROM PREVIOUS PAGE: "
+            f"{', '.join(canonical_open_continuations) or 'none'}\n\n"
+            "Return exactly this JSON shape with no extra keys: "
+            '{"blocks":[{"question_label":"one supplied label or null",'
+            '"bbox":[0,0,1000,1000],"text":"verbatim visible writing",'
+            '"continues_from_previous":false,'
+            '"label_source":"heading|continuation|inferred","confidence":0.0}],'
+            '"is_blank_page":false,"needs_review":true}.'
+        )
+        payload, _usage = self._structured_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": prompt}, image_part],
+                }
+            ],
+            response_model=_Qwen38PageReadPayload,
+            schema_name="visual_page_read",
+            max_tokens=self._page_read_token_budget(
+                len(question_labels),
+                image_bytes=image_bytes,
+            ),
+            temperature=0.0,
+            enable_thinking=False,
+        )
+        assert isinstance(payload, _Qwen38PageReadPayload)
+        if payload.is_blank_page and payload.blocks:
+            raise ValueError("Visual page read marked a nonempty block list as blank")
+        blocks: list[VisualPageBlock] = []
+        for block in payload.blocks:
+            if block.question_label is None:
+                if block.label_source != "continuation":
+                    raise ValueError(
+                        "Visual page read used a null label without a continuation source"
+                    )
+                blocks.append(block)
+                continue
+            canonical = canonical_labels.get(block.question_label.strip().casefold())
+            if canonical is None:
+                raise ValueError("Visual page read returned an unknown finalized question label")
+            if block.label_source == "continuation":
+                raise ValueError(
+                    "Visual page read marked a labelled block as a continuation"
+                )
+            blocks.append(block.model_copy(update={"question_label": canonical}))
+        return VisualPageTranscriptOutput(
+            blocks=blocks,
+            is_blank_page=payload.is_blank_page,
+            needs_review=True,
+        )
+
     def map_page_answer_regions(
         self,
         *,
@@ -1702,6 +1848,63 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 f"~{max(context_room, 0)} completion tokens in a {self.context_tokens}-token "
                 "context — too little room to map safely in one call. Raise "
                 "LOCAL_QWEN38_CONTEXT_TOKENS if VRAM allows it."
+            )
+        return budget
+
+    @staticmethod
+    def _page_read_content_units(image_bytes: bytes) -> int:
+        """Estimate how much verbatim page text the response may need to hold.
+
+        Ink density is a CPU-only budget input. It is never used to infer a
+        question label, a boundary, a transcript, or a grade.
+        """
+
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                grayscale = image.convert("L")
+                grayscale.thumbnail((1000, 1000))
+                histogram = grayscale.histogram()
+            pixels = sum(histogram)
+            if pixels <= 0:
+                return 1
+            ink_ratio = sum(histogram[:129]) / pixels
+            return max(1, min(16, math.ceil(ink_ratio * 100)))
+        except Exception:
+            # _image_part will reject an invalid image before transport. Keep a
+            # conservative nonzero estimate here so a malformed test fixture
+            # cannot make this path regress to a tiny flat budget.
+            return 1
+
+    def _page_read_token_budget(
+        self,
+        label_count: int,
+        *,
+        image_bytes: bytes,
+    ) -> int:
+        """Size one-page text-and-geometry output to its visible content.
+
+        A page-read response carries arbitrary verbatim handwriting, unlike a
+        mapping response whose one-box-per-label shape is bounded. The budget
+        therefore grows for visible ink as well as label count and still
+        respects the actual context window and a finite server ceiling.
+        """
+
+        content_need = max(
+            _PAGE_READ_BASE_TOKENS
+            + _PAGE_READ_TOKENS_PER_LABEL * max(label_count, 1)
+            + _PAGE_READ_TOKENS_PER_CONTENT_UNIT
+            * self._page_read_content_units(image_bytes),
+            _PAGE_READ_MIN_TOKENS,
+        )
+        prompt_estimate = _IMAGE_MAX_TOKENS_PER_PAGE + _PAGE_READ_PROMPT_OVERHEAD_TOKENS
+        context_room = self.context_tokens - prompt_estimate - _CONTEXT_SAFETY_MARGIN_TOKENS
+        budget = min(content_need, context_room, _PAGE_READ_MAX_TOKENS_CEILING)
+        if budget < _PAGE_READ_MIN_TOKENS:
+            raise ValueError(
+                f"llama_cpp_qwen38_vision: page read for {label_count} finalized labels "
+                f"leaves only ~{max(context_room, 0)} completion tokens in a "
+                f"{self.context_tokens}-token context â€” too little room to read safely. "
+                "Raise LOCAL_QWEN38_CONTEXT_TOKENS if VRAM allows it."
             )
         return budget
 

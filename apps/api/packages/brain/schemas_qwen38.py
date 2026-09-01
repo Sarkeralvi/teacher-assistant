@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 FINAL_INTENT_PROMPT_VERSION = "qwen38-visible-evidence-structured-v5"
+VISUAL_PAGE_READ_PROMPT_VERSION = "qwen38-page-read-structured-v1"
 LEGACY_FINAL_INTENT_PROMPT_VERSION = "qwen38-final-intent-structured-v2"
 LEGACY_FINAL_INTENT_PROMPT_VERSION_V3 = "qwen38-final-intent-structured-v3"
 LEGACY_FINAL_INTENT_PROMPT_VERSION_V4 = "qwen38-final-intent-structured-v4"
@@ -186,6 +187,36 @@ class VisualPageRegion(BaseModel):
         if not (0 <= x1 < x2 <= 1000 and 0 <= y1 < y2 <= 1000):
             raise ValueError("bbox must be normalized [x1, y1, x2, y2]")
         return self
+
+
+class VisualPageBlock(BaseModel):
+    """One verbatim visual block on a complete script page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_label: str | None
+    bbox: list[int] = Field(min_length=4, max_length=4)
+    text: str
+    continues_from_previous: bool
+    label_source: Literal["heading", "continuation", "inferred"]
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+
+    @model_validator(mode="after")
+    def bbox_is_normalized_box(self) -> VisualPageBlock:
+        x1, y1, x2, y2 = self.bbox
+        if not (0 <= x1 < x2 <= 1000 and 0 <= y1 < y2 <= 1000):
+            raise ValueError("bbox must be normalized [x1, y1, x2, y2]")
+        return self
+
+
+class VisualPageTranscriptOutput(BaseModel):
+    """One review-only, full-page visual read containing text and geometry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[VisualPageBlock]
+    is_blank_page: bool
+    needs_review: Literal[True] = True
 
 
 class VisualPageMappingOutput(BaseModel):

@@ -58,6 +58,7 @@ class LocalAiPhaseManager:
             or self.settings.local_paddle_ocr_enabled
             or self.settings.local_qwen38_transcription_enabled
             or self.settings.local_qwen38_visual_preparation_enabled
+            or self.settings.local_qwen38_page_read_enabled
             or self.settings.local_qwen38_grading_enabled
         ):
             raise LocalAiPhaseError("Local AI features are disabled")

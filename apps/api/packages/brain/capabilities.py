@@ -13,6 +13,7 @@ class BrainCapability(StrEnum):
     OCR_ANSWER_PREPARATION = "ocr_answer_preparation"
     VISUAL_REFERENCE_EXTRACTION = "visual_reference_extraction"
     VISUAL_MAPPING = "visual_mapping"
+    VISUAL_PAGE_READ = "visual_page_read"
     VISUAL_TRANSCRIPTION = "visual_transcription"
     TRANSCRIPTION_REPAIR = "transcription_repair"
 
