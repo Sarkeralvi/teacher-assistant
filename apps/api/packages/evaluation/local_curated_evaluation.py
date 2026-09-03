@@ -35,7 +35,7 @@ SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km",)
 # retired from executable contracts. This does not authorize a new Qwen3.8
 # grading run; run_grading_stage accepts SUPPORTED_GRADING_MODELS only.
 HISTORICAL_GRADING_MODELS = (*SUPPORTED_GRADING_MODELS, "qwen3.8-27b-q4km")
-EXPECTED_LLAMA_CPP_BUILD = "10249"
+EXPECTED_LLAMA_CPP_BUILD = "10622"
 EXPECTED_PROMPT_VERSION = "real-grading-v3"
 OCR_CALL_LIMIT = 20
 QWEN_CALL_LIMIT = 18
@@ -191,7 +191,7 @@ class EvaluationThresholds(BaseModel):
 class LlamaCppAssetMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    build: Literal["10249"]
+    build: Literal["10622"]
     # Either candidate grading model may be pinned until the bake-off decides.
     model_alias: Literal["qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"]
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -2083,7 +2083,9 @@ def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
             raise LocalCuratedEvaluationError("Could not record the llama.cpp build") from exc
         llama_version_text = (version_result.stdout + version_result.stderr).strip()
         if not re.search(rf"\b{EXPECTED_LLAMA_CPP_BUILD}\b", llama_version_text):
-            raise LocalCuratedEvaluationError("llama.cpp build does not match 10249")
+            raise LocalCuratedEvaluationError(
+                f"llama.cpp build does not match {EXPECTED_LLAMA_CPP_BUILD}"
+            )
 
     qwen38_binary = required_file("Qwen3.8 llama.cpp binary", "LOCAL_QWEN38_BINARY_PATH")
     qwen38_model = required_file("Qwen3.8 model", "LOCAL_QWEN38_MODEL_PATH")

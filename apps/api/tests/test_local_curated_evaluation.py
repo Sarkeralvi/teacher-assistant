@@ -59,14 +59,14 @@ def _operator_assets() -> OperatorAssetMetadata:
     return OperatorAssetMetadata.model_validate(
         {
             "llama_cpp": {
-                "build": "10249",
+                "build": "10622",
                 "model_alias": "qwen3.6-35b-a3b-q4km",
                 "model_sha256": "1" * 64,
                 "model_size_bytes": 1024,
                 "device": "gpu_hybrid",
             },
             "qwen38_vision": {
-                "build": "10249",
+                "build": "10622",
                 "model_alias": "qwen3.8-27b-q4km",
                 "model_sha256": "2" * 64,
                 "model_size_bytes": 2048,
@@ -474,7 +474,7 @@ def test_operator_asset_metadata_hashes_local_files_without_recording_paths(
 
     def fake_run(command: list[str], **_kwargs: object) -> object:
         assert command[-1] == "--version"
-        return type("Result", (), {"stdout": "llama.cpp build 10249", "stderr": ""})()
+        return type("Result", (), {"stdout": "llama.cpp build 10622", "stderr": ""})()
 
     monkeypatch.setattr(evaluation_module.subprocess, "run", fake_run)
     metadata = evaluation_module._operator_asset_metadata("qwen3.6-35b-a3b-q4km")

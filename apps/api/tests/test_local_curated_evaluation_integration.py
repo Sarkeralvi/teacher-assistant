@@ -235,7 +235,7 @@ def _assets(grading_model: str) -> evaluation.OperatorAssetMetadata:
     return evaluation.OperatorAssetMetadata.model_validate(
         {
             "llama_cpp": {
-                "build": "10249",
+                "build": "10622",
                 "model_alias": grading_model,
                 "model_sha256": (
                     "1" * 64 if grading_model == "qwen3.6-35b-a3b-q4km" else "2" * 64
@@ -248,7 +248,7 @@ def _assets(grading_model: str) -> evaluation.OperatorAssetMetadata:
                 ),
             },
             "qwen38_vision": {
-                "build": "10249",
+                "build": "10622",
                 "model_alias": "qwen3.8-27b-q4km",
                 "model_sha256": "2" * 64,
                 "model_size_bytes": 2048,

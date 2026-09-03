@@ -43,7 +43,7 @@ def _assets(model_alias: str) -> evaluation.OperatorAssetMetadata:
     return evaluation.OperatorAssetMetadata.model_validate(
         {
             "llama_cpp": {
-                "build": "10249",
+                "build": "10622",
                 "model_alias": model_alias,
                 "model_sha256": model_hash,
                 "model_size_bytes": 1024,
@@ -52,7 +52,7 @@ def _assets(model_alias: str) -> evaluation.OperatorAssetMetadata:
                 ),
             },
             "qwen38_vision": {
-                "build": "10249",
+                "build": "10622",
                 "model_alias": "qwen3.8-27b-q4km",
                 "model_sha256": "2" * 64,
                 "model_size_bytes": 2048,
