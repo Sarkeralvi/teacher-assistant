@@ -25,6 +25,7 @@ from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
     SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS,
     THINKING_REPAIR_PROMPT_VERSION,
+    VISUAL_PAGE_READ_PROMPT_VERSION,
 )
 
 
@@ -493,11 +494,22 @@ class Qwen38VisualTranscriptionService:
     def confirm(
         self, region: AnswerRegion, run: AnswerRegionOcrRun, *, teacher: User, draft_hash: str
     ) -> None:
-        if run.answer_region_id != region.id or run.profile != "qwen38_verbatim_visual":
+        # A page-read run (LocalScriptPageReadService, one call per page) carries
+        # no structured editing_marks, so it is never routed into Thinking repair;
+        # it is instead directly confirmable here, on the same terms as a current
+        # final-intent run, gated by the same forbidden-marker scan below.
+        if run.answer_region_id != region.id or run.profile not in {
+            "qwen38_verbatim_visual",
+            "qwen38_visual_page_read",
+        }:
             raise VisualTranscriptionError(
                 "Visual transcription run does not belong to this answer"
             )
-        if run.prompt_version != FINAL_INTENT_PROMPT_VERSION:
+        is_page_read = run.profile == "qwen38_visual_page_read"
+        current_prompt_version = (
+            VISUAL_PAGE_READ_PROMPT_VERSION if is_page_read else FINAL_INTENT_PROMPT_VERSION
+        )
+        if run.prompt_version != current_prompt_version:
             raise VisualTranscriptionError(
                 "This transcript used the older combined transcription/cancellation policy; "
                 "run the current evidence-preserving transcription before direct confirmation, "
@@ -888,7 +900,10 @@ class Qwen38VisualTranscriptionService:
     def reject(
         self, region: AnswerRegion, run: AnswerRegionOcrRun, *, teacher: User, reason: str
     ) -> None:
-        if run.answer_region_id != region.id or run.profile != "qwen38_verbatim_visual":
+        if run.answer_region_id != region.id or run.profile not in {
+            "qwen38_verbatim_visual",
+            "qwen38_visual_page_read",
+        }:
             raise VisualTranscriptionError(
                 "Visual transcription run does not belong to this answer"
             )

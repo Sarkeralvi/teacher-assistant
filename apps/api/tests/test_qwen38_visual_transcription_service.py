@@ -15,6 +15,7 @@ from app.services.qwen38_visual_transcription_service import (
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
     THINKING_REPAIR_PROMPT_VERSION,
+    VISUAL_PAGE_READ_PROMPT_VERSION,
 )
 
 
@@ -85,6 +86,114 @@ def test_teacher_can_explicitly_confirm_an_exact_flagged_baseline(
     assert run.status == "confirmed"
     assert run.confirmed_text == draft_text
     assert region.manual_answer_text == draft_text
+
+
+def test_page_read_transcript_can_be_confirmed_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean one-call-per-page transcript is confirmable without a second,
+    redundant per-region visual call — it carries no structured editing_marks,
+    so it is gated by the same forbidden-marker scan as the old pipeline
+    instead of ever entering Thinking repair."""
+
+    class FakeDb:
+        def scalar(self, _statement):
+            return None
+
+        def commit(self):
+            return None
+
+    service = Qwen38VisualTranscriptionService(FakeDb())  # type: ignore[arg-type]
+    draft_text = "x=4"
+    run = SimpleNamespace(
+        id=51,
+        answer_region_id=42,
+        profile="qwen38_visual_page_read",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        status="succeeded",
+        draft_text=draft_text,
+        normalized_result={"is_blank": False, "requires_thinking_repair": False},
+        source_image_sha256="a" * 64,
+        warnings=["teacher_review_required", "visual_page_read"],
+        confirmed_text=None,
+        confirmed_by_teacher_id=None,
+        confirmed_at=None,
+    )
+    region = SimpleNamespace(
+        id=42,
+        grading_jobs=[],
+        grade_suggestions=[],
+        manual_answer_text=None,
+        evidence_status="unconfirmed",
+    )
+    mapping = SimpleNamespace(teacher_confirmed=True)
+    monkeypatch.setattr(service, "_source_hash", lambda _region: "a" * 64)
+    monkeypatch.setattr(service, "_mapping_for_region", lambda _region_id: mapping)
+    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
+
+    service.confirm(
+        region,  # type: ignore[arg-type]
+        run,  # type: ignore[arg-type]
+        teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+        draft_hash=hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
+    )
+
+    assert run.status == "confirmed"
+    assert run.confirmed_text == draft_text
+    assert region.manual_answer_text == draft_text
+
+
+def test_page_read_transcript_with_unresolved_evidence_cannot_be_confirmed() -> None:
+    service = Qwen38VisualTranscriptionService(None)  # type: ignore[arg-type]
+    region = SimpleNamespace(id=42)
+    run = SimpleNamespace(
+        id=51,
+        answer_region_id=42,
+        profile="qwen38_visual_page_read",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        status="succeeded",
+        draft_text="[visibly crossed] x=3\nx=4",
+        normalized_result={"is_blank": False, "requires_thinking_repair": True},
+    )
+
+    with pytest.raises(VisualTranscriptionError, match="unresolved or explicitly preserved"):
+        service.confirm(
+            region,  # type: ignore[arg-type]
+            run,  # type: ignore[arg-type]
+            teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+            draft_hash=hashlib.sha256(run.draft_text.encode("utf-8")).hexdigest(),
+        )
+
+
+def test_page_read_run_can_be_rejected() -> None:
+    class FakeDb:
+        def commit(self):
+            return None
+
+    service = Qwen38VisualTranscriptionService(FakeDb())  # type: ignore[arg-type]
+    run = SimpleNamespace(
+        id=51,
+        answer_region_id=42,
+        profile="qwen38_visual_page_read",
+        status="succeeded",
+        rejected_by_teacher_id=None,
+        rejected_at=None,
+        rejection_reason_codes=None,
+    )
+    region = SimpleNamespace(id=42)
+    mapping = SimpleNamespace(mapping_status="uncertain", blocker_reason=None)
+    service._mapping_for_region = lambda _region_id: mapping  # type: ignore[method-assign]
+    service._audit = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    service.reject(
+        region,  # type: ignore[arg-type]
+        run,  # type: ignore[arg-type]
+        teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+        reason="all_candidates_wrong",
+    )
+
+    assert run.status == "rejected"
+    assert mapping.mapping_status == "blocked"
 
 
 def test_transcription_cannot_replace_evidence_after_grading_started(

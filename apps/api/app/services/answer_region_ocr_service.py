@@ -279,6 +279,10 @@ class AnswerRegionOcrService:
                             "paddle_baseline_transcription",
                             "visual_transcription",
                             "visual_transcription_thinking_repair",
+                            # LocalScriptPageReadService's one-call-per-page runs;
+                            # without this the Custom Controlled review panel
+                            # never sees the transcript page-read already produced.
+                            "visual_page_read",
                         ]
                     ),
                 )

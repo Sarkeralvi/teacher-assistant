@@ -200,6 +200,13 @@ const REPAIRABLE_FINAL_INTENT_PROMPT_VERSIONS = new Set([
   CURRENT_FINAL_INTENT_PROMPT_VERSION,
 ]);
 const CURRENT_THINKING_REPAIR_PROMPT_VERSION = "qwen38-final-intent-thinking-repair-v9";
+// Mirrors VISUAL_PAGE_READ_PROMPT_VERSION in packages/brain/schemas_qwen38.py. A
+// page-read transcript carries no structured editing_marks (see
+// LocalScriptPageReadService._create_transcription_artifact), so it is never
+// routed into the Thinking-repair flow below, which expects them. A page-read
+// run that flags unresolved evidence instead falls back to the full per-region
+// "Transcribe visible answer evidence" pipeline, which can adjudicate it.
+const CURRENT_PAGE_READ_PROMPT_VERSION = "qwen38-page-read-structured-v1";
 
 type ThinkingRepairDecision = EditingDecisionOverlay & {
   page_index: number;
@@ -2146,7 +2153,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 const warnings = localMappingWarnings(mapping);
                 const visualRun = mapping.answer_region_id
                   ? [...(ocrRunsByRegionId[mapping.answer_region_id] ?? [])]
-                      .filter((run) => run.profile === "qwen38_verbatim_visual")
+                      .filter((run) => run.profile === "qwen38_verbatim_visual" || run.profile === "qwen38_visual_page_read")
                       .sort((left, right) => right.id - left.id)[0] ?? null
                   : null;
                 const thinkingRepairRuns = mapping.answer_region_id
@@ -2185,9 +2192,21 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                     ].some((marker) => (visualRun.draft_text ?? "").toLowerCase().includes(marker))
                   ),
                 );
+                // A page-read transcript is directly confirmable, exactly like a
+                // current final-intent run, unless it (or the same marker scan
+                // above) flagged unresolved evidence it cannot itself adjudicate
+                // (no structured editing_marks) — that case escalates to the full
+                // per-region pipeline instead, below.
+                const currentPageReadRun = Boolean(
+                  visualRun?.prompt_version === CURRENT_PAGE_READ_PROMPT_VERSION,
+                );
+                const pageReadNeedsEscalation = currentPageReadRun
+                  && (requiresThinkingRepair || baselineHasUnresolvedEvidence);
+                const pageReadDirectlyConfirmable = currentPageReadRun && !pageReadNeedsEscalation;
+                const directlyConfirmableRun = currentFinalIntentRun || pageReadDirectlyConfirmable;
                 const confirmedRun = thinkingRepairRun?.status === "confirmed"
                   ? thinkingRepairRun
-                  : visualRun?.status === "confirmed" && repairableFinalIntentRun
+                  : visualRun?.status === "confirmed" && (repairableFinalIntentRun || currentPageReadRun)
                     ? visualRun
                     : null;
                 const hasDraftSuggestion = Boolean(
@@ -2196,6 +2215,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                 const legacyRetranscriptionRequired = Boolean(
                   visualRun &&
                   !currentFinalIntentRun &&
+                  !currentPageReadRun &&
                   visualRun.status !== "confirmed" &&
                   mapping.answer_region_id &&
                   !gradedRegionIds.has(mapping.answer_region_id) &&
@@ -2319,7 +2339,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             {confirmingMappingId === mapping.id ? "Confirming region..." : segmentCropsState === "error" || sourcePagesState === "error" ? "All evidence images must load before confirmation" : segmentCropsState !== "loaded" || sourcePagesState !== "loaded" ? "Loading every source page and answer segment..." : !boundaryReviewed ? "Compare and acknowledge the full-page boundary first" : `Confirm all ${sourceSegments.length} displayed answer segment${sourceSegments.length === 1 ? "" : "s"}`}
                           </button>
                         ) : null}
-                        {mapping.teacher_confirmed && (!visualRun || legacyRetranscriptionRequired || failedCurrentRetranscriptionRequired) ? (
+                        {mapping.teacher_confirmed && (!visualRun || legacyRetranscriptionRequired || failedCurrentRetranscriptionRequired || pageReadNeedsEscalation) ? (
                           <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !localAiStatus?.brain.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
                             {runningOcrRegionId === mapping.answer_region_id
                               ? "The brain is resolving corrections and transcribing..."
@@ -2327,7 +2347,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                                 ? "Re-run evidence-preserving transcription"
                                 : legacyRetranscriptionRequired
                                   ? "Re-transcribe with evidence-preserving rules"
-                                  : "Transcribe visible answer evidence with the visual brain"}
+                                  : pageReadNeedsEscalation
+                                    ? "Resolve possible edits with the full evidence-preserving pipeline"
+                                    : "Transcribe visible answer evidence with the visual brain"}
                           </button>
                         ) : null}
                         {visualRun ? (
@@ -2336,6 +2358,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                             {legacyRetranscriptionRequired ? (
                               <p className="rounded border border-amber-800 bg-amber-950/20 p-2 text-xs text-amber-100">
                                 This transcript used the older combined transcription/cancellation policy. It cannot be directly confirmed; re-transcribe with the evidence-preserving policy or use the explicit Thinking repair when available.
+                              </p>
+                            ) : null}
+                            {pageReadNeedsEscalation ? (
+                              <p className="rounded border border-amber-800 bg-amber-950/20 p-2 text-xs text-amber-100">
+                                This page-read transcript shows possible crossed-out, overwritten, or unclear writing. It cannot be directly confirmed; run the full evidence-preserving pipeline above to adjudicate it.
                               </p>
                             ) : null}
                             {safeVisualTranscriptionError(visualRun.error) ? <p className="text-xs text-red-200">{safeVisualTranscriptionError(visualRun.error)}</p> : null}
@@ -2358,11 +2385,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                               </p>
                             ) : null}
                             {visualRun.draft_text ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-3 text-xs text-slate-100">{visualRun.draft_text}</pre> : null}
-                            {visualRun.status === "succeeded" && currentFinalIntentRun && thinkingRepairRun?.status !== "confirmed" ? <div className="flex flex-wrap gap-2">
+                            {visualRun.status === "succeeded" && directlyConfirmableRun && thinkingRepairRun?.status !== "confirmed" ? <div className="flex flex-wrap gap-2">
                               {!baselineHasUnresolvedEvidence ? <button className={buttonClass} type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleConfirmVisualTranscription(mapping, visualRun)}>{requiresThinkingRepair ? "I verified this is the finalized surviving work" : "Confirm this final transcription"}</button> : null}
                               <button className="rounded border border-red-700 px-3 py-2 text-xs text-red-100" type="button" disabled={confirmingVisualRunId === visualRun.id} onClick={() => void handleRejectVisualTranscription(mapping, visualRun)}>None matches — block and upload clearer page</button>
                             </div> : null}
-                            {visualRun.status === "succeeded" && currentFinalIntentRun && baselineHasUnresolvedEvidence ? (
+                            {visualRun.status === "succeeded" && directlyConfirmableRun && baselineHasUnresolvedEvidence ? (
                               <p className="text-xs text-amber-200">The baseline explicitly contains unresolved or crossed-writing markers, so it cannot be finalized directly. Use Thinking or upload a clearer complete page.</p>
                             ) : null}
                           </div>

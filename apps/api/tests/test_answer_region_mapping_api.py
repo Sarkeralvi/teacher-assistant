@@ -37,7 +37,10 @@ from app.models import (
 )
 from app.services.local_ocr_client import LocalOcrResult
 from app.services.qwen38_visual_transcription_service import Qwen38VisualTranscriptionService
-from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
+from packages.brain.schemas_qwen38 import (
+    FINAL_INTENT_PROMPT_VERSION,
+    VISUAL_PAGE_READ_PROMPT_VERSION,
+)
 
 CLEANUP_MODELS = (
     FinalGrade,
@@ -1018,3 +1021,83 @@ def test_prepare_route_refuses_repair_unconfirmed_only_with_page_read_enabled(
     assert "does not yet support repairing only" in response.json()["detail"]
     assert not _FakePageReadService.calls
     assert not _FakeMappingService.calls
+
+
+def test_page_read_transcript_appears_in_ocr_runs_and_is_directly_confirmable(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    # AnswerRegionOcrService.list_runs() and Qwen38VisualTranscriptionService's
+    # confirm/reject used to only recognize the old mapping-then-transcribe
+    # pipeline's profile ("qwen38_verbatim_visual"). A LocalScriptPageReadService
+    # transcript ("qwen38_visual_page_read") would silently never appear in the
+    # review panel and, even if it did, could never be confirmed.
+    teacher, token = register_teacher(client, "page-read-review")
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    create_question(client, int(assessment["id"]), "Q1(a)", token)
+    seed_confirmed_question_nodes(db_session, int(assessment["id"]))
+    pdf_path = tmp_path / "page-read-review.pdf"
+    make_text_pdf(pdf_path, ["Q1(a) x=4"])
+    submission = upload_submission_pdf(
+        client, int(assessment["id"]), pdf_path, token, "S-PAGE-READ-REVIEW"
+    )
+    mapping_response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"replace_existing": True},
+    )
+    mapping_payload = next(
+        item for item in mapping_response.json()["mappings"] if item["answer_region_id"]
+    )
+    mapping = db_session.get(AnswerRegionMapping, int(mapping_payload["id"]))
+    assert mapping is not None and mapping.answer_region is not None
+    confirm_response = client.post(
+        f"/question-node-mappings/{mapping.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True},
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+    region = mapping.answer_region
+    source_hash = Qwen38VisualTranscriptionService(db_session)._source_hash(region)
+    draft_text = "x=4"
+    draft_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+    page_read_run = AnswerRegionOcrRun(
+        answer_region_id=region.id,
+        requested_by_teacher_id=int(teacher["id"]),
+        request_id=f"page-read-{uuid4().hex}",
+        status="succeeded",
+        profile="qwen38_visual_page_read",
+        task_kind="visual_page_read",
+        reasoning_mode="off",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        source_image_sha256=source_hash,
+        source_image_hashes=[],
+        input_manifest_sha256=source_hash,
+        output_sha256=draft_hash,
+        provider="llama_cpp_qwen38",
+        model_name="qwen3.8-27b-q4km",
+        draft_text=draft_text,
+        normalized_result={"is_blank": False, "requires_thinking_repair": False},
+        warnings=["teacher_review_required", "visual_page_read"],
+        call_limit=0,
+        calls_used=0,
+        candidate_set_sha256=draft_hash,
+    )
+    db_session.add(page_read_run)
+    db_session.commit()
+
+    listed = client.get(
+        f"/answer-regions/{region.id}/ocr-runs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert page_read_run.id in [item["id"] for item in listed.json()]
+
+    confirm_transcript = client.post(
+        f"/answer-regions/{region.id}/visual-transcription-runs/{page_read_run.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"teacher_confirmed": True, "draft_text_sha256": draft_hash},
+    )
+    assert confirm_transcript.status_code == 200, confirm_transcript.text
+    assert confirm_transcript.json()["status"] == "confirmed"
