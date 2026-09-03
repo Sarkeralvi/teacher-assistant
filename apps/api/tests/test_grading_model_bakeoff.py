@@ -43,7 +43,7 @@ def _assets(model_alias: str) -> evaluation.OperatorAssetMetadata:
     return evaluation.OperatorAssetMetadata.model_validate(
         {
             "llama_cpp": {
-                "build": "10622",
+                "build": "10249" if model_alias.startswith("qwen3.6") else "10622",
                 "model_alias": model_alias,
                 "model_sha256": model_hash,
                 "model_size_bytes": 1024,

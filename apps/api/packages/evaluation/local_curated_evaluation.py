@@ -35,7 +35,11 @@ SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km",)
 # retired from executable contracts. This does not authorize a new Qwen3.8
 # grading run; run_grading_stage accepts SUPPORTED_GRADING_MODELS only.
 HISTORICAL_GRADING_MODELS = (*SUPPORTED_GRADING_MODELS, "qwen3.8-27b-q4km")
-EXPECTED_LLAMA_CPP_BUILD = "10622"
+# The Qwen3.8 vision runtime was promoted to b10622 (TA-LOCAL-010); the
+# separate Qwen3.6 text-grader runtime was not part of that promotion and
+# remains on b10249. The two binaries are legitimately on different builds.
+EXPECTED_QWEN38_LLAMA_CPP_BUILD = "10622"
+EXPECTED_QWEN36_LLAMA_CPP_BUILD = "10249"
 EXPECTED_PROMPT_VERSION = "real-grading-v3"
 OCR_CALL_LIMIT = 20
 QWEN_CALL_LIMIT = 18
@@ -191,7 +195,10 @@ class EvaluationThresholds(BaseModel):
 class LlamaCppAssetMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    build: Literal["10622"]
+    # Qwen3.6's runtime (b10249) was not part of the b10622 promotion, so a
+    # grader run may legitimately record either build depending on which
+    # model alias it pins; Qwen3.8VisionAssetMetadata narrows this to b10622.
+    build: Literal["10249", "10622"]
     # Either candidate grading model may be pinned until the bake-off decides.
     model_alias: Literal["qwen3.6-35b-a3b-q4km", "qwen3.8-27b-q4km"]
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -207,6 +214,7 @@ class Qwen38VisionAssetMetadata(LlamaCppAssetMetadata):
     visual path.
     """
 
+    build: Literal["10622"]
     model_alias: Literal["qwen3.8-27b-q4km"]
     device: Literal["gpu_hybrid_single_slot"] = "gpu_hybrid_single_slot"
     mmproj_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -2070,7 +2078,7 @@ def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
             raise LocalCuratedEvaluationError(f"Operator asset metadata is unavailable: {label}")
         return path
 
-    def assert_build(binary: Path) -> None:
+    def assert_build(binary: Path, expected_build: str) -> None:
         try:
             version_result = subprocess.run(
                 [str(binary), "--version"],
@@ -2082,9 +2090,9 @@ def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise LocalCuratedEvaluationError("Could not record the llama.cpp build") from exc
         llama_version_text = (version_result.stdout + version_result.stderr).strip()
-        if not re.search(rf"\b{EXPECTED_LLAMA_CPP_BUILD}\b", llama_version_text):
+        if not re.search(rf"\b{expected_build}\b", llama_version_text):
             raise LocalCuratedEvaluationError(
-                f"llama.cpp build does not match {EXPECTED_LLAMA_CPP_BUILD}"
+                f"llama.cpp build does not match {expected_build}"
             )
 
     qwen38_binary = required_file("Qwen3.8 llama.cpp binary", "LOCAL_QWEN38_BINARY_PATH")
@@ -2094,30 +2102,32 @@ def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
         raise LocalCuratedEvaluationError(
             "Operator asset metadata is unavailable: Qwen3.8 projector"
         )
-    assert_build(qwen38_binary)
+    assert_build(qwen38_binary, EXPECTED_QWEN38_LLAMA_CPP_BUILD)
 
     if expected_qwen_model == "qwen3.6-35b-a3b-q4km":
         grader_binary = required_file("Qwen3.6 llama.cpp binary", "LOCAL_QWEN_BINARY_PATH")
         grader_model = required_file("Qwen3.6 model", "LOCAL_QWEN_MODEL_PATH")
         grader_device = "gpu_hybrid"
-        assert_build(grader_binary)
+        grader_build = EXPECTED_QWEN36_LLAMA_CPP_BUILD
+        assert_build(grader_binary, grader_build)
     elif expected_qwen_model == "qwen3.8-27b-q4km":
         grader_model = qwen38_model
         grader_device = "gpu_hybrid_single_slot"
+        grader_build = EXPECTED_QWEN38_LLAMA_CPP_BUILD
     else:
         raise LocalCuratedEvaluationError("Unsupported grading-model alias")
     try:
         return OperatorAssetMetadata.model_validate(
             {
                 "llama_cpp": {
-                    "build": EXPECTED_LLAMA_CPP_BUILD,
+                    "build": grader_build,
                     "model_alias": expected_qwen_model,
                     "model_sha256": sha256_file(grader_model),
                     "model_size_bytes": grader_model.stat().st_size,
                     "device": grader_device,
                 },
                 "qwen38_vision": {
-                    "build": EXPECTED_LLAMA_CPP_BUILD,
+                    "build": EXPECTED_QWEN38_LLAMA_CPP_BUILD,
                     "model_alias": "qwen3.8-27b-q4km",
                     "model_sha256": sha256_file(qwen38_model),
                     "model_size_bytes": qwen38_model.stat().st_size,

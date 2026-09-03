@@ -59,7 +59,7 @@ def _operator_assets() -> OperatorAssetMetadata:
     return OperatorAssetMetadata.model_validate(
         {
             "llama_cpp": {
-                "build": "10622",
+                "build": "10249",
                 "model_alias": "qwen3.6-35b-a3b-q4km",
                 "model_sha256": "1" * 64,
                 "model_size_bytes": 1024,
@@ -474,7 +474,10 @@ def test_operator_asset_metadata_hashes_local_files_without_recording_paths(
 
     def fake_run(command: list[str], **_kwargs: object) -> object:
         assert command[-1] == "--version"
-        return type("Result", (), {"stdout": "llama.cpp build 10622", "stderr": ""})()
+        # The same fake binary stands in for both the Qwen3.8 (b10622) and
+        # Qwen3.6 (b10249) runtimes here, so its fake output must satisfy
+        # both builds' assert_build check.
+        return type("Result", (), {"stdout": "llama.cpp build 10622 build 10249", "stderr": ""})()
 
     monkeypatch.setattr(evaluation_module.subprocess, "run", fake_run)
     metadata = evaluation_module._operator_asset_metadata("qwen3.6-35b-a3b-q4km")
