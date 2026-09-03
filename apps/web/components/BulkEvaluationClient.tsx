@@ -35,6 +35,16 @@ const activeStatuses = new Set([
   "grading",
   "stopping",
 ]);
+// Must match the backend's Form(ge=1, le=2000) on maximum_provider_calls;
+// an out-of-range value here is otherwise only caught server-side and
+// surfaces as an opaque 422 with no indication of which field failed.
+const MIN_CALL_LIMIT = 1;
+const MAX_CALL_LIMIT = 2000;
+
+function clampCallLimit(value: number): number {
+  if (!Number.isFinite(value)) return MIN_CALL_LIMIT;
+  return Math.min(MAX_CALL_LIMIT, Math.max(MIN_CALL_LIMIT, Math.trunc(value)));
+}
 
 export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [runs, setRuns] = useState<BulkEvaluationRun[]>([]);
@@ -45,7 +55,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const [file, setFile] = useState<File | null>(null);
   const [gradingRunId, setGradingRunId] = useState<number | null>(null);
   const [markingPolicy, setMarkingPolicy] = useState<MarkingPolicy>("general");
-  const [callLimit, setCallLimit] = useState(2000);
+  const [callLimit, setCallLimit] = useState(MAX_CALL_LIMIT);
   const [authorized, setAuthorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -243,7 +253,15 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
           <select className={inputClass} value={markingPolicy} onChange={(event) => setMarkingPolicy(event.target.value as MarkingPolicy)}>
             <option value="tough">Tough</option><option value="general">General</option><option value="easy">Easy</option>
           </select>
-          <input className={inputClass} type="number" min={1} max={2000} value={callLimit} onChange={(event) => setCallLimit(Number(event.target.value))} aria-label="Maximum model calls" />
+          <input
+            className={inputClass}
+            type="number"
+            min={MIN_CALL_LIMIT}
+            max={MAX_CALL_LIMIT}
+            value={callLimit}
+            onChange={(event) => setCallLimit(clampCallLimit(Number(event.target.value)))}
+            aria-label="Maximum model calls"
+          />
         </div>
         <label className="flex items-start gap-3 rounded-lg border border-amber-700/60 bg-amber-950/20 p-4 text-sm text-amber-100">
           <input className="mt-1" type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} />

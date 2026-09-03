@@ -1120,6 +1120,41 @@ export function backendUnreachableMessage() {
   return `Could not reach backend at ${resolveApiBaseUrl()}. Check backend server.`;
 }
 
+// FastAPI returns `detail` as a plain string for an app-raised HTTPException,
+// but as a list of {loc, msg, type} objects for its own automatic request
+// validation errors (e.g. a Form field outside its declared range). Without
+// this, a validation failure fell back to a bare "422 Unprocessable Entity"
+// with no indication of which field or why.
+function extractErrorDetail(errorBody: unknown, fallback: string): string {
+  if (typeof errorBody !== "object" || errorBody === null || !("detail" in errorBody)) {
+    return fallback;
+  }
+  const detail = (errorBody as { detail?: unknown }).detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((entry) => {
+        if (typeof entry !== "object" || entry === null || !("msg" in entry)) {
+          return null;
+        }
+        const loc = Array.isArray((entry as { loc?: unknown }).loc)
+          ? (entry as { loc: unknown[] })
+              .loc.filter((part) => part !== "body" && part !== "query" && part !== "path")
+              .join(".")
+          : "";
+        const msg = String((entry as { msg: unknown }).msg);
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .filter((msg): msg is string => Boolean(msg));
+    if (messages.length > 0) {
+      return messages.join("; ");
+    }
+  }
+  return fallback;
+}
+
 async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const hasJsonBody = options.body !== undefined;
   const headers: Record<string, string> = {};
@@ -1162,10 +1197,7 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
     }
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const errorBody = (await response.json()) as { detail?: unknown };
-      if (typeof errorBody.detail === "string") {
-        detail = errorBody.detail;
-      }
+      detail = extractErrorDetail(await response.json(), detail);
     } catch {
       // Keep default status text.
     }
@@ -1205,8 +1237,7 @@ async function apiDownload(path: string, options: Pick<RequestOptions, "token" |
     }
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const body = (await response.json()) as { detail?: unknown };
-      if (typeof body.detail === "string") detail = body.detail;
+      detail = extractErrorDetail(await response.json(), detail);
     } catch {
       // Keep the HTTP status when the response is not JSON.
     }
