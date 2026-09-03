@@ -35,6 +35,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import math
 import re
 import time
@@ -63,6 +64,8 @@ from packages.brain.schemas_qwen38 import (
     VisualPageTranscriptOutput,
     VisualTranscriptionOutput,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 PROVIDER_NAME = "llama_cpp_qwen38"
@@ -839,6 +842,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         reasoning_effort: Literal["low", "medium", "xhigh"] | None = None,
         thinking_budget_tokens: int | None = None,
         constrain_json_schema: bool = False,
+        salvage_list_field: str | None = None,
     ) -> tuple[BaseModel, dict[str, Any]]:
         """Call /v1/chat/completions and validate its JSON response.
 
@@ -854,6 +858,14 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         contract instructions plus Pydantic are the strict, fail-closed schema
         authority: malformed, missing, extra, truncated, or contract-breaking
         fields are rejected before any draft evidence or grade is persisted.
+
+        ``salvage_list_field``, when set, names a top-level list field (e.g.
+        ``"regions"``) whose individual entries may be dropped instead of
+        failing the whole response. This never re-contacts the model — it
+        only drops the specific malformed entries from the one response
+        already received and re-validates what remains. Only use it for
+        fields whose entries are disposable placement geometry, never for
+        fields that carry evidence text a dropped entry would destroy.
         """
         if self.require_model_lease:
             from app.services.local_model_call_guard import (
@@ -1032,12 +1044,53 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
         try:
             validated = response_model.model_validate(parsed)
         except ValidationError as exc:
+            if salvage_list_field is not None:
+                salvaged = self._salvage_list_field(parsed, salvage_list_field, exc)
+                if salvaged is not None:
+                    return response_model.model_validate(salvaged), usage
             raise ValueError(
                 "llama_cpp_qwen38_vision: response schema mismatch — "
                 f"{self._sanitize(str(exc))} ({diagnostics})"
             ) from exc
 
         return validated, usage
+
+    @staticmethod
+    def _salvage_list_field(
+        parsed: Any, field: str, exc: ValidationError
+    ) -> dict[str, Any] | None:
+        """Drop only the malformed entries of one top-level list field.
+
+        One degenerate entry — e.g. a zero-area placeholder box the model
+        emitted for a label with no visible content on this page — otherwise
+        invalidates every other entry the model read correctly, failing a
+        whole page over geometry that carried no information to begin with.
+        Returns ``None`` (never salvageable) whenever any reported error
+        falls outside this one list field, so a genuinely structural
+        violation still fails closed exactly as before.
+        """
+        if not isinstance(parsed, dict) or not isinstance(parsed.get(field), list):
+            return None
+        items = parsed[field]
+        bad_indices: set[int] = set()
+        for error in exc.errors():
+            loc = error["loc"]
+            if len(loc) < 2 or loc[0] != field or not isinstance(loc[1], int):
+                return None
+            bad_indices.add(loc[1])
+        if not bad_indices or bad_indices == set(range(len(items))):
+            return None
+        logger.warning(
+            "llama_cpp_qwen38_vision: dropped %d malformed %r entr%s out of %d "
+            "rather than failing the whole response",
+            len(bad_indices),
+            field,
+            "y" if len(bad_indices) == 1 else "ies",
+            len(items),
+        )
+        salvaged = dict(parsed)
+        salvaged[field] = [item for idx, item in enumerate(items) if idx not in bad_indices]
+        return salvaged
 
     @staticmethod
     def _image_part(image_bytes: bytes, mime_type: str) -> tuple[dict[str, Any], str]:
@@ -1817,6 +1870,11 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             max_tokens=self._page_mapping_token_budget(len(question_labels)),
             temperature=0.0,
             enable_thinking=False,
+            # A region carries only placement geometry, never evidence text;
+            # dropping one with an invalid bbox loses nothing the rest of the
+            # response didn't already lose, and downstream already treats an
+            # unmapped label as a normal "not_found" state to review.
+            salvage_list_field="regions",
         )
         assert isinstance(payload, _Qwen38PageMappingPayload)
         known = {label.casefold() for label in question_labels}

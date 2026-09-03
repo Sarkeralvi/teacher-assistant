@@ -1651,6 +1651,94 @@ def test_page_mapping_uses_question_identity_without_grading_student_work() -> N
     assert "rubric" not in prompt.casefold()
 
 
+def test_page_mapping_salvages_regions_with_valid_geometry_when_others_are_degenerate() -> None:
+    # Reproduces the reported failure: the model included a region for every
+    # finalized label even when several had no visible content on this page,
+    # giving those a zero-area placeholder bbox. One bad region used to fail
+    # the whole page; it should now be dropped and the rest kept.
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "regions": [
+                                {
+                                    "question_label": "1(a)",
+                                    "bbox": [40, 80, 960, 400],
+                                    "continues_from_previous": False,
+                                    "continues_to_next": False,
+                                    "confidence": 0.92,
+                                    "warnings": [],
+                                },
+                                {
+                                    "question_label": "1(b)",
+                                    "bbox": [500, 500, 500, 500],
+                                    "continues_from_previous": False,
+                                    "continues_to_next": False,
+                                    "confidence": 1.0,
+                                    "warnings": [],
+                                },
+                            ],
+                            "needs_review": True,
+                        }
+                    )
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 400, "completion_tokens": 60},
+    }
+    provider, client = provider_with(completion)
+
+    result = provider.map_page_answer_regions(
+        image_bytes=b"\x89PNG\r\n\x1a\nimage",
+        mime_type="image/png",
+        question_labels=["1(a)", "1(b)"],
+    )
+
+    assert [region.question_label for region in result.regions] == ["1(a)"]
+    # Salvage re-validates the one response already received; it never
+    # re-contacts the model.
+    assert len(client.requests) == 1
+
+
+def test_page_mapping_still_fails_when_every_region_is_degenerate() -> None:
+    completion = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "regions": [
+                                {
+                                    "question_label": "1(a)",
+                                    "bbox": [500, 500, 500, 500],
+                                    "continues_from_previous": False,
+                                    "continues_to_next": False,
+                                    "confidence": 1.0,
+                                    "warnings": [],
+                                },
+                            ],
+                            "needs_review": True,
+                        }
+                    )
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 400, "completion_tokens": 60},
+    }
+    provider, _client = provider_with(completion)
+
+    with pytest.raises(ValueError, match="response schema mismatch"):
+        provider.map_page_answer_regions(
+            image_bytes=b"\x89PNG\r\n\x1a\nimage",
+            mime_type="image/png",
+            question_labels=["1(a)"],
+        )
+
+
 def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
     completion = {
         "choices": [
