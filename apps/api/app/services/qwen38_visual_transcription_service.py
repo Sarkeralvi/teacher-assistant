@@ -313,6 +313,24 @@ class Qwen38VisualTranscriptionService:
         self.db.refresh(run)
         return run
 
+    def mark_enqueue_failed(self, run_id: int, message: str) -> None:
+        """Make a queue outage visible instead of leaving a run queued forever."""
+
+        run = self.db.get(AnswerRegionOcrRun, run_id)
+        if run is None or run.status != "queued":
+            return
+        run.status = "failed"
+        run.completed_at = datetime.now(UTC)
+        run.error = message
+        self._audit(
+            run,
+            "qwen38_visual_transcription_enqueue_failed",
+            "system",
+            None,
+            {"error": message},
+        )
+        self.db.commit()
+
     def run(self, run_id: int) -> None:
         run = self.db.get(AnswerRegionOcrRun, run_id)
         if run is None or run.profile != "qwen38_verbatim_visual" or run.status != "queued":

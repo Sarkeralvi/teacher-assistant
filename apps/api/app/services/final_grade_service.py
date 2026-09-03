@@ -4,13 +4,14 @@ from io import BytesIO
 
 from fastapi import HTTPException, status
 from openpyxl import Workbook
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     AnswerRegion,
     Assessment,
     AuditLog,
+    BulkEvaluationItem,
     FinalGrade,
     GradeSuggestion,
     Question,
@@ -168,7 +169,11 @@ class FinalGradeService:
         suggestion: GradeSuggestion | None = None,
     ) -> tuple[FinalGrade, bool]:
         suggestion = suggestion or self._get_suggestion(suggestion_id)
-        region = self.db.get(AnswerRegion, suggestion.answer_region_id)
+        region = self.db.scalar(
+            select(AnswerRegion)
+            .where(AnswerRegion.id == suggestion.answer_region_id)
+            .with_for_update()
+        )
         if region is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Answer region not found"
@@ -199,6 +204,11 @@ class FinalGradeService:
         final_grade.approval_status = approval_status
         self.db.add(final_grade)
         self.db.flush()
+        self._link_related_bulk_items(
+            answer_region_id=region.id,
+            suggestion_id=suggestion.id,
+            final_grade_id=final_grade.id,
+        )
         self.db.add(
             AuditLog(
                 actor_type="teacher",
@@ -218,6 +228,22 @@ class FinalGradeService:
         self.db.commit()
         self.db.refresh(final_grade)
         return final_grade, created
+
+    def _link_related_bulk_items(
+        self, *, answer_region_id: int, suggestion_id: int, final_grade_id: int
+    ) -> None:
+        """Keep bulk-review rows aligned with an explicit teacher decision."""
+
+        items = self.db.scalars(
+            select(BulkEvaluationItem).where(
+                or_(
+                    BulkEvaluationItem.answer_region_id == answer_region_id,
+                    BulkEvaluationItem.grade_suggestion_id == suggestion_id,
+                )
+            )
+        ).all()
+        for item in items:
+            item.final_grade_id = final_grade_id
 
     def get_final_grade_for_region(self, answer_region_id: int) -> FinalGrade:
         region = self.db.get(AnswerRegion, answer_region_id)

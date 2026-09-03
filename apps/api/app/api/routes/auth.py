@@ -20,7 +20,9 @@ def register(payload: AuthRegister, db: DbSession) -> AuthToken:
     user = User(
         name=payload.name,
         email=payload.email,
-        role=payload.role,
+        # Keep the route fail-closed even if the request schema is broadened in
+        # the future: this public endpoint never provisions elevated accounts.
+        role="teacher",
         password_hash=hash_password(payload.password),
     )
     db.add(user)

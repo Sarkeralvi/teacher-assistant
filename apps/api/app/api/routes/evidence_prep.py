@@ -43,6 +43,24 @@ def build_response_from_summary(
     return response
 
 
+def build_failed_run_summary(run: BatchEvidencePrepRun) -> dict[str, object]:
+    """Return the durable failure result without re-running preparation work."""
+
+    return {
+        "assessment_id": run.assessment_id,
+        "status": run.status,
+        "total_submissions": run.total_submissions,
+        "total_expected_packets": run.total_expected_packets,
+        "ready_packet_count": run.ready_packet_count,
+        "blocked_packet_count": run.blocked_packet_count,
+        "warning_packet_count": run.warning_packet_count,
+        "blank_packet_count": run.blank_packet_count,
+        "partial_packet_count": run.partial_packet_count,
+        "packets": [],
+        "error": run.error,
+    }
+
+
 @router.get(
     "/assessments/{assessment_id}/evidence-prep-summary",
     response_model=BatchEvidencePrepRunRead,
@@ -121,5 +139,7 @@ def read_evidence_prep_run(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Evidence prep run not found"
         )
+    if run.status == "failed":
+        return build_response_from_summary(build_failed_run_summary(run), run)
     summary = EvidencePrepService(db).summarize_assessment(assessment_id)
     return build_response_from_summary(summary, run)

@@ -352,6 +352,16 @@ def create_answer_region_with_optional_rubric(
     )
     assert region_response.status_code == 201
     region = region_response.json()
+    confirmation_response = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        headers=headers,
+        json={
+            "full_answer_confirmed": True,
+            "manual_answer_text": manual_answer_text,
+        },
+    )
+    assert confirmation_response.status_code == 200
+    region = confirmation_response.json()
     region["_auth_headers"] = headers
     return region
 
@@ -485,7 +495,14 @@ def create_assessment_with_answer_regions(
             },
         )
         assert region_response.status_code == 201
-        regions.append(region_response.json())
+        region = region_response.json()
+        confirmation_response = client.patch(
+            f"/answer-regions/{region['id']}/full-answer-confirmation",
+            headers=batch_headers,
+            json={"full_answer_confirmed": True},
+        )
+        assert confirmation_response.status_code == 200
+        regions.append(confirmation_response.json())
     return {"assessment_id": assessment_id, "regions": regions, "headers": batch_headers}
 
 
@@ -1671,6 +1688,9 @@ def test_evidence_packet_blocks_possible_continuation_near_page_bottom(
     assert answer_region is not None
     answer_region.y = Decimal("62.00")
     answer_region.height = Decimal("18.00")
+    answer_region.full_answer_confirmed = False
+    answer_region.evidence_status = "unconfirmed"
+    answer_region.continuation_check_status = "not_checked"
     db_session.add(
         SubmissionPage(
             submission_id=answer_region.submission_id,

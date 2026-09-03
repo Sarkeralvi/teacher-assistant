@@ -240,6 +240,39 @@ def test_create_prep_run_summarizes_ready_packet_without_grading_side_effects(
     assert detail.json()["id"] == run["id"]
 
 
+def test_failed_prep_run_returns_persisted_failure_without_reprocessing(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    data = create_assessment_fixture(client, tmp_path)
+    failed_run = BatchEvidencePrepRun(
+        assessment_id=data["assessment"]["id"],
+        created_by_teacher_id=data["teacher"]["id"],
+        status="failed",
+        total_submissions=1,
+        total_expected_packets=1,
+        ready_packet_count=0,
+        blocked_packet_count=1,
+        warning_packet_count=1,
+        blank_packet_count=0,
+        partial_packet_count=0,
+        error="Synthetic preparation failure",
+    )
+    db_session.add(failed_run)
+    db_session.commit()
+
+    response = client.get(
+        f"/assessments/{data['assessment']['id']}/evidence-prep-runs/{failed_run.id}",
+        headers={"Authorization": f"Bearer {data['token']}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["blocked_packet_count"] == 1
+    assert body["error"] == "Synthetic preparation failure"
+    assert body["packets"] == []
+
+
 def test_missing_model_answer_blocks_packet_prep_and_queue(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:

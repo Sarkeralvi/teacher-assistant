@@ -203,6 +203,10 @@ class GradingService:
         continuation_suspected = any(
             _segment_near_page_bottom(segment) for segment in confirmed_segments
         )
+        full_answer_confirmed = bool(
+            region.full_answer_confirmed
+            or region.full_answer_verification_source == "bulk_policy"
+        )
         if not continuation_suspected and page is not None:
             continuation_suspected = _rectangle_near_page_bottom(
                 region.y, region.height, page.image_path
@@ -220,10 +224,7 @@ class GradingService:
             "continuation_confirmed_not_needed",
         }:
             continuation_check_status = region.continuation_check_status
-        elif (
-            region.full_answer_confirmed
-            or region.full_answer_verification_source == "bulk_policy"
-        ):
+        elif full_answer_confirmed:
             continuation_check_status = (
                 "continuation_confirmed_included"
                 if len(confirmed_segments) > 1
@@ -235,16 +236,15 @@ class GradingService:
             continuation_check_status = "checked_no_continuation"
 
         packet_status = region.evidence_status
-        if (
-            region.full_answer_confirmed
-            or region.full_answer_verification_source == "bulk_policy"
-        ) and packet_status == "unconfirmed":
+        if full_answer_confirmed and packet_status == "unconfirmed":
             packet_status = "complete"
         crop_path = region.image_path
         if not confirmed_segments:
             blockers.append("missing confirmed answer segment")
         if not (region.manual_answer_text or "").strip():
             blockers.append("missing verified answer evidence")
+        if not full_answer_confirmed:
+            blockers.append("full answer evidence has not been explicitly confirmed")
         final_intent_run = self._confirmed_final_intent_run(region)
         latest_final_intent_source = self._latest_final_intent_source_run(region)
         latest_thinking_repair = self._latest_thinking_repair(region)

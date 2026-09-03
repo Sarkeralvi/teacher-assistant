@@ -1178,8 +1178,8 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
   return (await response.json()) as T;
 }
 
-async function apiDownload(path: string): Promise<Blob> {
-  const token = getStoredAuthToken();
+async function apiDownload(path: string, options: Pick<RequestOptions, "token" | "authErrorMessage"> = {}): Promise<Blob> {
+  const token = options.token !== undefined ? options.token : getStoredAuthToken();
   let response: Response;
   try {
     response = await fetch(`${resolveApiBaseUrl()}${path}`, {
@@ -1193,6 +1193,16 @@ async function apiDownload(path: string): Promise<Blob> {
     throw error;
   }
   if (!response.ok) {
+    if (response.status === 401 && options.authErrorMessage) {
+      throw new Error(options.authErrorMessage);
+    }
+    if (response.status === 401) {
+      if (token) {
+        clearStoredAuthToken();
+        throw new Error("Your login session expired. Please log in again.");
+      }
+      throw new Error("Please log in to continue.");
+    }
     let detail = `${response.status} ${response.statusText}`;
     try {
       const body = (await response.json()) as { detail?: unknown };
@@ -1205,12 +1215,14 @@ async function apiDownload(path: string): Promise<Blob> {
   return response.blob();
 }
 
-export type UserCreate = Pick<User, "name" | "email"> & { role?: string };
-export type AuthRegister = UserCreate & { password: string };
+export type AuthRegister = Pick<User, "name" | "email"> & {
+  password: string;
+  role?: "teacher";
+};
 export type AuthLogin = Pick<User, "email"> & { password: string };
 export type CourseCreate = Pick<Course, "teacher_id" | "code" | "title"> &
   Partial<Pick<Course, "department" | "semester">>;
-export type CourseUpdate = Partial<CourseCreate>;
+export type CourseUpdate = Partial<Pick<Course, "code" | "title" | "department" | "semester">>;
 export type AssessmentCreate = Pick<Assessment, "title" | "assessment_type" | "total_marks"> & {
   status?: string;
 };
@@ -1547,6 +1559,10 @@ export function deleteSubmission(assessmentId: number, submissionId: number) {
 
 export function getSubmissionPageImageUrl(pageId: number) {
   return `${resolveApiBaseUrl()}/submission-pages/${pageId}/image`;
+}
+
+export function downloadSubmissionPageImage(pageId: number) {
+  return apiDownload(`/submission-pages/${pageId}/image`);
 }
 
 export function createAnswerRegion(pageId: number, payload: AnswerRegionCreate) {
@@ -2228,6 +2244,6 @@ export function getAssessmentSummary(assessmentId: number) {
   return apiRequest<AssessmentSummary>(`/assessments/${assessmentId}/summary`);
 }
 
-export function getAssessmentFinalGradesExportUrl(assessmentId: number) {
-  return `${resolveApiBaseUrl()}/assessments/${assessmentId}/export/final-grades.xlsx`;
+export function downloadAssessmentFinalGrades(assessmentId: number) {
+  return apiDownload(`/assessments/${assessmentId}/export/final-grades.xlsx`);
 }

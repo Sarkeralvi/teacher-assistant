@@ -141,6 +141,32 @@ def test_async_grade_rejects_when_not_ready(client: TestClient, tmp_path: Path) 
     assert "active rubric" in response.text
 
 
+def test_async_grade_queue_failure_marks_the_durable_job_failed(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    region = create_answer_region_with_optional_rubric(client, tmp_path)
+
+    class FailingQueue:
+        def enqueue(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("synthetic queue outage")
+
+    monkeypatch.setattr("app.api.routes.grading.get_default_queue", lambda: FailingQueue())
+    response = client.post(
+        f"/answer-regions/{region['id']}/grade-async", headers=region["_auth_headers"]
+    )
+
+    assert response.status_code == 503
+    job = db_session.scalars(
+        select(GradingJob).where(GradingJob.answer_region_id == region["id"])
+    ).one()
+    assert job.status == "failed"
+    assert job.error == "Grading worker could not be enqueued"
+    assert db_session.scalars(select(GradeSuggestion)).all() == []
+
+
 def test_worker_job_is_idempotent_on_retry_after_success(
     client: TestClient, tmp_path: Path, db_session: Session
 ) -> None:

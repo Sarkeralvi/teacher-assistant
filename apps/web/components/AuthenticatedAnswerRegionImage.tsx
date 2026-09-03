@@ -121,6 +121,8 @@ function ProtectedAnswerImage({
   return (
     <figure className="grid gap-2 rounded border border-slate-700 bg-slate-950 p-2">
       <div className="relative mx-auto w-fit max-w-full">
+        {/* This is a bearer-authenticated in-memory Blob URL. next/image cannot fetch it server-side. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="block max-h-[36rem] max-w-full rounded object-contain" src={imageUrl} alt={alt} />
         {editingDecisions.map((decision) => {
           const [x1, y1, x2, y2] = decision.bbox;

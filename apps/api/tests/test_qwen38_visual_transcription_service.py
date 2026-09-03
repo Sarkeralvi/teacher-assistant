@@ -123,6 +123,28 @@ def test_thinking_repair_has_an_independent_disabled_by_default_kill_switch() ->
         service._assert_thinking_repair_enabled("qwen3.8-27b-q4km")
 
 
+def test_enqueue_failure_marks_visual_transcription_run_failed() -> None:
+    run = SimpleNamespace(id=51, status="queued", completed_at=None, error=None)
+    audit_events: list[tuple[object, ...]] = []
+
+    class FakeDb:
+        def get(self, _model: object, run_id: int):
+            return run if run_id == 51 else None
+
+        def commit(self) -> None:
+            return None
+
+    service = Qwen38VisualTranscriptionService(FakeDb())  # type: ignore[arg-type]
+    service._audit = lambda *args: audit_events.append(args)  # type: ignore[method-assign]
+
+    service.mark_enqueue_failed(51, "Synthetic queue outage")
+
+    assert run.status == "failed"
+    assert run.error == "Synthetic queue outage"
+    assert run.completed_at is not None
+    assert audit_events[0][1] == "qwen38_visual_transcription_enqueue_failed"
+
+
 def test_thinking_repair_can_rescue_an_unsafe_model_blank() -> None:
     source = SimpleNamespace(
         draft_text="",

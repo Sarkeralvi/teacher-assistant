@@ -319,6 +319,23 @@ def test_course_crud_and_invalid_teacher(client: TestClient) -> None:
     assert client.get(f"/courses/{course['id']}", headers=headers).status_code == 404
 
 
+def test_course_owner_cannot_transfer_course_to_another_teacher(client: TestClient) -> None:
+    owner, owner_headers = register_teacher(client, email="course-owner@example.com")
+    other, other_headers = register_teacher(client, email="course-other@example.com")
+    course = create_course(client, int(owner["id"]), owner_headers)
+
+    response = client.patch(
+        f"/courses/{course['id']}",
+        headers=owner_headers,
+        json={"teacher_id": other["id"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Course ownership cannot be changed through this endpoint"
+    assert client.get(f"/courses/{course['id']}", headers=owner_headers).status_code == 200
+    assert client.get(f"/courses/{course['id']}", headers=other_headers).status_code == 404
+
+
 def test_create_academic_workflow_and_rubric_json_round_trip(client: TestClient) -> None:
     teacher, headers = register_teacher(client)
     course = create_course(client, int(teacher["id"]), headers)

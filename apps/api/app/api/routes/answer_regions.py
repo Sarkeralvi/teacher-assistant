@@ -196,6 +196,14 @@ def reopen_answer_region_confirmation(region: AnswerRegion) -> None:
     region.continuation_check_status = "not_checked"
 
 
+def require_complete_packet_confirmation(payload: AnswerRegionFullAnswerConfirmation) -> None:
+    if payload.packet_status == "complete" and not payload.full_answer_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A complete evidence packet requires explicit full-answer confirmation",
+        )
+
+
 def record_answer_region_correction(
     db: Session,
     region: AnswerRegion,
@@ -258,6 +266,25 @@ def update_region_primary_from_segments(region: AnswerRegion) -> None:
     region.width = primary.width
     region.height = primary.height
     region.image_path = primary.image_path
+
+
+def cleanup_unreferenced_answer_region_images(db: Session, relative_paths: list[str]) -> None:
+    candidates = {path for path in relative_paths if path}
+    if not candidates:
+        return
+    referenced = set(
+        db.scalars(
+            select(AnswerRegion.image_path).where(AnswerRegion.image_path.in_(candidates))
+        ).all()
+    )
+    referenced.update(
+        db.scalars(
+            select(AnswerRegionSegment.image_path).where(
+                AnswerRegionSegment.image_path.in_(candidates)
+            )
+        ).all()
+    )
+    LocalStorage().delete_relative_files(sorted(candidates - referenced))
 
 
 def get_questions_for_suggestion(
@@ -689,7 +716,7 @@ def create_answer_region(
         manual_answer_text=(
             payload.manual_answer_text.strip() if payload.manual_answer_text else None
         ),
-        evidence_status="complete",
+        evidence_status="unconfirmed",
         continuation_check_status="not_checked",
     )
     db.add(region)
@@ -758,6 +785,7 @@ def correct_answer_region_segment_bbox(
     page = get_submission_page_or_404(segment.submission_page_id, db)
     validate_page_box(page, payload.x, payload.y, payload.width, payload.height)
     before = segment_state(segment)
+    old_image_path = segment.image_path
     image_path = crop_answer_region_image(
         storage=LocalStorage(),
         source_image_path=page.image_path,
@@ -780,9 +808,11 @@ def correct_answer_region_segment_bbox(
         region.height = payload.height
         region.image_path = image_path
     after = segment_state(segment)
-    return record_answer_region_correction(
+    response = record_answer_region_correction(
         db, region, current_user, "edit_segment_bbox", before, after
     )
+    cleanup_unreferenced_answer_region_images(db, [old_image_path])
+    return response
 
 
 @router.post(
@@ -817,7 +847,7 @@ def correct_answer_region_add_segment(
         height=payload.height,
     )
     segment = AnswerRegionSegment(
-        answer_region_id=region.id,
+        answer_region=region,
         submission_page_id=page.id,
         order_index=payload.order_index,
         x=payload.x,
@@ -859,6 +889,7 @@ def correct_answer_region_remove_segment(
             ),
         )
     before = {"segments": [segment_state(existing) for existing in region.segments]}
+    removed_image_path = segment.image_path
     db.delete(segment)
     db.flush()
     region.segments = [existing for existing in region.segments if existing.id != segment_id]
@@ -866,9 +897,11 @@ def correct_answer_region_remove_segment(
     update_region_primary_from_segments(region)
     reopen_answer_region_confirmation(region)
     after = {"segments": [segment_state(existing) for existing in region.segments]}
-    return record_answer_region_correction(
+    response = record_answer_region_correction(
         db, region, current_user, "remove_segment", before, after
     )
+    cleanup_unreferenced_answer_region_images(db, [removed_image_path])
+    return response
 
 
 @router.patch(
@@ -882,6 +915,7 @@ def correct_answer_region_full_answer_confirmation(
     current_user: CurrentUser,
 ) -> AnswerRegionCorrectionResponse:
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    require_complete_packet_confirmation(payload)
     before = region_confirmation_state(region)
     if payload.continuation_not_needed:
         region.continuation_check_status = "continuation_confirmed_not_needed"
@@ -1585,6 +1619,14 @@ def add_answer_region_segment(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Segment page must belong to the same submission",
         )
+    validate_page_box(page, payload.x, payload.y, payload.width, payload.height)
+    before = {
+        "segments": [segment_state(segment) for segment in region.segments],
+        "confirmation": region_confirmation_state(region),
+    }
+    for existing in region.segments:
+        if existing.order_index >= payload.order_index:
+            existing.order_index += 1
     image_path = crop_answer_region_image(
         storage=LocalStorage(),
         source_image_path=page.image_path,
@@ -1595,7 +1637,7 @@ def add_answer_region_segment(
         height=payload.height,
     )
     segment = AnswerRegionSegment(
-        answer_region_id=region.id,
+        answer_region=region,
         submission_page_id=page.id,
         order_index=payload.order_index,
         x=payload.x,
@@ -1608,6 +1650,26 @@ def add_answer_region_segment(
         is_primary=False,
     )
     db.add(segment)
+    db.flush()
+    normalize_segment_orders(region)
+    update_region_primary_from_segments(region)
+    reopen_answer_region_confirmation(region)
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="answer_region.segment_added",
+            entity_type="answer_region",
+            entity_id=region.id,
+            payload_json={
+                "before": before,
+                "after": {
+                    "segments": [segment_state(existing) for existing in region.segments],
+                    "confirmation": region_confirmation_state(region),
+                },
+            },
+        )
+    )
     db.commit()
     db.refresh(segment)
     return segment
@@ -1647,21 +1709,29 @@ def create_visual_transcription_run(
             expected_model=payload.expected_model,
             provider=payload.provider,
         )
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Brain visual transcription could not be created")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Brain visual transcription could not be created",
+        ) from exc
+    try:
         get_default_queue().enqueue(
             run_qwen38_visual_transcription_job,
             run.id,
             retry=None,
             job_timeout=policy.job_timeout_seconds,
         )
-        return run
-    except VisualTranscriptionError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
+        service.mark_enqueue_failed(run.id, "Brain visual transcription could not be queued")
         logger.exception("Brain visual transcription could not be queued")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Brain visual transcription could not be queued",
         ) from exc
+    return run
 
 
 @router.get(
@@ -1725,21 +1795,29 @@ def create_visual_transcription_thinking_repair(
             expected_model=payload.expected_model,
             provider=payload.provider,
         )
+    except VisualTranscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Brain thinking repair could not be created")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Brain thinking repair could not be created",
+        ) from exc
+    try:
         get_default_queue().enqueue(
             run_qwen38_thinking_repair_job,
             run.id,
             retry=None,
             job_timeout=policy.job_timeout_seconds,
         )
-        return run
-    except VisualTranscriptionError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
+        service.mark_enqueue_failed(run.id, "Brain thinking repair could not be queued")
         logger.exception("Brain thinking repair could not be queued")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Brain thinking repair could not be queued",
         ) from exc
+    return run
 
 
 @router.post(
@@ -1866,6 +1944,8 @@ def update_answer_region_full_answer_confirmation(
     current_user: CurrentUser,
 ) -> AnswerRegion:
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    require_complete_packet_confirmation(payload)
+    before = region_confirmation_state(region)
     if (
         payload.full_answer_confirmed
         and region.continuation_check_status == "possible_continuation"
@@ -1887,6 +1967,22 @@ def update_answer_region_full_answer_confirmation(
     )
     if payload.continuation_not_needed:
         region.continuation_check_status = "continuation_confirmed_not_needed"
+    after = region_confirmation_state(region) | {
+        "continuation_not_needed": payload.continuation_not_needed
+    }
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="answer_region.full_answer_confirmation",
+            entity_type="answer_region",
+            entity_id=region.id,
+            payload_json={
+                "before": before,
+                "after": after,
+            },
+        )
+    )
     db.commit()
     db.refresh(region)
     return region
@@ -1929,6 +2025,10 @@ def delete_answer_region(
     answer_region_id: int, db: DbSession, current_user: CurrentUser
 ) -> Response:
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
+    stored_relative_paths = [
+        region.image_path,
+        *(segment.image_path for segment in region.segments),
+    ]
     db.delete(region)
     try:
         db.commit()
@@ -1938,4 +2038,5 @@ def delete_answer_region(
             status_code=status.HTTP_409_CONFLICT,
             detail="Answer region has related records and cannot be deleted safely",
         ) from exc
+    cleanup_unreferenced_answer_region_images(db, stored_relative_paths)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

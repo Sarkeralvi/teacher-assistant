@@ -1,26 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { getCurrentUser, logout, type User } from "../lib/api";
 
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  async function loadCurrentUser() {
+  const loadCurrentUser = useCallback(async () => {
     try {
       setCurrentUser(await getCurrentUser());
     } catch {
       setCurrentUser(null);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadCurrentUser();
     window.addEventListener("auth-changed", loadCurrentUser);
     return () => window.removeEventListener("auth-changed", loadCurrentUser);
-  }, []);
+  }, [loadCurrentUser]);
 
   async function handleLogout() {
     await logout();

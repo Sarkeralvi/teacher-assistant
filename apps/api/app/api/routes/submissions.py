@@ -37,6 +37,7 @@ router = APIRouter(tags=["submissions"])
 MAX_ZIP_BYTES = 50 * 1024 * 1024
 MAX_ZIP_FILES = 100
 MAX_ZIP_MEMBER_BYTES = 25 * 1024 * 1024
+MAX_ZIP_UNCOMPRESSED_BYTES = 250 * 1024 * 1024
 SUPPORTED_ZIP_SUFFIX_CONTENT_TYPES = {
     ".pdf": "application/pdf",
     ".png": "image/png",
@@ -112,27 +113,31 @@ def create_submission_from_upload(
     )
     db.add(submission)
     db.flush()
-
-    stored_upload = storage.save_upload(file, submission.id, suffix)
-    page_paths = extract_page_images(
-        storage=storage,
-        submission_id=submission.id,
-        uploaded_path=stored_upload.absolute_path,
-        kind=kind,
-    )
-    for page_no, image_path in enumerate(page_paths, start=1):
-        db.add(
-            SubmissionPage(
-                submission_id=submission.id,
-                page_no=page_no,
-                image_path=image_path,
-                quality_score=None,
-            )
+    submission_id = submission.id
+    try:
+        stored_upload = storage.save_upload(file, submission_id, suffix)
+        page_paths = extract_page_images(
+            storage=storage,
+            submission_id=submission_id,
+            uploaded_path=stored_upload.absolute_path,
+            kind=kind,
         )
+        for page_no, image_path in enumerate(page_paths, start=1):
+            db.add(
+                SubmissionPage(
+                    submission_id=submission_id,
+                    page_no=page_no,
+                    image_path=image_path,
+                    quality_score=None,
+                )
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        storage.delete_submission_files(submission_id, [])
+        raise
 
-    db.commit()
-    submission = get_submission_or_404(submission.id, db)
-    return submission
+    return get_submission_or_404(submission_id, db)
 
 
 def is_safe_zip_member_path(name: str) -> bool:
@@ -243,6 +248,15 @@ def upload_submission_zip(
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"ZIP contains too many files; maximum is {MAX_ZIP_FILES}",
+            )
+        total_uncompressed_bytes = sum(info.file_size for info in entries)
+        if total_uncompressed_bytes > MAX_ZIP_UNCOMPRESSED_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    "ZIP expands beyond the allowed uncompressed size of "
+                    f"{MAX_ZIP_UNCOMPRESSED_BYTES // (1024 * 1024)} MiB"
+                ),
             )
 
         for info in entries:

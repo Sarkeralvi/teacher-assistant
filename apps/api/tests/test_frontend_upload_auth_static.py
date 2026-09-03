@@ -21,6 +21,8 @@ if _repo_root is None:
 
 REPO_ROOT = _repo_root
 WEB_API = REPO_ROOT / "apps" / "web" / "lib" / "api.ts"
+ASSESSMENT_DETAIL = REPO_ROOT / "apps" / "web" / "components" / "AssessmentDetailClient.tsx"
+ASSESSMENT_REVIEW = REPO_ROOT / "apps" / "web" / "components" / "AssessmentReviewClient.tsx"
 CONTROLLED_WIZARD = (
     REPO_ROOT / "apps" / "web" / "components" / "CustomControlledGradingRunClient.tsx"
 )
@@ -68,9 +70,25 @@ def test_api_request_has_clear_auth_and_backend_unreachable_messages() -> None:
     assert "Check backend server." in source
     assert "response.status === 401" in source
     api_request_start = source.index("async function apiRequest")
-    api_request_end = source.index("export type UserCreate")
+    api_request_end = source.index("export type AuthRegister")
     api_request = source[api_request_start:api_request_end]
     assert "catch" in api_request
+
+
+def test_protected_page_and_export_downloads_use_bearer_authenticated_fetches() -> None:
+    api_source = _read(WEB_API)
+    assessment_source = _read(ASSESSMENT_DETAIL)
+    review_source = _read(ASSESSMENT_REVIEW)
+
+    assert "export function downloadSubmissionPageImage" in api_source
+    assert 'apiDownload(`/submission-pages/${pageId}/image`)' in api_source
+    assert "export function downloadAssessmentFinalGrades" in api_source
+    assert 'apiDownload(`/assessments/${assessmentId}/export/final-grades.xlsx`)' in api_source
+    assert "Authorization" in api_source[api_source.index("async function apiDownload") :]
+    assert "href={getSubmissionPageImageUrl" not in assessment_source
+    assert "downloadSubmissionPageImage" in assessment_source
+    assert "getAssessmentFinalGradesExportUrl" not in review_source
+    assert "downloadAssessmentFinalGrades" in review_source
 
 
 def test_controlled_grading_upload_refreshes_material_state_after_success() -> None:

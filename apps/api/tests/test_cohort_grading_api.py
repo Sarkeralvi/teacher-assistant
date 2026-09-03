@@ -197,6 +197,13 @@ def build_cohort(
                 "manual_answer_text": "Explained well.",
             },
         ).json()
+        confirmed = client.patch(
+            f"/answer-regions/{region['id']}/full-answer-confirmation",
+            headers=headers,
+            json={"full_answer_confirmed": True, "manual_answer_text": "Explained well."},
+        )
+        assert confirmed.status_code == 200
+        region = confirmed.json()
         region_ids.append(region["id"])
     queue_response = client.post(
         f"/assessments/{assessment['id']}/grading-queue-runs",

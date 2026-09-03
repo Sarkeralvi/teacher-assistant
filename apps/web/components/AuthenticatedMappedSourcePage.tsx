@@ -93,6 +93,8 @@ export function AuthenticatedMappedSourcePage({
     <figure className="grid gap-2 rounded border border-amber-700 bg-slate-950 p-2">
       <div className="max-h-[48rem] overflow-auto">
         <div className="relative w-full">
+          {/* This is a bearer-authenticated in-memory Blob URL. next/image cannot fetch it server-side. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             className="h-auto w-full"
             src={imageUrl}

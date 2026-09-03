@@ -79,9 +79,19 @@ def run_bulk_evaluation_next_job(bulk_evaluation_run_id: int) -> None:
     finally:
         db.close()
     if has_more:
-        get_default_queue().enqueue(
-            run_bulk_evaluation_next_job,
-            bulk_evaluation_run_id,
-            retry=None,
-            job_timeout=3600,
-        )
+        try:
+            get_default_queue().enqueue(
+                run_bulk_evaluation_next_job,
+                bulk_evaluation_run_id,
+                retry=None,
+                job_timeout=3600,
+            )
+        except Exception:
+            recovery_db = SessionLocal()
+            try:
+                BulkEvaluationService(recovery_db).pause_after_enqueue_failure(
+                    bulk_evaluation_run_id
+                )
+            finally:
+                recovery_db.close()
+            raise

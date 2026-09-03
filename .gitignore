@@ -4,6 +4,9 @@
 !.env.example
 .local-ai/
 
+# Local machine-specific MCP tool wiring (hardcoded absolute host paths)
+.mcp.json
+
 # Python
 __pycache__/
 *.py[cod]

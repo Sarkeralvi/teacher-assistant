@@ -625,7 +625,16 @@ def grade_answer_region_async(
     job = GradingService(db, use_configured_adapter=False).create_queued_grading_job(
         answer_region_id
     )
-    get_default_queue().enqueue(run_grade_answer_region_job, job.id)
+    try:
+        get_default_queue().enqueue(run_grade_answer_region_job, job.id)
+    except Exception as exc:
+        job.status = "failed"
+        job.error = "Grading worker could not be enqueued"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Grading job could not be enqueued",
+        ) from exc
     return job
 
 

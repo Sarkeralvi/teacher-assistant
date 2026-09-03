@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import { AuthenticatedAnswerRegionImage } from "./AuthenticatedAnswerRegionImage";
@@ -10,7 +10,7 @@ import {
   approveSelectedFinalGrades,
   editGradeSuggestion,
   getAssessment,
-  getAssessmentFinalGradesExportUrl,
+  downloadAssessmentFinalGrades,
   getAssessmentReviewQueue,
   getAssessmentSummary,
   getCurrentUser,
@@ -31,6 +31,18 @@ type ReviewDraft = {
 type ReviewStatusFilter = "all" | "ungraded" | "suggested" | "finalized" | "approved" | "edited" | "rejected";
 const CURRENT_REAL_GRADING_PROMPT_VERSION = "real-grading-v3";
 
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId: number }>) {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [summary, setSummary] = useState<AssessmentSummary | null>(null);
@@ -41,11 +53,12 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
   const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<number[]>([]);
   const [batchApproveResult, setBatchApproveResult] = useState<BatchApproveFinalGradesResponse | null>(null);
   const [batchApproving, setBatchApproving] = useState(false);
+  const [downloadingExport, setDownloadingExport] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingRegionId, setSavingRegionId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -69,11 +82,11 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     } finally {
       setLoading(false);
     }
-  }
+  }, [assessmentId]);
 
   useEffect(() => {
     void load();
-  }, [assessmentId]);
+  }, [load]);
 
   const statusCounts = getStatusCounts(items);
   const filteredItems = items.filter((item) => itemMatchesStatusFilter(item, statusFilter));
@@ -208,6 +221,19 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleExport() {
+    setDownloadingExport(true);
+    setError(null);
+    try {
+      const workbook = await downloadAssessmentFinalGrades(assessmentId);
+      triggerBrowserDownload(workbook, `assessment-${assessmentId}-final-grades.xlsx`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to download approved final grades");
+    } finally {
+      setDownloadingExport(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {loading ? <LoadingState /> : null}
@@ -226,9 +252,14 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
           </p>
         ) : null}
         <div className="mt-4 flex flex-wrap gap-3">
-          <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
-            Export approved grades (.xlsx)
-          </a>
+          <button
+            className={buttonClass}
+            disabled={downloadingExport}
+            type="button"
+            onClick={() => void handleExport()}
+          >
+            {downloadingExport ? "Preparing export..." : "Export approved grades (.xlsx)"}
+          </button>
         </div>
         <p className="mt-3 text-xs text-slate-400">Pending suggestions and rejected drafts are excluded from the workbook.</p>
       </section>
@@ -243,7 +274,13 @@ export function AssessmentReviewClient({ assessmentId }: Readonly<{ assessmentId
         </p>
       )}
 
-      {summary ? <SummaryPanel summary={summary} assessmentId={assessmentId} /> : null}
+      {summary ? (
+        <SummaryPanel
+          summary={summary}
+          downloading={downloadingExport}
+          onDownload={() => void handleExport()}
+        />
+      ) : null}
 
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -340,7 +377,15 @@ function BatchApproveResultPanel({ result }: Readonly<{ result: BatchApproveFina
   );
 }
 
-function SummaryPanel({ summary, assessmentId }: Readonly<{ summary: AssessmentSummary; assessmentId: number }>) {
+function SummaryPanel({
+  summary,
+  downloading,
+  onDownload,
+}: Readonly<{
+  summary: AssessmentSummary;
+  downloading: boolean;
+  onDownload: () => void;
+}>) {
   return (
     <section className="rounded border border-slate-800 bg-slate-900 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -350,9 +395,9 @@ function SummaryPanel({ summary, assessmentId }: Readonly<{ summary: AssessmentS
             <p className="mt-2 text-sm text-slate-400">Approve or edit at least one grade before export is useful.</p>
           ) : null}
         </div>
-        <a className={buttonClass} href={getAssessmentFinalGradesExportUrl(assessmentId)}>
-          Download final grades (.xlsx)
-        </a>
+        <button className={buttonClass} disabled={downloading} type="button" onClick={onDownload}>
+          {downloading ? "Preparing export..." : "Download final grades (.xlsx)"}
+        </button>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-4">
         <SummaryMetric label="Submissions" value={summary.total_submissions} />

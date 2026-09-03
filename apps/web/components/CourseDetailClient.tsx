@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import { createAssessment, getCourse, listAssessments, type Assessment, type Course } from "../lib/api";
@@ -16,7 +16,7 @@ export function CourseDetailClient({ courseId }: Readonly<{ courseId: number }>)
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -31,11 +31,11 @@ export function CourseDetailClient({ courseId }: Readonly<{ courseId: number }>)
     } finally {
       setLoading(false);
     }
-  }
+  }, [courseId]);
 
   useEffect(() => {
     void load();
-  }, [courseId]);
+  }, [load]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

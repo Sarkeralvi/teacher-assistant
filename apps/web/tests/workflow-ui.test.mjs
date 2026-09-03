@@ -63,7 +63,7 @@ for (const symbol of [
   "createCohortDispatch",
   "getAssessmentReviewQueue",
   "approveGradeSuggestion",
-  "getAssessmentFinalGradesExportUrl",
+  "downloadAssessmentFinalGrades",
   "gradeAnswerRegionWithBrain",
   "gradeAllApprovedAnswersWithBrain",
   "provider_data_boundary_confirmed",
@@ -277,6 +277,12 @@ for (const marker of [
 }
 
 const review = readFileSync(join(root, "components/AssessmentReviewClient.tsx"), "utf8");
+if (review.includes("getAssessmentFinalGradesExportUrl")) {
+  throw new Error("Final-grade export must use the authenticated download helper");
+}
+if (!review.includes("downloadAssessmentFinalGrades")) {
+  throw new Error("Teacher review must use authenticated final-grade export downloads");
+}
 for (const marker of [
   "Review brain-assisted draft grades",
   "Every score here is a review-required draft.",
@@ -290,6 +296,11 @@ for (const marker of [
   if (!review.includes(marker)) {
     throw new Error(`Teacher review UI missing marker: ${marker}`);
   }
+}
+
+const bulk = readFileSync(join(root, "components/BulkEvaluationClient.tsx"), "utf8");
+if (!bulk.includes("window.setTimeout(() => URL.revokeObjectURL(url), 0)")) {
+  throw new Error("Bulk result downloads must defer Blob URL revocation until after click dispatch");
 }
 
 const browserUi = `${referencePage}\n${assessment}\n${review}`;

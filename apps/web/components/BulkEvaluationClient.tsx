@@ -192,8 +192,10 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = `bulk-evaluation-${activeRun.id}.xlsx`;
+      document.body.appendChild(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {

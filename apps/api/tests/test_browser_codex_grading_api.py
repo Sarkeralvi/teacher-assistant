@@ -140,7 +140,16 @@ def create_owned_answer_region(client: TestClient, tmp_path: Path) -> dict[str, 
         },
     )
     assert region_response.status_code == 201
-    return {"teacher_id": teacher_id, "token": token, "region": region_response.json()}
+    confirmation_response = client.patch(
+        f"/answer-regions/{region_response.json()['id']}/full-answer-confirmation",
+        headers=headers,
+        json={
+            "full_answer_confirmed": True,
+            "manual_answer_text": "Student explanation captured for grading.",
+        },
+    )
+    assert confirmation_response.status_code == 200
+    return {"teacher_id": teacher_id, "token": token, "region": confirmation_response.json()}
 
 
 def test_browser_codex_endpoint_requires_auth(client: TestClient, tmp_path: Path) -> None:

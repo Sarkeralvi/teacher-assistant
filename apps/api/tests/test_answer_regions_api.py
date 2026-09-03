@@ -147,6 +147,8 @@ def test_create_answer_region_crops_image_and_serves_png(
     assert region["image_path"].endswith(".png")
     assert not region["image_path"].startswith("/")
     assert ".." not in region["image_path"]
+    assert region["full_answer_confirmed"] is False
+    assert region["evidence_status"] == "unconfirmed"
 
     image_response = client.get(f"/answer-regions/{region['id']}/image", headers=headers)
     assert image_response.status_code == 200
@@ -183,6 +185,40 @@ def test_full_answer_confirmation_refuses_an_unresolved_page_continuation(
 
     assert response.status_code == 409
     assert "Repair the mapping" in response.text
+
+
+def test_complete_packet_requires_explicit_full_answer_confirmation(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
+    _question, _page, region, headers = create_correction_region(client, tmp_path)
+    request = {
+        "full_answer_confirmed": False,
+        "packet_status": "complete",
+        "manual_answer_text": "Synthetic answer evidence.",
+    }
+
+    for path in (
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        f"/answer-regions/{region['id']}/corrections/full-answer-confirmation",
+    ):
+        response = client.patch(path, headers=headers, json=request)
+        assert response.status_code == 422
+        assert "requires explicit full-answer confirmation" in response.text
+
+    confirmed = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True, "manual_answer_text": request["manual_answer_text"]},
+    )
+
+    assert confirmed.status_code == 200
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.event_type == "answer_region.full_answer_confirmation")
+        .one()
+    )
+    assert audit.payload_json["before"]["full_answer_confirmed"] is False
+    assert audit.payload_json["after"]["full_answer_confirmed"] is True
 
 
 def test_answer_region_list_endpoints_and_question_filter(
@@ -499,6 +535,28 @@ def test_add_answer_region_segment_persists_ordered_crop_and_confirmation(
     )
     assert confirm_response.status_code == 200
     assert confirm_response.json()["full_answer_confirmed"] is True
+
+    reopening_response = client.post(
+        f"/answer-regions/{region['id']}/segments",
+        headers=headers,
+        json={
+            "page_id": page["id"],
+            "x": 8,
+            "y": 9,
+            "width": 16,
+            "height": 12,
+            "order_index": 1,
+            "source": "manual",
+            "confirmed": True,
+        },
+    )
+    assert reopening_response.status_code == 201
+
+    reopened = client.get(f"/answer-regions/{region['id']}", headers=headers).json()
+    assert reopened["full_answer_confirmed"] is False
+    assert reopened["evidence_status"] == "unconfirmed"
+    assert [item["order_index"] for item in reopened["segments"]] == [1, 2, 3]
+    assert reopened["segments"][0]["is_primary"] is True
 
 
 def test_answer_region_segment_rejects_page_from_other_submission(
@@ -986,6 +1044,8 @@ def test_edit_segment_bbox_updates_segment_safely_and_writes_audit(
 ) -> None:
     _question, _page, region, headers = create_correction_region(client, tmp_path)
     segment_id = region["segments"][0]["id"]
+    old_image_path = tmp_path / "storage" / region["segments"][0]["image_path"]
+    assert old_image_path.is_file()
 
     response = client.patch(
         f"/answer-regions/{region['id']}/corrections/segments/{segment_id}",
@@ -1001,6 +1061,8 @@ def test_edit_segment_bbox_updates_segment_safely_and_writes_audit(
     updated_segment = payload["answer_region"]["segments"][0]
     assert updated_segment["x"] == "14.00"
     assert updated_segment["width"] == "35.00"
+    assert not old_image_path.exists()
+    assert (tmp_path / "storage" / updated_segment["image_path"]).is_file()
     assert (
         db_session.query(AuditLog)
         .filter(AuditLog.event_type == "answer_region.edit_segment_bbox")
@@ -1052,6 +1114,8 @@ def test_add_reorder_and_remove_segment_updates_evidence_packet(
     assert packet["student_answer_evidence"]["segment_count"] == 2
     assert packet["student_answer_evidence"]["pages_covered"] == [page["page_no"]]
 
+    removed_image_path = tmp_path / "storage" / segments[0]["image_path"]
+    assert removed_image_path.is_file()
     remove_response = client.delete(
         f"/answer-regions/{region['id']}/corrections/segments/{segments[0]['id']}",
         headers=headers,
@@ -1059,6 +1123,20 @@ def test_add_reorder_and_remove_segment_updates_evidence_packet(
     assert remove_response.status_code == 200
     assert len(remove_response.json()["answer_region"]["segments"]) == 1
     assert remove_response.json()["answer_region"]["question_id"] == question["id"]
+    assert not removed_image_path.exists()
+
+
+def test_delete_answer_region_cleans_unreferenced_crop_artifacts(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _question, _page, region, headers = create_correction_region(client, tmp_path)
+    crop_path = tmp_path / "storage" / region["image_path"]
+    assert crop_path.is_file()
+
+    response = client.delete(f"/answer-regions/{region['id']}", headers=headers)
+
+    assert response.status_code == 204
+    assert not crop_path.exists()
 
 
 def test_correction_rejects_cross_assessment_teacher(client: TestClient, tmp_path: Path) -> None:
@@ -1166,11 +1244,23 @@ def test_evidence_packet_requires_explicit_complete_status_before_grading(
 
     db_region = db_session.get(AnswerRegion, region["id"])
     assert db_region is not None
-    db_region.full_answer_confirmed = True
     db_region.evidence_status = "complete"
     db_region.manual_answer_text = "Confirmed answer text."
     for segment in db_region.segments:
         segment.confirmed = True
+    db_session.commit()
+
+    inconsistent_packet = client.get(
+        f"/answer-regions/{region['id']}/grading-evidence-packet", headers=headers
+    ).json()
+    assert inconsistent_packet["student_answer_evidence"]["packet_status"] == "complete"
+    assert inconsistent_packet["readiness_result"]["ready_for_grading"] is False
+    assert (
+        "full answer evidence has not been explicitly confirmed"
+        in inconsistent_packet["readiness_result"]["blockers"]
+    )
+
+    db_region.full_answer_confirmed = True
     db_session.commit()
 
     packet_after = client.get(

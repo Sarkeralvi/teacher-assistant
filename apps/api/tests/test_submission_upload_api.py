@@ -9,6 +9,7 @@ from PIL import Image
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
+from app.api.routes import submissions as submission_routes
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
@@ -519,3 +520,57 @@ def test_upload_zip_invalid_zip_and_missing_assessment_errors(
         )
     assert invalid.status_code == 400
     assert invalid.json()["detail"] == "Uploaded file is not a valid ZIP archive"
+
+
+def test_upload_failure_cleans_uncommitted_submission_artifacts(
+    client: TestClient,
+    tmp_path: Path,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assessment = create_assessment(client)
+    image_path = tmp_path / "answer.png"
+    make_png(image_path)
+
+    def fail_extraction(**_kwargs: object) -> list[str]:
+        raise RuntimeError("synthetic extraction failure")
+
+    monkeypatch.setattr(submission_routes, "extract_page_images", fail_extraction)
+    with image_path.open("rb") as file_obj:
+        with pytest.raises(RuntimeError, match="synthetic extraction failure"):
+            client.post(
+                f"/assessments/{assessment['id']}/submissions/upload",
+                headers=assessment["auth_headers"],
+                data={"student_identifier": "S-cleanup"},
+                files={"file": ("answer.png", file_obj, "image/png")},
+            )
+
+    db_session.expire_all()
+    assert db_session.query(Submission).count() == 0
+    assert list((tmp_path / "storage" / "uploads" / "submissions").glob("*")) == []
+    assert list((tmp_path / "storage" / "artifacts" / "pages").glob("*")) == []
+
+
+def test_upload_zip_rejects_excessive_total_uncompressed_size(
+    client: TestClient, tmp_path: Path, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assessment = create_assessment(client)
+    image_path = tmp_path / "answer.png"
+    make_png(image_path)
+    zip_path = tmp_path / "oversized-total.zip"
+    make_zip(
+        zip_path,
+        {"one.png": image_path.read_bytes(), "two.png": image_path.read_bytes()},
+    )
+    monkeypatch.setattr(submission_routes, "MAX_ZIP_UNCOMPRESSED_BYTES", 100)
+
+    with zip_path.open("rb") as file_obj:
+        response = client.post(
+            f"/assessments/{assessment['id']}/submissions/upload-zip",
+            headers=assessment["auth_headers"],
+            files={"file": ("oversized-total.zip", file_obj, "application/zip")},
+        )
+
+    assert response.status_code == 413
+    assert "uncompressed size" in response.json()["detail"]
+    assert db_session.query(Submission).count() == 0

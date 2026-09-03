@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { buttonClass, EmptyState, ErrorState, inputClass, LoadingState } from "./AppShell";
 import { createRubric, getQuestion, listRubrics, type Question, type Rubric } from "../lib/api";
@@ -68,7 +68,7 @@ export function QuestionDetailClient({ questionId }: Readonly<{ questionId: numb
   const rubricJson = useMemo(() => buildRubricJson(totalMarks, criteria), [totalMarks, criteria]);
   const marksSum = useMemo(() => criterionMarksSum(criteria), [criteria]);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -84,11 +84,11 @@ export function QuestionDetailClient({ questionId }: Readonly<{ questionId: numb
     } finally {
       setLoading(false);
     }
-  }
+  }, [questionId]);
 
   useEffect(() => {
     void load();
-  }, [questionId]);
+  }, [load]);
 
   function updateCriterion<Field extends keyof CriterionDraft>(
     index: number,

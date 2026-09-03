@@ -18,11 +18,6 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 
-def ensure_teacher_exists(db: Session, teacher_id: int) -> None:
-    if db.get(User, teacher_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
-
-
 @router.post("", response_model=CourseRead, status_code=status.HTTP_201_CREATED)
 def create_course(payload: CourseCreate, db: DbSession, current_user: CurrentUser) -> Course:
     course = Course(**payload.model_dump(exclude={"teacher_id"}), teacher_id=current_user.id)
@@ -51,8 +46,11 @@ def update_course(
 ) -> Course:
     course = get_owned_course_or_404(course_id, db, current_user)
     updates = payload.model_dump(exclude_unset=True)
-    if "teacher_id" in updates and updates["teacher_id"] is not None:
-        ensure_teacher_exists(db, updates["teacher_id"])
+    if "teacher_id" in updates:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Course ownership cannot be changed through this endpoint",
+        )
     for field, value in updates.items():
         setattr(course, field, value)
     db.commit()

@@ -16,7 +16,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 from openpyxl import Workbook
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings, get_settings
@@ -796,9 +796,67 @@ class BulkEvaluationService:
         self.db.refresh(item)
         return item
 
-    def review_snapshot_hash(self, run: BulkEvaluationRun) -> str:
+    def pause_after_enqueue_failure(self, run_id: int) -> None:
+        """Persist a visible manual-recovery state if the next worker unit cannot queue."""
+
+        run = self.db.get(BulkEvaluationRun, run_id)
+        if run is None or run.status in {
+            "completed",
+            "completed_with_exceptions",
+            "failed",
+            "stopped",
+            "paused",
+        }:
+            return
+        self._pause(
+            run,
+            "Bulk worker could not enqueue the next unit; resume manually after queue recovery",
+        )
+
+    @staticmethod
+    def _sync_final_grade_links(
+        db: Session, items: list[BulkEvaluationItem]
+    ) -> None:
+        region_ids = {item.answer_region_id for item in items if item.answer_region_id is not None}
+        suggestion_ids = {
+            item.grade_suggestion_id for item in items if item.grade_suggestion_id is not None
+        }
+        conditions = []
+        if region_ids:
+            conditions.append(FinalGrade.answer_region_id.in_(region_ids))
+        if suggestion_ids:
+            conditions.append(FinalGrade.suggestion_id.in_(suggestion_ids))
+        if not conditions:
+            return
+
+        final_grades = db.scalars(
+            select(FinalGrade).where(or_(*conditions)).order_by(FinalGrade.id.desc())
+        ).all()
+        final_by_region: dict[int, FinalGrade] = {}
+        final_by_suggestion: dict[int, FinalGrade] = {}
+        for final_grade in final_grades:
+            final_by_region.setdefault(final_grade.answer_region_id, final_grade)
+            if final_grade.suggestion_id is not None:
+                final_by_suggestion.setdefault(final_grade.suggestion_id, final_grade)
+        for item in items:
+            final_grade = (
+                final_by_region.get(item.answer_region_id)
+                if item.answer_region_id is not None
+                else None
+            ) or (
+                final_by_suggestion.get(item.grade_suggestion_id)
+                if item.grade_suggestion_id is not None
+                else None
+            )
+            if final_grade is not None:
+                item.final_grade_id = final_grade.id
+
+    @classmethod
+    def _reviewable_items(
+        cls, db: Session, run: BulkEvaluationRun
+    ) -> list[BulkEvaluationItem]:
         items = list(
-            self.db.scalars(
+            db.scalars(
                 select(BulkEvaluationItem)
                 .where(
                     BulkEvaluationItem.run_id == run.id,
@@ -808,6 +866,11 @@ class BulkEvaluationService:
                 .order_by(BulkEvaluationItem.id)
             ).all()
         )
+        cls._sync_final_grade_links(db, items)
+        return [item for item in items if item.final_grade_id is None]
+
+    def review_snapshot_hash(self, run: BulkEvaluationRun) -> str:
+        items = self._reviewable_items(self.db, run)
         payload: list[dict[str, object]] = []
         for item in items:
             suggestion = self.db.get(GradeSuggestion, item.grade_suggestion_id)
@@ -840,15 +903,7 @@ class BulkEvaluationService:
         current_hash = self.review_snapshot_hash(run)
         if current_hash != review_snapshot_sha256:
             raise BulkEvaluationError("Clean draft set changed; refresh before approving")
-        eligible_items = list(
-            self.db.scalars(
-                select(BulkEvaluationItem).where(
-                    BulkEvaluationItem.run_id == run.id,
-                    BulkEvaluationItem.status == "graded",
-                    BulkEvaluationItem.grade_suggestion_id.is_not(None),
-                )
-            ).all()
-        )
+        eligible_items = self._reviewable_items(self.db, run)
         eligible_ids = {int(item.grade_suggestion_id) for item in eligible_items}
         if set(suggestion_ids) != eligible_ids or len(suggestion_ids) != len(eligible_ids):
             raise BulkEvaluationError(
@@ -862,9 +917,22 @@ class BulkEvaluationService:
         }
         for suggestion_id in sorted(eligible_ids):
             item = items_by_suggestion[suggestion_id]
+            locked_region = self.db.scalar(
+                select(AnswerRegion)
+                .where(AnswerRegion.id == item.answer_region_id)
+                .with_for_update()
+            )
+            if locked_region is None:
+                raise BulkEvaluationError("Clean draft evidence is no longer available; refresh")
             existing = self.db.scalar(
                 select(FinalGrade).where(FinalGrade.answer_region_id == item.answer_region_id)
             )
+            if existing is not None:
+                item.final_grade_id = existing.id
+                self.db.commit()
+                raise BulkEvaluationError(
+                    "A clean draft was finalized separately; refresh before approving"
+                )
             final_grade, created = final_service.approve_suggestion(
                 suggestion_id,
                 teacher_id,
@@ -889,6 +957,7 @@ class BulkEvaluationService:
             .where(
                 BulkEvaluationItem.run_id == run.id,
                 BulkEvaluationItem.status.not_in(("approved", "exception", "uncertain")),
+                BulkEvaluationItem.final_grade_id.is_(None),
             )
             .limit(1)
         )

@@ -32,7 +32,7 @@ import {
   getGradingEvidencePacket,
   getGradingQueueSummary,
   getBrainStatus,
-  getSubmissionPageImageUrl,
+  downloadSubmissionPageImage,
   getStoredAuthToken,
   gradeAllApprovedAnswersWithBrain,
   gradeAnswerRegionWithBrain,
@@ -87,8 +87,6 @@ import {
   type Submission,
   type SubmissionZipUploadResponse,
 } from "../lib/api";
-import { type DemoTeacher } from "../lib/demoTeacher";
-import { DemoTeacherSelector } from "./DemoTeacherSelector";
 
 type DraftQuestionEdit = {
   selected: boolean;
@@ -327,10 +325,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [acceptingSuggestionId, setAcceptingSuggestionId] = useState<string | null>(null);
   const [suggestionPageId, setSuggestionPageId] = useState<number | null>(null);
   const [selectedPreviewRegionId, setSelectedPreviewRegionId] = useState("");
-  const [selectedTeacher, setSelectedTeacher] = useState<DemoTeacher | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [openingSubmissionPageId, setOpeningSubmissionPageId] = useState<number | null>(null);
   const [creatingRegion, setCreatingRegion] = useState(false);
   const [creatingEvidencePrepRun, setCreatingEvidencePrepRun] = useState(false);
   const [creatingGradingQueueRun, setCreatingGradingQueueRun] = useState(false);
@@ -516,7 +514,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const selectedPage = selectedPageContext();
   const selectedQuestion = questions.find((question) => question.id === Number(selectedQuestionId)) ?? null;
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -592,9 +590,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setSubmissions(submissionData);
       setAnswerRegions(answerRegionData);
       setQuestionNodeMappings(questionNodeMappingData);
-      if (!selectedPreviewRegionId && answerRegionData[0]) {
-        setSelectedPreviewRegionId(String(answerRegionData[0].id));
-      }
+      setSelectedPreviewRegionId((current) => current || (answerRegionData[0] ? String(answerRegionData[0].id) : current));
       const evidenceEntries: Array<readonly [number, GradingEvidencePacket]> = [];
       for (const region of answerRegionData) {
         evidenceEntries.push([region.id, await getGradingEvidencePacket(region.id)] as const);
@@ -612,22 +608,18 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setGradingQueueSummary(gradingQueueData);
       setLocalAiStatus(localAiData);
       setGradingRuns(gradingRunData);
-      if (!selectedPageId && submissionData[0]?.pages[0]) {
-        setSelectedPageId(String(submissionData[0].pages[0].id));
-      }
-      if (!selectedQuestionId && questionData[0]) {
-        setSelectedQuestionId(String(questionData[0].id));
-      }
+      setSelectedPageId((current) => current || (submissionData[0]?.pages[0] ? String(submissionData[0].pages[0].id) : current));
+      setSelectedQuestionId((current) => current || (questionData[0] ? String(questionData[0].id) : current));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load assessment");
     } finally {
       setLoading(false);
     }
-  }
+  }, [assessmentId]);
 
   useEffect(() => {
     void load();
-  }, [assessmentId]);
+  }, [load]);
 
   useEffect(() => {
     setProviderDataBoundaryConfirmed(false);
@@ -1437,6 +1429,28 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     }
   }
 
+  async function handleOpenSubmissionPage(pageId: number) {
+    const previewWindow = window.open("", "_blank");
+    if (!previewWindow) {
+      setError("Allow pop-ups to open this protected source page.");
+      return;
+    }
+    previewWindow.opener = null;
+    setOpeningSubmissionPageId(pageId);
+    setError(null);
+    try {
+      const image = await downloadSubmissionPageImage(pageId);
+      const objectUrl = URL.createObjectURL(image);
+      previewWindow.location.replace(objectUrl);
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (err) {
+      previewWindow.close();
+      setError(err instanceof Error ? err.message : "Failed to open protected source page");
+    } finally {
+      setOpeningSubmissionPageId(null);
+    }
+  }
+
   async function handleCreateEvidencePrepRun() {
     setCreatingEvidencePrepRun(true);
     setError(null);
@@ -1528,14 +1542,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             <li key={step} className="rounded border border-slate-800 bg-slate-950/40 p-3">{step}</li>
           ))}
         </ol>
-      </section>
-
-      <section className="grid gap-4 rounded border border-slate-800 bg-slate-900 p-5">
-        <div>
-          <h2 className="text-xl font-semibold">Pilot context: Current teacher / assessment</h2>
-          <p className="text-sm text-slate-400">Select/login teacher and confirm this is the intended synthetic/demo assessment before preparing evidence.</p>
-        </div>
-        <DemoTeacherSelector onTeacherChange={setSelectedTeacher} />
       </section>
 
       <section className="grid gap-4 rounded border border-cyan-900 bg-slate-900 p-5">
@@ -1982,15 +1988,21 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               <p className="mt-2 text-sm font-medium">Pages</p>
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 {submission.pages.map((page) => (
-                  <a key={page.id} href={getSubmissionPageImageUrl(page.id)} target="_blank" rel="noreferrer" className="rounded border border-slate-700 p-3 text-sm hover:border-cyan-700">
+                  <button
+                    key={page.id}
+                    className="rounded border border-slate-700 p-3 text-left text-sm hover:border-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={openingSubmissionPageId === page.id}
+                    type="button"
+                    onClick={() => void handleOpenSubmissionPage(page.id)}
+                  >
                     <span className="flex items-center justify-between gap-2">
-                      <span>Page {page.page_no}</span>
+                      <span>{openingSubmissionPageId === page.id ? "Opening page..." : `Page ${page.page_no}`}</span>
                       <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
                         {statusForPage(page.id)}
                       </span>
                     </span>
                     <span className="block text-xs text-slate-500">{page.image_path}</span>
-                  </a>
+                  </button>
                 ))}
               </div>
             </article>

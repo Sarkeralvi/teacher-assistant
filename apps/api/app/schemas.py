@@ -61,7 +61,10 @@ class AuthRegister(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=255)
-    role: Literal["teacher", "admin"] = "teacher"
+    # Public registration creates a teacher account only.  Administrative
+    # accounts must be provisioned through an explicitly authorized operator
+    # workflow rather than self-selected by an unauthenticated request.
+    role: Literal["teacher"] = "teacher"
 
 
 class AuthLogin(BaseModel):

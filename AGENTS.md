@@ -13,6 +13,19 @@ This repository is the TAAgent project implementing the Answer Evidence Extracti
 - No VSCode/Codex workflow. Use repo-local Hermes/tool execution only unless the founder explicitly changes the operating mode.
 - No autonomous loop. Every task is manual controlled mode unless the founder explicitly approves otherwise.
 
+## Third-party agent tooling (ECC)
+
+- The ECC Claude Code plugin (`ecc@ecc`, https://github.com/affaan-m/ECC), installed at
+  user/global scope, is founder-approved for use in this repository (approved 2026-09-02).
+- This exception covers ECC's agents, skills, and slash commands for general engineering work
+  (planning, testing, code review, docs) here. It does NOT relax any grading-safety rule above:
+  no provider/model grading calls, no auto-finalization, no uploads/deletions/batch runs, and no
+  `COHORT_MODEL_GRADING_ENABLED` changes may happen via ECC automation without the same
+  explicit, task-scoped authorization Claude itself requires.
+- ECC hook automation starts disabled in this repo (installed with `--hooks off`). Enabling
+  `standard`/`strict` hook profiles is a separate decision requiring explicit founder approval,
+  since it is exactly the "autonomous loop" behavior this file otherwise prohibits.
+
 ## Engineering rules
 
 - Detect and work from the repo root before changing files.

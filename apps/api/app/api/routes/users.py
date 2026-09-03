@@ -2,7 +2,6 @@ from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
@@ -18,14 +17,17 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("", response_model=list[UserRead])
 def list_users(db: DbSession, current_user: CurrentUser) -> Sequence[User]:
-    del current_user
-    return db.scalars(select(User).order_by(User.id)).all()
+    del db
+    # A teacher directory would disclose other teachers' names and email
+    # addresses across tenants.  The product has no separately authorized
+    # administrative directory, so the authenticated caller can only read
+    # their own account through this legacy collection endpoint.
+    return [current_user]
 
 
 @router.get("/{user_id}", response_model=UserRead)
 def get_user(user_id: int, db: DbSession, current_user: CurrentUser) -> User:
-    del current_user
-    user = db.get(User, user_id)
-    if user is None:
+    del db
+    if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return user
+    return current_user

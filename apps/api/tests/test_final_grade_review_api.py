@@ -160,6 +160,13 @@ def create_region_and_suggestion(client: TestClient, tmp_path: Path) -> dict[str
     )
     assert region_response.status_code == 201
     region = region_response.json()
+    confirmation_response = client.patch(
+        f"/answer-regions/{region['id']}/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True, "manual_answer_text": "2 + 2 = 4"},
+    )
+    assert confirmation_response.status_code == 200
+    region = confirmation_response.json()
     grade_response = client.post(f"/answer-regions/{region['id']}/grade", headers=headers)
     assert grade_response.status_code == 201
     suggestion = grade_response.json()["suggestion"]
@@ -195,11 +202,16 @@ def create_extra_region_and_suggestion(
         },
     )
     assert region_response.status_code == 201
-    grade_response = client.post(
-        f"/answer-regions/{region_response.json()['id']}/grade", headers=headers
+    confirmation_response = client.patch(
+        f"/answer-regions/{region_response.json()['id']}/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True, "manual_answer_text": "2 + 2 = 4"},
     )
+    assert confirmation_response.status_code == 200
+    region = confirmation_response.json()
+    grade_response = client.post(f"/answer-regions/{region['id']}/grade", headers=headers)
     assert grade_response.status_code == 201
-    return {"region": region_response.json(), "suggestion": grade_response.json()["suggestion"]}
+    return {"region": region, "suggestion": grade_response.json()["suggestion"]}
 
 
 def auth_header(token: str) -> dict[str, str]:
@@ -278,9 +290,14 @@ def create_owned_region_and_suggestion(
         },
     )
     assert region_response.status_code == 201
-    grade_response = client.post(
-        f"/answer-regions/{region_response.json()['id']}/grade", headers=headers
+    confirmation_response = client.patch(
+        f"/answer-regions/{region_response.json()['id']}/full-answer-confirmation",
+        headers=headers,
+        json={"full_answer_confirmed": True, "manual_answer_text": "2 + 2 = 4"},
     )
+    assert confirmation_response.status_code == 200
+    region = confirmation_response.json()
+    grade_response = client.post(f"/answer-regions/{region['id']}/grade", headers=headers)
     assert grade_response.status_code == 201
     return {
         "auth": auth,
@@ -288,7 +305,7 @@ def create_owned_region_and_suggestion(
         "assessment": assessment,
         "submission": submission,
         "question": question,
-        "region": region_response.json(),
+        "region": region,
         "suggestion": grade_response.json()["suggestion"],
     }
 

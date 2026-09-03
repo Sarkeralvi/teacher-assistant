@@ -84,11 +84,16 @@ def decode_access_token(token: str) -> dict[str, Any]:
         ).digest()
         if not hmac.compare_digest(_b64encode(expected_signature), signature_text):
             raise credentials_error
+        header = json.loads(_b64decode(header_text))
+        if not isinstance(header, dict) or header.get("alg") != "HS256":
+            raise credentials_error
         payload = json.loads(_b64decode(payload_text))
+        if not isinstance(payload, dict):
+            raise credentials_error
         if int(payload.get("exp", 0)) < int(datetime.now(UTC).timestamp()):
             raise credentials_error
         return payload
-    except (ValueError, json.JSONDecodeError, TypeError):
+    except (ValueError, json.JSONDecodeError, TypeError, AttributeError, OverflowError):
         raise credentials_error from None
 
 
@@ -99,7 +104,16 @@ def get_current_user_optional(
     if credentials is None:
         return None
     payload = decode_access_token(credentials.credentials)
-    user_id = int(payload.get("sub", 0))
+    try:
+        user_id = int(payload.get("sub", 0))
+    except (TypeError, ValueError, OverflowError):
+        user_id = 0
+    if user_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(
