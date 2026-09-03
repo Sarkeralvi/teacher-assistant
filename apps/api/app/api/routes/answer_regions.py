@@ -71,6 +71,7 @@ from app.services.answer_region_mapping_service import (
     upsert_answer_region_for_mapping,
 )
 from app.services.answer_region_processing import crop_answer_region_image
+from app.services.local_script_page_read import LocalScriptPageReadService
 from app.services.local_script_preparation import (
     LocalScriptPreparationError,
     LocalScriptPreparationService,
@@ -1130,21 +1131,43 @@ def run_submission_question_node_mappings(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
-        service = LocalScriptPreparationService(db)
-        try:
-            mappings = service.prepare(
-                submission=submission,
-                teacher=current_user,
-                expected_model=request.expected_model or "",
-                replace_existing=request.replace_existing,
-                repair_unconfirmed_only=request.repair_unconfirmed_only,
-                maximum_ocr_calls=request.maximum_ocr_calls,
-                provider=(
-                    "llama_cpp_qwen38"
-                    if request.provider == "local_qwen38_visual"
-                    else None
+        explicit_provider = (
+            "llama_cpp_qwen38" if request.provider == "local_qwen38_visual" else None
+        )
+        # Bulk Supervised already branches on this same policy flag
+        # (bulk_evaluation_service._assert_enabled/_process_read); this route
+        # previously ignored it and always ran the established mapping-then-
+        # transcription path even with page-read explicitly turned on.
+        if policy.page_read_enabled and request.repair_unconfirmed_only:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Page-read preparation does not yet support repairing only "
+                    "unconfirmed mappings; disable page-read or run a full replace."
                 ),
             )
+        try:
+            if policy.page_read_enabled:
+                page_read_result = LocalScriptPageReadService(db).prepare(
+                    submission=submission,
+                    teacher=current_user,
+                    expected_model=request.expected_model or "",
+                    replace_existing=request.replace_existing,
+                    maximum_page_read_calls=request.maximum_ocr_calls,
+                    provider=explicit_provider,
+                )
+                mappings = page_read_result.mappings
+            else:
+                service = LocalScriptPreparationService(db)
+                mappings = service.prepare(
+                    submission=submission,
+                    teacher=current_user,
+                    expected_model=request.expected_model or "",
+                    replace_existing=request.replace_existing,
+                    repair_unconfirmed_only=request.repair_unconfirmed_only,
+                    maximum_ocr_calls=request.maximum_ocr_calls,
+                    provider=explicit_provider,
+                )
         except LocalScriptPreparationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

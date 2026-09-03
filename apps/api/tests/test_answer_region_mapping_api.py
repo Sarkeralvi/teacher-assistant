@@ -11,7 +11,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from alembic import command
-from app.core.config import get_settings
+from app.api.routes import answer_regions as answer_regions_route
+from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
@@ -881,3 +882,139 @@ def test_retired_paddle_qwen36_mapping_provider_fails_closed(
     assert response.status_code == 409
     assert "retired and cannot run" in response.json()["detail"]
     assert "local_qwen38_visual" in response.json()["detail"]
+
+
+def _local_qwen38_settings(*, page_read_enabled: bool) -> Settings:
+    settings = Settings()
+    settings.brain_allow_real_providers = True
+    settings.local_qwen38_enabled = True
+    settings.local_qwen38_api_key = "test-key"
+    settings.local_script_preparation_enabled = True
+    settings.local_qwen38_visual_preparation_enabled = True
+    settings.local_qwen38_page_read_enabled = page_read_enabled
+    return settings
+
+
+class _FakePageReadResult:
+    mappings: list[object] = []
+
+
+class _FakePageReadService:
+    """Records dispatch without touching the real page-read pipeline."""
+
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, _db: object) -> None:
+        pass
+
+    def prepare(self, **kwargs: object) -> _FakePageReadResult:
+        _FakePageReadService.calls.append(kwargs)
+        return _FakePageReadResult()
+
+
+class _FakeMappingService:
+    """Records dispatch without touching the real mapping pipeline."""
+
+    calls: list[dict[str, object]] = []
+
+    def __init__(self, _db: object) -> None:
+        pass
+
+    def prepare(self, **kwargs: object) -> list[object]:
+        _FakeMappingService.calls.append(kwargs)
+        return []
+
+
+def _prepare_submission(client: TestClient, tmp_path: Path, name: str) -> tuple[dict, str]:
+    teacher, token = register_teacher(client, name)
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    pdf_path = tmp_path / f"{name}.pdf"
+    make_text_pdf(pdf_path, ["Visible student answer"])
+    submission = upload_submission_pdf(client, int(assessment["id"]), pdf_path, token, f"S-{name}")
+    return submission, token
+
+
+def test_prepare_route_dispatches_to_page_read_service_when_policy_enables_it(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Bulk Supervised already branches on LOCAL_QWEN38_PAGE_READ_ENABLED
+    # (bulk_evaluation_service._assert_enabled/_process_read); the Custom
+    # Controlled "Prepare" route used to ignore that same flag and always run
+    # the established mapping-then-transcription path regardless.
+    submission, token = _prepare_submission(client, tmp_path, "page-read-dispatch")
+    _FakePageReadService.calls = []
+    _FakeMappingService.calls = []
+    enabled_settings = _local_qwen38_settings(page_read_enabled=True)
+    monkeypatch.setattr(answer_regions_route, "get_settings", lambda: enabled_settings)
+    monkeypatch.setattr(answer_regions_route, "LocalScriptPageReadService", _FakePageReadService)
+    monkeypatch.setattr(answer_regions_route, "LocalScriptPreparationService", _FakeMappingService)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "local_qwen38_visual",
+            "replace_existing": True,
+            "repair_unconfirmed_only": False,
+            "draft_only_confirmed": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(_FakePageReadService.calls) == 1
+    assert not _FakeMappingService.calls
+
+
+def test_prepare_route_dispatches_to_mapping_service_when_page_read_is_disabled(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    submission, token = _prepare_submission(client, tmp_path, "mapping-dispatch")
+    _FakePageReadService.calls = []
+    _FakeMappingService.calls = []
+    disabled_settings = _local_qwen38_settings(page_read_enabled=False)
+    monkeypatch.setattr(answer_regions_route, "get_settings", lambda: disabled_settings)
+    monkeypatch.setattr(answer_regions_route, "LocalScriptPageReadService", _FakePageReadService)
+    monkeypatch.setattr(answer_regions_route, "LocalScriptPreparationService", _FakeMappingService)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "local_qwen38_visual",
+            "replace_existing": True,
+            "repair_unconfirmed_only": False,
+            "draft_only_confirmed": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(_FakeMappingService.calls) == 1
+    assert not _FakePageReadService.calls
+
+
+def test_prepare_route_refuses_repair_unconfirmed_only_with_page_read_enabled(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    submission, token = _prepare_submission(client, tmp_path, "page-read-repair-conflict")
+    _FakePageReadService.calls = []
+    _FakeMappingService.calls = []
+    enabled_settings = _local_qwen38_settings(page_read_enabled=True)
+    monkeypatch.setattr(answer_regions_route, "get_settings", lambda: enabled_settings)
+    monkeypatch.setattr(answer_regions_route, "LocalScriptPageReadService", _FakePageReadService)
+    monkeypatch.setattr(answer_regions_route, "LocalScriptPreparationService", _FakeMappingService)
+
+    response = client.post(
+        f"/submissions/{submission['id']}/question-node-mappings/run",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "provider": "local_qwen38_visual",
+            "replace_existing": False,
+            "repair_unconfirmed_only": True,
+            "draft_only_confirmed": True,
+        },
+    )
+
+    assert response.status_code == 409
+    assert "does not yet support repairing only" in response.json()["detail"]
+    assert not _FakePageReadService.calls
+    assert not _FakeMappingService.calls

@@ -188,7 +188,8 @@ function isLocalPreparedMapping(mapping: AnswerRegionMapping): boolean {
   const source = mapping.source_reference?.text_source;
   return mapping.provider === "local_paddle_qwen"
     || source === "brain_visual_mapping_pending_transcription"
-    || source === "qwen38_visual_mapping_pending_transcription";
+    || source === "qwen38_visual_mapping_pending_transcription"
+    || source === "brain_visual_page_read";
 }
 
 const CURRENT_FINAL_INTENT_PROMPT_VERSION = "qwen38-visible-evidence-structured-v5";
