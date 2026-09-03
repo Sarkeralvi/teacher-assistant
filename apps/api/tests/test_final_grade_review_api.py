@@ -476,6 +476,22 @@ def test_reject_grade_suggestion_creates_rejected_final_grade(
     assert payload["teacher_comment"] == "Suggestion is not usable."
 
 
+def test_edit_grade_suggestion_accepts_final_score_exactly_at_max_score(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = create_region_and_suggestion(client, tmp_path)
+    max_score = data["suggestion"]["max_score"]
+
+    full_marks = client.post(
+        f"/grade-suggestions/{data['suggestion']['id']}/edit",
+        headers=data["headers"],
+        json={"teacher_id": data["teacher"]["id"], "final_score": max_score},
+    )
+
+    assert full_marks.status_code == 201
+    assert full_marks.json()["final_score"] == max_score
+
+
 def test_finalize_validation_failures(client: TestClient, tmp_path: Path) -> None:
     data = create_region_and_suggestion(client, tmp_path)
     suggestion_id = data["suggestion"]["id"]
