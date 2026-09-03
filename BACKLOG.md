@@ -1,4 +1,53 @@
-﻿# TA-LOCAL-005 — Tiered OCR pipeline with vision escalation
+﻿# TA-SEC-001 — Auth, grading-gate, and evidence-storage hardening audit
+
+- Recorded at: 2026-09-03
+- Baseline commit: `d52dab4` (carrying commit: `1817783`)
+- Canonical workflow: cross-cutting (Custom Controlled, Bulk Supervised, review/export).
+- Implemented: JWT `alg`/`sub` validation hardening in `decode_access_token`; scoped
+  `/users` and `/users/{id}` to the caller's own account instead of every teacher across
+  tenants; fail-closed `role: "teacher"` on `AuthRegister`/`/auth/register`; blocked
+  changing `teacher_id` through `PATCH /courses/{id}`; a hard grading-safety gate requiring
+  `full_answer_confirmed` before an answer region can be graded (mock, cohort, or Codex
+  dev path), with new regions starting `evidence_status="unconfirmed"` instead of
+  `"complete"`; `SELECT ... FOR UPDATE` locking in bulk-evaluation approval and
+  `FinalGradeService.approve_suggestion` to close a double-finalize race; `BulkEvaluationItem.final_grade_id`
+  kept in sync with `FinalGrade` so externally finalized items drop out of the snapshot
+  hash and next-runnable query; rollback/cleanup of partial storage writes on failed
+  submission upload; a 250 MiB ZIP total-uncompressed-size cap against zip bombs;
+  enqueue-failure recovery for grading jobs, Qwen visual-transcription/thinking-repair
+  runs, and chained bulk-evaluation jobs (marked `failed`/paused instead of stuck
+  `queued` forever); deletion of answer-region crop images left unreferenced after a
+  segment edit/removal or region deletion; and frontend fixes routing the submission-page
+  image and final-grades export through authenticated blob fetches instead of bare
+  `<a href>` links that never sent the bearer token.
+- Removed: the cross-tenant "demo teacher selector" and teacher-directory UI, which
+  depended on the now-scoped-down `/users` listing.
+- Safety: no provider/model call, upload, deletion, batch run, push, or stack
+  operation was made or authorized as part of this task; `COHORT_MODEL_GRADING_ENABLED`
+  was not changed outside pre-existing test fixtures that already monkeypatched it for
+  unit coverage; no `FinalGrade` is created by any of these changes without the existing
+  teacher approve/edit/reject/approve-selected actions; the new grading gate makes
+  grading strictly harder to trigger (adds a blocker), never easier.
+- Verification completed: 665 backend tests passed (3 skipped, up from 594/3 at the prior
+  handoff), Ruff clean, frontend `tsc --noEmit` clean, frontend production build clean,
+  `workflow-ui.test.mjs` passed. Three pre-existing test files
+  (`test_final_grade_review_api.py`, `test_browser_codex_grading_api.py`,
+  `test_cohort_grading_api.py`) predated the full-answer-confirmation gate and were
+  updated to confirm evidence before grading, matching the pattern already used in
+  `test_grading_api.py`.
+- Verification remaining: this was a code-level audit and test-suite pass only. It does
+  not substitute for the 20-case curated quality gate or the founder-supervised
+  rehearsal, both still blocked per the 2026-08-31 handoff. The pre-existing gap noted in
+  that handoff — Bulk Supervised has no dedicated `BACKLOG.md`/`docs/VALIDATION_LOG.md`
+  entry for the feature itself (migration `0026`, ~4,100 lines) — remains open; this
+  entry documents only the hardening changes made on top of it, not a retroactive record
+  of the original feature.
+- Pilot status: unaffected/unchanged by this task. The two gates blocking any teacher
+  pilot (curated quality `PASS`, founder-supervised rehearsal) are unchanged.
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: Done (code-level); documentation gap for Bulk Supervised itself still open.
+
+# TA-LOCAL-005 — Tiered OCR pipeline with vision escalation
 
 - **Current status update — 2026-08-25 (supersedes older local-AI status notes below):** the supervised teacher workflow uses Qwen3.8 for reference drafting, full-page answer mapping, final-intent visual transcription, and text-only draft grading. A separate explicit one-call thinking repair is available only when the teacher finds cancellation/replacement interpretation unfaithful; it receives answer images plus the rejected transcript but no question, solution, rubric, marks, or grading context. Every Qwen call requires the exclusive fail-closed model lease. Mapping, transcript/repair confirmation, and full-answer image confirmation remain separate teacher gates; suggestions remain draft-only; retries/fallbacks and cohort grading remain disabled. PaddleOCR and Qwen3.6 remain disabled rollback assets. **Pilot status: blocked** pending a teacher-signed curated quality `PASS` and one signed end-to-end supervised rehearsal. Semi/Fully Automated remain disabled.
 - Recorded at: 2026-08-20 (historical entry; see current status update above)

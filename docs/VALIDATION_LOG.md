@@ -2131,3 +2131,57 @@ For the same 303 measured output tokens and 4,414 prompt tokens, average decode 
 - The benchmark finally path attempted to restore b10249 before releasing its lease. That attempt encountered an inherited legacy-Windows-PowerShell module-path issue (`Get-FileHash` was unavailable); the normal managed PowerShell path immediately restored b10249 successfully before result evaluation or promotion. The benchmark runner was corrected to use PowerShell 7 for managed commands. This was a harness-shell defect, not a llama.cpp or repository startup failure.
 - Rollback: run the managed stop command, restore the ignored pre-promotion `.env.local-ai` backup, run Qwen38 preflight, and run the managed start command. Build 10249 was not overwritten or deleted.
 - Cohort grading remained disabled. The lease was released, all worker queues remained idle, and no student data, grade, suggestion, or final-grade artifact was created.
+
+# TA-SEC-001 — Auth, grading-gate, and evidence-storage hardening audit (2026-09-03)
+
+- Recorded at: 2026-09-03
+- Baseline commit: `d52dab4`; carrying commit: `1817783`
+- Workflow type: manual controlled code-level audit and remediation
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Real Codex calls: 0
+- Provider/model calls: 0
+- Real Codex grading/mapping: not run
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Private files/artifacts used: no
+- Running app stack stopped/restarted/rebuilt/modified: no
+
+## Change made
+
+Found this repository's working tree already carrying a large uncommitted
+security/robustness pass (auth hardening, a new full-answer-confirmation grading gate,
+race-condition locking, storage rollback, zip-bomb caps, enqueue-failure recovery, and
+matching frontend fixes) from earlier in this session, with three test files
+(`test_final_grade_review_api.py`, `test_browser_codex_grading_api.py`,
+`test_cohort_grading_api.py`) never updated to match the new grading gate, and one Ruff
+E501 violation in `answer_regions.py`. Updated the three test files' region-creation
+helpers to call `PATCH /answer-regions/{id}/full-answer-confirmation` before grading,
+matching the pattern already used in `test_grading_api.py`; wrapped a long list
+comprehension in `answer_regions.py` to satisfy the line-length limit; then committed the
+whole pass as `1817783`.
+
+## Safety result
+
+No provider/model call, upload, deletion, batch run, push, or stack operation was made.
+`COHORT_MODEL_GRADING_ENABLED` was not changed outside a pre-existing test fixture in
+`test_cohort_grading_api.py` that already monkeypatched it to `"true"` for unit coverage
+before this task started. The full-answer-confirmation gate this commit relies on makes
+grading strictly harder to trigger, not easier; no new path creates a `FinalGrade`
+without an explicit teacher approve/edit/reject/approve-selected action.
+
+## Checks run
+
+- `git status --short` / `git --no-pager diff` — reviewed every changed file before
+  committing.
+- `python -m pytest -q --basetemp ..\..\tmp\pytest-claude` from `apps/api` — 665 passed,
+  3 skipped (was 30 failed, 635 passed, 3 skipped before the three test files were
+  fixed).
+- `python -m ruff check .` from `apps/api` — clean (was 1 E501 error before the fix).
+- `npm run lint` (`tsc --noEmit`) from `apps/web` — clean.
+- `npm run build` from `apps/web` — clean production build.
+- `node apps\web\tests\workflow-ui.test.mjs` — passed.
