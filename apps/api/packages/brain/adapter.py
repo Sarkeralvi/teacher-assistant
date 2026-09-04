@@ -1,14 +1,14 @@
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from app.core.config import Settings
-from packages.brain.antigravity_gemini_vision_provider import AntigravityGeminiVisionProvider
+from packages.brain.antigravity_gemini_vision_provider import (
+    AntigravityGeminiVisionProvider,
+)
 from packages.brain.capabilities import (
     BRAIN_CAPABILITY_METHODS,
     BrainCapability,
@@ -20,10 +20,19 @@ from packages.brain.capabilities import (
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.image_input import build_image_data_url
-from packages.brain.llama_cpp_qwen38_vision_provider import LlamaCppQwen38VisionProvider
+from packages.brain.llama_cpp_qwen38_vision_provider import (
+    LlamaCppQwen38VisionProvider,
+)
 from packages.brain.llama_cpp_qwen_provider import LlamaCppQwenProvider
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.openai_provider import OpenAICompatibleProvider
+from packages.brain.profiles import (
+    BUILTIN_BRAIN_PROFILES,
+    BrainProviderConfigurationError,
+    BrainProviderProfile,
+    BrainProviderProfileDefinition,
+    ProviderBuildResult,
+)
 from packages.brain.prompt_registry import (
     MARKING_POLICY_INSTRUCTIONS,
     build_grading_prompt,
@@ -37,20 +46,22 @@ from packages.brain.schemas_qwen38 import (
     VisualTranscriptionOutput,
 )
 
-
-class BrainProviderConfigurationError(RuntimeError):
-    """Raised when provider configuration is incomplete or unsupported."""
-
-
-@dataclass(frozen=True)
-class ProviderBuildResult:
-    provider: BrainProvider
-    image_input_enabled: bool = False
-
-
 ProviderFactory = Callable[[Settings, str], ProviderBuildResult]
 _PROVIDER_FACTORIES: dict[str, ProviderFactory] = {}
 _PROVIDER_CANONICAL_NAMES: dict[str, str] = {}
+_PROFILE_DEFINITIONS: dict[str, BrainProviderProfileDefinition] = {}
+_LEGACY_PROVIDER_CONSTRUCTOR_NAMES = frozenset(
+    constructor.__name__
+    for constructor in (
+        AntigravityGeminiVisionProvider,
+        CodexCliProvider,
+        GeminiBrainProvider,
+        LlamaCppQwen38VisionProvider,
+        LlamaCppQwenProvider,
+        MockBrainProvider,
+        OpenAICompatibleProvider,
+    )
+)
 _LEGACY_RUNTIME_LOCATIONS = {
     "llama_cpp_qwen": BrainExecutionLocation.LOCAL,
     "qwen": BrainExecutionLocation.LOCAL,
@@ -86,8 +97,42 @@ def register_brain_provider(
         _PROVIDER_CANONICAL_NAMES[candidate] = normalized
 
 
+def register_brain_profile(definition: BrainProviderProfileDefinition) -> None:
+    """Publish a selectable profile and retain its provider-name compatibility path."""
+
+    profile_id = definition.profile_id.strip().lower()
+    if not profile_id or profile_id != definition.profile_id:
+        raise ValueError("Brain profile ids must be nonempty lowercase safe ids")
+    existing = _PROFILE_DEFINITIONS.get(profile_id)
+    if existing is not None and existing is not definition:
+        raise ValueError(f"Brain profile id is already registered: {profile_id}")
+    _PROFILE_DEFINITIONS[profile_id] = definition
+
+    def build_profile(settings: Settings, _requested: str) -> ProviderBuildResult:
+        configuration = definition.resolve(settings)
+        # Preserve the legacy adapter module's constructor patch points until
+        # env-selected provider construction is removed in TA-BRAIN-003.
+        constructor_name = definition.provider_constructor.__name__
+        if constructor_name not in _LEGACY_PROVIDER_CONSTRUCTOR_NAMES:
+            raise BrainProviderConfigurationError(
+                f"No legacy constructor is registered for profile {profile_id}"
+            )
+        constructor = globals()[constructor_name]
+        return definition.build(settings, configuration, constructor)
+
+    register_brain_provider(
+        profile_id,
+        build_profile,
+        aliases=definition.aliases,
+    )
+
+
 def registered_brain_providers() -> tuple[str, ...]:
     return tuple(sorted(set(_PROVIDER_CANONICAL_NAMES.values())))
+
+
+def registered_brain_profiles() -> tuple[str, ...]:
+    return tuple(sorted(_PROFILE_DEFINITIONS))
 
 
 def canonical_brain_provider_name(name: str) -> str:
@@ -99,6 +144,47 @@ def canonical_brain_provider_name(name: str) -> str:
             f"Unsupported BRAIN_PROVIDER: {normalized}. Registered providers: "
             + ", ".join(registered_brain_providers())
         ) from exc
+
+
+def configured_brain_profiles(settings: Settings) -> tuple[BrainProviderProfile, ...]:
+    """Resolve catalog metadata and construction readiness without probing providers."""
+
+    profiles: list[BrainProviderProfile] = []
+    for profile_id in registered_brain_profiles():
+        definition = _PROFILE_DEFINITIONS[profile_id]
+        configuration = definition.resolve(settings)
+        try:
+            adapter = BrainAdapter.for_profile(settings, profile_id)
+        except BrainProviderConfigurationError as exc:
+            ready = False
+            readiness_detail = sanitize_provider_error(
+                str(exc),
+                secrets=_configured_secret_values(settings),
+            )
+            capabilities = configuration.capabilities
+        else:
+            ready = True
+            readiness_detail = "ready"
+            capabilities = adapter.runtime.capabilities
+        profiles.append(
+            BrainProviderProfile(
+                profile_id=configuration.profile_id,
+                display_name=configuration.display_name,
+                vendor=configuration.vendor,
+                transport=configuration.transport,
+                model=configuration.model,
+                endpoint=configuration.safe_endpoint,
+                capabilities=capabilities,
+                destination=configuration.destination,
+                timeout_seconds=configuration.timeout_seconds,
+                structured_output_mode=configuration.structured_output_mode,
+                secret_reference=configuration.secret_reference,
+                enabled=configuration.enabled,
+                ready=ready,
+                readiness_detail=readiness_detail,
+            )
+        )
+    return tuple(profiles)
 
 
 _API_KEY_PATTERN = re.compile(
@@ -123,6 +209,20 @@ def sanitize_provider_error(
     sanitized = _API_KEY_PATTERN.sub("[REDACTED]", sanitized)
     sanitized = _AUTH_VALUE_PATTERN.sub(r"\1\2[REDACTED]", sanitized)
     return _DATA_URL_PATTERN.sub("[IMAGE_DATA_REDACTED]", sanitized)
+
+
+def _configured_secret_values(settings: Settings) -> tuple[str, ...]:
+    return tuple(
+        value
+        for value in (
+            settings.brain_api_key,
+            settings.openai_api_key,
+            settings.gemini_api_key,
+            settings.local_qwen_api_key,
+            settings.local_qwen38_api_key,
+        )
+        if value
+    )
 
 
 class BrainAdapter:
@@ -207,6 +307,37 @@ class BrainAdapter:
                 )
         try:
             built = factory(settings, canonical_name)
+        except BrainProviderConfigurationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise BrainProviderConfigurationError(str(exc)) from exc
+        return cls(
+            built.provider,
+            image_input_enabled=built.image_input_enabled,
+            storage_root=settings.local_storage_root,
+        )
+
+    @classmethod
+    def for_profile(cls, settings: Settings, profile_id: str) -> "BrainAdapter":
+        normalized = profile_id.strip().lower()
+        definition = _PROFILE_DEFINITIONS.get(normalized)
+        if definition is None:
+            raise BrainProviderConfigurationError(
+                f"Unsupported brain profile: {normalized}. Registered profiles: "
+                + ", ".join(registered_brain_profiles())
+            )
+        if not settings.brain_allow_real_providers and normalized != "mock":
+            raise BrainProviderConfigurationError(
+                "BRAIN_ALLOW_REAL_PROVIDERS must be true before a non-mock profile "
+                "can initialize"
+            )
+        try:
+            configuration = definition.resolve(settings)
+            built = definition.build(
+                settings,
+                configuration,
+                definition.provider_constructor,
+            )
         except BrainProviderConfigurationError:
             raise
         except (TypeError, ValueError) as exc:
@@ -605,241 +736,5 @@ def _validate_declared_capabilities(
         )
 
 
-def _build_mock(_settings: Settings, _requested: str) -> ProviderBuildResult:
-    return ProviderBuildResult(MockBrainProvider())
-
-
-def _build_openai_compatible(
-    settings: Settings,
-    requested: str,
-) -> ProviderBuildResult:
-    canonical_name = "openai" if requested == "openai" else "openai_compatible"
-    generic_profile = canonical_name == "openai_compatible" or any(
-        (settings.brain_model, settings.brain_api_key, settings.brain_base_url)
-    )
-    api_key = settings.brain_api_key or settings.openai_api_key
-    model = settings.brain_model or settings.openai_model or (
-        "gpt-4o-mini" if canonical_name == "openai" else ""
-    )
-    base_url = settings.brain_base_url or settings.openai_base_url or (
-        "https://api.openai.com/v1" if canonical_name == "openai" else ""
-    )
-    timeout = (
-        settings.brain_timeout_seconds
-        if generic_profile
-        else settings.openai_timeout_seconds
-    )
-    image_enabled = (
-        settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
-        else settings.openai_image_input_enabled
-    )
-    if not model:
-        raise BrainProviderConfigurationError("BRAIN_MODEL is required")
-    if not base_url:
-        raise BrainProviderConfigurationError(
-            "BRAIN_BASE_URL is required for an OpenAI-compatible provider"
-        )
-    location = _resolve_location(
-        settings,
-        base_url=base_url,
-        default=BrainExecutionLocation.CLOUD,
-    )
-    if location is BrainExecutionLocation.CLOUD and not api_key:
-        key_name = "OPENAI_API_KEY" if canonical_name == "openai" else "BRAIN_API_KEY"
-        raise BrainProviderConfigurationError(
-            f"{key_name} is required for a cloud OpenAI-compatible provider"
-        )
-    provider = OpenAICompatibleProvider(
-        api_key=api_key,
-        model_name=model,
-        base_url=base_url,
-        timeout_seconds=timeout,
-        provider_name=canonical_name,
-        execution_location=location,
-        image_input_enabled=bool(image_enabled),
-        structured_output_mode=settings.brain_structured_output_mode,
-        verify_model_on_start=settings.brain_verify_model_on_start,
-        managed_local_phase=_resolve_managed_phase(settings, location=location),
-    )
-    return ProviderBuildResult(provider, image_input_enabled=bool(image_enabled))
-
-
-def _build_gemini(settings: Settings, _requested: str) -> ProviderBuildResult:
-    api_key = settings.brain_api_key or settings.gemini_api_key
-    if not api_key:
-        raise BrainProviderConfigurationError(
-            "GEMINI_API_KEY or BRAIN_API_KEY is required when BRAIN_PROVIDER=gemini"
-        )
-    image_enabled = (
-        settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
-        else settings.gemini_image_input_enabled
-    )
-    provider = GeminiBrainProvider(
-        api_key=api_key,
-        model_name=settings.brain_model or settings.gemini_model,
-        timeout_seconds=settings.brain_timeout_seconds,
-        image_input_enabled=bool(image_enabled),
-        structured_output_mode=settings.brain_structured_output_mode,
-        verify_model_on_start=settings.brain_verify_model_on_start,
-    )
-    return ProviderBuildResult(provider, image_input_enabled=bool(image_enabled))
-
-
-def _build_codex_cli(settings: Settings, _requested: str) -> ProviderBuildResult:
-    if settings.codex_cli_approval_policy.strip().lower() != "never":
-        raise BrainProviderConfigurationError(
-            "CODEX_CLI_APPROVAL_POLICY must be never for BRAIN_PROVIDER=codex_cli"
-        )
-    if settings.codex_cli_sandbox.strip() == "danger-full-access":
-        raise BrainProviderConfigurationError(
-            "CODEX_CLI_SANDBOX=danger-full-access is not allowed"
-        )
-    generic_profile = _generic_profile_selected(settings)
-    image_enabled = (
-        settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
-        else settings.codex_cli_image_input_enabled
-    )
-    return ProviderBuildResult(
-        CodexCliProvider(
-            command=settings.codex_cli_command,
-            model_name=settings.brain_model or settings.codex_cli_model,
-            timeout_seconds=(
-                settings.brain_timeout_seconds
-                if generic_profile
-                else settings.codex_cli_timeout_seconds
-            ),
-            sandbox=settings.codex_cli_sandbox,
-            use_json=settings.codex_cli_use_json,
-            output_last_message=settings.codex_cli_output_last_message,
-            image_input_enabled=bool(image_enabled),
-            workdir=settings.codex_cli_workdir,
-        ),
-        image_input_enabled=bool(image_enabled),
-    )
-
-
-def _build_qwen(settings: Settings, _requested: str) -> ProviderBuildResult:
-    if not settings.local_qwen_enabled:
-        raise BrainProviderConfigurationError(
-            "LOCAL_QWEN_ENABLED must be true for BRAIN_PROVIDER=llama_cpp_qwen"
-        )
-    api_key = settings.brain_api_key or settings.local_qwen_api_key
-    if not api_key:
-        raise BrainProviderConfigurationError(
-            "LOCAL_QWEN_API_KEY or BRAIN_API_KEY is required for llama_cpp_qwen"
-        )
-    provider = LlamaCppQwenProvider(
-        api_key=api_key,
-        model_name=settings.brain_model or settings.local_qwen_model,
-        base_url=settings.brain_base_url or settings.local_qwen_base_url,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.local_qwen_timeout_seconds
-        ),
-        require_model_lease=True,
-    )
-    return ProviderBuildResult(provider)
-
-
-def _build_qwen38(settings: Settings, _requested: str) -> ProviderBuildResult:
-    if not settings.local_qwen38_enabled:
-        raise BrainProviderConfigurationError(
-            "LOCAL_QWEN38_ENABLED must be true for BRAIN_PROVIDER=llama_cpp_qwen38"
-        )
-    api_key = settings.brain_api_key or settings.local_qwen38_api_key
-    if not api_key:
-        raise BrainProviderConfigurationError(
-            "LOCAL_QWEN38_API_KEY or BRAIN_API_KEY is required for llama_cpp_qwen38"
-        )
-    provider = LlamaCppQwen38VisionProvider(
-        api_key=api_key,
-        model_name=settings.brain_model or settings.local_qwen38_model,
-        base_url=settings.brain_base_url or settings.local_qwen38_base_url,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.local_qwen38_timeout_seconds
-        ),
-        grading_reasoning_mode=settings.local_qwen38_grading_reasoning_mode,
-        context_tokens=settings.local_qwen38_context_tokens,
-        require_model_lease=True,
-    )
-    return ProviderBuildResult(provider)
-
-
-def _build_antigravity_gemini(settings: Settings, _requested: str) -> ProviderBuildResult:
-    if not settings.antigravity_gemini_enabled:
-        raise BrainProviderConfigurationError(
-            "ANTIGRAVITY_GEMINI_ENABLED must be true for BRAIN_PROVIDER=antigravity_gemini"
-        )
-    provider = AntigravityGeminiVisionProvider(
-        model_name=settings.brain_model or settings.antigravity_gemini_model,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.antigravity_gemini_timeout_seconds
-        ),
-    )
-    return ProviderBuildResult(provider, image_input_enabled=True)
-
-
-def _generic_profile_selected(settings: Settings) -> bool:
-    return any((settings.brain_model, settings.brain_api_key, settings.brain_base_url))
-
-
-def _resolve_location(
-    settings: Settings,
-    *,
-    base_url: str,
-    default: BrainExecutionLocation,
-) -> BrainExecutionLocation:
-    configured = settings.brain_endpoint_type.strip().lower()
-    if configured not in {"", "auto", "local", "cloud"}:
-        raise BrainProviderConfigurationError(
-            "An HTTP brain endpoint type must be auto, local, or cloud"
-        )
-    if configured not in {"", "auto"}:
-        return BrainExecutionLocation(configured)
-    hostname = (urlparse(base_url).hostname or "").casefold()
-    if hostname in {"localhost", "127.0.0.1", "::1"}:
-        return BrainExecutionLocation.LOCAL
-    return default
-
-
-def _resolve_managed_phase(
-    settings: Settings,
-    *,
-    location: BrainExecutionLocation,
-) -> str | None:
-    value = settings.brain_managed_local_phase.strip()
-    if not value:
-        return None
-    if location is not BrainExecutionLocation.LOCAL:
-        raise BrainProviderConfigurationError(
-            "BRAIN_MANAGED_LOCAL_PHASE is valid only for a local endpoint"
-        )
-    aliases = {"qwen": "Qwen", "qwen38": "Qwen38"}
-    try:
-        return aliases[value.casefold()]
-    except KeyError as exc:
-        raise BrainProviderConfigurationError(
-            "BRAIN_MANAGED_LOCAL_PHASE must be Qwen or Qwen38"
-        ) from exc
-
-
-register_brain_provider("mock", _build_mock, aliases=("fake",))
-register_brain_provider("openai", _build_openai_compatible)
-register_brain_provider(
-    "openai_compatible",
-    _build_openai_compatible,
-    aliases=("openai-compatible",),
-)
-register_brain_provider("gemini", _build_gemini)
-register_brain_provider("codex_cli", _build_codex_cli)
-register_brain_provider("llama_cpp_qwen", _build_qwen)
-register_brain_provider("llama_cpp_qwen38", _build_qwen38)
-register_brain_provider("antigravity_gemini", _build_antigravity_gemini, aliases=("antigravity",))
+for _profile_definition in BUILTIN_BRAIN_PROFILES:
+    register_brain_profile(_profile_definition)

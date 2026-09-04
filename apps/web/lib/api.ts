@@ -282,6 +282,8 @@ export type GradingRun = {
   mode: GradingRunMode | string;
   status: string;
   marking_policy: MarkingPolicy;
+  brain_profile_id: string | null;
+  brain_profile_data_boundary_confirmed_at: string | null;
 
   question_pdf_path: string | null;
   solution_pdf_path: string | null;
@@ -955,11 +957,29 @@ export type LocalAiStatus = {
   qwen38: LocalAiServiceStatus;
 };
 
+export type BrainProfile = {
+  id: string;
+  display_name: string;
+  vendor: string;
+  transport: "in_process" | "http" | "cli";
+  model: string;
+  endpoint: string;
+  capabilities: string[];
+  data_destination: "mock" | "local" | "cloud";
+  timeout_seconds: number;
+  structured_output_mode: string;
+  secret_reference: string;
+  enabled: boolean;
+  ready: boolean;
+  readiness_detail: string;
+};
+
 export type CohortDispatchProvider = string;
 
 export type CohortDispatchRequest = {
   queue_run_id: number;
   grading_run_id: number;
+  profile_id?: string;
   provider: CohortDispatchProvider;
   expected_model: string;
   call_limit: number;
@@ -1309,6 +1329,13 @@ export function getBrainStatus() {
   return apiRequest<LocalAiStatus>("/brain/status");
 }
 
+export function getBrainProfiles() {
+  return apiRequest<BrainProfile[]>("/brain/profiles", {
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
 export async function logout() {
   const token = getStoredAuthToken();
   clearStoredAuthToken();
@@ -1418,6 +1445,22 @@ export function getGradingRun(gradingRunId: number) {
 export function updateGradingRun(gradingRunId: number, payload: GradingRunUpdate) {
   return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}`, {
     method: "PATCH",
+    body: payload,
+    token: getStoredAuthToken(),
+    authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
+  });
+}
+
+export function selectGradingRunBrainProfile(
+  gradingRunId: number,
+  payload: {
+    profile_id: string;
+    required_capability: string;
+    provider_data_boundary_confirmed: boolean;
+  },
+) {
+  return apiRequest<GradingRun>(`/grading-runs/${gradingRunId}/brain-profile`, {
+    method: "PUT",
     body: payload,
     token: getStoredAuthToken(),
     authErrorMessage: UPLOAD_AUTH_ERROR_MESSAGE,
@@ -1634,6 +1677,7 @@ export function runSubmissionQuestionNodeMappings(
     replace_existing?: boolean;
     repair_unconfirmed_only?: boolean;
     provider?: ScriptMappingProvider;
+    profile_id?: string;
     expected_model?: string;
     expected_ocr_model?: string;
     expected_layout_model?: string;
@@ -1657,6 +1701,7 @@ export function runAssessmentQuestionNodeMappings(
     replace_existing?: boolean;
     repair_unconfirmed_only?: boolean;
     provider?: ScriptMappingProvider;
+    profile_id?: string;
     expected_model?: string;
     expected_ocr_model?: string;
     expected_layout_model?: string;
@@ -1736,14 +1781,15 @@ export function listAssessmentAnswerRegions(assessmentId: number, questionId?: n
 
 export function startReferenceExtraction(
   gradingRunId: number,
-  brain: { provider: string; model: string; location: string },
+  profile: BrainProfile,
   providerDataBoundaryConfirmed = false,
 ) {
   return apiRequest<ReferenceExtraction>(`/grading-runs/${gradingRunId}/reference-extraction`, {
     method: "POST",
     body: {
-      provider: brain.provider,
-      expected_model: brain.model,
+      profile_id: profile.id,
+      provider: profile.id,
+      expected_model: profile.model,
       materials_confirmed: true,
       draft_only_confirmed: true,
       provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
@@ -1781,10 +1827,12 @@ export function createVisualTranscriptionRun(
   expectedModel: string,
   provider = "brain",
   providerDataBoundaryConfirmed = false,
+  profileId?: string,
 ) {
   return apiRequest<AnswerRegionOcrRun>(`/answer-regions/${answerRegionId}/visual-transcription-runs`, {
     method: "POST",
     body: {
+      profile_id: profileId,
       provider,
       expected_model: expectedModel,
       draft_only_confirmed: true,
@@ -1821,12 +1869,14 @@ export function createVisualTranscriptionThinkingRepair(
   expectedModel: string,
   provider = "brain",
   providerDataBoundaryConfirmed = false,
+  profileId?: string,
 ) {
   return apiRequest<AnswerRegionOcrRun>(
     `/answer-regions/${answerRegionId}/visual-transcription-runs/${sourceRunId}/thinking-repair`,
     {
       method: "POST",
       body: {
+        profile_id: profileId,
         provider,
         expected_model: expectedModel,
         draft_only_confirmed: true,
@@ -1841,6 +1891,7 @@ export function createBulkEvaluationRun(
   payload: {
     file: File;
     grading_run_id: number;
+    profile_id?: string;
     expected_model: string;
     provider: string;
     location: string;
@@ -2085,6 +2136,7 @@ export function gradeAnswerRegionWithLocalQwen38(
   answerRegionId: number,
   payload: {
     grading_run_id: number;
+    profile_id?: string;
     provider: string;
     expected_model: string;
     draft_only_confirmed: true;
@@ -2105,6 +2157,7 @@ export function gradeAnswerRegionWithBrain(
   answerRegionId: number,
   payload: {
     grading_run_id: number;
+    profile_id?: string;
     provider: string;
     expected_model: string;
     draft_only_confirmed: true;
@@ -2173,6 +2226,7 @@ export function gradeAllApprovedAnswersWithBrain(
   assessmentId: number,
   payload: {
     grading_run_id: number;
+    profile_id?: string;
     provider: string;
     expected_model: string;
     draft_only_confirmed: true;

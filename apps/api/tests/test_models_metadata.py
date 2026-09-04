@@ -113,6 +113,8 @@ EXPECTED_COLUMNS = {
         "mode",
         "status",
         "marking_policy",
+        "brain_profile_id",
+        "brain_profile_data_boundary_confirmed_at",
         "question_pdf_path",
         "solution_pdf_path",
         "rubric_pdf_path",

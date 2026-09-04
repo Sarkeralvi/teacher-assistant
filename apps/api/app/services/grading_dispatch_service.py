@@ -32,7 +32,7 @@ from app.services.grading_queue_service import GradingQueueService
 from app.services.grading_service import GradingService, sanitize_provider_error
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 from packages.brain.capabilities import BrainCapability
-from packages.brain.policy import brain_policy_from_settings
+from packages.brain.policy import brain_policy_for_profile, brain_policy_from_settings
 
 
 class GradingDispatchService:
@@ -479,16 +479,38 @@ class GradingDispatchService:
                 detail="Question must have exactly one active rubric",
             )
         try:
-            policy = brain_policy_from_settings(
-                self.settings,
-                requested_provider=request.provider,
-            )
-            policy.validate_request(
-                requested_provider=request.provider,
-                expected_model=request.expected_model,
-                capability=BrainCapability.GRADING,
-                feature_enabled=self.settings.cohort_model_grading_enabled,
-            )
+            if grading_run.brain_profile_id is not None:
+                if request.profile_id != grading_run.brain_profile_id:
+                    raise BrainProviderConfigurationError(
+                        "Request profile does not match the grading run's locked profile"
+                    )
+                policy = brain_policy_for_profile(
+                    self.settings,
+                    grading_run.brain_profile_id,
+                )
+                policy.validate_profile_request(
+                    profile_id=grading_run.brain_profile_id,
+                    capability=BrainCapability.GRADING,
+                    expected_model=request.expected_model,
+                    provider_data_boundary_confirmed=(
+                        request.provider_data_boundary_confirmed
+                    ),
+                )
+                if not self.settings.cohort_model_grading_enabled:
+                    raise BrainProviderConfigurationError(
+                        "The grading feature is disabled for the selected brain profile"
+                    )
+            else:
+                policy = brain_policy_from_settings(
+                    self.settings,
+                    requested_provider=request.provider,
+                )
+                policy.validate_request(
+                    requested_provider=request.provider,
+                    expected_model=request.expected_model,
+                    capability=BrainCapability.GRADING,
+                    feature_enabled=self.settings.cohort_model_grading_enabled,
+                )
         except BrainProviderConfigurationError as exc:
             detail = str(exc)
             status_code = (

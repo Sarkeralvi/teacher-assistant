@@ -45,7 +45,7 @@ from app.worker.jobs import run_grade_answer_region_job, run_grading_dispatch_jo
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 from packages.brain.capabilities import BrainCapability
-from packages.brain.policy import brain_policy_from_settings
+from packages.brain.policy import brain_policy_for_profile, brain_policy_from_settings
 
 # Retained as a module attribute for integrations that patch the adapter factory
 # at this route boundary; provider selection itself is delegated to BrainPolicy.
@@ -175,18 +175,35 @@ def grade_answer_region_with_local_qwen38(
     ):
         raise HTTPException(status_code=409, detail="Local Qwen3.8 grading is disabled")
     try:
-        policy = brain_policy_from_settings(
-            settings,
-            requested_provider=payload.provider,
-        )
-        policy.validate_request(
-            requested_provider=payload.provider,
-            expected_model=payload.expected_model,
-            capability=BrainCapability.GRADING,
-            feature_enabled=(
+        if payload.profile_id is not None:
+            policy = brain_policy_for_profile(settings, payload.profile_id)
+            policy.validate_profile_request(
+                profile_id=payload.profile_id,
+                capability=BrainCapability.GRADING,
+                expected_model=payload.expected_model,
+                provider_data_boundary_confirmed=(
+                    payload.provider_data_boundary_confirmed
+                ),
+            )
+            if not (
                 policy.single_answer_grading_enabled and policy.grading_enabled
-            ),
-        )
+            ):
+                raise BrainProviderConfigurationError(
+                    "The grading feature is disabled for the selected brain profile"
+                )
+        else:
+            policy = brain_policy_from_settings(
+                settings,
+                requested_provider=payload.provider,
+            )
+            policy.validate_request(
+                requested_provider=payload.provider,
+                expected_model=payload.expected_model,
+                capability=BrainCapability.GRADING,
+                feature_enabled=(
+                    policy.single_answer_grading_enabled and policy.grading_enabled
+                ),
+            )
     except BrainProviderConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
@@ -202,6 +219,13 @@ def grade_answer_region_with_local_qwen38(
         or grading_run.assessment_id != region.submission.assessment_id
     ):
         raise HTTPException(status_code=404, detail="Grading run not found")
+    if grading_run.brain_profile_id != payload.profile_id and (
+        grading_run.brain_profile_id is not None or payload.profile_id is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Request profile does not match the grading run's locked profile",
+        )
     existing = db.scalars(
         select(GradeSuggestion).where(GradeSuggestion.answer_region_id == region.id)
     ).first()
@@ -317,6 +341,13 @@ def grade_all_approved_answers_with_local_qwen38(
         or grading_run.assessment_id != assessment.id
     ):
         raise HTTPException(status_code=404, detail="Grading run not found")
+    if grading_run.brain_profile_id != payload.profile_id and (
+        grading_run.brain_profile_id is not None or payload.profile_id is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Request profile does not match the grading run's locked profile",
+        )
 
     regions = db.scalars(
         select(AnswerRegion)
@@ -418,18 +449,35 @@ def grade_all_approved_answers_with_local_qwen38(
         )
 
     try:
-        policy = brain_policy_from_settings(
-            settings,
-            requested_provider=payload.provider,
-        )
-        policy.validate_request(
-            requested_provider=payload.provider,
-            expected_model=payload.expected_model,
-            capability=BrainCapability.GRADING,
-            feature_enabled=(
+        if payload.profile_id is not None:
+            policy = brain_policy_for_profile(settings, payload.profile_id)
+            policy.validate_profile_request(
+                profile_id=payload.profile_id,
+                capability=BrainCapability.GRADING,
+                expected_model=payload.expected_model,
+                provider_data_boundary_confirmed=(
+                    payload.provider_data_boundary_confirmed
+                ),
+            )
+            if not (
                 policy.single_answer_grading_enabled and policy.grading_enabled
-            ),
-        )
+            ):
+                raise BrainProviderConfigurationError(
+                    "The grading feature is disabled for the selected brain profile"
+                )
+        else:
+            policy = brain_policy_from_settings(
+                settings,
+                requested_provider=payload.provider,
+            )
+            policy.validate_request(
+                requested_provider=payload.provider,
+                expected_model=payload.expected_model,
+                capability=BrainCapability.GRADING,
+                feature_enabled=(
+                    policy.single_answer_grading_enabled and policy.grading_enabled
+                ),
+            )
     except BrainProviderConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:

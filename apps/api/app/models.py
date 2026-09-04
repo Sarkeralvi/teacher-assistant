@@ -156,6 +156,10 @@ class GradingRun(TimestampMixin, Base):
     mode: Mapped[str] = mapped_column(String(64), nullable=False, default="custom_controlled")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     marking_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="general")
+    brain_profile_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    brain_profile_data_boundary_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     question_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     solution_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     rubric_pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)

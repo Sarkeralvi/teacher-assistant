@@ -91,7 +91,12 @@ from packages.brain.answer_region_suggestion_codex_provider import (
     CodexAnswerRegionSuggestionProvider,
     CodexAnswerRegionSuggestionProviderError,
 )
-from packages.brain.policy import brain_policy_from_settings, configured_visual_provider
+from packages.brain.capabilities import BrainCapability
+from packages.brain.policy import (
+    brain_policy_for_profile,
+    brain_policy_from_settings,
+    configured_visual_provider,
+)
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -109,6 +114,33 @@ def _resolved_visual_brain_provider(settings, provider: str | None) -> str:
     if normalized == "local_qwen38_visual":
         return "llama_cpp_qwen38"
     return normalized
+
+
+def _profile_or_legacy_visual_policy(
+    settings,
+    *,
+    profile_id: str | None,
+    provider: str | None,
+    capability: BrainCapability,
+    provider_data_boundary_confirmed: bool,
+):
+    if profile_id:
+        policy = brain_policy_for_profile(settings, profile_id)
+        policy.validate_profile_request(
+            profile_id=profile_id,
+            capability=capability,
+            provider_data_boundary_confirmed=provider_data_boundary_confirmed,
+        )
+        return policy, profile_id
+    resolved_provider = _resolved_visual_brain_provider(settings, provider)
+    policy = brain_policy_from_settings(
+        settings,
+        requested_provider=resolved_provider,
+    )
+    policy.require_data_boundary_confirmation(
+        confirmed=provider_data_boundary_confirmed
+    )
+    return policy, provider
 
 
 def get_submission_page_or_404(page_id: int, db: Session) -> SubmissionPage:
@@ -1117,14 +1149,14 @@ def run_submission_question_node_mappings(
     if request.provider in {"brain_visual", "local_qwen38_visual"}:
         settings = get_settings()
         try:
-            policy = brain_policy_from_settings(
+            policy, _selected_provider = _profile_or_legacy_visual_policy(
                 settings,
-                requested_provider=_resolved_visual_brain_provider(
-                    settings, request.provider
+                profile_id=request.profile_id,
+                provider=request.provider,
+                capability=BrainCapability.VISUAL_MAPPING,
+                provider_data_boundary_confirmed=(
+                    request.provider_data_boundary_confirmed
                 ),
-            )
-            policy.require_data_boundary_confirmation(
-                confirmed=request.provider_data_boundary_confirmed
             )
         except BrainProviderConfigurationError as exc:
             raise HTTPException(
@@ -1132,7 +1164,9 @@ def run_submission_question_node_mappings(
                 detail=str(exc),
             ) from exc
         explicit_provider = (
-            "llama_cpp_qwen38" if request.provider == "local_qwen38_visual" else None
+            "llama_cpp_qwen38"
+            if request.provider == "local_qwen38_visual"
+            else request.profile_id
         )
         # Bulk Supervised already branches on this same policy flag
         # (bulk_evaluation_service._assert_enabled/_process_read); this route
@@ -1712,12 +1746,12 @@ def create_visual_transcription_run(
     region = get_owned_answer_region_or_404(answer_region_id, db, current_user)
     settings = get_settings()
     try:
-        policy = brain_policy_from_settings(
+        policy, selected_provider = _profile_or_legacy_visual_policy(
             settings,
-            requested_provider=_resolved_visual_brain_provider(settings, payload.provider),
-        )
-        policy.require_data_boundary_confirmation(
-            confirmed=payload.provider_data_boundary_confirmed
+            profile_id=payload.profile_id,
+            provider=payload.provider,
+            capability=BrainCapability.VISUAL_TRANSCRIPTION,
+            provider_data_boundary_confirmed=payload.provider_data_boundary_confirmed,
         )
     except BrainProviderConfigurationError as exc:
         raise HTTPException(
@@ -1730,7 +1764,7 @@ def create_visual_transcription_run(
             region,
             teacher=current_user,
             expected_model=payload.expected_model,
-            provider=payload.provider,
+            provider=selected_provider,
         )
     except VisualTranscriptionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1797,12 +1831,12 @@ def create_visual_transcription_thinking_repair(
         )
     settings = get_settings()
     try:
-        policy = brain_policy_from_settings(
+        policy, selected_provider = _profile_or_legacy_visual_policy(
             settings,
-            requested_provider=_resolved_visual_brain_provider(settings, payload.provider),
-        )
-        policy.require_data_boundary_confirmation(
-            confirmed=payload.provider_data_boundary_confirmed
+            profile_id=payload.profile_id,
+            provider=payload.provider,
+            capability=BrainCapability.TRANSCRIPTION_REPAIR,
+            provider_data_boundary_confirmed=payload.provider_data_boundary_confirmed,
         )
     except BrainProviderConfigurationError as exc:
         raise HTTPException(
@@ -1816,7 +1850,7 @@ def create_visual_transcription_thinking_repair(
             source_run,
             teacher=current_user,
             expected_model=payload.expected_model,
-            provider=payload.provider,
+            provider=selected_provider,
         )
     except VisualTranscriptionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

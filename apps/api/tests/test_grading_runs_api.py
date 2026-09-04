@@ -174,6 +174,42 @@ def test_create_custom_grading_run_missing_assessment_returns_404(client: TestCl
     assert response.status_code == 404
 
 
+def test_grading_run_brain_profile_is_persisted_and_immutable(client: TestClient) -> None:
+    teacher, token = register_teacher(client)
+    assessment = create_assessment_for_teacher(client, int(teacher["id"]), token)
+    headers = {"Authorization": f"Bearer {token}"}
+    run = client.post(
+        f"/assessments/{assessment['id']}/grading-runs/custom",
+        headers=headers,
+    ).json()
+
+    assert run["brain_profile_id"] is None
+    selected = client.put(
+        f"/grading-runs/{run['id']}/brain-profile",
+        headers=headers,
+        json={
+            "profile_id": "mock",
+            "required_capability": "grading",
+            "provider_data_boundary_confirmed": False,
+        },
+    )
+
+    assert selected.status_code == 200
+    assert selected.json()["brain_profile_id"] == "mock"
+    assert selected.json()["brain_profile_data_boundary_confirmed_at"] is None
+    rejected = client.put(
+        f"/grading-runs/{run['id']}/brain-profile",
+        headers=headers,
+        json={
+            "profile_id": "codex_cli",
+            "required_capability": "grading",
+            "provider_data_boundary_confirmed": True,
+        },
+    )
+    assert rejected.status_code == 409
+    assert "locked" in rejected.text
+
+
 def test_upload_materials_stores_safe_relative_pdf_paths_and_updates_status(
     client: TestClient,
 ) -> None:

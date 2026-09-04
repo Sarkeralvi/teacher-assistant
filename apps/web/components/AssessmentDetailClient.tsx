@@ -11,6 +11,7 @@ import {
   type AnswerRegionImageLoadState,
 } from "./AuthenticatedAnswerRegionImage";
 import { AuthenticatedMappedSourcePage } from "./AuthenticatedMappedSourcePage";
+import { BrainProfileSelector } from "./BrainProfileSelector";
 import {
   acceptAnswerRegionMappingSuggestion,
   acceptQuestionImportDrafts,
@@ -32,6 +33,7 @@ import {
   getGradingEvidencePacket,
   getGradingQueueSummary,
   getBrainStatus,
+  getBrainProfiles,
   downloadSubmissionPageImage,
   getStoredAuthToken,
   gradeAllApprovedAnswersWithBrain,
@@ -56,6 +58,7 @@ import {
   runAssessmentQuestionNodeMappings,
   runSubmissionQuestionNodeMappings,
   suggestAnswerRegionMappings,
+  selectGradingRunBrainProfile,
   updateQuestion,
   updateQuestionNode,
   updateQuestionNodeMapping,
@@ -67,6 +70,7 @@ import {
   type AnswerRegionMapping,
   type AnswerRegionOcrRun,
   type Assessment,
+  type BrainProfile,
   type DraftAnswerRegionSuggestionGroup,
   type DraftQuestion,
   type EvidencePrepRun,
@@ -314,6 +318,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const [questionImportProvider, setQuestionImportProvider] = useState<QuestionImportProvider>("mock");
   const [questionImportJob, setQuestionImportJob] = useState<QuestionImportJob | null>(null);
   const [localAiStatus, setLocalAiStatus] = useState<LocalAiStatus | null>(null);
+  const [brainProfiles, setBrainProfiles] = useState<BrainProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
   const [providerDataBoundaryConfirmed, setProviderDataBoundaryConfirmed] = useState(false);
   const [draftQuestionEdits, setDraftQuestionEdits] = useState<Record<string, DraftQuestionEdit>>({});
   const [importingQuestions, setImportingQuestions] = useState(false);
@@ -426,16 +432,21 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   const activeGradingRun = [...gradingRuns]
     .filter((run) => run.mode === "custom_controlled")
     .sort((left, right) => right.id - left.id)[0] ?? null;
+  const selectedBrainProfile = brainProfiles.find(
+    (profile) => profile.id === (activeGradingRun?.brain_profile_id ?? selectedProfileId),
+  );
+  const brainProfileLocked = Boolean(
+    activeGradingRun?.brain_profile_id && selectedBrainProfile,
+  );
   const localScriptPreparationAuthorized = Boolean(
-    localAiStatus?.brain.enabled &&
-    localAiStatus.brain.script_preparation_enabled &&
-    localAiStatus.brain.visual_preparation_enabled &&
-    localAiStatus.brain.capabilities.includes("visual_mapping"),
+    brainProfileLocked &&
+    selectedBrainProfile?.ready &&
+    selectedBrainProfile.capabilities.includes("visual_mapping"),
   );
   const localVisualMappingAuthorized = Boolean(
-    localAiStatus?.brain.enabled &&
-    localAiStatus.brain.visual_preparation_enabled &&
-    localAiStatus.brain.capabilities.includes("visual_mapping"),
+    brainProfileLocked &&
+    selectedBrainProfile?.ready &&
+    selectedBrainProfile.capabilities.includes("visual_mapping"),
   );
   const unresolvedMappingSubmissionIds = Array.from(
     new Set(
@@ -449,11 +460,11 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     (submission) => !preparedSubmissionIds.has(submission.id),
   );
   const localSingleGradeAuthorized = Boolean(
-    localAiStatus?.brain.enabled &&
-    localAiStatus.brain.grading_enabled &&
-    localAiStatus.brain.capabilities.includes("grading"),
+    brainProfileLocked &&
+      selectedBrainProfile?.ready &&
+      selectedBrainProfile.capabilities.includes("grading"),
   );
-  const brainCloudDataBoundaryRequired = localAiStatus?.brain.location === "cloud";
+  const brainCloudDataBoundaryRequired = selectedBrainProfile?.data_destination === "cloud";
   const providerDataBoundaryReady = !brainCloudDataBoundaryRequired || providerDataBoundaryConfirmed;
   const approvedBatchRegionIds = answerRegions
     .filter((region) => (
@@ -539,6 +550,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         gradingQueueData,
         localAiData,
         gradingRunData,
+        brainProfileData,
       ] =
         await Promise.all([
           getAssessment(assessmentId),
@@ -553,6 +565,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
           getGradingQueueSummary(assessmentId).catch(() => null),
           getBrainStatus().catch(() => null),
           listAssessmentGradingRuns(assessmentId).catch(() => [] as GradingRun[]),
+          getBrainProfiles(),
         ]);
 
       setAssessment(assessmentData);
@@ -616,6 +629,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       setGradingQueueSummary(gradingQueueData);
       setLocalAiStatus(localAiData);
       setGradingRuns(gradingRunData);
+      setBrainProfiles(brainProfileData);
+      const currentRun = [...gradingRunData]
+        .filter((run) => run.mode === "custom_controlled")
+        .sort((left, right) => right.id - left.id)[0] ?? null;
+      const defaultProfile = brainProfileData.find(
+        (profile) => profile.ready && profile.capabilities.includes("visual_mapping"),
+      );
+      setSelectedProfileId(currentRun?.brain_profile_id ?? defaultProfile?.id ?? "");
+      setProviderDataBoundaryConfirmed(
+        Boolean(currentRun?.brain_profile_data_boundary_confirmed_at),
+      );
       setSelectedPageId((current) => current || (submissionData[0]?.pages[0] ? String(submissionData[0].pages[0].id) : current));
       setSelectedQuestionId((current) => current || (questionData[0] ? String(questionData[0].id) : current));
     } catch (err) {
@@ -628,14 +652,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    setProviderDataBoundaryConfirmed(false);
-  }, [
-    localAiStatus?.brain.location,
-    localAiStatus?.brain.model,
-    localAiStatus?.brain.provider,
-  ]);
 
   useEffect(() => {
     const activeRegionIds = Object.entries(ocrRunsByRegionId)
@@ -978,6 +994,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
   }
 
   function requireProviderDataBoundaryConfirmation(): boolean {
+    if (!brainProfileLocked) {
+      setError("Select and lock a brain profile for this grading run first.");
+      return false;
+    }
     if (!providerDataBoundaryReady) {
       setError(
         "Confirm cloud provider data transfer before sending student evidence to the configured brain.",
@@ -985,6 +1005,29 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       return false;
     }
     return true;
+  }
+
+  async function handleLockBrainProfile() {
+    if (!activeGradingRun || !selectedBrainProfile) {
+      setError("Start a Custom Controlled grading run before selecting a brain profile.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const updated = await selectGradingRunBrainProfile(activeGradingRun.id, {
+        profile_id: selectedBrainProfile.id,
+        required_capability: "visual_mapping",
+        provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
+      });
+      setGradingRuns((current) =>
+        current.map((run) => (run.id === updated.id ? updated : run)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not lock the brain profile");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleRunAutomaticMappings(repairUnconfirmedOnly = false) {
@@ -997,13 +1040,14 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         replace_existing: !repairUnconfirmedOnly,
         repair_unconfirmed_only: repairUnconfirmedOnly,
         provider: "brain_visual",
-        expected_model: localAiStatus?.brain.model ?? "",
+        profile_id: selectedBrainProfile?.id,
+        expected_model: selectedBrainProfile?.model ?? "",
         draft_only_confirmed: true,
         provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         maximum_ocr_calls: 25,
       });
       setScriptPreparationMessage(
-        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answer regions prepared by ${localAiStatus?.brain.provider ?? "the configured brain"}${repairUnconfirmedOnly ? " while preserving confirmed evidence" : ""}. Confirm each complete boundary, then request its verbatim transcription.`,
+        `${responses.reduce((total, response) => total + response.mappings.filter((mapping) => mapping.answer_region_id != null).length, 0)} answer regions prepared by ${selectedBrainProfile?.display_name ?? "the selected brain"}${repairUnconfirmedOnly ? " while preserving confirmed evidence" : ""}. Confirm each complete boundary, then request its verbatim transcription.`,
       );
       await load();
     } catch (err) {
@@ -1024,7 +1068,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         replace_existing: false,
         repair_unconfirmed_only: true,
         provider: "brain_visual",
-        expected_model: localAiStatus?.brain.model ?? "",
+        profile_id: selectedBrainProfile?.id,
+        expected_model: selectedBrainProfile?.model ?? "",
         draft_only_confirmed: true,
         provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         maximum_ocr_calls: Math.min(Math.max(submission?.pages.length ?? 1, 1), 25),
@@ -1051,7 +1096,8 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
         replace_existing: false,
         repair_unconfirmed_only: false,
         provider: "brain_visual",
-        expected_model: localAiStatus?.brain.model ?? "",
+        profile_id: selectedBrainProfile?.id,
+        expected_model: selectedBrainProfile?.model ?? "",
         draft_only_confirmed: true,
         provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         maximum_ocr_calls: Math.min(Math.max(submission?.pages.length ?? 1, 1), 25),
@@ -1091,8 +1137,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       await gradeAnswerRegionWithBrain(answerRegionId, {
         grading_run_id: activeGradingRun.id,
-        provider: localAiStatus?.brain.provider ?? "brain",
-        expected_model: localAiStatus?.brain.model ?? "",
+        profile_id: selectedBrainProfile?.id,
+        provider: selectedBrainProfile?.id ?? "brain",
+        expected_model: selectedBrainProfile?.model ?? "",
         draft_only_confirmed: true,
         provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
       });
@@ -1120,8 +1167,9 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       const result = await gradeAllApprovedAnswersWithBrain(assessmentId, {
         grading_run_id: activeGradingRun.id,
-        provider: localAiStatus?.brain.provider ?? "brain",
-        expected_model: localAiStatus?.brain.model ?? "",
+        profile_id: selectedBrainProfile?.id,
+        provider: selectedBrainProfile?.id ?? "brain",
+        expected_model: selectedBrainProfile?.model ?? "",
         draft_only_confirmed: true,
         provider_data_boundary_confirmed: providerDataBoundaryConfirmed,
         call_limit: Math.min(approvedBatchRegionIds.length, 25),
@@ -1145,9 +1193,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
     try {
       let run = await createVisualTranscriptionRun(
         regionId,
-        localAiStatus?.brain.model ?? "",
-        localAiStatus?.brain.provider ?? "brain",
+        selectedBrainProfile?.model ?? "",
+        selectedBrainProfile?.id ?? "brain",
         providerDataBoundaryConfirmed,
+        selectedBrainProfile?.id,
       );
       setOcrRunsByRegionId((current) => ({
         ...current,
@@ -1227,9 +1276,10 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       let run = await createVisualTranscriptionThinkingRepair(
         regionId,
         sourceRun.id,
-        localAiStatus?.brain.model ?? "",
-        localAiStatus?.brain.provider ?? "brain",
+        selectedBrainProfile?.model ?? "",
+        selectedBrainProfile?.id ?? "brain",
         providerDataBoundaryConfirmed,
+        selectedBrainProfile?.id,
       );
       rememberVisualRun(regionId, run);
       for (let attempt = 0; attempt < 360 && ["queued", "running"].includes(run.status); attempt += 1) {
@@ -2041,7 +2091,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               >
                 {runningMappings
                   ? "The visual brain is preparing a script..."
-                  : `Prepare submission #${submission.id} with ${localAiStatus?.brain.provider ?? "the visual brain"}`}
+                  : `Prepare submission #${submission.id} with ${selectedBrainProfile?.display_name ?? "the visual brain"}`}
               </button>
             ))}
             {unpreparedSubmissions.length === 0 ? (
@@ -2074,26 +2124,25 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             </button>
           ))}
         </div>
+        <BrainProfileSelector
+          profiles={brainProfiles}
+          requiredCapability="visual_mapping"
+          run={activeGradingRun}
+          selectedProfileId={selectedProfileId}
+          consentConfirmed={providerDataBoundaryConfirmed}
+          busy={submitting}
+          onProfileChange={(profileId) => {
+            setSelectedProfileId(profileId);
+            setProviderDataBoundaryConfirmed(false);
+          }}
+          onConsentChange={setProviderDataBoundaryConfirmed}
+          onLock={() => void handleLockBrainProfile()}
+        />
         <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-3">
           <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
           <p>Script pages: {pages.length}</p>
-          <p>Brain: {localAiStatus?.brain.available ? `${localAiStatus.brain.provider} · ${localAiStatus.brain.model} · ${localAiStatus.brain.location}` : localAiStatus?.brain.enabled ? "configured" : "disabled"}</p>
+          <p>Brain: {selectedBrainProfile ? `${selectedBrainProfile.display_name} · ${selectedBrainProfile.model} · ${selectedBrainProfile.data_destination}` : "not selected"}</p>
         </div>
-        {brainCloudDataBoundaryRequired ? (
-          <label className="flex items-start gap-3 rounded border border-amber-700/60 bg-amber-950/20 p-3 text-sm text-amber-100">
-            <input
-              className="mt-1"
-              type="checkbox"
-              checked={providerDataBoundaryConfirmed}
-              onChange={(event) => setProviderDataBoundaryConfirmed(event.target.checked)}
-            />
-            <span>
-              I authorize {localAiStatus?.brain.provider ?? "the configured cloud provider"} to
-              receive student answer images, transcriptions, and draft-grading inputs for these
-              explicitly requested calls. No final grade will be created automatically.
-            </span>
-          </label>
-        ) : null}
         <p className="text-xs text-amber-200">Mapping, transcription, and grading are separate brain calls with fresh context and no retries. Repair preserves teacher-confirmed or graded evidence and never creates a transcript or grade.</p>
         {flatMappings.length > 0 ? (
           <p className="text-xs text-slate-300">
@@ -2340,7 +2389,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           </button>
                         ) : null}
                         {mapping.teacher_confirmed && (!visualRun || legacyRetranscriptionRequired || failedCurrentRetranscriptionRequired || pageReadNeedsEscalation) ? (
-                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !localAiStatus?.brain.transcription_enabled} onClick={() => void handleRunVisualTranscription(mapping)}>
+                          <button className={buttonClass} type="button" disabled={runningOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !brainProfileLocked || !selectedBrainProfile?.capabilities.includes("visual_transcription")} onClick={() => void handleRunVisualTranscription(mapping)}>
                             {runningOcrRegionId === mapping.answer_region_id
                               ? "The brain is resolving corrections and transcribing..."
                               : failedCurrentRetranscriptionRequired
@@ -2398,7 +2447,7 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
                           <button
                             className="rounded border border-violet-500 bg-violet-950/40 px-3 py-2 font-semibold text-violet-100 disabled:opacity-50"
                             type="button"
-                            disabled={repairingOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !localAiStatus?.brain.thinking_repair_enabled}
+                            disabled={repairingOcrRegionId === mapping.answer_region_id || !providerDataBoundaryReady || !brainProfileLocked || !selectedBrainProfile?.capabilities.includes("transcription_repair")}
                             onClick={() => void handleRunThinkingRepair(mapping, visualRun)}
                           >
                             {repairingOcrRegionId === mapping.answer_region_id

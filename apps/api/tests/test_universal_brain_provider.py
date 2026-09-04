@@ -19,7 +19,7 @@ from packages.brain.capabilities import (
     BrainTransport,
 )
 from packages.brain.mock_provider import MockBrainProvider
-from packages.brain.policy import brain_policy_from_settings
+from packages.brain.policy import brain_policy_for_profile, brain_policy_from_settings
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas_qwen38 import (
     VisualPageBlock,
@@ -284,6 +284,37 @@ def test_codex_cli_transport_has_a_cloud_data_destination() -> None:
         match="Cloud provider data transfer must be explicitly confirmed",
     ):
         policy.require_data_boundary_confirmation(confirmed=False)
+
+
+def test_profile_policy_rejects_an_unsupported_capability() -> None:
+    policy = brain_policy_for_profile(Settings(), "mock")
+
+    with pytest.raises(
+        BrainProviderConfigurationError,
+        match="mock does not support visual_mapping",
+    ):
+        policy.validate_profile_request(
+            profile_id="mock",
+            capability=BrainCapability.VISUAL_MAPPING,
+            provider_data_boundary_confirmed=False,
+        )
+
+
+def test_profile_policy_requires_consent_for_a_cloud_destination() -> None:
+    policy = brain_policy_for_profile(
+        Settings(BRAIN_ALLOW_REAL_PROVIDERS=True),
+        "codex_cli",
+    )
+
+    with pytest.raises(
+        BrainProviderConfigurationError,
+        match="Cloud provider data transfer must be explicitly confirmed",
+    ):
+        policy.validate_profile_request(
+            profile_id="codex_cli",
+            capability=BrainCapability.GRADING,
+            provider_data_boundary_confirmed=False,
+        )
 
 
 def test_legacy_named_local_provider_inherits_its_local_runtime_metadata() -> None:

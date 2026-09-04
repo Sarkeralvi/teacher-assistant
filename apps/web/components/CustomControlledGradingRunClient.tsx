@@ -4,17 +4,21 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { buttonClass, ErrorState, inputClass, LoadingState } from "./AppShell";
+import { BrainProfileSelector } from "./BrainProfileSelector";
 import {
   confirmReferenceExtraction,
   createCustomGradingRun,
   getAssessment,
   getGradingRun,
+  getBrainProfiles,
   getBrainStatus,
   getReferenceExtraction,
   listAssessmentGradingRuns,
+  selectGradingRunBrainProfile,
   startReferenceExtraction,
   uploadGradingRunMaterials,
   type Assessment,
+  type BrainProfile,
   type GradingRun,
   type LocalAiStatus,
   type ReferenceExtraction,
@@ -40,6 +44,9 @@ export function CustomControlledGradingRunClient({
   const [run, setRun] = useState<GradingRun | null>(null);
   const [extraction, setExtraction] = useState<ReferenceExtraction | null>(null);
   const [localAi, setLocalAi] = useState<LocalAiStatus | null>(null);
+  const [brainProfiles, setBrainProfiles] = useState<BrainProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [profileConsentConfirmed, setProfileConsentConfirmed] = useState(false);
   const [questionPdf, setQuestionPdf] = useState<File | null>(null);
   const [solutionPdf, setSolutionPdf] = useState<File | null>(null);
   const [rubricPdf, setRubricPdf] = useState<File | null>(null);
@@ -57,27 +64,40 @@ export function CustomControlledGradingRunClient({
   const extractionActive = extraction?.status === "queued" || extraction?.status === "running";
   const activeRunId = run?.id;
   const referencesConfirmed = Boolean(run?.questions_confirmed_at && run.rubrics_confirmed_at);
+  const selectedBrainProfile = brainProfiles.find(
+    (profile) => profile.id === (run?.brain_profile_id ?? selectedProfileId),
+  );
   const brainProviderConfigured = Boolean(
-    localAi?.real_providers_allowed
-      && localAi.brain.configured
-      && localAi.brain.available
-      && localAi.brain.reference_extraction_enabled
-      && localAi.brain.capabilities.includes("visual_reference_extraction"),
+    run?.brain_profile_id &&
+      selectedBrainProfile?.ready &&
+      selectedBrainProfile.capabilities.includes("visual_reference_extraction"),
   );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, runs, localStatus] = await Promise.all([
+      const [assessmentData, runs, localStatus, profiles] = await Promise.all([
         getAssessment(assessmentId),
         listAssessmentGradingRuns(assessmentId),
         getBrainStatus().catch(() => null),
+        getBrainProfiles(),
       ]);
       const currentRun = runs.at(-1) ?? null;
       setAssessment(assessmentData);
       setRun(currentRun);
       setLocalAi(localStatus);
+      setBrainProfiles(profiles);
+      const lockedProfileId = currentRun?.brain_profile_id ?? "";
+      const defaultProfile = profiles.find(
+        (profile) =>
+          profile.ready &&
+          profile.capabilities.includes("visual_reference_extraction"),
+      );
+      setSelectedProfileId(lockedProfileId || defaultProfile?.id || "");
+      setProfileConsentConfirmed(
+        Boolean(currentRun?.brain_profile_data_boundary_confirmed_at),
+      );
       if (currentRun) {
         setExtraction(await getReferenceExtraction(currentRun.id));
       } else {
@@ -182,7 +202,7 @@ export function CustomControlledGradingRunClient({
   }
 
   async function handleStartExtraction() {
-    if (!run || !materialsUploaded || !materialsConfirmed || !localAi?.brain) {
+    if (!run || !materialsUploaded || !materialsConfirmed || !selectedBrainProfile) {
       setError("Confirm that the three uploaded files are correct before extraction.");
       return;
     }
@@ -192,8 +212,8 @@ export function CustomControlledGradingRunClient({
       setExtraction(
         await startReferenceExtraction(
           run.id,
-          localAi.brain,
-          materialsConfirmed,
+          selectedBrainProfile,
+          profileConsentConfirmed,
         ),
       );
       setRun(await getGradingRun(run.id));
@@ -201,6 +221,25 @@ export function CustomControlledGradingRunClient({
       setDraftsConfirmed(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start brain extraction");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLockProfile() {
+    if (!run || !selectedBrainProfile) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setRun(
+        await selectGradingRunBrainProfile(run.id, {
+          profile_id: selectedBrainProfile.id,
+          required_capability: "visual_reference_extraction",
+          provider_data_boundary_confirmed: profileConsentConfirmed,
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not lock the brain profile");
     } finally {
       setBusy(false);
     }
@@ -318,6 +357,21 @@ export function CustomControlledGradingRunClient({
         </p>
       </div>
 
+      <BrainProfileSelector
+        profiles={brainProfiles}
+        requiredCapability="visual_reference_extraction"
+        run={run}
+        selectedProfileId={selectedProfileId}
+        consentConfirmed={profileConsentConfirmed}
+        busy={busy}
+        onProfileChange={(profileId) => {
+          setSelectedProfileId(profileId);
+          setProfileConsentConfirmed(false);
+        }}
+        onConsentChange={setProfileConsentConfirmed}
+        onLock={() => void handleLockProfile()}
+      />
+
       <Progress current={progressStep} />
 
       {error ? <ErrorState message={error} /> : null}
@@ -401,7 +455,7 @@ export function CustomControlledGradingRunClient({
                   onChange={(event) => setMaterialsConfirmed(event.target.checked)}
                 />
                 <span>
-                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize one draft-only visual extraction with {localAi?.brain.provider ?? "the configured brain"} ({localAi?.brain.model ?? "model unavailable"}, {localAi?.brain.location ?? "provider-managed"}){localAi?.brain.location === "cloud" ? ", including transfer of these reference pages to that cloud provider" : ""}.
+                  I confirm these are the correct question, solution/model answer, and rubric files. I authorize one draft-only visual extraction with {selectedBrainProfile?.display_name ?? "the selected brain"} ({selectedBrainProfile?.model ?? "model unavailable"}, {selectedBrainProfile?.data_destination ?? "provider-managed"}){selectedBrainProfile?.data_destination === "cloud" ? ", including transfer of these reference pages to that cloud provider" : ""}.
                 </span>
               </label>
               <div className="flex flex-wrap items-center gap-3">

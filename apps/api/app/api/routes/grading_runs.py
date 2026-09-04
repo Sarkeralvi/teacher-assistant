@@ -30,6 +30,7 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    GradingRunBrainProfileSelect,
     GradingRunCreate,
     GradingRunRead,
     GradingRunUpdate,
@@ -46,8 +47,8 @@ from app.services.storage import LocalStorage
 from app.worker.jobs import run_reference_extraction_job
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import BrainProviderConfigurationError
-from packages.brain.capabilities import BrainExecutionLocation
-from packages.brain.policy import brain_policy_from_settings
+from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
+from packages.brain.policy import brain_policy_for_profile, brain_policy_from_settings
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -488,6 +489,10 @@ def serialize_grading_run(grading_run: GradingRun, db: Session) -> dict[str, obj
         "mode": grading_run.mode,
         "status": grading_run.status,
         "marking_policy": grading_run.marking_policy,
+        "brain_profile_id": grading_run.brain_profile_id,
+        "brain_profile_data_boundary_confirmed_at": (
+            grading_run.brain_profile_data_boundary_confirmed_at
+        ),
         "question_pdf_path": grading_run.question_pdf_path,
         "solution_pdf_path": grading_run.solution_pdf_path,
         "rubric_pdf_path": grading_run.rubric_pdf_path,
@@ -594,6 +599,47 @@ def update_grading_run(
     return serialize_grading_run(grading_run, db)
 
 
+@router.put("/grading-runs/{grading_run_id}/brain-profile", response_model=GradingRunRead)
+def select_grading_run_brain_profile(
+    grading_run_id: int,
+    payload: GradingRunBrainProfileSelect,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, object]:
+    grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    if grading_run.brain_profile_id is not None:
+        if grading_run.brain_profile_id != payload.profile_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The brain profile is locked for this grading run",
+            )
+        return serialize_grading_run(grading_run, db)
+    try:
+        capability = BrainCapability(payload.required_capability)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unknown brain capability",
+        ) from exc
+    try:
+        policy = brain_policy_for_profile(get_settings(), payload.profile_id)
+        policy.validate_profile_request(
+            profile_id=payload.profile_id,
+            capability=capability,
+            provider_data_boundary_confirmed=(
+                payload.provider_data_boundary_confirmed
+            ),
+        )
+    except BrainProviderConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    grading_run.brain_profile_id = payload.profile_id
+    if policy.location is BrainExecutionLocation.CLOUD:
+        grading_run.brain_profile_data_boundary_confirmed_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(grading_run)
+    return serialize_grading_run(grading_run, db)
+
+
 @router.post("/grading-runs/{grading_run_id}/materials", response_model=GradingRunRead)
 def upload_grading_run_materials(
     grading_run_id: int,
@@ -685,11 +731,30 @@ def start_reference_extraction(
     current_user: CurrentUser,
 ) -> dict[str, Any]:
     grading_run = get_owned_grading_run_or_404(grading_run_id, db, current_user)
+    selected_provider = payload.provider
     try:
-        policy = brain_policy_from_settings(
-            get_settings(),
-            requested_provider=payload.provider,
-        )
+        if grading_run.brain_profile_id is not None:
+            if payload.profile_id != grading_run.brain_profile_id:
+                raise BrainProviderConfigurationError(
+                    "Request profile does not match the grading run's locked profile"
+                )
+            policy = brain_policy_for_profile(
+                get_settings(),
+                grading_run.brain_profile_id,
+            )
+            selected_provider = grading_run.brain_profile_id
+            policy.validate_profile_request(
+                profile_id=grading_run.brain_profile_id,
+                capability=BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+                provider_data_boundary_confirmed=(
+                    payload.provider_data_boundary_confirmed
+                ),
+            )
+        else:
+            policy = brain_policy_from_settings(
+                get_settings(),
+                requested_provider=payload.provider,
+            )
     except BrainProviderConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if (
@@ -706,7 +771,7 @@ def start_reference_extraction(
             grading_run,
             teacher_id=current_user.id,
             expected_model=payload.expected_model,
-            provider=payload.provider,
+            provider=selected_provider,
         )
     except ReferenceExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

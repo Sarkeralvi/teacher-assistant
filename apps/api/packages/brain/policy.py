@@ -24,6 +24,7 @@ from packages.brain.provider_base import BrainProvider
 @dataclass(frozen=True)
 class BrainPolicy:
     adapter: BrainAdapter
+    profile_id: str | None
     reference_extraction_enabled: bool
     script_preparation_enabled: bool
     single_answer_grading_enabled: bool
@@ -92,17 +93,49 @@ class BrainPolicy:
                 "Cloud provider data transfer must be explicitly confirmed"
             )
 
+    def validate_profile_request(
+        self,
+        *,
+        profile_id: str,
+        capability: BrainCapability,
+        provider_data_boundary_confirmed: bool,
+        expected_model: str | None = None,
+    ) -> None:
+        normalized = profile_id.strip().lower()
+        if self.profile_id is None or normalized != self.profile_id:
+            raise BrainProviderConfigurationError(
+                "Requested profile does not match the selected brain profile"
+            )
+        if expected_model is not None and expected_model != self.model:
+            raise BrainProviderConfigurationError(
+                "Expected model does not match the selected brain profile"
+            )
+        if not self.supports(capability):
+            raise BrainProviderConfigurationError(
+                f"Brain profile {normalized} does not support {capability.value}"
+            )
+        self.require_data_boundary_confirmation(
+            confirmed=provider_data_boundary_confirmed
+        )
+
 
 def brain_policy_from_settings(
     settings: Settings,
     *,
     requested_provider: str | None = None,
     adapter_override: Any | None = None,
+    profile_id: str | None = None,
 ) -> BrainPolicy:
-    resolved_provider = (requested_provider or settings.brain_provider).strip().lower()
+    resolved_provider = (
+        profile_id or requested_provider or settings.brain_provider
+    ).strip().lower()
     if resolved_provider in {"", "brain", "active"}:
         resolved_provider = settings.brain_provider
-    adapter = adapter_override or BrainAdapter.for_provider(settings, resolved_provider)
+    adapter = adapter_override or (
+        BrainAdapter.for_profile(settings, profile_id)
+        if profile_id is not None
+        else BrainAdapter.for_provider(settings, resolved_provider)
+    )
     adapter = normalize_brain_adapter(
         adapter,
         settings=settings,
@@ -184,6 +217,7 @@ def brain_policy_from_settings(
     )
     return BrainPolicy(
         adapter=adapter,
+        profile_id=profile_id,
         reference_extraction_enabled=reference_enabled,
         script_preparation_enabled=script_enabled,
         single_answer_grading_enabled=single_grade_enabled,
@@ -196,6 +230,19 @@ def brain_policy_from_settings(
         job_timeout_seconds=timeout,
         model_asset_sha256=model_hash or None,
         auxiliary_model_asset_sha256=auxiliary_hash or None,
+    )
+
+
+def brain_policy_for_profile(
+    settings: Settings,
+    profile_id: str,
+    *,
+    adapter_override: Any | None = None,
+) -> BrainPolicy:
+    return brain_policy_from_settings(
+        settings,
+        adapter_override=adapter_override,
+        profile_id=profile_id.strip().lower(),
     )
 
 

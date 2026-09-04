@@ -6,7 +6,11 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.services.local_ocr_client import LocalOcrClient
-from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
+from packages.brain.adapter import (
+    BrainAdapter,
+    BrainProviderConfigurationError,
+    configured_brain_profiles,
+)
 from packages.brain.policy import brain_policy_from_settings, configured_visual_provider
 
 
@@ -27,6 +31,29 @@ class LocalAiStatusService:
             "qwen": self._qwen_status(),
             "qwen38": self._qwen38_status(),
         }
+
+    def profiles(self) -> list[dict[str, Any]]:
+        """Return safe construction metadata without probing any provider endpoint."""
+
+        return [
+            {
+                "id": profile.profile_id,
+                "display_name": profile.display_name,
+                "vendor": profile.vendor,
+                "transport": profile.transport.value,
+                "model": profile.model,
+                "endpoint": profile.endpoint,
+                "capabilities": sorted(item.value for item in profile.capabilities),
+                "data_destination": profile.destination.value,
+                "timeout_seconds": profile.timeout_seconds,
+                "structured_output_mode": profile.structured_output_mode,
+                "secret_reference": profile.secret_reference,
+                "enabled": profile.enabled,
+                "ready": profile.ready,
+                "readiness_detail": profile.readiness_detail,
+            }
+            for profile in configured_brain_profiles(self.settings)
+        ]
 
     def _brain_status(self) -> dict[str, Any]:
         """Describe the configured brain without contacting an external endpoint."""

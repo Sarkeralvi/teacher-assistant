@@ -42,6 +42,23 @@ class LocalAiStatusRead(BaseModel):
     qwen38: LocalAiServiceStatusRead
 
 
+class BrainProfileRead(BaseModel):
+    id: str
+    display_name: str
+    vendor: str
+    transport: Literal["in_process", "http", "cli"]
+    model: str
+    endpoint: str
+    capabilities: list[str]
+    data_destination: Literal["mock", "local", "cloud"]
+    timeout_seconds: float
+    structured_output_mode: str
+    secret_reference: str
+    enabled: bool
+    ready: bool
+    readiness_detail: str
+
+
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=3, max_length=320)
@@ -156,6 +173,12 @@ class GradingRunUpdate(BaseModel):
     marking_policy: MarkingPolicy | None = None
 
 
+class GradingRunBrainProfileSelect(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    required_capability: str = Field(min_length=1, max_length=64)
+    provider_data_boundary_confirmed: bool = False
+
+
 class GradingRunWorkflowState(BaseModel):
     materials_uploaded: bool
     materials_confirmed: bool
@@ -211,6 +234,8 @@ class GradingRunRead(ORMBase):
     mode: GradingRunMode
     status: GradingRunStatus
     marking_policy: MarkingPolicy
+    brain_profile_id: str | None
+    brain_profile_data_boundary_confirmed_at: datetime | None
     question_pdf_path: str | None
     solution_pdf_path: str | None
     rubric_pdf_path: str | None
@@ -923,6 +948,7 @@ class AnswerRegionRead(ORMBase):
 
 
 class ReferenceExtractionStartRequest(BaseModel):
+    profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     materials_confirmed: Literal[True]
@@ -1121,6 +1147,7 @@ class PaddleOcrRejectionRequest(BaseModel):
 
 
 class VisualTranscriptionRunRequest(BaseModel):
+    profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     provider: str = Field(default="brain", min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
@@ -1144,6 +1171,7 @@ class VisualTranscriptionRejectionRequest(BaseModel):
 
 
 class VisualTranscriptionThinkingRepairRequest(BaseModel):
+    profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     provider: str = Field(default="brain", min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
@@ -1180,6 +1208,7 @@ class AnswerRegionMappingRunRequest(BaseModel):
         "local_paddle_qwen",
         "local_qwen38_visual",
     ] = "deterministic_layout"
+    profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     expected_model: str | None = Field(default=None, max_length=255)
     expected_ocr_model: str | None = Field(default=None, max_length=255)
     expected_layout_model: str | None = Field(default=None, max_length=255)
@@ -1483,6 +1512,7 @@ class GradeAnswerRegionResponse(BaseModel):
 
 class LocalQwenGradeRequest(BaseModel):
     grading_run_id: int = Field(gt=0)
+    profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     draft_only_confirmed: Literal[True]
@@ -1543,6 +1573,7 @@ class CohortGradeDispatchResponse(BaseModel):
 class CohortDispatchRequest(BaseModel):
     queue_run_id: int = Field(gt=0)
     grading_run_id: int = Field(gt=0)
+    profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     provider: str = Field(min_length=1, max_length=64)
     expected_model: str = Field(min_length=1, max_length=255)
     call_limit: int = Field(ge=1, le=25)

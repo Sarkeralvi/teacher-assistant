@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core.auth import get_current_user
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.main import app
 from app.schemas import LocalAiStatusRead
 from app.services.local_ai_status_service import LocalAiStatusService
@@ -27,6 +27,50 @@ def test_brain_status_alias_exposes_the_provider_neutral_runtime_contract() -> N
     assert {"provider", "model", "location", "capabilities", "configured"} <= set(
         brain
     )
+
+
+def test_brain_profiles_route_lists_all_registered_profiles_without_secrets() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=False,
+        BRAIN_API_KEY="catalog-secret-value",
+        OPENAI_API_KEY="openai-secret-value",
+        GEMINI_API_KEY="gemini-secret-value",
+        LOCAL_QWEN_API_KEY="qwen-secret-value",
+        LOCAL_QWEN38_API_KEY="qwen38-secret-value",
+    )
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        response = TestClient(app).get("/brain/profiles")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    profiles = response.json()
+    assert {profile["id"] for profile in profiles} == {
+        "mock",
+        "openai",
+        "openai_compatible",
+        "gemini",
+        "codex_cli",
+        "llama_cpp_qwen",
+        "llama_cpp_qwen38",
+        "antigravity_gemini",
+    }
+    by_id = {profile["id"]: profile for profile in profiles}
+    assert by_id["mock"]["ready"] is True
+    assert by_id["llama_cpp_qwen"]["ready"] is False
+    assert by_id["llama_cpp_qwen38"]["ready"] is False
+    assert by_id["codex_cli"]["transport"] == "cli"
+    assert by_id["codex_cli"]["data_destination"] == "cloud"
+    assert by_id["antigravity_gemini"]["capabilities"] == []
+    serialized = json.dumps(profiles)
+    assert "catalog-secret-value" not in serialized
+    assert "openai-secret-value" not in serialized
+    assert "gemini-secret-value" not in serialized
+    assert "qwen-secret-value" not in serialized
+    assert "qwen38-secret-value" not in serialized
 
 
 def test_local_ai_status_defaults_are_disabled_and_do_not_expose_secrets_or_paths() -> None:
