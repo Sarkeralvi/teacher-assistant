@@ -14,6 +14,7 @@ from packages.brain.capabilities import (
     BrainImageInputMode,
     BrainProviderRuntime,
 )
+from packages.brain.antigravity_gemini_vision_provider import AntigravityGeminiVisionProvider
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.image_input import build_image_data_url
@@ -651,6 +652,22 @@ def _build_qwen38(settings: Settings, _requested: str) -> ProviderBuildResult:
     return ProviderBuildResult(provider)
 
 
+def _build_antigravity_gemini(settings: Settings, _requested: str) -> ProviderBuildResult:
+    if not settings.antigravity_gemini_enabled:
+        raise BrainProviderConfigurationError(
+            "ANTIGRAVITY_GEMINI_ENABLED must be true for BRAIN_PROVIDER=antigravity_gemini"
+        )
+    provider = AntigravityGeminiVisionProvider(
+        model_name=settings.brain_model or settings.antigravity_gemini_model,
+        timeout_seconds=(
+            settings.brain_timeout_seconds
+            if _generic_profile_selected(settings)
+            else settings.antigravity_gemini_timeout_seconds
+        ),
+    )
+    return ProviderBuildResult(provider, image_input_enabled=True)
+
+
 def _generic_profile_selected(settings: Settings) -> bool:
     return any((settings.brain_model, settings.brain_api_key, settings.brain_base_url))
 
@@ -706,3 +723,4 @@ register_brain_provider("gemini", _build_gemini)
 register_brain_provider("codex_cli", _build_codex_cli)
 register_brain_provider("llama_cpp_qwen", _build_qwen)
 register_brain_provider("llama_cpp_qwen38", _build_qwen38)
+register_brain_provider("antigravity_gemini", _build_antigravity_gemini, aliases=("antigravity",))

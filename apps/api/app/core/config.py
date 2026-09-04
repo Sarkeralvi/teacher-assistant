@@ -308,6 +308,23 @@ class Settings(BaseSettings):
     local_qwen38_max_visual_calls: int = Field(
         default=25, alias="LOCAL_QWEN38_MAX_VISUAL_CALLS", ge=1, le=100
     )
+    # Antigravity Gemini vision provider (disabled by default; uses generous quota from antigravity IDE)
+    antigravity_gemini_enabled: bool = Field(default=False, alias="ANTIGRAVITY_GEMINI_ENABLED")
+    antigravity_gemini_model: str = Field(
+        default="gemini-3.8-flash-high", alias="ANTIGRAVITY_GEMINI_MODEL"
+    )
+    antigravity_gemini_timeout_seconds: float = Field(
+        default=120.0, alias="ANTIGRAVITY_GEMINI_TIMEOUT_SECONDS", gt=0
+    )
+    antigravity_gemini_visual_preparation_enabled: bool = Field(
+        default=False, alias="ANTIGRAVITY_GEMINI_VISUAL_PREPARATION_ENABLED"
+    )
+    antigravity_gemini_page_read_enabled: bool = Field(
+        default=False, alias="ANTIGRAVITY_GEMINI_PAGE_READ_ENABLED"
+    )
+    antigravity_gemini_transcription_enabled: bool = Field(
+        default=False, alias="ANTIGRAVITY_GEMINI_TRANSCRIPTION_ENABLED"
+    )
     bulk_supervised_enabled: bool = Field(default=False, alias="BULK_SUPERVISED_ENABLED")
     bulk_max_submissions: int = Field(
         default=180, alias="BULK_MAX_SUBMISSIONS", ge=1, le=180
