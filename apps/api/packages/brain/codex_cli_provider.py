@@ -14,6 +14,7 @@ from packages.brain.capabilities import (
     BrainCapability,
     BrainExecutionLocation,
     BrainImageInputMode,
+    BrainTransport,
 )
 from packages.brain.prompt_registry import (
     build_dependent_rubric_guidance,
@@ -47,7 +48,8 @@ class CodexCliProviderError(RuntimeError):
 
 class CodexCliProvider(BrainProvider):
     provider_name = "codex_cli"
-    execution_location = BrainExecutionLocation.CLI
+    execution_location = BrainExecutionLocation.CLOUD
+    transport = BrainTransport.CLI
     image_input_mode = BrainImageInputMode.FILE_PATH
     capabilities = frozenset({BrainCapability.GRADING})
 

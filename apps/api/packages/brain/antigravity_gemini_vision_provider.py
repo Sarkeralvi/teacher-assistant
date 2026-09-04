@@ -68,7 +68,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
+from packages.brain.capabilities import (
+    BrainCapability,
+    BrainExecutionLocation,
+    BrainTransport,
+)
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas_qwen38 import (
     EditingMark,
@@ -125,6 +129,7 @@ class AntigravityGeminiVisionProvider(BrainProvider):
 
     provider_name: str = PROVIDER_NAME
     execution_location: BrainExecutionLocation = BrainExecutionLocation.CLOUD
+    transport: BrainTransport = BrainTransport.CLI
     capabilities: frozenset[BrainCapability] = frozenset(
         {
             BrainCapability.VISUAL_TRANSCRIPTION,

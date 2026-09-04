@@ -5,8 +5,14 @@ from packages.brain.capabilities import (
     BrainCapability,
     BrainExecutionLocation,
     BrainImageInputMode,
+    BrainTransport,
 )
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.schemas_qwen38 import (
+    VisualPageMappingOutput,
+    VisualPageTranscriptOutput,
+    VisualTranscriptionOutput,
+)
 
 
 class BrainProvider:
@@ -14,6 +20,7 @@ class BrainProvider:
     model_name: str
     capabilities: frozenset[BrainCapability] = frozenset()
     execution_location: BrainExecutionLocation = BrainExecutionLocation.CLOUD
+    transport: BrainTransport = BrainTransport.HTTP
     image_input_mode: BrainImageInputMode = BrainImageInputMode.NONE
     managed_local_phase: str | None = None
 
@@ -83,6 +90,76 @@ class BrainProvider:
     ) -> dict[str, Any]:
         raise NotImplementedError(
             f"Provider {self.provider_name} does not support OCR answer preparation"
+        )
+
+    def extract_reference_bundle_from_images(
+        self,
+        *,
+        documents: dict[str, list[tuple[bytes, str, int]]],
+    ) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support visual reference extraction"
+        )
+
+    def map_page_answer_regions(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
+        open_continuations: list[str] | None = None,
+        boundary_verification: bool = False,
+    ) -> VisualPageMappingOutput:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support visual mapping"
+        )
+
+    def read_page(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
+        open_continuations: list[str] | None = None,
+    ) -> VisualPageTranscriptOutput:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support visual page reading"
+        )
+
+    def transcribe_image(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        label: str,
+        max_tokens: int | None = None,
+    ) -> VisualTranscriptionOutput:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support visual transcription"
+        )
+
+    def transcribe_images(
+        self,
+        *,
+        images: list[tuple[bytes, str]],
+        label: str,
+        max_tokens: int | None = None,
+    ) -> VisualTranscriptionOutput:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support visual transcription"
+        )
+
+    def repair_transcription_images(
+        self,
+        *,
+        images: list[tuple[bytes, str]],
+        rejected_transcript: str,
+        source_editing_marks: list[dict[str, Any]] | None = None,
+    ) -> VisualTranscriptionOutput:
+        raise NotImplementedError(
+            f"Provider {self.provider_name} does not support transcription repair"
         )
 
     def verify_available_model(self) -> None:

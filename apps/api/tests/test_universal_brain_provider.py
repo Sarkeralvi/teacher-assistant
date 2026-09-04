@@ -1,21 +1,31 @@
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from app.core.config import Settings
+from app.services.local_ai_status_service import LocalAiStatusService
 from packages.brain.adapter import (
     BrainAdapter,
     BrainProviderConfigurationError,
     ProviderBuildResult,
     register_brain_provider,
 )
-from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
+from packages.brain.capabilities import (
+    BrainCapability,
+    BrainExecutionLocation,
+    BrainTransport,
+)
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.policy import brain_policy_from_settings
 from packages.brain.provider_base import BrainProvider
-from packages.brain.schemas_qwen38 import VisualPageMappingOutput
+from packages.brain.schemas_qwen38 import (
+    VisualPageBlock,
+    VisualPageMappingOutput,
+    VisualPageTranscriptOutput,
+)
 
 
 def test_openai_compatible_local_endpoint_does_not_require_an_api_key() -> None:
@@ -197,11 +207,89 @@ def test_capability_only_provider_does_not_need_a_dummy_grading_method() -> None
     assert not adapter.supports(BrainCapability.GRADING)
 
 
+def test_visual_page_read_runs_through_the_brain_adapter_contract() -> None:
+    class PageReadProvider(BrainProvider):
+        provider_name = "page_read_test"
+        model_name = "page-read-model"
+        execution_location = BrainExecutionLocation.LOCAL
+        capabilities = frozenset({BrainCapability.VISUAL_PAGE_READ})
+
+        def read_page(
+            self,
+            *,
+            image_bytes: bytes,
+            mime_type: str,
+            question_labels: list[str],
+            question_references: list[dict[str, Any]] | None = None,
+            open_continuations: list[str] | None = None,
+        ) -> VisualPageTranscriptOutput:
+            assert image_bytes == b"test-image"
+            assert mime_type == "image/png"
+            assert question_labels == ["Q1"]
+            assert question_references == [{"question_no": "Q1"}]
+            assert open_continuations == []
+            return VisualPageTranscriptOutput(
+                blocks=[
+                    VisualPageBlock(
+                        question_label="Q1",
+                        bbox=[10, 20, 900, 800],
+                        text="visible answer",
+                        continues_from_previous=False,
+                        label_source="heading",
+                        confidence="0.91",
+                    )
+                ],
+                is_blank_page=False,
+                needs_review=True,
+            )
+
+    adapter = BrainAdapter(PageReadProvider(), image_input_enabled=True)
+
+    result = adapter.read_page(
+        image_bytes=b"test-image",
+        mime_type="image/png",
+        question_labels=["Q1"],
+        question_references=[{"question_no": "Q1"}],
+        open_continuations=[],
+    )
+
+    assert result.blocks[0].text == "visible answer"
+    assert result.needs_review is True
+
+
+def test_codex_cli_transport_has_a_cloud_data_destination() -> None:
+    settings = Settings(
+        BRAIN_PROVIDER="codex_cli",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_MODEL="codex-test-model",
+        BRAIN_GRADING_ENABLED=True,
+    )
+
+    policy = brain_policy_from_settings(settings)
+
+    assert {location.value for location in BrainExecutionLocation} == {
+        "mock",
+        "local",
+        "cloud",
+    }
+    assert policy.location is BrainExecutionLocation.CLOUD
+    assert policy.transport is BrainTransport.CLI
+    assert policy.adapter.runtime.is_cli is True
+    assert policy.adapter.runtime.status_location == "cli"
+    status = LocalAiStatusService(settings).read()["brain"]
+    assert status["location"] == "cli"
+    assert status["device"] == "cli"
+    with pytest.raises(
+        BrainProviderConfigurationError,
+        match="Cloud provider data transfer must be explicitly confirmed",
+    ):
+        policy.require_data_boundary_confirmation(confirmed=False)
+
+
 def test_legacy_named_local_provider_inherits_its_local_runtime_metadata() -> None:
     class LegacyQwenDouble(BrainProvider):
         provider_name = "llama_cpp_qwen"
         model_name = "legacy-qwen"
-        capabilities = frozenset({BrainCapability.GRADING})
 
     adapter = BrainAdapter(LegacyQwenDouble())
 

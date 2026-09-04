@@ -7,8 +7,10 @@ from packages.brain.adapter import (
     BrainAdapter,
     BrainProviderConfigurationError,
 )
+from packages.brain.capabilities import BrainCapability
 from packages.brain.mock_provider import MockBrainProvider
 from packages.brain.prompt_registry import get_prompt_version
+from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 
 
@@ -57,6 +59,22 @@ def test_mock_brain_adapter_returns_schema_valid_mock_grade_suggestion() -> None
     assert [item.criterion_id for item in validated.rubric_breakdown] == ["concept", "working"]
     awarded_marks = [item.awarded_marks for item in validated.rubric_breakdown]
     assert awarded_marks == [Decimal("0"), Decimal("0")]
+
+
+def test_declared_capability_requires_a_concrete_contract_method() -> None:
+    class BrokenPageReadProvider(BrainProvider):
+        provider_name = "broken_page_read_test"
+        model_name = "broken-page-read-model"
+        capabilities = frozenset({BrainCapability.VISUAL_PAGE_READ})
+
+    with pytest.raises(
+        BrainProviderConfigurationError,
+        match=(
+            "broken_page_read_test declares capabilities without implementing their "
+            r"contract methods: visual_page_read \(read_page\)"
+        ),
+    ):
+        BrainAdapter(BrokenPageReadProvider())
 
 
 def test_mock_output_cannot_be_mistaken_for_real_grading() -> None:

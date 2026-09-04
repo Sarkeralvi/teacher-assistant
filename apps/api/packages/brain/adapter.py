@@ -10,10 +10,12 @@ from urllib.parse import urlparse
 from app.core.config import Settings
 from packages.brain.antigravity_gemini_vision_provider import AntigravityGeminiVisionProvider
 from packages.brain.capabilities import (
+    BRAIN_CAPABILITY_METHODS,
     BrainCapability,
     BrainExecutionLocation,
     BrainImageInputMode,
     BrainProviderRuntime,
+    BrainTransport,
 )
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
@@ -29,6 +31,11 @@ from packages.brain.prompt_registry import (
 )
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.schemas_qwen38 import (
+    VisualPageMappingOutput,
+    VisualPageTranscriptOutput,
+    VisualTranscriptionOutput,
+)
 
 
 class BrainProviderConfigurationError(RuntimeError):
@@ -48,8 +55,9 @@ _LEGACY_RUNTIME_LOCATIONS = {
     "llama_cpp_qwen": BrainExecutionLocation.LOCAL,
     "qwen": BrainExecutionLocation.LOCAL,
     "llama_cpp_qwen38": BrainExecutionLocation.LOCAL,
-    "codex_cli": BrainExecutionLocation.CLI,
+    "codex_cli": BrainExecutionLocation.CLOUD,
 }
+_LEGACY_RUNTIME_TRANSPORTS = {"codex_cli": BrainTransport.CLI}
 _LEGACY_MANAGED_LOCAL_PHASES = {
     "llama_cpp_qwen": "Qwen",
     "qwen": "Qwen",
@@ -133,19 +141,27 @@ class BrainAdapter:
             type(self.provider).__dict__.get("capabilities"),
         )
         capabilities = set(declared_capabilities or ())
-        method_capabilities = {
-            "grade": BrainCapability.GRADING,
-            "extract_questions_from_pdf": BrainCapability.QUESTION_PDF_EXTRACTION,
-            "extract_rubric_from_pdf": BrainCapability.RUBRIC_PDF_EXTRACTION,
-            "extract_reference_bundle_from_images": (
-                BrainCapability.VISUAL_REFERENCE_EXTRACTION
-            ),
-            "map_page_answer_regions": BrainCapability.VISUAL_MAPPING,
-            "read_page": BrainCapability.VISUAL_PAGE_READ,
-            "transcribe_images": BrainCapability.VISUAL_TRANSCRIPTION,
-            "repair_transcription_images": BrainCapability.TRANSCRIPTION_REPAIR,
-        }
+        provider_name = str(self.provider.provider_name)
+        if capabilities:
+            _validate_declared_capabilities(self.provider, provider_name, capabilities)
         if declared_capabilities is None:
+            # Legacy compatibility for injected providers and test doubles. Remove in
+            # TA-BRAIN-003 after every provider is selected through a declared profile.
+            method_capabilities = {
+                method_name: capability
+                for capability, method_name in BRAIN_CAPABILITY_METHODS.items()
+                if capability
+                in {
+                    BrainCapability.GRADING,
+                    BrainCapability.QUESTION_PDF_EXTRACTION,
+                    BrainCapability.RUBRIC_PDF_EXTRACTION,
+                    BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+                    BrainCapability.VISUAL_MAPPING,
+                    BrainCapability.VISUAL_PAGE_READ,
+                    BrainCapability.VISUAL_TRANSCRIPTION,
+                    BrainCapability.TRANSCRIPTION_REPAIR,
+                }
+            }
             capabilities.update(
                 capability
                 for method_name, capability in method_capabilities.items()
@@ -156,12 +172,12 @@ class BrainAdapter:
                     is not getattr(BrainProvider, method_name, None)
                 )
             )
-        provider_name = str(self.provider.provider_name)
         self.runtime = BrainProviderRuntime(
             provider=provider_name,
             model=self.provider.model_name,
             location=_runtime_location(self.provider, provider_name),
             capabilities=frozenset(capabilities),
+            transport=_runtime_transport(self.provider, provider_name),
             image_input_mode=BrainImageInputMode(
                 getattr(self.provider, "image_input_mode", BrainImageInputMode.NONE)
             ),
@@ -362,46 +378,122 @@ class BrainAdapter:
         except Exception as exc:
             raise RuntimeError(self._sanitize_error(str(exc))) from exc
 
-    def map_page_answer_regions(self, **kwargs: Any) -> Any:
+    def map_page_answer_regions(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
+        open_continuations: list[str] | None = None,
+        boundary_verification: bool = False,
+    ) -> VisualPageMappingOutput:
+        kwargs: dict[str, Any] = {
+            "image_bytes": image_bytes,
+            "mime_type": mime_type,
+            "question_labels": question_labels,
+        }
+        if question_references is not None:
+            kwargs["question_references"] = question_references
+        if open_continuations is not None:
+            kwargs["open_continuations"] = open_continuations
+        if boundary_verification:
+            kwargs["boundary_verification"] = True
         return self._call_capability(
             BrainCapability.VISUAL_MAPPING,
             "map_page_answer_regions",
             **kwargs,
         )
 
-    def read_page(self, **kwargs: Any) -> Any:
+    def read_page(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        question_labels: list[str],
+        question_references: list[dict[str, Any]] | None = None,
+        open_continuations: list[str] | None = None,
+    ) -> VisualPageTranscriptOutput:
+        kwargs: dict[str, Any] = {
+            "image_bytes": image_bytes,
+            "mime_type": mime_type,
+            "question_labels": question_labels,
+        }
+        if question_references is not None:
+            kwargs["question_references"] = question_references
+        if open_continuations is not None:
+            kwargs["open_continuations"] = open_continuations
         return self._call_capability(
             BrainCapability.VISUAL_PAGE_READ,
             "read_page",
             **kwargs,
         )
 
-    def transcribe_image(self, **kwargs: Any) -> Any:
+    def transcribe_image(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        label: str,
+        max_tokens: int | None = None,
+    ) -> VisualTranscriptionOutput:
+        kwargs: dict[str, Any] = {
+            "image_bytes": image_bytes,
+            "mime_type": mime_type,
+            "label": label,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         return self._call_capability(
             BrainCapability.VISUAL_TRANSCRIPTION,
             "transcribe_image",
             **kwargs,
         )
 
-    def transcribe_images(self, **kwargs: Any) -> Any:
+    def transcribe_images(
+        self,
+        *,
+        images: list[tuple[bytes, str]],
+        label: str,
+        max_tokens: int | None = None,
+    ) -> VisualTranscriptionOutput:
+        kwargs: dict[str, Any] = {"images": images, "label": label}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         return self._call_capability(
             BrainCapability.VISUAL_TRANSCRIPTION,
             "transcribe_images",
             **kwargs,
         )
 
-    def repair_transcription_images(self, **kwargs: Any) -> Any:
+    def repair_transcription_images(
+        self,
+        *,
+        images: list[tuple[bytes, str]],
+        rejected_transcript: str,
+        source_editing_marks: list[dict[str, Any]] | None = None,
+    ) -> VisualTranscriptionOutput:
+        kwargs: dict[str, Any] = {
+            "images": images,
+            "rejected_transcript": rejected_transcript,
+        }
+        if source_editing_marks is not None:
+            kwargs["source_editing_marks"] = source_editing_marks
         return self._call_capability(
             BrainCapability.TRANSCRIPTION_REPAIR,
             "repair_transcription_images",
             **kwargs,
         )
 
-    def extract_reference_bundle_from_images(self, **kwargs: Any) -> dict[str, Any]:
+    def extract_reference_bundle_from_images(
+        self,
+        *,
+        documents: dict[str, list[tuple[bytes, str, int]]],
+    ) -> dict[str, Any]:
         return self._call_capability(
             BrainCapability.VISUAL_REFERENCE_EXTRACTION,
             "extract_reference_bundle_from_images",
-            **kwargs,
+            documents=documents,
         )
 
     def _call_capability(
@@ -460,6 +552,13 @@ def _runtime_location(
     return BrainExecutionLocation(declared)
 
 
+def _runtime_transport(provider: BrainProvider, provider_name: str) -> BrainTransport:
+    declared = _runtime_attribute(provider, "transport")
+    if declared is None:
+        return _LEGACY_RUNTIME_TRANSPORTS.get(provider_name.casefold(), BrainTransport.HTTP)
+    return BrainTransport(declared)
+
+
 def _managed_local_phase(provider: BrainProvider, provider_name: str) -> str | None:
     declared = _runtime_attribute(provider, "managed_local_phase")
     if declared is not None:
@@ -484,6 +583,26 @@ def _runtime_attribute(provider: BrainProvider, name: str) -> object | None:
         if name in provider_type.__dict__:
             return provider_type.__dict__[name]
     return None
+
+
+def _validate_declared_capabilities(
+    provider: BrainProvider,
+    provider_name: str,
+    capabilities: set[BrainCapability],
+) -> None:
+    missing: list[str] = []
+    for capability in sorted(capabilities, key=lambda item: item.value):
+        method_name = BRAIN_CAPABILITY_METHODS[capability]
+        bound_method = getattr(provider, method_name, None)
+        implementation = getattr(type(provider), method_name, None)
+        base_implementation = getattr(BrainProvider, method_name, None)
+        if not callable(bound_method) or implementation is base_implementation:
+            missing.append(f"{capability.value} ({method_name})")
+    if missing:
+        raise BrainProviderConfigurationError(
+            f"Provider {provider_name} declares capabilities without implementing their "
+            f"contract methods: {', '.join(missing)}"
+        )
 
 
 def _build_mock(_settings: Settings, _requested: str) -> ProviderBuildResult:

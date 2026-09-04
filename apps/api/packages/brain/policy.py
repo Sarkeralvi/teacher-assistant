@@ -11,10 +11,12 @@ from packages.brain.adapter import (
     canonical_brain_provider_name,
 )
 from packages.brain.capabilities import (
+    BRAIN_CAPABILITY_METHODS,
     BrainCapability,
     BrainExecutionLocation,
     BrainImageInputMode,
     BrainProviderRuntime,
+    BrainTransport,
 )
 from packages.brain.provider_base import BrainProvider
 
@@ -46,6 +48,10 @@ class BrainPolicy:
     @property
     def location(self) -> BrainExecutionLocation:
         return self.adapter.runtime.location
+
+    @property
+    def transport(self) -> BrainTransport:
+        return self.adapter.runtime.transport
 
     def supports(self, capability: BrainCapability) -> bool:
         return self.adapter.runtime.supports(capability)
@@ -246,14 +252,19 @@ def _legacy_runtime(
 
     provider = adapter.provider
     method_capabilities = {
-        "grade": BrainCapability.GRADING,
-        "extract_questions_from_pdf": BrainCapability.QUESTION_PDF_EXTRACTION,
-        "extract_rubric_from_pdf": BrainCapability.RUBRIC_PDF_EXTRACTION,
-        "extract_reference_bundle_from_images": BrainCapability.VISUAL_REFERENCE_EXTRACTION,
-        "map_page_answer_regions": BrainCapability.VISUAL_MAPPING,
-        "read_page": BrainCapability.VISUAL_PAGE_READ,
-        "transcribe_images": BrainCapability.VISUAL_TRANSCRIPTION,
-        "repair_transcription_images": BrainCapability.TRANSCRIPTION_REPAIR,
+        method_name: capability
+        for capability, method_name in BRAIN_CAPABILITY_METHODS.items()
+        if capability
+        in {
+            BrainCapability.GRADING,
+            BrainCapability.QUESTION_PDF_EXTRACTION,
+            BrainCapability.RUBRIC_PDF_EXTRACTION,
+            BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+            BrainCapability.VISUAL_MAPPING,
+            BrainCapability.VISUAL_PAGE_READ,
+            BrainCapability.VISUAL_TRANSCRIPTION,
+            BrainCapability.TRANSCRIPTION_REPAIR,
+        }
     }
     declared_capabilities = vars(provider).get(
         "capabilities",
@@ -300,11 +311,18 @@ def _legacy_runtime(
         managed_phase = "Qwen38"
     elif managed_phase is None and requested_provider in {"llama_cpp_qwen", "qwen"}:
         managed_phase = "Qwen"
+    transport = getattr(provider, "transport", BrainTransport.HTTP)
+    if (
+        requested_provider == "codex_cli"
+        and type(provider).__dict__.get("transport") is None
+    ):
+        transport = BrainTransport.CLI
     return BrainProviderRuntime(
         provider=str(getattr(provider, "provider_name", "") or requested_provider),
         model=model,
         location=BrainExecutionLocation(location),
         capabilities=frozenset(capabilities),
+        transport=BrainTransport(transport),
         image_input_mode=BrainImageInputMode(
             getattr(provider, "image_input_mode", BrainImageInputMode.NONE)
         ),

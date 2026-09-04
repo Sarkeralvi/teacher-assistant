@@ -19,9 +19,18 @@ class BrainCapability(StrEnum):
 
 
 class BrainExecutionLocation(StrEnum):
+    """Privacy-relevant destination where provider data is processed."""
+
     MOCK = "mock"
     LOCAL = "local"
     CLOUD = "cloud"
+
+
+class BrainTransport(StrEnum):
+    """Mechanism used to invoke a provider, independent of data destination."""
+
+    IN_PROCESS = "in_process"
+    HTTP = "http"
     CLI = "cli"
 
 
@@ -37,6 +46,7 @@ class BrainProviderRuntime:
     model: str
     location: BrainExecutionLocation
     capabilities: frozenset[BrainCapability]
+    transport: BrainTransport = BrainTransport.HTTP
     image_input_mode: BrainImageInputMode = BrainImageInputMode.NONE
     managed_local_phase: str | None = None
 
@@ -48,7 +58,32 @@ class BrainProviderRuntime:
         return self.location is not BrainExecutionLocation.MOCK
 
     @property
+    def is_cli(self) -> bool:
+        return self.transport is BrainTransport.CLI
+
+    @property
+    def status_location(self) -> str:
+        """Preserve the existing status label while destination is split out."""
+
+        return self.transport.value if self.is_cli else self.location.value
+
+    @property
     def is_managed_local(self) -> bool:
         return self.location is BrainExecutionLocation.LOCAL and bool(
             self.managed_local_phase
         )
+
+
+BRAIN_CAPABILITY_METHODS: dict[BrainCapability, str] = {
+    BrainCapability.GRADING: "grade",
+    BrainCapability.QUESTION_PDF_EXTRACTION: "extract_questions_from_pdf",
+    BrainCapability.RUBRIC_PDF_EXTRACTION: "extract_rubric_from_pdf",
+    BrainCapability.OCR_REFERENCE_EXTRACTION: "extract_reference_bundle_from_ocr_documents",
+    BrainCapability.OCR_ANSWER_MAPPING: "map_submission_answers_from_ocr_pages",
+    BrainCapability.OCR_ANSWER_PREPARATION: "prepare_student_answers_from_ocr_candidates",
+    BrainCapability.VISUAL_REFERENCE_EXTRACTION: "extract_reference_bundle_from_images",
+    BrainCapability.VISUAL_MAPPING: "map_page_answer_regions",
+    BrainCapability.VISUAL_PAGE_READ: "read_page",
+    BrainCapability.VISUAL_TRANSCRIPTION: "transcribe_images",
+    BrainCapability.TRANSCRIPTION_REPAIR: "repair_transcription_images",
+}
