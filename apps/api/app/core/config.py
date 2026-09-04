@@ -308,7 +308,7 @@ class Settings(BaseSettings):
     local_qwen38_max_visual_calls: int = Field(
         default=25, alias="LOCAL_QWEN38_MAX_VISUAL_CALLS", ge=1, le=100
     )
-    # Antigravity Gemini vision provider (disabled by default; uses generous quota from antigravity IDE)
+    # Antigravity Gemini vision provider (disabled by default; uses antigravity IDE quota)
     antigravity_gemini_enabled: bool = Field(default=False, alias="ANTIGRAVITY_GEMINI_ENABLED")
     antigravity_gemini_model: str = Field(
         default="gemini-3.8-flash-high", alias="ANTIGRAVITY_GEMINI_MODEL"

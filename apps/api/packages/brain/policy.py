@@ -104,6 +104,7 @@ def brain_policy_from_settings(
     )
     provider = adapter.runtime.provider
     is_qwen38 = provider == "llama_cpp_qwen38"
+    is_antigravity_gemini = provider == "antigravity_gemini"
     vision_transport_enabled = bool(getattr(adapter.provider, "vision_enabled", True))
 
     reference_enabled = _coalesce(
@@ -118,18 +119,31 @@ def brain_policy_from_settings(
         settings.brain_single_answer_grading_enabled,
         settings.local_single_answer_grading_enabled,
     )
+    if is_qwen38:
+        visual_preparation_fallback = settings.local_qwen38_visual_preparation_enabled
+    elif is_antigravity_gemini:
+        visual_preparation_fallback = settings.antigravity_gemini_visual_preparation_enabled
+    else:
+        visual_preparation_fallback = script_enabled or reference_enabled
     visual_enabled = _coalesce(
         settings.brain_visual_preparation_enabled,
-        settings.local_qwen38_visual_preparation_enabled
-        if is_qwen38
-        else script_enabled or reference_enabled,
+        visual_preparation_fallback,
     )
-    page_read_enabled = (
-        bool(settings.local_qwen38_page_read_enabled) if is_qwen38 else False
-    )
+    if is_qwen38:
+        page_read_enabled = bool(settings.local_qwen38_page_read_enabled)
+    elif is_antigravity_gemini:
+        page_read_enabled = bool(settings.antigravity_gemini_page_read_enabled)
+    else:
+        page_read_enabled = False
+    if is_qwen38:
+        transcription_fallback = settings.local_qwen38_transcription_enabled
+    elif is_antigravity_gemini:
+        transcription_fallback = settings.antigravity_gemini_transcription_enabled
+    else:
+        transcription_fallback = False
     transcription_enabled = _coalesce(
         settings.brain_transcription_enabled,
-        settings.local_qwen38_transcription_enabled if is_qwen38 else False,
+        transcription_fallback,
     )
     thinking_enabled = _coalesce(
         settings.brain_thinking_repair_enabled,

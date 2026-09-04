@@ -2,132 +2,128 @@
 
 import json
 import subprocess
-from unittest.mock import MagicMock, patch
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from packages.brain.antigravity_gemini_vision_provider import (
-    AntigravityGeminiVisionProvider,
     PROVIDER_NAME,
+    AntigravityGeminiVisionProvider,
 )
 from packages.brain.capabilities import BrainCapability
 
 
 @pytest.fixture
-def provider():
-    """Create a provider instance for testing."""
+def provider(tmp_path):
+    """Create a provider instance with an isolated temp-image directory."""
     return AntigravityGeminiVisionProvider(
         model_name="gemini-3.8-flash-high",
         timeout_seconds=120,
+        repository_root=tmp_path,
     )
 
 
-def test_provider_initialization():
-    """Test that provider initializes with correct settings."""
+def test_provider_initialization(tmp_path):
     provider = AntigravityGeminiVisionProvider(
         model_name="gemini-3.8-flash-high",
         timeout_seconds=120,
+        repository_root=tmp_path,
     )
     assert provider.model_name == "gemini-3.8-flash-high"
     assert provider.timeout_seconds == 120
     assert provider.provider_name == PROVIDER_NAME
 
 
-def test_provider_capabilities():
-    """Test that provider advertises correct capabilities."""
-    provider = AntigravityGeminiVisionProvider()
+def test_provider_capabilities(tmp_path):
+    provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
     assert BrainCapability.VISUAL_TRANSCRIPTION in provider.capabilities
     assert BrainCapability.VISUAL_PAGE_READ in provider.capabilities
-    assert BrainCapability.VISUAL_MAPPING in provider.capabilities
 
 
 def test_transcribe_image_with_mocked_agy(provider):
-    """Test transcribe_image with mocked agy subprocess."""
+    """transcribe_image writes a temp file, calls agy, deletes the temp file, and
+    fills in provider-computed metadata that the draft schema never asked the
+    model for."""
     image_bytes = b"fake-image-data"
-    image_sha256 = "a" * 64  # 64-char hex string
 
-    # Mock response with all required fields for VisualTranscriptionOutput
     mock_response = {
         "status": "SUCCESS",
-        "response": json.dumps({
-            "draft_text": "The answer is 42",
-            "uncertain_glyphs": [],
-            "editing_marks": [],
-            "cancellation_detected": False,
-            "replacement_detected": False,
-            "uncertain_correction_detected": False,
-            "requires_thinking_repair": False,
-            "is_blank": False,
-            "is_irrelevant": False,
-            "confidence": 0.95,
-            "needs_review": True,
-            "model_provider": "antigravity_gemini",
-            "model_name": "gemini-3.8-flash-high",
-            "image_sha256": image_sha256,
-            "latency_ms": 2500,
-            "prompt_tokens": 100,
-            "completion_tokens": 50,
-            "provider_calls_used": 1,
-        }),
+        "response": json.dumps(
+            {
+                "draft_text": "The answer is 42",
+                "uncertain_glyphs": [],
+                "editing_marks": [],
+                "cancellation_detected": False,
+                "replacement_detected": False,
+                "uncertain_correction_detected": False,
+                "is_blank": False,
+                "is_irrelevant": False,
+                "confidence": 0.95,
+            }
+        ),
+        "usage": {"input_tokens": 100, "output_tokens": 50},
     }
 
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(mock_response),
-            stderr="",
-        )
+    captured_paths = []
 
+    def fake_run(cmd, **kwargs):
+        # The prompt (cmd[2]) must reference an absolute, forward-slash path
+        # to a file that actually exists at call time, then get cleaned up.
+        prompt = cmd[2]
+        assert "view_file" in prompt
+        assert "\\" not in prompt.split("absolute path ")[1].split(" ")[0]
+        captured_paths.append(prompt)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(mock_response), stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run) as mock_run:
         result = provider.transcribe_image(
             image_bytes=image_bytes,
-            source_image_sha256=image_sha256,
+            source_image_sha256="a" * 64,
             prompt_version="v1",
         )
 
-        assert result.draft_text == "The answer is 42"
-        assert result.needs_review is True
-        assert float(result.confidence) == 0.95
+    assert result.draft_text == "The answer is 42"
+    assert result.needs_review is True
+    assert float(result.confidence) == 0.95
+    assert result.model_provider == "antigravity_gemini"
+    assert result.model_name == "gemini-3.8-flash-high"
+    assert result.image_sha256 == "a" * 64
+    assert result.prompt_tokens == 100
+    assert result.completion_tokens == 50
+    mock_run.assert_called_once()
 
-        # Verify agy was called with correct args
-        mock_run.assert_called_once()
-        args, kwargs = mock_run.call_args
-        assert args[0][0] == "agy"
-        assert args[0][1] == "-p"  # prompt flag
-        assert "--model" in args[0]
-        assert "gemini-3.8-flash-high" in args[0]
-        assert "--json-schema" in args[0]
+    # Temp dir must be empty again after the call.
+    assert list(provider.temp_dir.glob("*")) == []
 
 
 def test_read_page_with_mocked_agy(provider):
-    """Test read_page with mocked agy subprocess."""
     image_bytes = b"fake-image-data"
     label_names = ["Question 1", "Question 2"]
 
-    # Mock response with all required fields for VisualPageTranscriptOutput
     mock_response = {
         "status": "SUCCESS",
-        "response": json.dumps({
-            "blocks": [
-                {
-                    "question_label": "Question 1",
-                    "bbox": [100, 100, 400, 200],
-                    "text": "Student's answer for Q1",
-                    "continues_from_previous": False,
-                    "label_source": "heading",
-                    "confidence": 0.95,
-                },
-            ],
-            "is_blank_page": False,
-            "needs_review": True,
-        }),
+        "response": json.dumps(
+            {
+                "blocks": [
+                    {
+                        "question_label": "Question 1",
+                        "bbox": [100, 100, 400, 200],
+                        "text": "Student's answer for Q1",
+                        "continues_from_previous": False,
+                        "label_source": "heading",
+                        "confidence": 0.95,
+                    },
+                ],
+                "is_blank_page": False,
+            }
+        ),
+        "usage": {"input_tokens": 150, "output_tokens": 80},
     }
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(mock_response),
-            stderr="",
+            returncode=0, stdout=json.dumps(mock_response), stderr=""
         )
 
         result = provider.read_page(
@@ -137,15 +133,30 @@ def test_read_page_with_mocked_agy(provider):
             label_names=label_names,
         )
 
-        # Verify the result has expected structure
-        assert hasattr(result, "blocks")
-        assert len(result.blocks) == 1
-        assert result.blocks[0].text == "Student's answer for Q1"
-        mock_run.assert_called_once()
+    assert len(result.blocks) == 1
+    assert result.blocks[0].text == "Student's answer for Q1"
+    assert result.needs_review is True
+    mock_run.assert_called_once()
+    assert list(provider.temp_dir.glob("*")) == []
+
+
+def test_temp_file_cleaned_up_even_on_failure(provider):
+    image_bytes = b"test-image"
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="boom")
+
+        with pytest.raises(RuntimeError, match="exited with code 1"):
+            provider.transcribe_image(
+                image_bytes=image_bytes,
+                source_image_sha256="exit-test",
+                prompt_version="v1",
+            )
+
+    assert list(provider.temp_dir.glob("*")) == []
 
 
 def test_agy_call_with_timeout(provider):
-    """Test that agy calls respect timeout."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
@@ -160,14 +171,11 @@ def test_agy_call_with_timeout(provider):
 
 
 def test_agy_call_nonzero_exit(provider):
-    """Test handling of agy non-zero exit codes."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = SimpleNamespace(
-            returncode=1,
-            stdout="",
-            stderr="Model not found",
+            returncode=1, stdout="", stderr="Model not found"
         )
 
         with pytest.raises(RuntimeError, match="exited with code 1"):
@@ -179,18 +187,12 @@ def test_agy_call_nonzero_exit(provider):
 
 
 def test_agy_call_error_status(provider):
-    """Test handling of agy ERROR status."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
-        error_response = {
-            "status": "ERROR",
-            "error": "Invalid prompt",
-        }
+        error_response = {"status": "ERROR", "error": "Invalid prompt"}
         mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(error_response),
-            stderr="",
+            returncode=0, stdout=json.dumps(error_response), stderr=""
         )
 
         with pytest.raises(RuntimeError, match="Invalid prompt"):
@@ -201,18 +203,37 @@ def test_agy_call_error_status(provider):
             )
 
 
+def test_agy_call_denied_action_surfaces_in_error(provider):
+    """A permission denial (agy's real failure mode) must be diagnosable, not silent."""
+    image_bytes = b"test-image"
+
+    with patch("subprocess.run") as mock_run:
+        denied_response = {
+            "status": "SUCCESS",
+            "response": "",
+            "denied_actions": [{"action": "read_file", "display_name": "ViewFile"}],
+        }
+        mock_run.return_value = SimpleNamespace(
+            returncode=0, stdout=json.dumps(denied_response), stderr=""
+        )
+
+        with pytest.raises(RuntimeError, match="empty response"):
+            provider.transcribe_image(
+                image_bytes=image_bytes,
+                source_image_sha256="denied-test",
+                prompt_version="v1",
+            )
+
+
 def test_agy_call_missing_response_field(provider):
-    """Test handling of missing response field in agy output."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({"status": "SUCCESS"}),  # missing 'response'
-            stderr="",
+            returncode=0, stdout=json.dumps({"status": "SUCCESS"}), stderr=""
         )
 
-        with pytest.raises(RuntimeError, match="schema validation failed"):
+        with pytest.raises(RuntimeError, match="empty response"):
             provider.transcribe_image(
                 image_bytes=image_bytes,
                 source_image_sha256="missing-field-test",
@@ -221,15 +242,10 @@ def test_agy_call_missing_response_field(provider):
 
 
 def test_agy_call_invalid_json(provider):
-    """Test handling of invalid JSON from agy."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout="not valid json {",
-            stderr="",
-        )
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="not valid json {", stderr="")
 
         with pytest.raises(RuntimeError, match="Failed to parse agy response JSON"):
             provider.transcribe_image(
@@ -240,7 +256,6 @@ def test_agy_call_invalid_json(provider):
 
 
 def test_agy_cli_not_found(provider):
-    """Test error handling when agy CLI is not available."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
@@ -255,7 +270,6 @@ def test_agy_cli_not_found(provider):
 
 
 def test_expected_model_mismatch(provider):
-    """Test that expected model must match configured model."""
     image_bytes = b"test-image"
 
     with pytest.raises(ValueError, match="Expected model"):
@@ -263,30 +277,25 @@ def test_expected_model_mismatch(provider):
             image_bytes=image_bytes,
             source_image_sha256="model-mismatch",
             prompt_version="v1",
-            expected_model="gemini-3.7-flash-medium",  # Different from configured
+            expected_model="gemini-3.7-flash-medium",
         )
 
 
-def test_schema_validation_failure(provider):
-    """Test that invalid schema in response is caught."""
+def test_draft_schema_missing_required_field(provider):
+    """The model's own draft omitting a required field must fail loudly, not
+    silently pass through as a hallucinated default."""
     image_bytes = b"test-image"
 
     with patch("subprocess.run") as mock_run:
-        # Response missing required fields
         invalid_response = {
             "status": "SUCCESS",
-            "response": json.dumps({
-                "draft_text": "valid text",
-                # missing other required fields
-            }),
+            "response": json.dumps({"draft_text": "valid text"}),  # missing is_blank etc.
         }
         mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(invalid_response),
-            stderr="",
+            returncode=0, stdout=json.dumps(invalid_response), stderr=""
         )
 
-        with pytest.raises(RuntimeError, match="schema validation failed"):
+        with pytest.raises(RuntimeError, match="was not usable"):
             provider.transcribe_image(
                 image_bytes=image_bytes,
                 source_image_sha256="validation-fail",
@@ -294,17 +303,16 @@ def test_schema_validation_failure(provider):
             )
 
 
-def test_different_model_names():
-    """Test provider works with different Gemini model names."""
+def test_different_model_names(tmp_path):
     for model in ["gemini-3.8-flash-high", "gemini-3.7-flash-medium"]:
-        provider = AntigravityGeminiVisionProvider(model_name=model)
+        provider = AntigravityGeminiVisionProvider(model_name=model, repository_root=tmp_path)
         assert provider.model_name == model
 
 
-def test_custom_timeout():
-    """Test provider respects custom timeout settings."""
+def test_custom_timeout(tmp_path):
     provider = AntigravityGeminiVisionProvider(
         model_name="gemini-3.8-flash-high",
         timeout_seconds=300,
+        repository_root=tmp_path,
     )
     assert provider.timeout_seconds == 300

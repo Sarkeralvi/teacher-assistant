@@ -8,13 +8,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.core.config import Settings
+from packages.brain.antigravity_gemini_vision_provider import AntigravityGeminiVisionProvider
 from packages.brain.capabilities import (
     BrainCapability,
     BrainExecutionLocation,
     BrainImageInputMode,
     BrainProviderRuntime,
 )
-from packages.brain.antigravity_gemini_vision_provider import AntigravityGeminiVisionProvider
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.image_input import build_image_data_url
