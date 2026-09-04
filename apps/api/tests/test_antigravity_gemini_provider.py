@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from packages.brain.adapter import BrainAdapter
 from packages.brain.antigravity_gemini_vision_provider import (
     PROVIDER_NAME,
     AntigravityGeminiVisionProvider,
@@ -35,10 +36,20 @@ def test_provider_initialization(tmp_path):
     assert provider.provider_name == PROVIDER_NAME
 
 
-def test_provider_capabilities(tmp_path):
+def test_provider_declares_no_capabilities_until_canonical_wrappers_exist(tmp_path):
+    """transcribe_image()/read_page() use this provider's own argument shape,
+    not the canonical BrainProvider contract, so declaring these capabilities
+    would let BrainAdapter construct and then crash on first real call."""
     provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
-    assert BrainCapability.VISUAL_TRANSCRIPTION in provider.capabilities
-    assert BrainCapability.VISUAL_PAGE_READ in provider.capabilities
+    assert provider.capabilities == frozenset()
+    assert BrainCapability.VISUAL_TRANSCRIPTION not in provider.capabilities
+    assert BrainCapability.VISUAL_PAGE_READ not in provider.capabilities
+
+
+def test_brain_adapter_constructs_with_no_declared_capabilities(tmp_path):
+    provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
+    adapter = BrainAdapter(provider)
+    assert adapter.runtime.capabilities == frozenset()
 
 
 def test_transcribe_image_with_mocked_agy(provider):

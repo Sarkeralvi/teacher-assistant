@@ -130,12 +130,16 @@ class AntigravityGeminiVisionProvider(BrainProvider):
     provider_name: str = PROVIDER_NAME
     execution_location: BrainExecutionLocation = BrainExecutionLocation.CLOUD
     transport: BrainTransport = BrainTransport.CLI
-    capabilities: frozenset[BrainCapability] = frozenset(
-        {
-            BrainCapability.VISUAL_TRANSCRIPTION,
-            BrainCapability.VISUAL_PAGE_READ,
-        }
-    )
+    # transcribe_image()/read_page() below use this provider's own argument
+    # shape (source_image_sha256, prompt_version, expected_model, ...), not
+    # the canonical BrainProvider contract (image_bytes, mime_type,
+    # question_labels, ...) that BrainAdapter.read_page/transcribe_images
+    # call. Declaring these capabilities would let BrainAdapter construct
+    # successfully and then crash with a TypeError on first real call from
+    # local_script_page_read.py. Leave undeclared until canonical-signature
+    # wrapper methods exist; direct calls to transcribe_image()/read_page()
+    # with this provider's own signature remain fully supported and tested.
+    capabilities: frozenset[BrainCapability] = frozenset()
 
     def __init__(
         self,
