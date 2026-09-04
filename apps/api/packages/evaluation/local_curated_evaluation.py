@@ -2163,8 +2163,8 @@ def _database_is_migrated_and_empty(session_factory: Any) -> None:
             raise LocalCuratedEvaluationError(
                 "Evaluation database is not migrated to the application schema"
             ) from exc
-        if revision != "0028_visual_page_read":
-            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0028")
+        if revision != "0029_fix_bulk_item_fk_drift":
+            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0029")
         populated_models = [
             model.__name__
             for model in (
