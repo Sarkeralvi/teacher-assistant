@@ -1,64 +1,8 @@
-"""AntigravityGeminiVisionProvider — Gemini multimodal provider via Antigravity CLI.
-
-Architecture
-------------
-This provider wraps the Antigravity CLI (agy) running in headless mode to call
-Gemini vision models using the generous quota available in the antigravity IDE.
-
-``agy`` is an agentic coding CLI, not a raw chat-completion API: there is no
-``--image`` flag. The model views an image only through the agent's own
-``view_file`` tool, and that tool requires a permission rule scoped to the
-directory the file lives in (see ``.gemini/antigravity-cli/settings.json``,
-which must contain
-``read_file(<repo>/.local-ai/antigravity-temp/)`` — forward slashes, a
-directory prefix, no trailing wildcard; other forms were tested and silently
-do not match). The prompt must reference the file by absolute path with
-forward slashes and explicitly say to use ``view_file`` — a Windows backslash
-path or an embedded base64 blob does not get treated as an image at all; the
-agent instead wanders off trying ``find_by_name``/``run_command`` to locate a
-file it already has the path to.
-
-Two main operations are exposed:
-
-1. ``transcribe_image()``
-   Accepts application-owned PNG/JPEG bytes, writes them to a private temp
-   file, calls Gemini via agy with a structured prompt, and returns a
-   ``VisualTranscriptionOutput`` draft. The temp file is always deleted
-   afterward, success or failure.
-
-2. ``read_page()``
-   Calls Gemini once per page and returns text + geometry in a single
-   response.
-
-Schema note
------------
-The full ``VisualTranscriptionOutput``/``VisualPageTranscriptOutput`` Pydantic
-schemas use ``Decimal`` fields, whose JSON Schema form includes a regex
-``pattern`` with a negative lookahead (``(?!...)``). agy validates
-``--json-schema`` against strict JSON Schema 2020-12 using a Go regex engine,
-which does not support lookaheads, and the call fails outright. This provider
-therefore asks the model for a stripped-down draft schema (``float``
-confidence, only the fields the model itself can know) and fills in the
-provider-computed metadata (model_provider, model_name, image_sha256,
-latency_ms, provider_calls_used) itself before validating against the full
-output schema — the same division the Qwen38 provider uses internally.
-
-Safety invariants
------------------
-* Subprocess calls use strict timeout handling.
-* JSON schema enforcement via --json-schema flag on a minimal draft schema.
-* Structured output parsing and full validation via Pydantic models.
-* Temp image files live under a single dedicated, gitignored directory and
-  are deleted immediately after each call, success or failure.
-* No API key exposure in logs (agy manages its own auth; nothing is logged
-  here beyond the sanitized command shape).
-"""
+"""Canonical multimodal brain provider backed by the Antigravity ``agy`` CLI."""
 
 from __future__ import annotations
 
-import hashlib
 import json
-import logging
 import subprocess
 import tempfile
 import time
@@ -69,25 +13,22 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from packages.brain.agentic_cli import finalize_cli_grade_output
 from packages.brain.capabilities import (
     BrainCapability,
     BrainExecutionLocation,
+    BrainImageInputMode,
     BrainTransport,
 )
 from packages.brain.provider_base import BrainProvider
-from packages.brain.schemas_qwen38 import (
-    EditingMark,
-    UncertainGlyph,
-    VisualPageBlock,
-    VisualPageTranscriptOutput,
-    VisualTranscriptionOutput,
+from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.universal_vision import (
+    UniversalVisionCompletion,
+    UniversalVisionProviderMixin,
 )
-
-logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "antigravity_gemini"
 DEFAULT_MODEL = "gemini-3.8-flash-high"
-
 _TEMP_DIR_NAME = Path(".local-ai") / "antigravity-temp"
 _MAX_OUTPUT_BYTES = 1_000_000
 
@@ -118,56 +59,25 @@ class _AgyResponse(BaseModel):
     denied_actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class _TranscriptionDraft(BaseModel):
-    """What the model itself can know. Metadata is filled in by this provider."""
+class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvider):
+    """Run canonical grading and vision operations through Antigravity headless mode."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    draft_text: str
-    uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
-    editing_marks: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
-    cancellation_detected: bool = False
-    replacement_detected: bool = False
-    uncertain_correction_detected: bool = False
-    is_blank: bool
-    is_irrelevant: bool
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class _PageBlockDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    question_label: str | None = None
-    bbox: list[int] = Field(min_length=4, max_length=4)
-    text: str
-    continues_from_previous: bool = False
-    label_source: str = "inferred"
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class _PageReadDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    blocks: list[_PageBlockDraft] = Field(default_factory=list)
-    is_blank_page: bool = False
-
-
-class AntigravityGeminiVisionProvider(BrainProvider):
-    """Gemini vision provider via Antigravity CLI headless mode."""
-
-    provider_name: str = PROVIDER_NAME
-    execution_location: BrainExecutionLocation = BrainExecutionLocation.CLOUD
-    transport: BrainTransport = BrainTransport.CLI
-    # transcribe_image()/read_page() below use this provider's own argument
-    # shape (source_image_sha256, prompt_version, expected_model, ...), not
-    # the canonical BrainProvider contract (image_bytes, mime_type,
-    # question_labels, ...) that BrainAdapter.read_page/transcribe_images
-    # call. Declaring these capabilities would let BrainAdapter construct
-    # successfully and then crash with a TypeError on first real call from
-    # local_script_page_read.py. Leave undeclared until canonical-signature
-    # wrapper methods exist; direct calls to transcribe_image()/read_page()
-    # with this provider's own signature remain fully supported and tested.
-    capabilities: frozenset[BrainCapability] = frozenset()
+    provider_name = PROVIDER_NAME
+    execution_location = BrainExecutionLocation.CLOUD
+    transport = BrainTransport.CLI
+    image_input_mode = BrainImageInputMode.FILE_PATH
+    capabilities = frozenset(
+        {
+            BrainCapability.GRADING,
+            BrainCapability.QUESTION_PDF_EXTRACTION,
+            BrainCapability.RUBRIC_PDF_EXTRACTION,
+            BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+            BrainCapability.VISUAL_MAPPING,
+            BrainCapability.VISUAL_PAGE_READ,
+            BrainCapability.VISUAL_TRANSCRIPTION,
+            BrainCapability.TRANSCRIPTION_REPAIR,
+        }
+    )
 
     def __init__(
         self,
@@ -183,172 +93,98 @@ class AntigravityGeminiVisionProvider(BrainProvider):
         self.temp_dir = self.repository_root / _TEMP_DIR_NAME
         self._runner = runner
 
-    def transcribe_image(
+    def _complete_structured_vision(
         self,
         *,
-        image_bytes: bytes,
-        source_image_sha256: str,
-        prompt_version: str,
-        expected_model: str = "",
-        task_name: str = "visual_transcription",
-    ) -> VisualTranscriptionOutput:
-        """Transcribe a single image via Gemini through Antigravity CLI."""
-        self._assert_model_matches(expected_model)
-        image_sha256 = source_image_sha256 or hashlib.sha256(image_bytes).hexdigest()
-
-        prompt_body = (
-            "Transcribe every visible piece of handwritten student mathematics writing in "
-            "this image exactly as written. Preserve mistakes; never solve, correct, or "
-            "complete the work. Use LaTeX for mathematics. If a stroke is crossed out but "
-            "still legible, transcribe it and record it in editing_marks with status "
-            "'cancelled'; do not delete legible crossed-out work. Set is_blank=true only if "
-            "there is no student writing at all. Set is_irrelevant=true only if the writing "
-            "is clearly not an attempt to answer the question.\n\n"
-            'Return exactly this JSON shape with no extra keys: {"draft_text":"string",'
-            '"uncertain_glyphs":[],"editing_marks":[],"cancellation_detected":false,'
-            '"replacement_detected":false,"uncertain_correction_detected":false,'
-            '"is_blank":false,"is_irrelevant":false,"confidence":0.0}'
-        )
-
-        start = time.perf_counter()
-        with self._temp_image(image_bytes) as (workspace, image_path):
-            prompt = self._view_file_prompt(image_path, prompt_body)
-            schema = _TranscriptionDraft.model_json_schema()
-            response_text, usage = self._call_agy_structured(
-                prompt, schema, cwd=workspace
+        prompt: str,
+        images: list[tuple[bytes, str]],
+        response_model: type[BaseModel] | None,
+        schema_name: str,
+        max_tokens: int | None = None,
+    ) -> UniversalVisionCompletion:
+        del schema_name, max_tokens
+        if not images:
+            raise ValueError("Antigravity vision calls require at least one image")
+        started = time.perf_counter()
+        with _TempImageContext(self.temp_dir, images) as (workspace, image_paths):
+            schema = _agy_compatible_schema(
+                response_model.model_json_schema()
+                if response_model is not None
+                else {"type": "object"}
             )
-        latency_ms = int((time.perf_counter() - start) * 1000)
-
+            response_text, usage = self._call_agy_structured(
+                self._view_files_prompt(image_paths, prompt), schema, cwd=workspace
+            )
         try:
-            raw = json.loads(response_text)
-            draft = _TranscriptionDraft.model_validate(raw)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            raise RuntimeError(f"Gemini transcription response was not usable: {exc}") from exc
-
-        uncertain_glyphs: list[UncertainGlyph] = []
-        for item in draft.uncertain_glyphs:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Gemini structured response was not usable: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("Gemini structured response must be a JSON object")
+        if response_model is not None:
             try:
-                uncertain_glyphs.append(UncertainGlyph.model_validate(item))
-            except (ValidationError, TypeError):
-                continue
-
-        editing_marks: list[EditingMark] = []
-        for item in draft.editing_marks:
-            try:
-                editing_marks.append(EditingMark.model_validate(item))
-            except (ValidationError, TypeError):
-                continue
-
-        return VisualTranscriptionOutput(
-            draft_text=draft.draft_text,
-            uncertain_glyphs=uncertain_glyphs,
-            editing_marks=editing_marks,
-            cancellation_detected=draft.cancellation_detected,
-            replacement_detected=draft.replacement_detected,
-            uncertain_correction_detected=draft.uncertain_correction_detected,
-            is_blank=draft.is_blank,
-            is_irrelevant=draft.is_irrelevant,
-            confidence=Decimal(str(round(draft.confidence, 4))),
-            needs_review=True,
-            model_provider=self.provider_name,
-            model_name=self.model_name,
-            image_sha256=image_sha256,
-            latency_ms=latency_ms,
+                payload = response_model.model_validate(payload).model_dump(mode="json")
+            except ValidationError as exc:
+                raise RuntimeError(f"Gemini structured response was not usable: {exc}") from exc
+        return UniversalVisionCompletion(
+            payload=payload,
+            latency_ms=int((time.perf_counter() - started) * 1000),
             prompt_tokens=usage.get("input_tokens"),
             completion_tokens=usage.get("output_tokens"),
         )
 
-    def read_page(
+    def grade(
         self,
         *,
-        image_bytes: bytes,
-        source_image_sha256: str,
+        question_text: str,
+        question_total_marks: Decimal,
+        rubric_json: dict[str, Any],
+        answer_image_path: str,
         prompt_version: str,
-        expected_model: str = "",
-        label_names: list[str] | None = None,
-        task_name: str = "visual_page_read",
-    ) -> VisualPageTranscriptOutput:
-        """Read an entire page in one call via Gemini through Antigravity CLI."""
-        self._assert_model_matches(expected_model)
-        labels_str = ", ".join(label_names) if label_names else "no fixed labels given"
-
-        prompt_body = (
-            "This image is one full page of a student's handwritten exam script. "
-            f"Known question labels on this page may include: {labels_str}. "
-            "Read the whole page and split it into blocks: one block per contiguous "
-            "region of writing. For each block give the visible question_label if one "
-            "is written nearby (else null), a normalized bounding box [x1,y1,x2,y2] on a "
-            "0-1000 scale, the verbatim transcribed text (LaTeX for mathematics, preserve "
-            "mistakes, never solve or correct), whether it continues from the block above "
-            "(continues_from_previous), and label_source ('heading' if the label is written "
-            "directly above/on the block, 'inferred' if you guessed it from position, "
-            "'continuation' if there is no label because it continues the previous block). "
-            "Set is_blank_page=true only if the whole page has no student writing.\n\n"
-            'Return exactly this JSON shape with no extra keys: {"blocks":['
-            '{"question_label":"string or null","bbox":[0,0,1000,1000],"text":"string",'
-            '"continues_from_previous":false,"label_source":"heading",'
-            '"confidence":0.0}],"is_blank_page":false}'
+        student_answer_text: str | None = None,
+        task_name: str = "answer_region_grading",
+        model_policy: ModelPolicy = ModelPolicy.REAL_GRADING,
+        messages: list[dict[str, Any]] | None = None,
+        image_data_url: str | None = None,
+        marking_policy: str = "general",
+    ) -> GradeSuggestionOutput:
+        del question_text, question_total_marks, rubric_json, student_answer_text
+        del task_name, model_policy, image_data_url, marking_policy
+        image_path = Path(answer_image_path)
+        if not image_path.is_file():
+            raise RuntimeError("Antigravity grading image does not exist")
+        prompt = "\n\n".join(
+            str(message.get("content", "")) for message in (messages or [])
+        )
+        prompt += "\nReturn only the requested grade-suggestion JSON object."
+        completion = self._complete_structured_vision(
+            prompt=prompt,
+            images=[(image_path.read_bytes(), _mime_type_for_path(image_path))],
+            response_model=None,
+            schema_name="grade_suggestion",
+        )
+        return finalize_cli_grade_output(
+            completion.payload,
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            prompt_version=prompt_version,
+            latency_ms=completion.latency_ms,
+            prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            provider_flag="antigravity_cli_provider",
         )
 
-        start = time.perf_counter()
-        with self._temp_image(image_bytes) as (workspace, image_path):
-            prompt = self._view_file_prompt(image_path, prompt_body)
-            schema = _PageReadDraft.model_json_schema()
-            response_text, usage = self._call_agy_structured(
-                prompt, schema, cwd=workspace
-            )
-        _latency_ms = int((time.perf_counter() - start) * 1000)
-
-        try:
-            raw = json.loads(response_text)
-            draft = _PageReadDraft.model_validate(raw)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            raise RuntimeError(f"Gemini page-read response was not usable: {exc}") from exc
-
-        blocks: list[VisualPageBlock] = []
-        for block in draft.blocks:
-            try:
-                blocks.append(
-                    VisualPageBlock(
-                        question_label=block.question_label,
-                        bbox=block.bbox,
-                        text=block.text,
-                        continues_from_previous=block.continues_from_previous,
-                        label_source=block.label_source,  # type: ignore[arg-type]
-                        confidence=Decimal(str(round(block.confidence, 4))),
-                    )
-                )
-            except ValidationError:
-                continue
-
-        return VisualPageTranscriptOutput(
-            blocks=blocks,
-            is_blank_page=draft.is_blank_page,
-            needs_review=True,
-        )
-
-    def _assert_model_matches(self, expected_model: str) -> None:
-        if expected_model and expected_model != self.model_name:
-            raise ValueError(
-                f"Expected model {expected_model}, configured model is {self.model_name}"
-            )
-
-    def _temp_image(self, image_bytes: bytes) -> _TempImageContext:
-        return _TempImageContext(self.temp_dir, image_bytes)
-
-    def _view_file_prompt(self, image_path: Path, body: str) -> str:
-        forward_slash_path = image_path.as_posix()
+    def _view_files_prompt(self, image_paths: list[Path], body: str) -> str:
+        rendered = ", ".join(path.as_posix() for path in image_paths)
         return (
-            f"View the image file at absolute path {forward_slash_path} using your "
-            "view_file tool. Do not use run_command, find_by_name, or any other tool — "
-            "the path is already exact and correct. Then, using only what you see in "
-            f"that image:\n\n{body}"
+            f"View each image file in order using view_file: {rendered}. "
+            "Do not use run_command, find_by_name, or any other tool. The paths are exact. "
+            f"Then use only what is visible in those images.\n\n{body}"
         )
 
     def _call_agy_structured(
         self, prompt: str, schema: dict[str, Any], *, cwd: Path
     ) -> tuple[str, dict[str, Any]]:
-        """Call agy CLI with a structured prompt and schema. Returns (response_text, usage)."""
         cmd = [
             "agy",
             "-p",
@@ -359,6 +195,7 @@ class AntigravityGeminiVisionProvider(BrainProvider):
             "json",
             "--json-schema",
             json.dumps(schema),
+            "--sandbox",
         ]
         try:
             result = (self._runner or subprocess.run)(
@@ -367,80 +204,93 @@ class AntigravityGeminiVisionProvider(BrainProvider):
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
+                check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"agy call timed out after {self.timeout_seconds}s") from exc
         except FileNotFoundError as exc:
             raise RuntimeError("agy CLI not found in PATH") from exc
-
-        if len((result.stdout or "").encode("utf-8")) > _MAX_OUTPUT_BYTES:
-            raise RuntimeError("agy stdout exceeded the output size limit")
-        if len((result.stderr or "").encode("utf-8")) > _MAX_OUTPUT_BYTES:
-            raise RuntimeError("agy stderr exceeded the output size limit")
-
+        _require_bounded_output(result, "agy")
         if result.returncode != 0:
-            stderr = result.stderr or "(no stderr)"
-            raise RuntimeError(f"agy exited with code {result.returncode}: {stderr}")
-
+            detail = (result.stderr or result.stdout or "(no output)")[:4000]
+            raise RuntimeError(f"agy exited with code {result.returncode}: {detail}")
         try:
             response_obj = _AgyResponse.model_validate_json(result.stdout)
         except (ValidationError, ValueError) as exc:
             raise RuntimeError(f"Failed to parse agy response JSON: {exc}") from exc
-
         if response_obj.status != "SUCCESS":
-            error_msg = response_obj.error or "unknown error"
-            denied = response_obj.denied_actions
-            if denied:
-                error_msg = f"{error_msg} (denied actions: {denied})"
-            raise RuntimeError(f"agy returned status {response_obj.status}: {error_msg}")
-
-        response_text = response_obj.response
-        if not response_text.strip():
+            error = response_obj.error or "unknown error"
+            if response_obj.denied_actions:
+                error = f"{error} (denied actions: {response_obj.denied_actions})"
+            raise RuntimeError(f"agy returned status {response_obj.status}: {error}")
+        if not response_obj.response.strip():
             raise RuntimeError("agy returned an empty response with SUCCESS status")
+        return (
+            _extract_first_json_object(response_obj.response),
+            response_obj.usage.model_dump(),
+        )
 
-        return _extract_first_json_object(response_text), response_obj.usage.model_dump()
+
+def _agy_compatible_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Remove regex patterns unsupported by agy's Go JSON-schema validator."""
+
+    def clean(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: clean(item) for key, item in value.items() if key != "pattern"}
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        return value
+
+    return clean(schema)
 
 
 def _extract_first_json_object(text: str) -> str:
-    """Return the first complete JSON object found in ``text``, re-serialized.
-
-    agy's headless agent reliably returns *valid* JSON for the schema it was
-    asked for, but real runs were observed appending harmless trailing keys
-    (``toolAction``, ``toolSummary``) or, occasionally, a second JSON-ish
-    fragment after the real object (e.g. a self-directed "finishing task"
-    turn). Draft models reject extra keys; this helper handles only extra
-    *content after* the first complete object, so a trailing CLI artifact does
-    not weaken validation of the actual response object.
-    """
     start = text.find("{")
     if start == -1:
         raise RuntimeError(f"agy response contained no JSON object: {text[:200]!r}")
-    decoder = json.JSONDecoder()
     try:
-        obj, _end = decoder.raw_decode(text, start)
+        obj, _end = json.JSONDecoder().raw_decode(text, start)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"agy response was not valid JSON: {exc}") from exc
     return json.dumps(obj)
 
 
-class _TempImageContext:
-    """Create one isolated workspace and delete it after every call."""
+def _mime_type_for_path(path: Path) -> str:
+    return "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
 
-    def __init__(self, temp_dir: Path, image_bytes: bytes) -> None:
+
+def _suffix_for_mime_type(mime_type: str) -> str:
+    if mime_type == "image/jpeg":
+        return ".jpg"
+    if mime_type == "image/png":
+        return ".png"
+    raise ValueError(f"Unsupported image MIME type: {mime_type}")
+
+
+def _require_bounded_output(result: _CompletedProcessLike, label: str) -> None:
+    for stream_name, value in (("stdout", result.stdout), ("stderr", result.stderr)):
+        if len((value or "").encode("utf-8")) > _MAX_OUTPUT_BYTES:
+            raise RuntimeError(f"{label} {stream_name} exceeded the output size limit")
+
+
+class _TempImageContext:
+    """Create one isolated multi-image workspace and always remove it."""
+
+    def __init__(self, temp_dir: Path, images: list[tuple[bytes, str]]) -> None:
         self.temp_dir = temp_dir
-        self.image_bytes = image_bytes
+        self.images = images
         self._workspace: tempfile.TemporaryDirectory[str] | None = None
 
-    def __enter__(self) -> tuple[Path, Path]:
+    def __enter__(self) -> tuple[Path, list[Path]]:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self._workspace = tempfile.TemporaryDirectory(
-            prefix="call-",
-            dir=self.temp_dir,
-        )
+        self._workspace = tempfile.TemporaryDirectory(prefix="call-", dir=self.temp_dir)
         workspace = Path(self._workspace.name)
-        image_path = workspace / "input.png"
-        image_path.write_bytes(self.image_bytes)
-        return workspace, image_path
+        paths: list[Path] = []
+        for index, (image_bytes, mime_type) in enumerate(self.images, start=1):
+            path = workspace / f"input-{index}{_suffix_for_mime_type(mime_type)}"
+            path.write_bytes(image_bytes)
+            paths.append(path)
+        return workspace, paths
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self._workspace is not None:

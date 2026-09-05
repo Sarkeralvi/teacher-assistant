@@ -54,6 +54,7 @@ def test_brain_profiles_route_lists_all_registered_profiles_without_secrets() ->
         "openai_compatible",
         "gemini",
         "codex_cli",
+        "claude_cli",
         "llama_cpp_qwen",
         "llama_cpp_qwen38",
         "antigravity_gemini",
@@ -64,7 +65,8 @@ def test_brain_profiles_route_lists_all_registered_profiles_without_secrets() ->
     assert by_id["llama_cpp_qwen38"]["ready"] is False
     assert by_id["codex_cli"]["transport"] == "cli"
     assert by_id["codex_cli"]["data_destination"] == "cloud"
-    assert by_id["antigravity_gemini"]["capabilities"] == []
+    assert "visual_mapping" in by_id["antigravity_gemini"]["capabilities"]
+    assert "grading" in by_id["claude_cli"]["capabilities"]
     serialized = json.dumps(profiles)
     assert "catalog-secret-value" not in serialized
     assert "openai-secret-value" not in serialized

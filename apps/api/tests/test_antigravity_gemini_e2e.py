@@ -56,8 +56,8 @@ def test_gemini_transcribe_real_image():
 
     result = provider.transcribe_image(
         image_bytes=image_bytes,
-        source_image_sha256="a" * 64,
-        prompt_version="v1",
+        mime_type="image/png",
+        label="Q1",
     )
 
     assert result.needs_review is True
@@ -83,9 +83,8 @@ def test_gemini_read_page_real_image():
 
     result = provider.read_page(
         image_bytes=image_bytes,
-        source_image_sha256="b" * 64,
-        prompt_version="v1",
-        label_names=["Q1"],
+        mime_type="image/png",
+        question_labels=["Q1"],
     )
 
     assert result.needs_review is True
@@ -115,8 +114,8 @@ def test_gemini_transcribe_blank_image():
 
     result = provider.transcribe_image(
         image_bytes=buf.getvalue(),
-        source_image_sha256="c" * 64,
-        prompt_version="v1",
+        mime_type="image/png",
+        label="Q1",
     )
 
     print(f"\nBlank-image result: is_blank={result.is_blank}, draft_text={result.draft_text!r}")

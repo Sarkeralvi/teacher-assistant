@@ -236,6 +236,13 @@ class Settings(BaseSettings):
     codex_cli_skip_git_repo_check: bool = Field(
         default=False, alias="CODEX_CLI_SKIP_GIT_REPO_CHECK"
     )
+    claude_cli_enabled: bool = Field(default=False, alias="CLAUDE_CLI_ENABLED")
+    claude_cli_command: str = Field(default="claude", alias="CLAUDE_CLI_COMMAND")
+    claude_cli_model: str = Field(default="sonnet", alias="CLAUDE_CLI_MODEL")
+    claude_cli_timeout_seconds: float = Field(
+        default=300.0, alias="CLAUDE_CLI_TIMEOUT_SECONDS", gt=0
+    )
+    claude_cli_workdir: str = Field(default="", alias="CLAUDE_CLI_WORKDIR")
     question_import_provider: str = Field(default="mock", alias="QUESTION_IMPORT_PROVIDER")
     codex_question_extraction_enabled: bool = Field(
         default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"

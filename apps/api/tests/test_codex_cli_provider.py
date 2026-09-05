@@ -555,6 +555,57 @@ def test_codex_cli_adapter_does_not_require_openai_api_key() -> None:
     assert adapter.provider.model_name == "gpt-5.5"
 
 
+def test_codex_visual_mapping_runs_through_canonical_adapter_contract() -> None:
+    workspaces: list[Path] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout=(
+                    "--cd <DIR>\n--sandbox <SANDBOX_MODE>\n"
+                    "--output-last-message <FILE>\n--output-schema <FILE>\n"
+                    "--json\n--image <FILE>"
+                )
+            )
+        workspace = Path(str(kwargs["cwd"]))
+        workspaces.append(workspace)
+        assert {path.name for path in workspace.iterdir()} == {
+            "input-1.png",
+            "output-schema.json",
+        }
+        output_file = Path(cmd[cmd.index("--output-last-message") + 1])
+        output_file.write_text(
+            json.dumps(
+                {
+                    "regions": [
+                        {
+                            "question_label": "Q1",
+                            "bbox": [50, 100, 950, 400],
+                            "continues_from_previous": False,
+                            "continues_to_next": False,
+                            "confidence": 0.9,
+                            "warnings": [],
+                        }
+                    ],
+                    "needs_review": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return FakeCompletedProcess(stdout="events")
+
+    adapter = BrainAdapter(make_provider(runner=runner, image_input_enabled=True))
+    output = adapter.map_page_answer_regions(
+        image_bytes=b"page",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
+
+    assert output.regions[0].question_label == "Q1"
+    assert workspaces and all(not workspace.exists() for workspace in workspaces)
+
 def test_codex_cli_raw_output_never_contains_image_base64() -> None:
     result = make_provider().grade(
         question_text="Explain.",

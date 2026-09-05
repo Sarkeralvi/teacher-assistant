@@ -13,6 +13,7 @@ from packages.brain.capabilities import (
     BrainExecutionLocation,
     BrainTransport,
 )
+from packages.brain.claude_cli_provider import ClaudeCliProvider
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
 from packages.brain.llama_cpp_qwen38_vision_provider import (
@@ -103,6 +104,7 @@ _UNIVERSAL_VISION_CAPABILITIES = frozenset(
         BrainCapability.RUBRIC_PDF_EXTRACTION,
         BrainCapability.VISUAL_REFERENCE_EXTRACTION,
         BrainCapability.VISUAL_MAPPING,
+        BrainCapability.VISUAL_PAGE_READ,
         BrainCapability.VISUAL_TRANSCRIPTION,
         BrainCapability.TRANSCRIPTION_REPAIR,
     }
@@ -320,6 +322,11 @@ def _build_gemini(
 
 
 def _codex_configuration(settings: Settings) -> BrainProviderProfileConfiguration:
+    image_enabled = (
+        settings.brain_image_input_enabled
+        if settings.brain_image_input_enabled is not None
+        else settings.codex_cli_image_input_enabled
+    )
     return BrainProviderProfileConfiguration(
         profile_id="codex_cli",
         display_name="Codex CLI",
@@ -327,7 +334,7 @@ def _codex_configuration(settings: Settings) -> BrainProviderProfileConfiguratio
         transport=BrainTransport.CLI,
         model=settings.brain_model or settings.codex_cli_model,
         endpoint="n/a",
-        capabilities=CodexCliProvider.capabilities,
+        capabilities=_image_capabilities(bool(image_enabled)),
         destination=BrainExecutionLocation.CLOUD,
         timeout_seconds=(
             settings.brain_timeout_seconds
@@ -370,6 +377,47 @@ def _build_codex_cli(
             workdir=settings.codex_cli_workdir,
         ),
         image_input_enabled=bool(image_enabled),
+    )
+
+
+def _claude_configuration(settings: Settings) -> BrainProviderProfileConfiguration:
+    return BrainProviderProfileConfiguration(
+        profile_id="claude_cli",
+        display_name="Claude Code CLI",
+        vendor="Anthropic",
+        transport=BrainTransport.CLI,
+        model=settings.brain_model or settings.claude_cli_model,
+        endpoint="n/a",
+        capabilities=ClaudeCliProvider.capabilities,
+        destination=BrainExecutionLocation.CLOUD,
+        timeout_seconds=(
+            settings.brain_timeout_seconds
+            if _generic_profile_selected(settings)
+            else settings.claude_cli_timeout_seconds
+        ),
+        structured_output_mode="json_schema",
+        secret_reference="CLI-managed authentication",
+        enabled=settings.brain_allow_real_providers and settings.claude_cli_enabled,
+    )
+
+
+def _build_claude_cli(
+    settings: Settings,
+    configuration: BrainProviderProfileConfiguration,
+    provider_constructor: ProviderConstructor,
+) -> ProviderBuildResult:
+    if not settings.claude_cli_enabled:
+        raise BrainProviderConfigurationError(
+            "CLAUDE_CLI_ENABLED must be true for BRAIN_PROVIDER=claude_cli"
+        )
+    return ProviderBuildResult(
+        provider_constructor(
+            command=settings.claude_cli_command,
+            model_name=configuration.model,
+            timeout_seconds=configuration.timeout_seconds,
+            workdir=settings.claude_cli_workdir,
+        ),
+        image_input_enabled=True,
     )
 
 
@@ -548,6 +596,13 @@ BUILTIN_BRAIN_PROFILES: tuple[BrainProviderProfileDefinition, ...] = (
         _codex_configuration,
         _build_codex_cli,
         CodexCliProvider,
+    ),
+    BrainProviderProfileDefinition(
+        "claude_cli",
+        ("claude_code_cli",),
+        _claude_configuration,
+        _build_claude_cli,
+        ClaudeCliProvider,
     ),
     BrainProviderProfileDefinition(
         "llama_cpp_qwen",

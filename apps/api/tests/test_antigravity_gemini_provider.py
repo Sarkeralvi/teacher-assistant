@@ -1,9 +1,12 @@
-"""Tests for AntigravityGeminiVisionProvider."""
+"""Contract and isolation tests for the Antigravity Gemini provider."""
+
+from __future__ import annotations
 
 import json
 import subprocess
+from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -15,346 +18,236 @@ from packages.brain.antigravity_gemini_vision_provider import (
 from packages.brain.capabilities import BrainCapability
 
 
-@pytest.fixture
-def provider(tmp_path):
-    """Create a provider instance with an isolated temp-image directory."""
-    return AntigravityGeminiVisionProvider(
-        model_name="gemini-3.8-flash-high",
-        timeout_seconds=120,
-        repository_root=tmp_path,
-    )
-
-
-def test_provider_initialization(tmp_path):
-    provider = AntigravityGeminiVisionProvider(
-        model_name="gemini-3.8-flash-high",
-        timeout_seconds=120,
-        repository_root=tmp_path,
-    )
-    assert provider.model_name == "gemini-3.8-flash-high"
-    assert provider.timeout_seconds == 120
-    assert provider.provider_name == PROVIDER_NAME
-
-
-def test_provider_declares_no_capabilities_until_canonical_wrappers_exist(tmp_path):
-    """transcribe_image()/read_page() use this provider's own argument shape,
-    not the canonical BrainProvider contract, so declaring these capabilities
-    would let BrainAdapter construct and then crash on first real call."""
-    provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
-    assert provider.capabilities == frozenset()
-    assert BrainCapability.VISUAL_TRANSCRIPTION not in provider.capabilities
-    assert BrainCapability.VISUAL_PAGE_READ not in provider.capabilities
-
-
-def test_brain_adapter_constructs_with_no_declared_capabilities(tmp_path):
-    provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
-    adapter = BrainAdapter(provider)
-    assert adapter.runtime.capabilities == frozenset()
-
-
-def test_transcribe_image_with_mocked_agy(provider):
-    """transcribe_image writes a temp file, calls agy, deletes the temp file, and
-    fills in provider-computed metadata that the draft schema never asked the
-    model for."""
-    image_bytes = b"fake-image-data"
-
-    mock_response = {
-        "status": "SUCCESS",
-        "response": json.dumps(
+def _agy_success(payload: dict[str, object]) -> SimpleNamespace:
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps(
             {
-                "draft_text": "The answer is 42",
-                "uncertain_glyphs": [],
-                "editing_marks": [],
-                "cancellation_detected": False,
-                "replacement_detected": False,
-                "uncertain_correction_detected": False,
-                "is_blank": False,
-                "is_irrelevant": False,
-                "confidence": 0.95,
+                "status": "SUCCESS",
+                "response": json.dumps(payload),
+                "usage": {"input_tokens": 100, "output_tokens": 50},
             }
         ),
-        "usage": {"input_tokens": 100, "output_tokens": 50},
+        stderr="",
+    )
+
+
+def _transcription_payload() -> dict[str, object]:
+    return {
+        "draft_text": "The answer is 42",
+        "uncertain_glyphs": [],
+        "editing_marks": [],
+        "cancellation_detected": False,
+        "replacement_detected": False,
+        "uncertain_correction_detected": False,
+        "requires_thinking_repair": False,
+        "is_blank": False,
+        "is_irrelevant": False,
+        "confidence": 0.95,
+        "needs_review": True,
     }
 
-    captured_paths = []
-    workspaces = []
 
-    def fake_run(cmd, **kwargs):
-        # The prompt (cmd[2]) must reference an absolute, forward-slash path
-        # to a file that actually exists at call time, then get cleaned up.
-        prompt = cmd[2]
-        assert "view_file" in prompt
-        assert "\\" not in prompt.split("absolute path ")[1].split(" ")[0]
-        captured_paths.append(prompt)
-        workspace = kwargs["cwd"]
-        assert sorted(path.name for path in workspace.iterdir()) == ["input.png"]
+def _grade_payload() -> dict[str, object]:
+    return {
+        "score": 1,
+        "max_score": 2,
+        "confidence": 0.7,
+        "rubric_breakdown": [
+            {
+                "criterion_id": "work",
+                "criterion": "Shows working",
+                "max_marks": 2,
+                "awarded_marks": 1,
+                "reason": "Partial working is visible.",
+                "evidence": "x = 42",
+                "confidence": 0.7,
+            }
+        ],
+        "detected_answer_summary": "Partial answer",
+        "major_errors": [],
+        "feedback_to_student": "Show the remaining step.",
+        "review_flags": [],
+    }
+
+
+def test_provider_exposes_canonical_visual_contract(tmp_path: Path) -> None:
+    provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
+    adapter = BrainAdapter(provider)
+
+    assert provider.provider_name == PROVIDER_NAME
+    assert BrainCapability.VISUAL_MAPPING in adapter.runtime.capabilities
+    assert BrainCapability.VISUAL_PAGE_READ in adapter.runtime.capabilities
+    assert BrainCapability.VISUAL_TRANSCRIPTION in adapter.runtime.capabilities
+    assert BrainCapability.GRADING in adapter.runtime.capabilities
+
+
+def test_transcription_runs_through_adapter_and_cleans_workspace(tmp_path: Path) -> None:
+    workspaces: list[Path] = []
+
+    def runner(command: list[str], **kwargs: object) -> SimpleNamespace:
+        workspace = Path(str(kwargs["cwd"]))
+        assert [path.name for path in workspace.iterdir()] == ["input-1.png"]
+        assert "view_file" in command[2]
         workspaces.append(workspace)
-        return SimpleNamespace(returncode=0, stdout=json.dumps(mock_response), stderr="")
+        return _agy_success(_transcription_payload())
 
-    with patch("subprocess.run", side_effect=fake_run) as mock_run:
-        result = provider.transcribe_image(
-            image_bytes=image_bytes,
-            source_image_sha256="a" * 64,
-            prompt_version="v1",
-        )
+    adapter = BrainAdapter(
+        AntigravityGeminiVisionProvider(repository_root=tmp_path, runner=runner)
+    )
+    result = adapter.transcribe_images(
+        images=[(b"fake-image", "image/png")],
+        label="Q1",
+    )
 
     assert result.draft_text == "The answer is 42"
-    assert result.needs_review is True
-    assert float(result.confidence) == 0.95
-    assert result.model_provider == "antigravity_gemini"
-    assert result.model_name == "gemini-3.8-flash-high"
-    assert result.image_sha256 == "a" * 64
+    assert result.model_provider == PROVIDER_NAME
     assert result.prompt_tokens == 100
-    assert result.completion_tokens == 50
-    mock_run.assert_called_once()
-
-    # Temp dir must be empty again after the call.
-    assert list(provider.temp_dir.glob("*")) == []
-    assert workspaces
     assert all(not workspace.exists() for workspace in workspaces)
 
 
-def test_read_page_with_mocked_agy(provider):
-    image_bytes = b"fake-image-data"
-    label_names = ["Question 1", "Question 2"]
-
-    mock_response = {
-        "status": "SUCCESS",
-        "response": json.dumps(
+def test_page_read_and_mapping_use_canonical_signatures(tmp_path: Path) -> None:
+    payloads = iter(
+        [
             {
                 "blocks": [
                     {
-                        "question_label": "Question 1",
-                        "bbox": [100, 100, 400, 200],
-                        "text": "Student's answer for Q1",
+                        "question_label": "Q1",
+                        "bbox": [100, 100, 900, 300],
+                        "text": "x = 42",
                         "continues_from_previous": False,
                         "label_source": "heading",
-                        "confidence": 0.95,
-                    },
+                        "confidence": 0.9,
+                    }
                 ],
                 "is_blank_page": False,
-            }
-        ),
-        "usage": {"input_tokens": 150, "output_tokens": 80},
-    }
+                "needs_review": True,
+            },
+            {
+                "regions": [
+                    {
+                        "question_label": "Q1",
+                        "bbox": [100, 100, 900, 300],
+                        "continues_from_previous": False,
+                        "continues_to_next": False,
+                        "confidence": 0.9,
+                        "warnings": [],
+                    }
+                ],
+                "needs_review": True,
+            },
+        ]
+    )
 
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(
-            returncode=0, stdout=json.dumps(mock_response), stderr=""
-        )
+    def runner(_command: list[str], **_kwargs: object) -> SimpleNamespace:
+        return _agy_success(next(payloads))
 
-        result = provider.read_page(
-            image_bytes=image_bytes,
-            source_image_sha256="xyz789",
-            prompt_version="v1",
-            label_names=label_names,
-        )
+    adapter = BrainAdapter(
+        AntigravityGeminiVisionProvider(repository_root=tmp_path, runner=runner)
+    )
+    page = adapter.read_page(
+        image_bytes=b"page",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
+    mapping = adapter.map_page_answer_regions(
+        image_bytes=b"page",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
 
-    assert len(result.blocks) == 1
-    assert result.blocks[0].text == "Student's answer for Q1"
+    assert page.blocks[0].text == "x = 42"
+    assert mapping.regions[0].question_label == "Q1"
+
+
+def test_grading_output_is_forced_to_teacher_review(tmp_path: Path) -> None:
+    image = tmp_path / "answer.png"
+    image.write_bytes(b"image")
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: _agy_success(_grade_payload()),
+    )
+
+    result = provider.grade(
+        question_text="Solve x.",
+        question_total_marks=Decimal("2"),
+        rubric_json={},
+        answer_image_path=str(image),
+        prompt_version="test-v1",
+        messages=[{"role": "user", "content": "Grade against the rubric."}],
+    )
+
+    assert result.score == Decimal("1")
     assert result.needs_review is True
-    mock_run.assert_called_once()
-    assert list(provider.temp_dir.glob("*")) == []
+    assert "teacher_review_required" in result.review_flags
+    assert "antigravity_cli_provider" in result.review_flags
 
 
-def test_temp_file_cleaned_up_even_on_failure(provider):
-    image_bytes = b"test-image"
-    workspaces = []
+def test_workspace_is_removed_after_timeout(tmp_path: Path) -> None:
+    workspaces: list[Path] = []
 
-    def fail_mid_call(_cmd, **kwargs):
-        workspace = kwargs["cwd"]
-        assert sorted(path.name for path in workspace.iterdir()) == ["input.png"]
-        workspaces.append(workspace)
+    def runner(_command: list[str], **kwargs: object) -> SimpleNamespace:
+        workspaces.append(Path(str(kwargs["cwd"])))
         raise subprocess.TimeoutExpired("agy", 120)
 
-    with patch("subprocess.run", side_effect=fail_mid_call):
-        with pytest.raises(RuntimeError, match="timed out after 120s"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="exit-test",
-                prompt_version="v1",
-            )
-
-    assert list(provider.temp_dir.glob("*")) == []
-    assert workspaces
-    assert all(not workspace.exists() for workspace in workspaces)
-
-
-def test_agy_call_with_timeout(provider):
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = subprocess.TimeoutExpired("agy", 120)
-
-        with pytest.raises(RuntimeError, match="timed out after 120s"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="timeout-test",
-                prompt_version="v1",
-            )
-
-
-def test_agy_call_nonzero_exit(provider):
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(
-            returncode=1, stdout="", stderr="Model not found"
-        )
-
-        with pytest.raises(RuntimeError, match="exited with code 1"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="exit-test",
-                prompt_version="v1",
-            )
-
-    assert list(provider.temp_dir.glob("*")) == []
-
-
-def test_agy_call_error_status(provider):
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        error_response = {"status": "ERROR", "error": "Invalid prompt"}
-        mock_run.return_value = SimpleNamespace(
-            returncode=0, stdout=json.dumps(error_response), stderr=""
-        )
-
-        with pytest.raises(RuntimeError, match="Invalid prompt"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="error-test",
-                prompt_version="v1",
-            )
-
-
-def test_agy_call_denied_action_surfaces_in_error(provider):
-    """A permission denial (agy's real failure mode) must be diagnosable, not silent."""
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        denied_response = {
-            "status": "SUCCESS",
-            "response": "",
-            "denied_actions": [{"action": "read_file", "display_name": "ViewFile"}],
-        }
-        mock_run.return_value = SimpleNamespace(
-            returncode=0, stdout=json.dumps(denied_response), stderr=""
-        )
-
-        with pytest.raises(RuntimeError, match="empty response"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="denied-test",
-                prompt_version="v1",
-            )
-
-
-def test_agy_call_missing_response_field(provider):
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(
-            returncode=0, stdout=json.dumps({"status": "SUCCESS"}), stderr=""
-        )
-
-        with pytest.raises(RuntimeError, match="empty response"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="missing-field-test",
-                prompt_version="v1",
-            )
-
-
-def test_agy_call_invalid_json(provider):
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout="not valid json {", stderr="")
-
-        with pytest.raises(RuntimeError, match="Failed to parse agy response JSON"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="bad-json-test",
-                prompt_version="v1",
-            )
-
-
-def test_agy_call_rejects_oversized_stdout(provider):
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(
-            returncode=0,
-            stdout="x" * 1_000_001,
-            stderr="",
-        )
-
-        with pytest.raises(RuntimeError, match="output size limit"):
-            provider.transcribe_image(
-                image_bytes=b"test-image",
-                source_image_sha256="oversized-output",
-                prompt_version="v1",
-            )
-
-
-def test_agy_cli_not_found(provider):
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = FileNotFoundError("agy not found")
-
-        with pytest.raises(RuntimeError, match="agy CLI not found in PATH"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="cli-not-found",
-                prompt_version="v1",
-            )
-
-
-def test_expected_model_mismatch(provider):
-    image_bytes = b"test-image"
-
-    with pytest.raises(ValueError, match="Expected model"):
-        provider.transcribe_image(
-            image_bytes=image_bytes,
-            source_image_sha256="model-mismatch",
-            prompt_version="v1",
-            expected_model="gemini-3.7-flash-medium",
-        )
-
-
-def test_draft_schema_missing_required_field(provider):
-    """The model's own draft omitting a required field must fail loudly, not
-    silently pass through as a hallucinated default."""
-    image_bytes = b"test-image"
-
-    with patch("subprocess.run") as mock_run:
-        invalid_response = {
-            "status": "SUCCESS",
-            "response": json.dumps({"draft_text": "valid text"}),  # missing is_blank etc.
-        }
-        mock_run.return_value = SimpleNamespace(
-            returncode=0, stdout=json.dumps(invalid_response), stderr=""
-        )
-
-        with pytest.raises(RuntimeError, match="was not usable"):
-            provider.transcribe_image(
-                image_bytes=image_bytes,
-                source_image_sha256="validation-fail",
-                prompt_version="v1",
-            )
-
-
-def test_different_model_names(tmp_path):
-    for model in ["gemini-3.8-flash-high", "gemini-3.7-flash-medium"]:
-        provider = AntigravityGeminiVisionProvider(model_name=model, repository_root=tmp_path)
-        assert provider.model_name == model
-
-
-def test_custom_timeout(tmp_path):
-    provider = AntigravityGeminiVisionProvider(
-        model_name="gemini-3.8-flash-high",
-        timeout_seconds=300,
-        repository_root=tmp_path,
+    adapter = BrainAdapter(
+        AntigravityGeminiVisionProvider(repository_root=tmp_path, runner=runner)
     )
-    assert provider.timeout_seconds == 300
+    with pytest.raises(RuntimeError, match="timed out after 120s"):
+        adapter.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+
+    assert workspaces and all(not workspace.exists() for workspace in workspaces)
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (SimpleNamespace(returncode=1, stdout="", stderr="bad"), "exited with code 1"),
+        (
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"status": "ERROR", "error": "Invalid prompt"}),
+                stderr="",
+            ),
+            "Invalid prompt",
+        ),
+        (SimpleNamespace(returncode=0, stdout="not json", stderr=""), "parse agy"),
+        (
+            SimpleNamespace(returncode=0, stdout="x" * 1_000_001, stderr=""),
+            "output size limit",
+        ),
+    ],
+)
+def test_transport_failures_surface(
+    tmp_path: Path, result: SimpleNamespace, message: str
+) -> None:
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: result,
+    )
+    with pytest.raises(RuntimeError, match=message):
+        provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+
+
+def test_malformed_model_payload_fails_strict_validation(tmp_path: Path) -> None:
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: _agy_success({"draft_text": "partial"}),
+    )
+    with pytest.raises(RuntimeError, match="was not usable"):
+        provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+
+
+def test_trailing_agy_artifact_does_not_weaken_payload_validation(tmp_path: Path) -> None:
+    wrapper = _agy_success(_transcription_payload())
+    outer = json.loads(wrapper.stdout)
+    outer["response"] += '\n{"toolAction":"done"}'
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=json.dumps(outer), stderr=""
+        ),
+    )
+
+    result = provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+    assert result.draft_text == "The answer is 42"

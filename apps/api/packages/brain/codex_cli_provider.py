@@ -3,12 +3,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from packages.brain.capabilities import (
     BrainCapability,
@@ -23,6 +24,10 @@ from packages.brain.prompt_registry import (
 )
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.universal_vision import (
+    UniversalVisionCompletion,
+    UniversalVisionProviderMixin,
+)
 
 CODEX_CLI_PROMPT_VERSION = "codex_cli_grading_v1"
 _REQUIRED_EXEC_FLAGS = ("--output-last-message", "--cd", "--sandbox")
@@ -47,12 +52,23 @@ class CodexCliProviderError(RuntimeError):
     """Raised when Codex CLI provider setup or execution fails safely."""
 
 
-class CodexCliProvider(BrainProvider):
+class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
     provider_name = "codex_cli"
     execution_location = BrainExecutionLocation.CLOUD
     transport = BrainTransport.CLI
     image_input_mode = BrainImageInputMode.FILE_PATH
-    capabilities = frozenset({BrainCapability.GRADING})
+    _VISION_CAPABILITIES = frozenset(
+        {
+            BrainCapability.QUESTION_PDF_EXTRACTION,
+            BrainCapability.RUBRIC_PDF_EXTRACTION,
+            BrainCapability.VISUAL_REFERENCE_EXTRACTION,
+            BrainCapability.VISUAL_MAPPING,
+            BrainCapability.VISUAL_PAGE_READ,
+            BrainCapability.VISUAL_TRANSCRIPTION,
+            BrainCapability.TRANSCRIPTION_REPAIR,
+        }
+    )
+    capabilities = frozenset({BrainCapability.GRADING, *_VISION_CAPABILITIES})
 
     def __init__(
         self,
@@ -75,10 +91,85 @@ class CodexCliProvider(BrainProvider):
         self.use_json = use_json
         self.output_last_message = output_last_message
         self.image_input_enabled = image_input_enabled
+        self.capabilities = frozenset(
+            {BrainCapability.GRADING}
+            | (set(self._VISION_CAPABILITIES) if image_input_enabled else set())
+        )
         self.workdir = workdir or "/home/newton/teacher-assistant"
         self._which = which
         self._runner = runner
         self._help_text: str | None = None
+
+    def _complete_structured_vision(
+        self,
+        *,
+        prompt: str,
+        images: list[tuple[bytes, str]],
+        response_model: type[BaseModel] | None,
+        schema_name: str,
+        max_tokens: int | None = None,
+    ) -> UniversalVisionCompletion:
+        del schema_name, max_tokens
+        if not self.image_input_enabled:
+            raise CodexCliProviderError("Image input is disabled for the Codex CLI profile")
+        if not images:
+            raise ValueError("Codex vision calls require at least one image")
+        configured_parent = Path(self.workdir)
+        workspace_parent = str(configured_parent) if configured_parent.is_dir() else None
+        started = time.perf_counter()
+        with tempfile.TemporaryDirectory(
+            prefix="ta-codex-cli-", dir=workspace_parent
+        ) as tmp_dir:
+            workspace = Path(tmp_dir)
+            self._preflight(require_image_input=True, cwd=workspace)
+            image_paths = self._stage_images(workspace, images)
+            output_file = workspace / "last-message.json"
+            schema_file = workspace / "output-schema.json"
+            schema_file.write_text(
+                json.dumps(
+                    response_model.model_json_schema()
+                    if response_model is not None
+                    else {"type": "object"}
+                ),
+                encoding="utf-8",
+            )
+            command = self._build_structured_command(
+                output_file=output_file,
+                schema_file=schema_file,
+                image_paths=image_paths,
+                cwd=workspace,
+            )
+            try:
+                completed = self._runner(
+                    command,
+                    cwd=workspace,
+                    capture_output=True,
+                    text=True,
+                    input=prompt,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise CodexCliProviderError(
+                    f"Codex CLI vision call timed out after {self.timeout_seconds:g}s"
+                ) from exc
+            self._require_bounded_process_output(completed)
+            if completed.returncode != 0:
+                raise CodexCliProviderError(
+                    self._format_process_failure(completed, command=command)
+                )
+            payload = self._read_json_output(output_file)
+        if response_model is not None:
+            try:
+                payload = response_model.model_validate(payload).model_dump(mode="json")
+            except ValidationError as exc:
+                raise CodexCliProviderError(
+                    f"Codex CLI structured response was not usable: {exc}"
+                ) from exc
+        return UniversalVisionCompletion(
+            payload=payload,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
 
     def grade(
         self,
@@ -246,6 +337,40 @@ class CodexCliProvider(BrainProvider):
             command.extend([image_flag, answer_image_path])
         return command
 
+    def _build_structured_command(
+        self,
+        *,
+        output_file: Path,
+        schema_file: Path,
+        image_paths: list[Path],
+        cwd: Path,
+    ) -> list[str]:
+        command = [
+            self.command,
+            "exec",
+            "--skip-git-repo-check",
+            "--cd",
+            str(cwd),
+            "--sandbox",
+            self.sandbox,
+            "--output-last-message",
+            str(output_file),
+            "--output-schema",
+            str(schema_file),
+        ]
+        if self.use_json and self._help_text and "--json" in self._help_text:
+            command.append("--json")
+        if self.model_name and self.model_name != "codex-cli":
+            command.extend(["--model", self.model_name])
+        image_flag = self._supported_image_flag()
+        if image_flag is None:
+            raise CodexCliProviderError(
+                "Codex CLI image input is not supported by this installed version."
+            )
+        for image_path in image_paths:
+            command.extend([image_flag, str(image_path)])
+        return command
+
     def _supported_image_flag(self) -> str | None:
         help_text = self._help_text or ""
         for flag in _IMAGE_FLAGS:
@@ -289,6 +414,23 @@ class CodexCliProvider(BrainProvider):
         staged = workspace / f"answer{suffix}"
         shutil.copyfile(source, staged)
         return staged
+
+    @staticmethod
+    def _stage_images(
+        workspace: Path, images: list[tuple[bytes, str]]
+    ) -> list[Path]:
+        paths: list[Path] = []
+        for index, (image_bytes, mime_type) in enumerate(images, start=1):
+            if mime_type == "image/png":
+                suffix = ".png"
+            elif mime_type == "image/jpeg":
+                suffix = ".jpg"
+            else:
+                raise ValueError(f"Unsupported image MIME type: {mime_type}")
+            path = workspace / f"input-{index}{suffix}"
+            path.write_bytes(image_bytes)
+            paths.append(path)
+        return paths
 
     @staticmethod
     def _require_bounded_process_output(completed: CompletedProcessLike) -> None:
