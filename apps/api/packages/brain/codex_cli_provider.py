@@ -28,6 +28,7 @@ CODEX_CLI_PROMPT_VERSION = "codex_cli_grading_v1"
 _REQUIRED_EXEC_FLAGS = ("--output-last-message", "--cd", "--sandbox")
 _IMAGE_FLAGS = ("--image", "-i")
 _MAX_CAPTURE_CHARS = 4000
+_MAX_OUTPUT_BYTES = 1_000_000
 _API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]+")
 _DATA_URL_PATTERN = re.compile(r"data:image/(?:png|jpeg);base64,[A-Za-z0-9+/=]+")
 
@@ -64,7 +65,6 @@ class CodexCliProvider(BrainProvider):
         output_last_message: bool = True,
         image_input_enabled: bool = False,
         workdir: str = "/home/newton/teacher-assistant",
-        skip_git_repo_check: bool = False,
         which: Which = shutil.which,
         runner: Runner = subprocess.run,
     ) -> None:
@@ -76,7 +76,6 @@ class CodexCliProvider(BrainProvider):
         self.output_last_message = output_last_message
         self.image_input_enabled = image_input_enabled
         self.workdir = workdir or "/home/newton/teacher-assistant"
-        self.skip_git_repo_check = skip_git_repo_check
         self._which = which
         self._runner = runner
         self._help_text: str | None = None
@@ -98,13 +97,24 @@ class CodexCliProvider(BrainProvider):
     ) -> GradeSuggestionOutput:
         del prompt_version, task_name, model_policy
         use_image_input = self.image_input_enabled and bool(answer_image_path)
-        self._preflight(require_image_input=use_image_input)
         if image_data_url:
             # Codex CLI provider never consumes base64/data URLs. Vision must
             # use a supported CLI image flag, not prompt text or persisted raw data.
             image_data_url = None
-        with tempfile.TemporaryDirectory(prefix="ta-codex-cli-") as tmp_dir:
-            output_file = Path(tmp_dir) / "last-message.json"
+        configured_parent = Path(self.workdir)
+        workspace_parent = str(configured_parent) if configured_parent.is_dir() else None
+        with tempfile.TemporaryDirectory(
+            prefix="ta-codex-cli-",
+            dir=workspace_parent,
+        ) as tmp_dir:
+            workspace = Path(tmp_dir)
+            self._preflight(require_image_input=use_image_input, cwd=workspace)
+            staged_image_path = self._stage_image(
+                workspace,
+                answer_image_path=answer_image_path,
+                use_image_input=use_image_input,
+            )
+            output_file = workspace / "last-message.json"
             prompt = self._build_prompt(
                 question_text=question_text,
                 question_total_marks=question_total_marks,
@@ -116,13 +126,14 @@ class CodexCliProvider(BrainProvider):
             )
             command = self._build_command(
                 output_file=output_file,
-                answer_image_path=answer_image_path,
+                answer_image_path=str(staged_image_path or ""),
                 use_image_input=use_image_input,
+                cwd=workspace,
             )
             try:
                 completed = self._runner(
                     command,
-                    cwd=self.workdir,
+                    cwd=workspace,
                     capture_output=True,
                     text=True,
                     input=prompt,
@@ -133,6 +144,7 @@ class CodexCliProvider(BrainProvider):
                 raise CodexCliProviderError(
                     f"Codex CLI grading timed out after {self.timeout_seconds:g}s"
                 ) from exc
+            self._require_bounded_process_output(completed)
             if completed.returncode != 0:
                 raise CodexCliProviderError(
                     self._format_process_failure(completed, command=command)
@@ -157,14 +169,16 @@ class CodexCliProvider(BrainProvider):
         except ValidationError:
             raise
 
-    def _preflight(self, *, require_image_input: bool) -> None:
+    def _preflight(self, *, require_image_input: bool, cwd: Path) -> None:
         if self._which(self.command) is None:
             raise CodexCliProviderError(f"codex command not found: {self.command}")
-        version = self._run_preflight_command([self.command, "--version"], "codex --version")
+        version = self._run_preflight_command(
+            [self.command, "--version"], "codex --version", cwd=cwd
+        )
         if not version.strip():
             raise CodexCliProviderError("codex --version returned no output")
         help_text = self._run_preflight_command(
-            [self.command, "exec", "--help"], "codex exec --help"
+            [self.command, "exec", "--help"], "codex exec --help", cwd=cwd
         )
         self._help_text = help_text
         for flag in _REQUIRED_EXEC_FLAGS:
@@ -179,11 +193,13 @@ class CodexCliProvider(BrainProvider):
         if self.sandbox == "danger-full-access":
             raise CodexCliProviderError("Codex CLI provider refuses danger-full-access sandbox")
 
-    def _run_preflight_command(self, command: list[str], label: str) -> str:
+    def _run_preflight_command(
+        self, command: list[str], label: str, *, cwd: Path
+    ) -> str:
         try:
             completed = self._runner(
                 command,
-                cwd=self.workdir,
+                cwd=cwd,
                 capture_output=True,
                 text=True,
                 timeout=min(self.timeout_seconds, 30),
@@ -194,18 +210,23 @@ class CodexCliProvider(BrainProvider):
         if completed.returncode != 0:
             detail = self._sanitize((completed.stderr or completed.stdout or "").strip())
             raise CodexCliProviderError(f"{label} failed: {detail[:_MAX_CAPTURE_CHARS]}")
+        self._require_bounded_process_output(completed)
         return completed.stdout or completed.stderr or ""
 
     def _build_command(
-        self, *, output_file: Path, answer_image_path: str, use_image_input: bool
+        self,
+        *,
+        output_file: Path,
+        answer_image_path: str,
+        use_image_input: bool,
+        cwd: Path,
     ) -> list[str]:
         command = [self.command, "exec"]
-        if self.skip_git_repo_check:
-            command.append("--skip-git-repo-check")
+        command.append("--skip-git-repo-check")
         command.extend(
             [
                 "--cd",
-                self.workdir,
+                str(cwd),
                 "--sandbox",
                 self.sandbox,
                 "--output-last-message",
@@ -235,6 +256,10 @@ class CodexCliProvider(BrainProvider):
     def _read_json_output(self, output_file: Path) -> dict[str, Any]:
         if not output_file.is_file():
             raise CodexCliProviderError("Codex CLI did not write --output-last-message file")
+        if output_file.stat().st_size > _MAX_OUTPUT_BYTES:
+            raise CodexCliProviderError(
+                "Codex CLI --output-last-message exceeded the output size limit"
+            )
         text = output_file.read_text(encoding="utf-8")
         if not text.strip():
             raise CodexCliProviderError("Codex CLI --output-last-message file was empty")
@@ -247,6 +272,31 @@ class CodexCliProvider(BrainProvider):
         if not isinstance(payload, dict):
             raise CodexCliProviderError("Codex CLI JSON output must be an object")
         return payload
+
+    @staticmethod
+    def _stage_image(
+        workspace: Path,
+        *,
+        answer_image_path: str,
+        use_image_input: bool,
+    ) -> Path | None:
+        if not use_image_input:
+            return None
+        source = Path(answer_image_path)
+        if not source.is_file():
+            raise CodexCliProviderError("Codex CLI image input file does not exist")
+        suffix = source.suffix.lower() if source.suffix else ".png"
+        staged = workspace / f"answer{suffix}"
+        shutil.copyfile(source, staged)
+        return staged
+
+    @staticmethod
+    def _require_bounded_process_output(completed: CompletedProcessLike) -> None:
+        for label, value in (("stdout", completed.stdout), ("stderr", completed.stderr)):
+            if len((value or "").encode("utf-8")) > _MAX_OUTPUT_BYTES:
+                raise CodexCliProviderError(
+                    f"Codex CLI {label} exceeded the output size limit"
+                )
 
     def _build_prompt(
         self,

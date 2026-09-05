@@ -60,11 +60,12 @@ import hashlib
 import json
 import logging
 import subprocess
+import tempfile
 import time
-import uuid
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -88,12 +89,39 @@ PROVIDER_NAME = "antigravity_gemini"
 DEFAULT_MODEL = "gemini-3.8-flash-high"
 
 _TEMP_DIR_NAME = Path(".local-ai") / "antigravity-temp"
+_MAX_OUTPUT_BYTES = 1_000_000
+
+
+class _CompletedProcessLike(Protocol):
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+_Runner = Callable[..., _CompletedProcessLike]
+
+
+class _AgyUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+
+
+class _AgyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    response: str = ""
+    usage: _AgyUsage = Field(default_factory=_AgyUsage)
+    error: str | None = None
+    denied_actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class _TranscriptionDraft(BaseModel):
     """What the model itself can know. Metadata is filled in by this provider."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     draft_text: str
     uncertain_glyphs: list[dict[str, Any]] = Field(default_factory=list)
@@ -107,7 +135,7 @@ class _TranscriptionDraft(BaseModel):
 
 
 class _PageBlockDraft(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     question_label: str | None = None
     bbox: list[int] = Field(min_length=4, max_length=4)
@@ -118,7 +146,7 @@ class _PageBlockDraft(BaseModel):
 
 
 class _PageReadDraft(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     blocks: list[_PageBlockDraft] = Field(default_factory=list)
     is_blank_page: bool = False
@@ -147,11 +175,13 @@ class AntigravityGeminiVisionProvider(BrainProvider):
         timeout_seconds: int = 120,
         *,
         repository_root: Path | None = None,
+        runner: _Runner | None = None,
     ) -> None:
         self.model_name = model_name or DEFAULT_MODEL
         self.timeout_seconds = timeout_seconds
         self.repository_root = repository_root or Path(__file__).resolve().parents[4]
         self.temp_dir = self.repository_root / _TEMP_DIR_NAME
+        self._runner = runner
 
     def transcribe_image(
         self,
@@ -181,10 +211,12 @@ class AntigravityGeminiVisionProvider(BrainProvider):
         )
 
         start = time.perf_counter()
-        with self._temp_image(image_bytes) as image_path:
+        with self._temp_image(image_bytes) as (workspace, image_path):
             prompt = self._view_file_prompt(image_path, prompt_body)
             schema = _TranscriptionDraft.model_json_schema()
-            response_text, usage = self._call_agy_structured(prompt, schema)
+            response_text, usage = self._call_agy_structured(
+                prompt, schema, cwd=workspace
+            )
         latency_ms = int((time.perf_counter() - start) * 1000)
 
         try:
@@ -259,10 +291,12 @@ class AntigravityGeminiVisionProvider(BrainProvider):
         )
 
         start = time.perf_counter()
-        with self._temp_image(image_bytes) as image_path:
+        with self._temp_image(image_bytes) as (workspace, image_path):
             prompt = self._view_file_prompt(image_path, prompt_body)
             schema = _PageReadDraft.model_json_schema()
-            response_text, usage = self._call_agy_structured(prompt, schema)
+            response_text, usage = self._call_agy_structured(
+                prompt, schema, cwd=workspace
+            )
         _latency_ms = int((time.perf_counter() - start) * 1000)
 
         try:
@@ -312,7 +346,7 @@ class AntigravityGeminiVisionProvider(BrainProvider):
         )
 
     def _call_agy_structured(
-        self, prompt: str, schema: dict[str, Any]
+        self, prompt: str, schema: dict[str, Any], *, cwd: Path
     ) -> tuple[str, dict[str, Any]]:
         """Call agy CLI with a structured prompt and schema. Returns (response_text, usage)."""
         cmd = [
@@ -327,8 +361,9 @@ class AntigravityGeminiVisionProvider(BrainProvider):
             json.dumps(schema),
         ]
         try:
-            result = subprocess.run(
+            result = (self._runner or subprocess.run)(
                 cmd,
+                cwd=cwd,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
@@ -338,27 +373,32 @@ class AntigravityGeminiVisionProvider(BrainProvider):
         except FileNotFoundError as exc:
             raise RuntimeError("agy CLI not found in PATH") from exc
 
+        if len((result.stdout or "").encode("utf-8")) > _MAX_OUTPUT_BYTES:
+            raise RuntimeError("agy stdout exceeded the output size limit")
+        if len((result.stderr or "").encode("utf-8")) > _MAX_OUTPUT_BYTES:
+            raise RuntimeError("agy stderr exceeded the output size limit")
+
         if result.returncode != 0:
             stderr = result.stderr or "(no stderr)"
             raise RuntimeError(f"agy exited with code {result.returncode}: {stderr}")
 
         try:
-            response_obj = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
+            response_obj = _AgyResponse.model_validate_json(result.stdout)
+        except (ValidationError, ValueError) as exc:
             raise RuntimeError(f"Failed to parse agy response JSON: {exc}") from exc
 
-        if response_obj.get("status") != "SUCCESS":
-            error_msg = response_obj.get("error", "unknown error")
-            denied = response_obj.get("denied_actions")
+        if response_obj.status != "SUCCESS":
+            error_msg = response_obj.error or "unknown error"
+            denied = response_obj.denied_actions
             if denied:
                 error_msg = f"{error_msg} (denied actions: {denied})"
-            raise RuntimeError(f"agy returned status {response_obj.get('status')}: {error_msg}")
+            raise RuntimeError(f"agy returned status {response_obj.status}: {error_msg}")
 
-        response_text = response_obj.get("response", "")
+        response_text = response_obj.response
         if not response_text.strip():
             raise RuntimeError("agy returned an empty response with SUCCESS status")
 
-        return _extract_first_json_object(response_text), response_obj.get("usage", {})
+        return _extract_first_json_object(response_text), response_obj.usage.model_dump()
 
 
 def _extract_first_json_object(text: str) -> str:
@@ -368,9 +408,9 @@ def _extract_first_json_object(text: str) -> str:
     asked for, but real runs were observed appending harmless trailing keys
     (``toolAction``, ``toolSummary``) or, occasionally, a second JSON-ish
     fragment after the real object (e.g. a self-directed "finishing task"
-    turn). ``extra="ignore"`` on the draft models already tolerates extra
-    *keys inside* the object; this handles extra *content after* it, so one
-    stray trailing fragment does not fail an otherwise-correct read.
+    turn). Draft models reject extra keys; this helper handles only extra
+    *content after* the first complete object, so a trailing CLI artifact does
+    not weaken validation of the actual response object.
     """
     start = text.find("{")
     if start == -1:
@@ -384,19 +424,24 @@ def _extract_first_json_object(text: str) -> str:
 
 
 class _TempImageContext:
-    """Writes image bytes to a private temp file and always deletes it afterward."""
+    """Create one isolated workspace and delete it after every call."""
 
     def __init__(self, temp_dir: Path, image_bytes: bytes) -> None:
         self.temp_dir = temp_dir
         self.image_bytes = image_bytes
-        self.path: Path | None = None
+        self._workspace: tempfile.TemporaryDirectory[str] | None = None
 
-    def __enter__(self) -> Path:
+    def __enter__(self) -> tuple[Path, Path]:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.path = self.temp_dir / f"{uuid.uuid4().hex}.png"
-        self.path.write_bytes(self.image_bytes)
-        return self.path
+        self._workspace = tempfile.TemporaryDirectory(
+            prefix="call-",
+            dir=self.temp_dir,
+        )
+        workspace = Path(self._workspace.name)
+        image_path = workspace / "input.png"
+        image_path.write_bytes(self.image_bytes)
+        return workspace, image_path
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if self.path is not None:
-            self.path.unlink(missing_ok=True)
+        if self._workspace is not None:
+            self._workspace.cleanup()

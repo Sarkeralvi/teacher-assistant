@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from packages.brain.adapter import BrainAdapter
+from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import VisualTranscriptionOutput
@@ -40,6 +41,9 @@ class LocalOcrResult(BaseModel):
 class FakeLocalQwenProvider(BrainProvider):
     provider_name = "llama_cpp_qwen"
     model_name = "qwen3.6-35b-a3b-q4km"
+    execution_location = BrainExecutionLocation.LOCAL
+    managed_local_phase = "Qwen"
+    capabilities = frozenset({BrainCapability.GRADING})
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -109,6 +113,9 @@ class FakeQwen38VisualProvider(BrainProvider):
 
     provider_name = "llama_cpp_qwen38"
     model_name = "qwen3.8-27b-q4km"
+    execution_location = BrainExecutionLocation.LOCAL
+    managed_local_phase = "Qwen38"
+    capabilities = frozenset({BrainCapability.VISUAL_TRANSCRIPTION})
 
     def __init__(self, transcription_by_image_sha256: dict[str, str]) -> None:
         self.transcription_by_image_sha256 = transcription_by_image_sha256
@@ -150,6 +157,10 @@ class FakeQwen38VisualProvider(BrainProvider):
 
 class FakeQwen38VisualAndGradingProvider(FakeQwen38VisualProvider):
     """Qwen3.8 fake used to prove visual work and text grading stay separate."""
+
+    capabilities = FakeQwen38VisualProvider.capabilities | {
+        BrainCapability.GRADING
+    }
 
     def __init__(self, transcription_by_image_sha256: dict[str, str]) -> None:
         super().__init__(transcription_by_image_sha256)

@@ -77,6 +77,7 @@ def test_transcribe_image_with_mocked_agy(provider):
     }
 
     captured_paths = []
+    workspaces = []
 
     def fake_run(cmd, **kwargs):
         # The prompt (cmd[2]) must reference an absolute, forward-slash path
@@ -85,6 +86,9 @@ def test_transcribe_image_with_mocked_agy(provider):
         assert "view_file" in prompt
         assert "\\" not in prompt.split("absolute path ")[1].split(" ")[0]
         captured_paths.append(prompt)
+        workspace = kwargs["cwd"]
+        assert sorted(path.name for path in workspace.iterdir()) == ["input.png"]
+        workspaces.append(workspace)
         return SimpleNamespace(returncode=0, stdout=json.dumps(mock_response), stderr="")
 
     with patch("subprocess.run", side_effect=fake_run) as mock_run:
@@ -106,6 +110,8 @@ def test_transcribe_image_with_mocked_agy(provider):
 
     # Temp dir must be empty again after the call.
     assert list(provider.temp_dir.glob("*")) == []
+    assert workspaces
+    assert all(not workspace.exists() for workspace in workspaces)
 
 
 def test_read_page_with_mocked_agy(provider):
@@ -153,11 +159,16 @@ def test_read_page_with_mocked_agy(provider):
 
 def test_temp_file_cleaned_up_even_on_failure(provider):
     image_bytes = b"test-image"
+    workspaces = []
 
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="boom")
+    def fail_mid_call(_cmd, **kwargs):
+        workspace = kwargs["cwd"]
+        assert sorted(path.name for path in workspace.iterdir()) == ["input.png"]
+        workspaces.append(workspace)
+        raise subprocess.TimeoutExpired("agy", 120)
 
-        with pytest.raises(RuntimeError, match="exited with code 1"):
+    with patch("subprocess.run", side_effect=fail_mid_call):
+        with pytest.raises(RuntimeError, match="timed out after 120s"):
             provider.transcribe_image(
                 image_bytes=image_bytes,
                 source_image_sha256="exit-test",
@@ -165,6 +176,8 @@ def test_temp_file_cleaned_up_even_on_failure(provider):
             )
 
     assert list(provider.temp_dir.glob("*")) == []
+    assert workspaces
+    assert all(not workspace.exists() for workspace in workspaces)
 
 
 def test_agy_call_with_timeout(provider):
@@ -195,6 +208,8 @@ def test_agy_call_nonzero_exit(provider):
                 source_image_sha256="exit-test",
                 prompt_version="v1",
             )
+
+    assert list(provider.temp_dir.glob("*")) == []
 
 
 def test_agy_call_error_status(provider):
@@ -262,6 +277,22 @@ def test_agy_call_invalid_json(provider):
             provider.transcribe_image(
                 image_bytes=image_bytes,
                 source_image_sha256="bad-json-test",
+                prompt_version="v1",
+            )
+
+
+def test_agy_call_rejects_oversized_stdout(provider):
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout="x" * 1_000_001,
+            stderr="",
+        )
+
+        with pytest.raises(RuntimeError, match="output size limit"):
+            provider.transcribe_image(
+                image_bytes=b"test-image",
+                source_image_sha256="oversized-output",
                 prompt_version="v1",
             )
 

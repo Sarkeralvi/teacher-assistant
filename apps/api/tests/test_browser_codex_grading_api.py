@@ -23,6 +23,7 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from packages.brain.codex_cli_provider import CodexCliProvider
 from tests.test_grading_api import codex_api_output, strict_rubric
 
 CLEANUP_MODELS = (
@@ -181,7 +182,7 @@ def test_browser_codex_endpoint_grades_one_region_and_never_finalizes(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeCodexCliProvider:
+    class FakeCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
         calls: list[dict[str, object]] = []
@@ -226,7 +227,7 @@ def test_browser_codex_endpoint_returns_clear_error_when_cli_unavailable(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class MissingCodexCliProvider:
+    class MissingCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
 
@@ -262,7 +263,7 @@ def test_browser_codex_endpoint_sanitizes_provider_errors(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FailingCodexCliProvider:
+    class FailingCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
 

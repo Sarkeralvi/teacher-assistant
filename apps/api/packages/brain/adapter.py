@@ -62,20 +62,6 @@ _LEGACY_PROVIDER_CONSTRUCTOR_NAMES = frozenset(
         OpenAICompatibleProvider,
     )
 )
-_LEGACY_RUNTIME_LOCATIONS = {
-    "llama_cpp_qwen": BrainExecutionLocation.LOCAL,
-    "qwen": BrainExecutionLocation.LOCAL,
-    "llama_cpp_qwen38": BrainExecutionLocation.LOCAL,
-    "codex_cli": BrainExecutionLocation.CLOUD,
-}
-_LEGACY_RUNTIME_TRANSPORTS = {"codex_cli": BrainTransport.CLI}
-_LEGACY_MANAGED_LOCAL_PHASES = {
-    "llama_cpp_qwen": "Qwen",
-    "qwen": "Qwen",
-    "llama_cpp_qwen38": "Qwen38",
-}
-
-
 def register_brain_provider(
     name: str,
     factory: ProviderFactory,
@@ -236,52 +222,20 @@ class BrainAdapter:
         self.provider = provider or MockBrainProvider()
         self.image_input_enabled = image_input_enabled
         self.storage_root = storage_root or "/data"
-        declared_capabilities = vars(self.provider).get(
-            "capabilities",
-            type(self.provider).__dict__.get("capabilities"),
-        )
-        capabilities = set(declared_capabilities or ())
+        capabilities = set(self.provider.capabilities)
         provider_name = str(self.provider.provider_name)
         if capabilities:
             _validate_declared_capabilities(self.provider, provider_name, capabilities)
-        if declared_capabilities is None:
-            # Legacy compatibility for injected providers and test doubles. Remove in
-            # TA-BRAIN-003 after every provider is selected through a declared profile.
-            method_capabilities = {
-                method_name: capability
-                for capability, method_name in BRAIN_CAPABILITY_METHODS.items()
-                if capability
-                in {
-                    BrainCapability.GRADING,
-                    BrainCapability.QUESTION_PDF_EXTRACTION,
-                    BrainCapability.RUBRIC_PDF_EXTRACTION,
-                    BrainCapability.VISUAL_REFERENCE_EXTRACTION,
-                    BrainCapability.VISUAL_MAPPING,
-                    BrainCapability.VISUAL_PAGE_READ,
-                    BrainCapability.VISUAL_TRANSCRIPTION,
-                    BrainCapability.TRANSCRIPTION_REPAIR,
-                }
-            }
-            capabilities.update(
-                capability
-                for method_name, capability in method_capabilities.items()
-                if callable(getattr(self.provider, method_name, None))
-                and (
-                    not isinstance(self.provider, BrainProvider)
-                    or getattr(type(self.provider), method_name, None)
-                    is not getattr(BrainProvider, method_name, None)
-                )
-            )
         self.runtime = BrainProviderRuntime(
             provider=provider_name,
             model=self.provider.model_name,
-            location=_runtime_location(self.provider, provider_name),
+            location=BrainExecutionLocation(self.provider.execution_location),
             capabilities=frozenset(capabilities),
-            transport=_runtime_transport(self.provider, provider_name),
+            transport=BrainTransport(self.provider.transport),
             image_input_mode=BrainImageInputMode(
                 getattr(self.provider, "image_input_mode", BrainImageInputMode.NONE)
             ),
-            managed_local_phase=_managed_local_phase(self.provider, provider_name),
+            managed_local_phase=self.provider.managed_local_phase,
         )
 
     @classmethod
@@ -661,59 +615,6 @@ class BrainAdapter:
             message,
             secrets=(str(getattr(self.provider, "api_key", "") or ""),),
         )
-
-
-def _runtime_location(
-    provider: BrainProvider,
-    provider_name: str,
-) -> BrainExecutionLocation:
-    """Resolve legacy injected adapters without misclassifying local Qwen as cloud.
-
-    Concrete providers publish ``execution_location``. Older integration doubles
-    often inherit the conservative cloud default from ``BrainProvider`` instead,
-    so canonical managed-local names need their established runtime metadata.
-    Unknown providers remain cloud by default.
-    """
-
-    declared = _runtime_attribute(provider, "execution_location")
-    if declared is None:
-        return _LEGACY_RUNTIME_LOCATIONS.get(
-            provider_name.casefold(), BrainExecutionLocation.CLOUD
-        )
-    return BrainExecutionLocation(declared)
-
-
-def _runtime_transport(provider: BrainProvider, provider_name: str) -> BrainTransport:
-    declared = _runtime_attribute(provider, "transport")
-    if declared is None:
-        return _LEGACY_RUNTIME_TRANSPORTS.get(provider_name.casefold(), BrainTransport.HTTP)
-    return BrainTransport(declared)
-
-
-def _managed_local_phase(provider: BrainProvider, provider_name: str) -> str | None:
-    declared = _runtime_attribute(provider, "managed_local_phase")
-    if declared is not None:
-        return str(declared) or None
-    return _LEGACY_MANAGED_LOCAL_PHASES.get(provider_name.casefold())
-
-
-def _runtime_attribute(provider: BrainProvider, name: str) -> object | None:
-    """Read an explicit subclass declaration, but ignore base-class defaults.
-
-    ``BrainProvider`` supplies conservative cloud/empty defaults.  A provider
-    subclass that does not override them is an old integration double, while a
-    subclass of ``MockBrainProvider`` legitimately inherits its mock location.
-    """
-
-    instance_values = vars(provider)
-    if name in instance_values:
-        return instance_values[name]
-    for provider_type in type(provider).__mro__:
-        if provider_type is BrainProvider:
-            return None
-        if name in provider_type.__dict__:
-            return provider_type.__dict__[name]
-    return None
 
 
 def _validate_declared_capabilities(

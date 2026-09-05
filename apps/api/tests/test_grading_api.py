@@ -39,6 +39,7 @@ from app.services.local_model_call_guard import (
     clear_local_model_call_authorization_for_shutdown,
 )
 from app.services.local_model_lease_service import LocalModelLeaseService
+from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.schemas import GradeSuggestionOutput, RubricBreakdownItem
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
@@ -1494,7 +1495,7 @@ def test_unwritable_grading_context_blocks_before_provider_call(
         pytest.skip("chmod does not make a directory unwritable on Windows")
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("chmod-based unwritable-directory check cannot block the root user")
-    class FakeCodexCliProvider:
+    class FakeCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
         calls = 0
@@ -1545,7 +1546,7 @@ def test_grade_answer_region_with_codex_cli_mocked_subprocess_creates_suggestion
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeCodexCliProvider:
+    class FakeCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
 
@@ -1596,7 +1597,7 @@ def test_grade_answer_region_codex_cli_subprocess_failure_marks_job_failed(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FailingCodexCliProvider:
+    class FailingCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
 
@@ -1641,7 +1642,7 @@ def test_grade_answer_region_codex_cli_image_enabled_unsupported_marks_job_faile
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class ImageUnsupportedCodexCliProvider:
+    class ImageUnsupportedCodexCliProvider(CodexCliProvider):
         provider_name = "codex_cli"
         model_name = "codex-cli"
 

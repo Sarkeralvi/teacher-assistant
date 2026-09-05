@@ -317,12 +317,14 @@ def test_profile_policy_requires_consent_for_a_cloud_destination() -> None:
         )
 
 
-def test_legacy_named_local_provider_inherits_its_local_runtime_metadata() -> None:
-    class LegacyQwenDouble(BrainProvider):
+def test_local_provider_double_declares_its_runtime_metadata() -> None:
+    class QwenDouble(BrainProvider):
         provider_name = "llama_cpp_qwen"
         model_name = "legacy-qwen"
+        execution_location = BrainExecutionLocation.LOCAL
+        managed_local_phase = "Qwen"
 
-    adapter = BrainAdapter(LegacyQwenDouble())
+    adapter = BrainAdapter(QwenDouble())
 
     assert adapter.runtime.location is BrainExecutionLocation.LOCAL
     assert adapter.runtime.managed_local_phase == "Qwen"

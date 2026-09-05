@@ -103,9 +103,13 @@ def make_provider(
 def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() -> None:
     calls: list[list[str]] = []
     inputs: list[str | None] = []
+    workspaces: list[Path] = []
 
     def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
         calls.append(cmd)
+        cwd = kwargs.get("cwd")
+        if isinstance(cwd, Path):
+            workspaces.append(cwd)
         input_value = kwargs.get("input")
         inputs.append(input_value if isinstance(input_value, str) else None)
         if cmd == ["codex", "--version"]:
@@ -132,14 +136,14 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     exec_cmd = calls[-1]
     assert exec_cmd[:2] == ["codex", "exec"]
     assert "--cd" in exec_cmd
-    assert exec_cmd[exec_cmd.index("--cd") + 1] == "/home/newton/teacher-assistant"
+    assert exec_cmd[exec_cmd.index("--cd") + 1] == str(workspaces[-1])
     assert "--sandbox" in exec_cmd
     assert exec_cmd[exec_cmd.index("--sandbox") + 1] == "read-only"
     assert "--output-last-message" in exec_cmd
     assert "--json" in exec_cmd
     assert exec_cmd[exec_cmd.index("--model") + 1] == "gpt-5.5"
     assert "--image" not in exec_cmd
-    assert "--skip-git-repo-check" not in exec_cmd
+    assert "--skip-git-repo-check" in exec_cmd
     assert "--dangerously-bypass-approvals-and-sandbox" not in exec_cmd
     assert inputs[-1] is not None
     assert "You are producing a grade suggestion for TA Agent." in inputs[-1]
@@ -172,6 +176,8 @@ def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() 
     assert "teacher_review_required" in result.review_flags
     assert "codex_cli_provider" in result.review_flags
     assert "image_input_disabled" in result.review_flags
+    assert workspaces
+    assert all(not workspace.exists() for workspace in workspaces)
 
 
 def test_codex_cli_provider_instructs_wrong_entity_phrase_gets_no_dependent_credit() -> None:
@@ -205,7 +211,7 @@ def test_codex_cli_provider_instructs_wrong_entity_phrase_gets_no_dependent_cred
     assert "unless the rubric explicitly allows unrelated partial credit" in prompt
 
 
-def test_codex_cli_provider_can_skip_git_repo_check_for_host_dev_mode() -> None:
+def test_codex_cli_provider_always_skips_repo_check_for_isolated_workspace() -> None:
     calls: list[list[str]] = []
 
     def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
@@ -228,33 +234,7 @@ def test_codex_cli_provider_can_skip_git_repo_check_for_host_dev_mode() -> None:
         prompt_version="ignored",
         messages=messages(),
     )
-    assert "--skip-git-repo-check" not in calls[-1]
-
-    calls.clear()
-    provider = CodexCliProvider(
-        command="codex",
-        model_name="gpt-5.5",
-        timeout_seconds=300,
-        sandbox="read-only",
-        use_json=True,
-        output_last_message=True,
-        image_input_enabled=False,
-        workdir="/home/newton/teacher-assistant",
-        skip_git_repo_check=True,
-        which=lambda command: "/usr/local/bin/codex",
-        runner=runner,
-    )
-    provider.grade(
-        question_text="Explain.",
-        question_total_marks=Decimal("10.00"),
-        rubric_json=rubric_payload(),
-        answer_image_path="artifacts/region.png",
-        prompt_version="ignored",
-        messages=messages(),
-    )
-
     assert "--skip-git-repo-check" in calls[-1]
-
 
 def test_codex_cli_missing_command_fails_clearly() -> None:
     provider = make_provider(which_result=None)
@@ -311,8 +291,11 @@ def test_codex_cli_image_disabled_does_not_attempt_image_input() -> None:
     assert "image_input_disabled" in result.review_flags
 
 
-def test_codex_cli_image_enabled_includes_supported_image_flag() -> None:
+def test_codex_cli_image_enabled_includes_staged_image_flag(tmp_path: Path) -> None:
     calls: list[list[str]] = []
+    staged_paths: list[Path] = []
+    source_image = tmp_path / "region.png"
+    source_image.write_bytes(b"synthetic-image")
 
     def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
         calls.append(cmd)
@@ -325,21 +308,59 @@ def test_codex_cli_image_enabled_includes_supported_image_flag() -> None:
         Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
             json.dumps(valid_codex_output()), encoding="utf-8"
         )
+        staged_path = Path(cmd[cmd.index("--image") + 1])
+        assert staged_path.read_bytes() == b"synthetic-image"
+        assert staged_path.parent == kwargs["cwd"]
+        staged_paths.append(staged_path)
         return FakeCompletedProcess()
 
     result = make_provider(runner=runner, image_input_enabled=True).grade(
         question_text="Explain.",
         question_total_marks=Decimal("10.00"),
         rubric_json=rubric_payload(),
-        answer_image_path="/tmp/region.png",
+        answer_image_path=str(source_image),
         prompt_version="ignored",
         messages=messages(image_input_enabled=True),
     )
 
     assert "--image" in calls[-1]
-    assert calls[-1][calls[-1].index("--image") + 1] == "/tmp/region.png"
+    assert Path(calls[-1][calls[-1].index("--image") + 1]).name == "answer.png"
     assert "image_input_used" in result.review_flags
     assert "image_input_disabled" not in result.review_flags
+    assert staged_paths
+    assert all(not path.exists() for path in staged_paths)
+
+
+def test_codex_cli_workspace_is_removed_after_simulated_failure(tmp_path: Path) -> None:
+    source_image = tmp_path / "region.png"
+    source_image.write_bytes(b"synthetic-image")
+    workspaces: list[Path] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout="--cd\n--sandbox\n--output-last-message\n--image"
+            )
+        workspace = kwargs["cwd"]
+        assert isinstance(workspace, Path)
+        workspaces.append(workspace)
+        assert sorted(path.name for path in workspace.iterdir()) == ["answer.png"]
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=300)
+
+    with pytest.raises(CodexCliProviderError, match="timed out"):
+        make_provider(runner=runner, image_input_enabled=True).grade(
+            question_text="Explain.",
+            question_total_marks=Decimal("10.00"),
+            rubric_json=rubric_payload(),
+            answer_image_path=str(source_image),
+            prompt_version="ignored",
+            messages=messages(image_input_enabled=True),
+        )
+
+    assert workspaces
+    assert all(not workspace.exists() for workspace in workspaces)
 
 
 def test_codex_cli_image_enabled_without_image_path_omits_image_flag() -> None:
@@ -418,6 +439,29 @@ def test_codex_cli_non_json_output_file_fails_safely() -> None:
             question_total_marks=Decimal("10.00"),
             rubric_json=rubric_payload(),
             answer_image_path="artifacts/region.png",
+            prompt_version="ignored",
+            messages=messages(),
+        )
+
+
+def test_codex_cli_oversized_output_file_fails_safely() -> None:
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(stdout="--cd\n--sandbox\n--output-last-message")
+        Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
+            "x" * 1_000_001,
+            encoding="utf-8",
+        )
+        return FakeCompletedProcess()
+
+    with pytest.raises(CodexCliProviderError, match="output size limit"):
+        make_provider(runner=runner).grade(
+            question_text="Explain.",
+            question_total_marks=Decimal("10.00"),
+            rubric_json=rubric_payload(),
+            answer_image_path="",
             prompt_version="ignored",
             messages=messages(),
         )
