@@ -31,6 +31,7 @@ PROVIDER_NAME = "antigravity_gemini"
 DEFAULT_MODEL = "gemini-3.8-flash-high"
 _TEMP_DIR_NAME = Path(".local-ai") / "antigravity-temp"
 _MAX_OUTPUT_BYTES = 1_000_000
+_AGY_PAYLOAD_ARTIFACT_FIELDS = frozenset({"toolAction", "toolSummary"})
 
 
 class _CompletedProcessLike(Protocol):
@@ -43,14 +44,18 @@ _Runner = Callable[..., _CompletedProcessLike]
 
 
 class _AgyUsage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # agy adds accounting fields across releases. They are transport metadata;
+    # the model-authored payload is validated separately against its strict schema.
+    model_config = ConfigDict(extra="ignore")
 
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
 
 
 class _AgyResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Keep required transport fields typed without coupling this provider to
+    # every informational envelope field emitted by one agy release.
+    model_config = ConfigDict(extra="ignore")
 
     status: str
     response: str = ""
@@ -121,6 +126,11 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             raise RuntimeError(f"Gemini structured response was not usable: {exc}") from exc
         if not isinstance(payload, dict):
             raise RuntimeError("Gemini structured response must be a JSON object")
+        payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in _AGY_PAYLOAD_ARTIFACT_FIELDS
+        }
         if response_model is not None:
             try:
                 payload = response_model.model_validate(payload).model_dump(mode="json")

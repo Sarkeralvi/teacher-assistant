@@ -467,6 +467,7 @@ def test_full_harness_rehearsal_uses_only_fake_providers(
         raise AssertionError(f"Unexpected provider: {requested_provider}")
 
     monkeypatch.setattr(BrainAdapter, "for_provider", classmethod(fake_for_provider))
+    monkeypatch.setattr(BrainAdapter, "for_profile", classmethod(fake_for_provider))
 
     ocr_result = evaluation.run_ocr_stage(
         run_dir,

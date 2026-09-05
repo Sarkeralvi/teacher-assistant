@@ -251,3 +251,40 @@ def test_trailing_agy_artifact_does_not_weaken_payload_validation(tmp_path: Path
 
     result = provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
     assert result.draft_text == "The answer is 42"
+
+
+def test_current_agy_envelope_metadata_does_not_replace_strict_payload_validation(
+    tmp_path: Path,
+) -> None:
+    model_payload = _transcription_payload()
+    model_payload.update(
+        {
+            "toolAction": "Submitting visual transcription draft",
+            "toolSummary": "Visual transcription draft",
+        }
+    )
+    wrapper = _agy_success(model_payload)
+    outer = json.loads(wrapper.stdout)
+    outer.update(
+        {
+            "conversation_id": "conversation-1",
+            "duration_seconds": 1.25,
+            "num_turns": 2,
+            "structured_output": {},
+            "json_schema": {"type": "object"},
+        }
+    )
+    outer["usage"].update(
+        {"thinking_tokens": 3, "cache_read_tokens": 4, "total_tokens": 157}
+    )
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=json.dumps(outer), stderr=""
+        ),
+    )
+
+    result = provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+
+    assert result.draft_text == "The answer is 42"
+    assert result.prompt_tokens == 100

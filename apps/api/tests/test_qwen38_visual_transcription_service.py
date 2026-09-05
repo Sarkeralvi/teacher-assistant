@@ -12,6 +12,7 @@ from app.services.qwen38_visual_transcription_service import (
     _source_run_has_repairable_output,
     _thinking_repair_input_hash,
 )
+from packages.brain.capabilities import BrainCapability
 from packages.brain.schemas_qwen38 import (
     FINAL_INTENT_PROMPT_VERSION,
     THINKING_REPAIR_PROMPT_VERSION,
@@ -230,6 +231,40 @@ def test_thinking_repair_has_an_independent_disabled_by_default_kill_switch() ->
 
     with pytest.raises(VisualTranscriptionError, match="thinking repair is disabled"):
         service._assert_thinking_repair_enabled("qwen3.8-27b-q4km")
+
+
+def test_visual_transcription_resolves_named_profile_without_legacy_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import qwen38_visual_transcription_service as module
+
+    validated: dict[str, object] = {}
+    policy = SimpleNamespace(
+        transcription_enabled=True,
+        provider="claude_cli",
+        model="sonnet",
+        adapter=SimpleNamespace(),
+    )
+
+    def validate_request(**kwargs: object) -> None:
+        validated.update(kwargs)
+
+    policy.validate_request = validate_request
+    monkeypatch.setattr(
+        module,
+        "brain_policy_for_profile",
+        lambda _settings, profile_id: policy
+        if profile_id == "claude_cli"
+        else pytest.fail("unexpected profile"),
+        raising=False,
+    )
+    service = Qwen38VisualTranscriptionService(
+        None,  # type: ignore[arg-type]
+        settings=Settings(BRAIN_TRANSCRIPTION_ENABLED=True),
+    )
+
+    assert service._assert_enabled("sonnet", provider="claude_cli") is policy
+    assert validated["capability"] is BrainCapability.VISUAL_TRANSCRIPTION
 
 
 def test_enqueue_failure_marks_visual_transcription_run_failed() -> None:

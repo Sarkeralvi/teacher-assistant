@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
+from packages.brain.agentic_cli import normalize_cli_grade_payload
 from packages.brain.capabilities import (
     BrainCapability,
     BrainExecutionLocation,
@@ -127,9 +128,11 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
             schema_file = workspace / "output-schema.json"
             schema_file.write_text(
                 json.dumps(
-                    response_model.model_json_schema()
-                    if response_model is not None
-                    else {"type": "object"}
+                    _codex_strict_schema(
+                        response_model.model_json_schema()
+                        if response_model is not None
+                        else {"type": "object", "properties": {}}
+                    )
                 ),
                 encoding="utf-8",
             )
@@ -240,7 +243,9 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
                 raise CodexCliProviderError(
                     self._format_process_failure(completed, command=command)
                 )
-            raw_payload = self._read_json_output(output_file)
+            raw_payload = normalize_cli_grade_payload(
+                self._read_json_output(output_file)
+            )
         raw_payload["model_provider"] = self.provider_name
         raw_payload["model_name"] = self.model_name
         raw_payload["prompt_version"] = CODEX_CLI_PROMPT_VERSION
@@ -568,7 +573,6 @@ reason, evidence, confidence. Awarded marks must sum to score.
             f"Codex CLI exited with status {completed.returncode}",
             f"classification={classification}",
             f"model={self.model_name}",
-            f"command={command_display}",
         ]
         if stderr:
             detail_parts.append(f"stderr={stderr[:_MAX_CAPTURE_CHARS]}")
@@ -576,6 +580,7 @@ reason, evidence, confidence. Awarded marks must sum to score.
             detail_parts.append(f"stdout={stdout[:_MAX_CAPTURE_CHARS]}")
         if not stderr and not stdout:
             detail_parts.append("no stdout/stderr captured")
+        detail_parts.append(f"command={command_display}")
         return "; ".join(detail_parts)
 
     @staticmethod
@@ -596,3 +601,21 @@ reason, evidence, confidence. Awarded marks must sum to score.
     @classmethod
     def _redacted_command(cls, command: list[str]) -> str:
         return " ".join(cls._sanitize(part) for part in command)
+
+
+def _codex_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Make Pydantic object defaults explicit for Codex strict response schemas."""
+
+    def normalize(value: Any) -> Any:
+        if isinstance(value, dict):
+            normalized = {key: normalize(item) for key, item in value.items()}
+            properties = normalized.get("properties")
+            if normalized.get("type") == "object" and isinstance(properties, dict):
+                normalized["required"] = list(properties)
+                normalized["additionalProperties"] = False
+            return normalized
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    return normalize(schema)

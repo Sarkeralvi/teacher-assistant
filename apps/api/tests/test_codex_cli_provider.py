@@ -509,6 +509,7 @@ def test_codex_cli_subprocess_non_zero_exit_fails_safely() -> None:
     assert "model=gpt-5.5" in error
     assert "command=codex exec" in error
     assert "stderr=failed with [REDACTED]" in error
+    assert error.index("stderr=") < error.index("command=")
     assert "sk-secret-value" not in error
 
 
@@ -575,6 +576,9 @@ def test_codex_visual_mapping_runs_through_canonical_adapter_contract() -> None:
             "input-1.png",
             "output-schema.json",
         }
+        schema_file = Path(cmd[cmd.index("--output-schema") + 1])
+        schema = json.loads(schema_file.read_text(encoding="utf-8"))
+        assert set(schema["required"]) == set(schema["properties"])
         output_file = Path(cmd[cmd.index("--output-last-message") + 1])
         output_file.write_text(
             json.dumps(
@@ -605,6 +609,32 @@ def test_codex_visual_mapping_runs_through_canonical_adapter_contract() -> None:
 
     assert output.regions[0].question_label == "Q1"
     assert workspaces and all(not workspace.exists() for workspace in workspaces)
+
+
+def test_codex_grading_discards_known_criterion_status_before_strict_validation() -> None:
+    payload = valid_codex_output()
+    payload["rubric_breakdown"][0]["criterion_status"] = "partially_met"
+
+    def runner(cmd: list[str], **_kwargs: object) -> FakeCompletedProcess:
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(stdout="--cd\n--sandbox\n--output-last-message")
+        Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return FakeCompletedProcess()
+
+    result = make_provider(runner=runner).grade(
+        question_text="Explain.",
+        question_total_marks=Decimal("10.00"),
+        rubric_json=rubric_payload(),
+        answer_image_path="",
+        prompt_version="ignored",
+        messages=messages(),
+    )
+
+    assert result.rubric_breakdown[0].criterion_id == "concept"
 
 def test_codex_cli_raw_output_never_contains_image_base64() -> None:
     result = make_provider().grade(

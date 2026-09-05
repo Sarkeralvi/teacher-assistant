@@ -7,6 +7,23 @@ from typing import Any
 from packages.brain.schemas import GradeSuggestionOutput
 
 
+def normalize_cli_grade_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop the one provider-side rubric field the canonical schema does not store."""
+
+    raw = dict(payload)
+    rubric_breakdown = raw.get("rubric_breakdown")
+    if isinstance(rubric_breakdown, list):
+        raw["rubric_breakdown"] = [
+            (
+                {key: value for key, value in item.items() if key != "criterion_status"}
+                if isinstance(item, dict)
+                else item
+            )
+            for item in rubric_breakdown
+        ]
+    return raw
+
+
 def finalize_cli_grade_output(
     payload: dict[str, Any],
     *,
@@ -20,7 +37,7 @@ def finalize_cli_grade_output(
 ) -> GradeSuggestionOutput:
     """Attach trusted metadata, enforce review flags, and validate model-authored JSON."""
 
-    raw = dict(payload)
+    raw = normalize_cli_grade_payload(payload)
     raw.update(
         {
             "model_provider": provider_name,

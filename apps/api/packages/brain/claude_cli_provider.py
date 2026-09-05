@@ -140,7 +140,8 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
         images: list[tuple[bytes, str]],
         response_model: type[BaseModel] | None,
     ) -> UniversalVisionCompletion:
-        if self._which(self.command) is None:
+        resolved_command = self._which(self.command)
+        if resolved_command is None:
             raise ClaudeCliProviderError(f"Claude CLI command not found: {self.command}")
         configured_parent = Path(self.workdir) if self.workdir else None
         parent = (
@@ -163,7 +164,7 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
                 "Use no other tool and use only their visible contents.\n\n"
                 + prompt
             )
-            command = self._build_command(schema)
+            command = self._build_command(schema, resolved_command=resolved_command)
             try:
                 result = self._runner(
                     command,
@@ -197,9 +198,11 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
 
-    def _build_command(self, schema: dict[str, Any]) -> list[str]:
+    def _build_command(
+        self, schema: dict[str, Any], *, resolved_command: str | None = None
+    ) -> list[str]:
         return [
-            self.command,
+            resolved_command or self.command,
             "--print",
             "--output-format",
             "json",
@@ -211,7 +214,7 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
             "--restricted",
             "--strict-mcp-config",
             "--mcp-config",
-            "{}",
+            '{"mcpServers":{}}',
             "--tools",
             "Read",
             "--allowedTools",

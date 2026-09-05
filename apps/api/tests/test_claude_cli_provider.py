@@ -42,10 +42,14 @@ def test_claude_mapping_runs_through_adapter_in_restricted_workspace(
 
     def runner(command: list[str], **kwargs: object) -> SimpleNamespace:
         workspace = Path(str(kwargs["cwd"]))
+        assert command[0] == "claude.cmd"
         assert [path.name for path in workspace.iterdir()] == ["input-1.png"]
         assert "--restricted" in command
         assert "--safe-mode" in command
         assert "--dangerously-skip-permissions" not in command
+        assert json.loads(command[command.index("--mcp-config") + 1]) == {
+            "mcpServers": {}
+        }
         assert command[command.index("--tools") + 1] == "Read"
         assert kwargs["input"] and "input-1.png" in str(kwargs["input"])
         workspaces.append(workspace)
@@ -147,6 +151,7 @@ def test_claude_grading_output_is_forced_to_teacher_review(tmp_path: Path) -> No
             {
                 "criterion_id": "work",
                 "criterion": "Shows working",
+                "criterion_status": "partially_met",
                 "max_marks": 2,
                 "awarded_marks": 1,
                 "reason": "Partial working is visible.",

@@ -18,6 +18,7 @@ from packages.brain.adapter import BrainProviderConfigurationError, sanitize_pro
 from packages.brain.capabilities import BrainCapability
 from packages.brain.policy import (
     BrainPolicy,
+    brain_policy_for_profile,
     brain_policy_from_settings,
     configured_visual_provider,
 )
@@ -940,9 +941,18 @@ class Qwen38VisualTranscriptionService:
     ) -> BrainPolicy:
         requested_provider = _resolve_visual_provider(self.settings, provider)
         try:
-            policy = brain_policy_from_settings(
-                self.settings,
-                requested_provider=requested_provider,
+            explicit_profile = (provider or "").strip().lower() not in {
+                "",
+                "brain",
+                "active",
+            }
+            policy = (
+                brain_policy_for_profile(self.settings, requested_provider)
+                if explicit_profile
+                else brain_policy_from_settings(
+                    self.settings,
+                    requested_provider=requested_provider,
+                )
             )
             policy.validate_request(
                 requested_provider=provider or "active",
