@@ -262,6 +262,7 @@ def test_codex_cli_transport_has_a_cloud_data_destination() -> None:
         BRAIN_PROVIDER="codex_cli",
         BRAIN_ALLOW_REAL_PROVIDERS=True,
         BRAIN_MODEL="codex-test-model",
+        CODEX_CLI_IMAGE_INPUT_ENABLED=True,
         BRAIN_GRADING_ENABLED=True,
     )
 
@@ -284,6 +285,30 @@ def test_codex_cli_transport_has_a_cloud_data_destination() -> None:
         match="Cloud provider data transfer must be explicitly confirmed",
     ):
         policy.require_data_boundary_confirmation(confirmed=False)
+
+
+def test_non_special_cased_cli_provider_gets_capability_driven_visual_flags() -> None:
+    """Bulk Supervised (and Custom Controlled) gate visual work on
+    policy.transcription_enabled/page_read_enabled. Only llama_cpp_qwen38 and
+    antigravity_gemini have dedicated settings knobs for those; every other
+    registered provider (codex_cli, claude_cli, gemini, ...) must fall back to
+    what the adapter itself declares, not a hardcoded False."""
+    settings = Settings(
+        BRAIN_PROVIDER="codex_cli",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_MODEL="codex-test-model",
+        BRAIN_GRADING_ENABLED=True,
+        CODEX_CLI_IMAGE_INPUT_ENABLED=True,
+    )
+
+    policy = brain_policy_from_settings(settings)
+
+    assert policy.adapter.runtime.supports(BrainCapability.VISUAL_TRANSCRIPTION)
+    assert policy.transcription_enabled is True
+    assert policy.adapter.runtime.supports(BrainCapability.VISUAL_PAGE_READ)
+    assert policy.page_read_enabled is True
+    assert policy.adapter.runtime.supports(BrainCapability.TRANSCRIPTION_REPAIR)
+    assert policy.thinking_repair_enabled is True
 
 
 def test_profile_policy_rejects_an_unsupported_capability() -> None:

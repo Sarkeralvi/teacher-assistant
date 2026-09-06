@@ -276,6 +276,16 @@ export async function seedCustomControlledFlow(token: string, files: ReturnType<
       full_answer_confirmed: true,
     },
   });
+  await apiJson(`/answer-regions/${answerRegion.id}/corrections/full-answer-confirmation`, {
+    method: "PATCH",
+    token,
+    body: {
+      full_answer_confirmed: true,
+      continuation_not_needed: true,
+      packet_status: "complete",
+      manual_answer_text: "Synthetic answer text for the mock grading loop.",
+    },
+  });
 
   if (!confirmedMaterials.materials_confirmed_at) {
     throw new Error("Grading-run materials were not confirmed");

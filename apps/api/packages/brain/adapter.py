@@ -32,6 +32,7 @@ from packages.brain.profiles import (
     BrainProviderProfile,
     BrainProviderProfileDefinition,
     ProviderBuildResult,
+    legacy_profile_settings,
 )
 from packages.brain.prompt_registry import (
     MARKING_POLICY_INSTRUCTIONS,
@@ -95,7 +96,8 @@ def register_brain_profile(definition: BrainProviderProfileDefinition) -> None:
     _PROFILE_DEFINITIONS[profile_id] = definition
 
     def build_profile(settings: Settings, _requested: str) -> ProviderBuildResult:
-        configuration = definition.resolve(settings)
+        effective_settings = legacy_profile_settings(settings, profile_id)
+        configuration = definition.resolve(effective_settings)
         # Preserve the legacy adapter module's constructor patch points until
         # env-selected provider construction is removed in TA-BRAIN-003.
         constructor_name = definition.provider_constructor.__name__
@@ -104,7 +106,7 @@ def register_brain_profile(definition: BrainProviderProfileDefinition) -> None:
                 f"No legacy constructor is registered for profile {profile_id}"
             )
         constructor = globals()[constructor_name]
-        return definition.build(settings, configuration, constructor)
+        return definition.build(effective_settings, configuration, constructor)
 
     register_brain_provider(
         profile_id,

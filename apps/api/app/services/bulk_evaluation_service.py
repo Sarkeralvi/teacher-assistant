@@ -57,6 +57,7 @@ from packages.brain.adapter import BrainProviderConfigurationError, sanitize_pro
 from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.policy import (
     BrainPolicy,
+    brain_policy_for_profile,
     brain_policy_from_settings,
     configured_visual_provider,
 )
@@ -308,9 +309,13 @@ class BulkEvaluationService:
     ) -> BrainPolicy:
         settings = self.settings
         try:
-            policy = brain_policy_from_settings(
-                settings,
-                requested_provider=provider or configured_visual_provider(settings),
+            policy = (
+                brain_policy_for_profile(settings, provider)
+                if provider
+                else brain_policy_from_settings(
+                    settings,
+                    requested_provider=configured_visual_provider(settings),
+                )
             )
             use_page_read = policy.page_read_enabled
             feature_enabled = bool(
@@ -362,10 +367,7 @@ class BulkEvaluationService:
 
     def _policy_for_run(self, run: BulkEvaluationRun) -> BrainPolicy:
         try:
-            policy = brain_policy_from_settings(
-                self.settings,
-                requested_provider=run.provider,
-            )
+            policy = brain_policy_for_profile(self.settings, run.provider)
             if policy.model != run.model_name:
                 raise BrainProviderConfigurationError(
                     "Configured brain model changed after bulk authorization"
@@ -756,21 +758,34 @@ class BulkEvaluationService:
         mapping = self.db.get(AnswerRegionMapping, item.mapping_id) if item.mapping_id else None
         region = self.db.get(AnswerRegion, item.answer_region_id) if item.answer_region_id else None
         if self._uses_page_read(run):
-            # A page-read call is never retried. Resuming may only re-settle
-            # immutable evidence that was already persisted by the successful
-            # one-call-per-page pass.
-            page_read_runs = (
-                self._page_read_runs_by_question([mapping]) if mapping is not None else {}
+            linked_transcription = (
+                self.db.get(AnswerRegionOcrRun, item.transcription_run_id)
+                if item.transcription_run_id
+                else None
             )
             if (
-                mapping is None
-                or mapping.answer_region is None
-                or item.question_id not in page_read_runs
+                linked_transcription is not None
+                and linked_transcription.profile == "qwen38_thinking_repair"
+                and linked_transcription.status == "confirmed"
+                and linked_transcription.confirmed_by_teacher_id is not None
             ):
-                raise BulkEvaluationError(
-                    "Page-read provider work cannot be retried; create a newly authorized run"
+                item.stage = "transcription"
+            else:
+                # A page-read call is never retried. Resuming may only re-settle
+                # immutable evidence that was already persisted by the successful
+                # one-call-per-page pass.
+                page_read_runs = (
+                    self._page_read_runs_by_question([mapping]) if mapping is not None else {}
                 )
-            item.stage = "read"
+                if (
+                    mapping is None
+                    or mapping.answer_region is None
+                    or item.question_id not in page_read_runs
+                ):
+                    raise BulkEvaluationError(
+                        "Page-read provider work cannot be retried; create a newly authorized run"
+                    )
+                item.stage = "read"
         elif mapping is None or not (mapping.teacher_confirmed or mapping.bulk_policy_verified):
             item.stage = "mapping"
         elif region is None or not (region.manual_answer_text or "").strip():
@@ -1326,6 +1341,13 @@ class BulkEvaluationService:
                 item.stage = "read"
                 continue
             item.transcription_run_id = transcript.id
+            if self._transcript_needs_repair(transcript):
+                item.status = "pending"
+                item.stage = "transcription"
+                item.exception_codes = []
+                item.warnings = ["thinking_repair_pending"]
+                item.completed_at = None
+                continue
             self._accept_or_quarantine_transcription(
                 run,
                 item,
@@ -1466,6 +1488,57 @@ class BulkEvaluationService:
             if item.transcription_run_id
             else None
         )
+        if (
+            current_run is not None
+            and current_run.profile == "qwen38_visual_page_read"
+            and self._transcript_needs_repair(current_run)
+        ):
+            self._require_calls(run, 3)
+            repair = service.create_thinking_repair(
+                region,
+                current_run,
+                teacher=teacher,
+                expected_model=run.model_name,
+                provider=run.provider,
+            )
+            item.transcription_run_id = repair.id
+            item.status = "pending"
+            item.stage = "transcription"
+            item.warnings = ["thinking_repair_pending"]
+            run.heartbeat_at = datetime.now(UTC)
+            self._refresh_counts(run)
+            self.db.commit()
+            return
+        if (
+            current_run is not None
+            and current_run.profile == "qwen38_thinking_repair"
+            and current_run.status == "confirmed"
+            and current_run.confirmed_by_teacher_id is not None
+        ):
+            confirmed_text = (current_run.confirmed_text or "").strip()
+            if not confirmed_text or confirmed_text != (current_run.draft_text or "").strip():
+                self._quarantine(
+                    item,
+                    "stale_evidence",
+                    "Teacher-confirmed transcription no longer matches its pinned draft",
+                )
+            else:
+                item.transcription_confidence = Decimal(
+                    str((current_run.normalized_result or {}).get("confidence") or 0)
+                )
+                item.evidence_snapshot_sha256 = hashlib.sha256(
+                    confirmed_text.encode("utf-8")
+                ).hexdigest()
+                item.verification_source = "teacher"
+                item.status = "pending"
+                item.stage = "grading"
+                item.exception_codes = []
+                item.warnings = []
+                item.completed_at = None
+            run.heartbeat_at = datetime.now(UTC)
+            self._refresh_counts(run)
+            self.db.commit()
+            return
         if current_run is not None and current_run.profile == "qwen38_thinking_repair":
             required = max(1, current_run.call_limit)
             self._require_calls(run, required)
@@ -1548,17 +1621,7 @@ class BulkEvaluationService:
             item.provider_call_count += 1
             if transcript_run is None or transcript_run.status != "succeeded":
                 raise VisualTranscriptionError("Visual transcription failed its provider contract")
-            normalized = transcript_run.normalized_result or {}
-            editing = normalized.get("editing_analysis") or {}
-            needs_repair = bool(
-                normalized.get("requires_thinking_repair")
-                or (isinstance(editing, dict) and any(editing.get(key) for key in (
-                    "cancellation_detected",
-                    "replacement_detected",
-                    "uncertain_correction_detected",
-                )))
-            )
-            if needs_repair:
+            if self._transcript_needs_repair(transcript_run):
                 self._require_calls(run, 3)
                 repair = service.create_thinking_repair(
                     region,
@@ -1588,6 +1651,25 @@ class BulkEvaluationService:
         run.heartbeat_at = datetime.now(UTC)
         self._refresh_counts(run)
         self.db.commit()
+
+    @staticmethod
+    def _transcript_needs_repair(transcript_run: AnswerRegionOcrRun) -> bool:
+        normalized = transcript_run.normalized_result or {}
+        editing = normalized.get("editing_analysis") or {}
+        return bool(
+            normalized.get("requires_thinking_repair")
+            or (
+                isinstance(editing, dict)
+                and any(
+                    editing.get(key)
+                    for key in (
+                        "cancellation_detected",
+                        "replacement_detected",
+                        "uncertain_correction_detected",
+                    )
+                )
+            )
+        )
 
     def _reusable_transcription(
         self,
@@ -1927,10 +2009,14 @@ class BulkEvaluationService:
             or "uncovered_ink_hard_blocker" in warnings
         ):
             codes.append("unassigned_ink")
-        if "inferred_question_label_requires_teacher_review" in warnings:
+        if (
+            not mapping.teacher_confirmed
+            and "inferred_question_label_requires_teacher_review" in warnings
+        ):
             codes.append("inferred_question_label")
-        if mapping.confidence is None or (
-            mapping.confidence < self.settings.bulk_mapping_auto_pass_min_confidence
+        if not mapping.teacher_confirmed and (
+            mapping.confidence is None
+            or mapping.confidence < self.settings.bulk_mapping_auto_pass_min_confidence
         ):
             codes.append("incomplete_region")
         return list(dict.fromkeys(codes))

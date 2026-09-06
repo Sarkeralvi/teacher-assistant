@@ -39,6 +39,7 @@ from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 from packages.brain.capabilities import BrainCapability
 from packages.brain.policy import (
     BrainPolicy,
+    brain_policy_for_profile,
     brain_policy_from_settings,
     configured_visual_provider,
 )
@@ -998,9 +999,19 @@ class ReferenceExtractionService:
         provider: str | None = None,
     ) -> BrainPolicy:
         try:
-            policy = brain_policy_from_settings(
-                self.settings,
-                requested_provider=provider or configured_visual_provider(self.settings),
+            requested_provider = provider or configured_visual_provider(self.settings)
+            explicit_profile = (provider or "").strip().lower() not in {
+                "",
+                "active",
+                "brain",
+            }
+            policy = (
+                brain_policy_for_profile(self.settings, requested_provider)
+                if explicit_profile
+                else brain_policy_from_settings(
+                    self.settings,
+                    requested_provider=requested_provider,
+                )
             )
             if expected_model != policy.model:
                 raise ReferenceExtractionError(
@@ -1023,7 +1034,11 @@ class ReferenceExtractionService:
         metadata = self._runtime_metadata(grading_run)
         return self._assert_enabled(
             str(metadata.get("model") or ""),
-            provider=str(metadata.get("provider") or ""),
+            provider=(
+                str(metadata.get("provider") or "")
+                if grading_run.brain_profile_id is not None
+                else None
+            ),
         )
 
     def _runtime_metadata(self, grading_run: GradingRun) -> dict[str, Any]:
@@ -1038,9 +1053,16 @@ class ReferenceExtractionService:
                 metadata = payload.get("_brain") if isinstance(payload, dict) else None
                 if isinstance(metadata, dict):
                     provider = str(metadata.get("provider") or extraction_run.provider)
-                    policy = brain_policy_from_settings(
-                        self.settings,
-                        requested_provider=provider,
+                    policy = (
+                        brain_policy_for_profile(
+                            self.settings,
+                            grading_run.brain_profile_id,
+                        )
+                        if grading_run.brain_profile_id is not None
+                        else brain_policy_from_settings(
+                            self.settings,
+                            requested_provider=provider,
+                        )
                     )
                     return {
                         "provider": provider,

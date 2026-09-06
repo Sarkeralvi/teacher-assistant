@@ -173,20 +173,28 @@ def brain_policy_from_settings(
     elif is_antigravity_gemini:
         page_read_enabled = bool(settings.antigravity_gemini_page_read_enabled)
     else:
-        page_read_enabled = False
+        # No per-provider settings knob exists for the newer CLI/API profiles
+        # (codex_cli, claude_cli, gemini, ...). Fall back to the adapter's own
+        # declared capability instead of hardcoding this off for every
+        # provider except the two that predate the profile catalog.
+        page_read_enabled = adapter.runtime.supports(BrainCapability.VISUAL_PAGE_READ)
     if is_qwen38:
         transcription_fallback = settings.local_qwen38_transcription_enabled
     elif is_antigravity_gemini:
         transcription_fallback = settings.antigravity_gemini_transcription_enabled
     else:
-        transcription_fallback = False
+        transcription_fallback = adapter.runtime.supports(
+            BrainCapability.VISUAL_TRANSCRIPTION
+        )
     transcription_enabled = _coalesce(
         settings.brain_transcription_enabled,
         transcription_fallback,
     )
     thinking_enabled = _coalesce(
         settings.brain_thinking_repair_enabled,
-        settings.local_qwen38_thinking_repair_enabled if is_qwen38 else False,
+        settings.local_qwen38_thinking_repair_enabled
+        if is_qwen38
+        else adapter.runtime.supports(BrainCapability.TRANSCRIPTION_REPAIR),
     )
     grading_enabled = _coalesce(
         settings.brain_grading_enabled,

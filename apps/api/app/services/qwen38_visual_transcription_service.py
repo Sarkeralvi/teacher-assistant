@@ -223,10 +223,16 @@ class Qwen38VisualTranscriptionService:
             )
         if not region.segments:
             raise VisualTranscriptionError("Mapped answer has no image segments")
+        source_contract_is_supported = (
+            source_run.profile == "qwen38_verbatim_visual"
+            and source_run.prompt_version in SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
+        ) or (
+            source_run.profile == "qwen38_visual_page_read"
+            and source_run.prompt_version == VISUAL_PAGE_READ_PROMPT_VERSION
+        )
         if (
             source_run.answer_region_id != region.id
-            or source_run.profile != "qwen38_verbatim_visual"
-            or source_run.prompt_version not in SUPPORTED_FINAL_INTENT_PROMPT_VERSIONS
+            or not source_contract_is_supported
             or source_run.status not in {"succeeded", "confirmed", "rejected"}
             or not _source_run_has_repairable_output(source_run)
         ):

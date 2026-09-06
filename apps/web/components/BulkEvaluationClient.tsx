@@ -7,6 +7,7 @@ import {
   approveCleanBulkEvaluation,
   createBulkEvaluationRun,
   downloadBulkEvaluationResults,
+  getBrainProfiles,
   getBrainStatus,
   listAssessmentGradingRuns,
   listBulkEvaluationExceptions,
@@ -14,12 +15,24 @@ import {
   resumeBulkEvaluationItem,
   resumeBulkEvaluationRun,
   stopBulkEvaluationRun,
+  type BrainProfile,
   type BulkEvaluationException,
   type BulkEvaluationRun,
   type GradingRun,
   type LocalAiStatus,
   type MarkingPolicy,
 } from "../lib/api";
+
+const REQUIRED_BULK_CAPABILITY = "grading";
+
+function profileEligibleForBulk(profile: BrainProfile): boolean {
+  if (!profile.capabilities.includes(REQUIRED_BULK_CAPABILITY)) return false;
+  if (profile.capabilities.includes("visual_page_read")) return true;
+  return (
+    profile.capabilities.includes("visual_mapping") &&
+    profile.capabilities.includes("visual_transcription")
+  );
+}
 
 const buttonClass =
   "inline-flex min-h-11 items-center justify-center rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50";
@@ -52,6 +65,8 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const [exceptions, setExceptions] = useState<BulkEvaluationException[]>([]);
   const [gradingRuns, setGradingRuns] = useState<GradingRun[]>([]);
   const [localAi, setLocalAi] = useState<LocalAiStatus | null>(null);
+  const [profiles, setProfiles] = useState<BrainProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const [file, setFile] = useState<File | null>(null);
   const [gradingRunId, setGradingRunId] = useState<number | null>(null);
   const [markingPolicy, setMarkingPolicy] = useState<MarkingPolicy>("general");
@@ -63,19 +78,30 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? runs[0] ?? null;
 
   const refresh = useCallback(async () => {
-    const [runRows, gradingRows, status] = await Promise.all([
+    const [runRows, gradingRows, status, profileRows] = await Promise.all([
       listBulkEvaluationRuns(assessmentId),
       listAssessmentGradingRuns(assessmentId),
       getBrainStatus(),
+      getBrainProfiles(),
     ]);
     setRuns(runRows);
     setGradingRuns(gradingRows);
     setLocalAi(status);
+    setProfiles(profileRows);
     const selected = activeRunId
       ? runRows.find((run) => run.id === activeRunId) ?? runRows[0] ?? null
       : runRows[0] ?? null;
     setActiveRunId(selected?.id ?? null);
     setGradingRunId((current) => current ?? eligibleGradingRun(gradingRows)?.id ?? null);
+    setSelectedProfileId((current) => {
+      if (current && profileRows.some((profile) => profile.id === current)) return current;
+      const eligible = profileRows.filter(profileEligibleForBulk);
+      const defaultProfile =
+        eligible.find((profile) => profile.id === status.brain.provider && profile.ready) ??
+        eligible.find((profile) => profile.ready) ??
+        eligible[0];
+      return defaultProfile?.id ?? "";
+    });
     setExceptions(selected ? await listBulkEvaluationExceptions(selected.id) : []);
   }, [activeRunId, assessmentId]);
 
@@ -97,20 +123,25 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   }, [refresh]);
 
   useEffect(() => {
+    setAuthorized(false);
+  }, [selectedProfileId]);
+
+  useEffect(() => {
     if (!activeRun || !activeStatuses.has(activeRun.status)) return;
     const interval = window.setInterval(() => void refresh().catch(() => undefined), 5000);
     return () => window.clearInterval(interval);
   }, [activeRun, refresh]);
 
-  const brain = localAi?.brain;
-  const expectedModel = brain?.model ?? "";
+  const eligibleProfiles = useMemo(() => profiles.filter(profileEligibleForBulk), [profiles]);
+  const selectedProfile = eligibleProfiles.find((profile) => profile.id === selectedProfileId) ?? null;
+  const expectedModel = selectedProfile?.model ?? "";
+  const consentRequired = Boolean(
+    selectedProfile && !["local", "mock"].includes(selectedProfile.data_destination),
+  );
   const brainReady = Boolean(
-    brain?.enabled
-      && brain.configured
-      && brain.bulk_evaluation_enabled
-      && brain.capabilities.includes("visual_mapping")
-      && brain.capabilities.includes("visual_transcription")
-      && brain.capabilities.includes("grading"),
+    localAi?.brain.bulk_evaluation_enabled
+      && selectedProfile?.ready
+      && profileEligibleForBulk(selectedProfile),
   );
   const cleanSuggestionIds = useMemo(
     () =>
@@ -133,16 +164,17 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   );
 
   async function createRun() {
-    if (!file || !gradingRunId || !expectedModel || !authorized) return;
+    if (!file || !gradingRunId || !selectedProfile || !expectedModel || !authorized) return;
     setBusy(true);
     setError(null);
     try {
       const run = await createBulkEvaluationRun(assessmentId, {
         file,
         grading_run_id: gradingRunId,
+        profile_id: selectedProfile.id,
         expected_model: expectedModel,
-        provider: brain?.provider ?? "brain",
-        location: brain?.location ?? "provider_managed",
+        provider: selectedProfile.id,
+        location: selectedProfile.data_destination,
         marking_policy: markingPolicy,
         maximum_provider_calls: callLimit,
         provider_data_boundary_confirmed: authorized,
@@ -230,7 +262,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
       {loading ? <p className="text-sm text-slate-400">Loading bulk evaluation state…</p> : null}
 
       <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-6 lg:grid-cols-4">
-        <StatusCard label="Brain" value={brain?.available ? `${brain.provider} · ${brain.model}` : brain?.enabled ? "Configured, unavailable" : "Disabled"} />
+        <StatusCard label="Brain" value={selectedProfile ? `${selectedProfile.display_name} · ${selectedProfile.model}${selectedProfile.ready ? "" : " · not ready"}` : eligibleProfiles.length === 0 ? "No eligible profile" : "Select a profile"} />
         <StatusCard label="References" value={gradingRunId ? "Finalized" : "Blocked"} />
         <StatusCard label="Active run" value={activeRun ? `#${activeRun.id}` : "None"} />
         <StatusCard label="Safety" value="Draft only" />
@@ -244,11 +276,25 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
             Existing submissions are not modified.
           </p>
         </div>
-        <div className="grid gap-3 lg:grid-cols-4">
+        <div className="grid gap-3 lg:grid-cols-5">
           <input className={inputClass} type="file" accept=".zip,application/zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
           <select className={inputClass} value={gradingRunId ?? ""} onChange={(event) => setGradingRunId(Number(event.target.value))}>
             <option value="">Select finalized reference run</option>
             {gradingRuns.map((run) => <option key={run.id} value={run.id}>Run #{run.id} · {run.marking_policy}</option>)}
+          </select>
+          <select
+            className={inputClass}
+            data-testid="bulk-brain-profile-select"
+            value={selectedProfileId}
+            onChange={(event) => setSelectedProfileId(event.target.value)}
+          >
+            <option value="">Select a provider profile</option>
+            {eligibleProfiles.map((profile) => (
+              <option disabled={!profile.ready} key={profile.id} value={profile.id}>
+                {profile.display_name} · {profile.model} · {profile.data_destination}
+                {profile.ready ? "" : " · not ready"}
+              </option>
+            ))}
           </select>
           <select className={inputClass} value={markingPolicy} onChange={(event) => setMarkingPolicy(event.target.value as MarkingPolicy)}>
             <option value="tough">Tough</option><option value="general">General</option><option value="easy">Easy</option>
@@ -263,11 +309,14 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
             aria-label="Maximum model calls"
           />
         </div>
+        {eligibleProfiles.length === 0 ? (
+          <p className="text-sm text-amber-200">No registered brain profile supports bulk grading yet.</p>
+        ) : null}
         <label className="flex items-start gap-3 rounded-lg border border-amber-700/60 bg-amber-950/20 p-4 text-sm text-amber-100">
           <input className="mt-1" type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} />
           <span>
-            I authorize {brain?.provider ?? "the configured provider"} processing
-            ({brain?.location ?? "provider-managed"}). {brain?.location === "cloud" ? "Student evidence will be transferred to the cloud provider. " : ""}
+            I authorize {selectedProfile?.display_name ?? "the selected provider"} processing
+            ({selectedProfile?.data_destination ?? "unselected"}). {consentRequired ? "Student evidence will be transferred to this non-local provider. " : ""}
             Strict auto-pass rules apply and all scores remain drafts until I approve them.
           </span>
         </label>

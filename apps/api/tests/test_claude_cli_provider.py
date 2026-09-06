@@ -160,18 +160,22 @@ def test_claude_grading_output_is_forced_to_teacher_review(tmp_path: Path) -> No
             }
         ],
         "detected_answer_summary": "Partial answer",
-        "major_errors": [],
-        "feedback_to_student": "Show the remaining step.",
         "review_flags": [],
     }
-    provider = ClaudeCliProvider(
-        workdir=str(tmp_path),
-        which=lambda _command: "claude.cmd",
-        runner=lambda *_args, **_kwargs: SimpleNamespace(
+    def runner(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        schema = json.loads(command[command.index("--json-schema") + 1])
+        assert "score" in schema["properties"]
+        assert "model_provider" not in schema["properties"]
+        return SimpleNamespace(
             returncode=0,
             stdout=json.dumps({"structured_output": payload}),
             stderr="",
-        ),
+        )
+
+    provider = ClaudeCliProvider(
+        workdir=str(tmp_path),
+        which=lambda _command: "claude.cmd",
+        runner=runner,
     )
 
     result = provider.grade(
@@ -185,5 +189,48 @@ def test_claude_grading_output_is_forced_to_teacher_review(tmp_path: Path) -> No
 
     assert result.score == Decimal("1")
     assert result.needs_review is True
+    assert result.major_errors == []
+    assert result.feedback_to_student == "Teacher review is required before feedback is released."
     assert "teacher_review_required" in result.review_flags
     assert "claude_cli_provider" in result.review_flags
+
+
+def test_claude_transcription_reconciles_redundant_editing_flags(tmp_path: Path) -> None:
+    payload = {
+        "draft_text": "visible answer",
+        "uncertain_glyphs": [],
+        "editing_marks": [
+            {
+                "page_index": 1,
+                "bbox": [10, 10, 900, 100],
+                "status": "replacement",
+                "position_hint": "final line",
+            }
+        ],
+        "cancellation_detected": False,
+        "replacement_detected": False,
+        "uncertain_correction_detected": False,
+        "requires_thinking_repair": False,
+        "is_blank": False,
+        "is_irrelevant": False,
+        "confidence": 0.8,
+        "needs_review": True,
+    }
+    provider = ClaudeCliProvider(
+        workdir=str(tmp_path),
+        which=lambda _command: "claude.cmd",
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": payload}),
+            stderr="",
+        ),
+    )
+
+    result = BrainAdapter(provider).transcribe_image(
+        image_bytes=b"page",
+        mime_type="image/png",
+        label="Q1",
+    )
+
+    assert result.replacement_detected is True
+    assert result.cancellation_detected is False

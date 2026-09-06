@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from packages.brain.agentic_cli import finalize_cli_grade_output
 from packages.brain.capabilities import (
@@ -44,6 +44,38 @@ Which = Callable[[str], str | None]
 
 class ClaudeCliProviderError(RuntimeError):
     """Raised when a Claude CLI call cannot satisfy the isolated contract."""
+
+
+class _ClaudeRubricBreakdownDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criterion_id: str = Field(min_length=1)
+    criterion: str = Field(min_length=1)
+    criterion_status: str = Field(min_length=1)
+    max_marks: Decimal = Field(ge=Decimal("0"))
+    awarded_marks: Decimal = Field(ge=Decimal("0"))
+    reason: str = Field(min_length=1)
+    evidence: str | None = None
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+
+
+class _ClaudeGradeSuggestionDraft(BaseModel):
+    """Strict model-authored fields before trusted runtime metadata is attached."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: Decimal = Field(ge=Decimal("0"))
+    max_score: Decimal = Field(gt=Decimal("0"))
+    confidence: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    needs_review: bool = True
+    rubric_breakdown: list[_ClaudeRubricBreakdownDraft] = Field(min_length=1)
+    detected_answer_summary: str = Field(min_length=1)
+    major_errors: list[str] = Field(default_factory=list)
+    feedback_to_student: str = Field(
+        default="Teacher review is required before feedback is released.",
+        min_length=1,
+    )
+    review_flags: list[str] = Field(default_factory=list)
 
 
 class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
@@ -122,7 +154,7 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
         completion = self._run_structured(
             prompt=prompt,
             images=[(image_path.read_bytes(), _mime_type_for_path(image_path))],
-            response_model=None,
+            response_model=_ClaudeGradeSuggestionDraft,
         )
         return finalize_cli_grade_output(
             completion.payload,

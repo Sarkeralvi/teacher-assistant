@@ -208,6 +208,7 @@ class Settings(BaseSettings):
     )
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    gemini_timeout_seconds: float = Field(default=120.0, alias="GEMINI_TIMEOUT_SECONDS")
     gemini_image_input_enabled: bool = Field(default=False, alias="GEMINI_IMAGE_INPUT_ENABLED")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="", alias="OPENAI_MODEL")

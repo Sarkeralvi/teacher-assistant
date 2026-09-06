@@ -31,7 +31,7 @@ from app.worker.jobs import run_bulk_evaluation_next_job
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import BrainProviderConfigurationError
 from packages.brain.capabilities import BrainExecutionLocation
-from packages.brain.policy import brain_policy_from_settings
+from packages.brain.policy import brain_policy_for_profile
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -55,10 +55,7 @@ def _owned_run(run_id: int, db: Session, teacher: User) -> BulkEvaluationRun:
 
 def _enqueue(run_id: int, provider: str) -> None:
     settings = get_settings()
-    timeout = brain_policy_from_settings(
-        settings,
-        requested_provider=provider,
-    ).job_timeout_seconds
+    timeout = brain_policy_for_profile(settings, provider).job_timeout_seconds
     get_default_queue().enqueue(
         run_bulk_evaluation_next_job,
         run_id,
@@ -94,10 +91,7 @@ def create_bulk_evaluation_run(
             detail="Strict auto-pass and draft-only authorization are required",
         )
     try:
-        policy = brain_policy_from_settings(
-            get_settings(),
-            requested_provider=provider,
-        )
+        policy = brain_policy_for_profile(get_settings(), provider)
     except BrainProviderConfigurationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if (

@@ -8,7 +8,11 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter
-from packages.brain.codex_cli_provider import CodexCliProvider, CodexCliProviderError
+from packages.brain.codex_cli_provider import (
+    CodexCliProvider,
+    CodexCliProviderError,
+    _codex_strict_schema,
+)
 from packages.brain.prompt_registry import build_grading_prompt
 from packages.brain.schemas import ModelPolicy
 from tests.test_openai_provider import rubric_payload
@@ -19,6 +23,26 @@ class FakeCompletedProcess:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def test_codex_strict_schema_removes_unsupported_regex_patterns() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "max_marks": {
+                "anyOf": [
+                    {"type": "number"},
+                    {"type": "string", "pattern": r"^(?!^[-+.]*$)[+-]?0*\d*"},
+                ]
+            }
+        },
+    }
+
+    normalized = _codex_strict_schema(schema)
+
+    assert "pattern" not in json.dumps(normalized)
+    assert normalized["required"] == ["max_marks"]
+    assert normalized["additionalProperties"] is False
 
 
 def valid_codex_output() -> dict[str, object]:
@@ -572,6 +596,8 @@ def test_codex_visual_mapping_runs_through_canonical_adapter_contract() -> None:
             )
         workspace = Path(str(kwargs["cwd"]))
         workspaces.append(workspace)
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "strict"
         assert {path.name for path in workspace.iterdir()} == {
             "input-1.png",
             "output-schema.json",
@@ -579,6 +605,7 @@ def test_codex_visual_mapping_runs_through_canonical_adapter_contract() -> None:
         schema_file = Path(cmd[cmd.index("--output-schema") + 1])
         schema = json.loads(schema_file.read_text(encoding="utf-8"))
         assert set(schema["required"]) == set(schema["properties"])
+        assert "pattern" not in json.dumps(schema)
         output_file = Path(cmd[cmd.index("--output-last-message") + 1])
         output_file.write_text(
             json.dumps(
@@ -611,15 +638,127 @@ def test_codex_visual_mapping_runs_through_canonical_adapter_contract() -> None:
     assert workspaces and all(not workspace.exists() for workspace in workspaces)
 
 
+def test_codex_visual_schema_failure_gets_one_bounded_repair_attempt() -> None:
+    execution_prompts: list[str] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout=(
+                    "--cd <DIR>\n--sandbox <SANDBOX_MODE>\n"
+                    "--output-last-message <FILE>\n--output-schema <FILE>\n"
+                    "--json\n--image <FILE>"
+                )
+            )
+        execution_prompts.append(str(kwargs["input"]))
+        invalid_bbox = [10, 10, 1100, 100] if len(execution_prompts) == 1 else [10, 10, 900, 100]
+        Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
+            json.dumps(
+                {
+                    "draft_text": "visible answer",
+                    "uncertain_glyphs": [],
+                    "editing_marks": [
+                        {
+                            "page_index": 1,
+                            "bbox": invalid_bbox,
+                            "status": "retained",
+                            "position_hint": "final line",
+                        }
+                    ],
+                    "cancellation_detected": False,
+                    "replacement_detected": False,
+                    "uncertain_correction_detected": False,
+                    "requires_thinking_repair": False,
+                    "is_blank": False,
+                    "is_irrelevant": False,
+                    "confidence": 0.8,
+                    "needs_review": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return FakeCompletedProcess(stdout="events")
+
+    adapter = BrainAdapter(make_provider(runner=runner, image_input_enabled=True))
+    output = adapter.transcribe_image(
+        image_bytes=b"page",
+        mime_type="image/png",
+        label="Q1",
+    )
+
+    assert output.draft_text == "visible answer"
+    assert len(execution_prompts) == 2
+    assert "failed strict validation" in execution_prompts[1]
+    assert "Previous JSON" in execution_prompts[1]
+
+
+def test_codex_visual_cross_field_failure_gets_bounded_repair_attempt() -> None:
+    execution_prompts: list[str] = []
+
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
+        if cmd == ["codex", "--version"]:
+            return FakeCompletedProcess(stdout="codex-cli 0.128.0")
+        if cmd == ["codex", "exec", "--help"]:
+            return FakeCompletedProcess(
+                stdout=(
+                    "--cd <DIR>\n--sandbox <SANDBOX_MODE>\n"
+                    "--output-last-message <FILE>\n--output-schema <FILE>\n"
+                    "--json\n--image <FILE>"
+                )
+            )
+        execution_prompts.append(str(kwargs["input"]))
+        repaired = len(execution_prompts) == 2
+        Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
+            json.dumps(
+                {
+                    "draft_text": (
+                        "[unclear correction] visible answer" if repaired else "visible answer"
+                    ),
+                    "uncertain_glyphs": [],
+                    "editing_marks": [
+                        {
+                            "page_index": 1,
+                            "bbox": [10, 10, 900, 100],
+                            "status": "uncertain_correction",
+                            "position_hint": "numerator",
+                        }
+                    ],
+                    "cancellation_detected": False,
+                    "replacement_detected": False,
+                    "uncertain_correction_detected": True,
+                    "requires_thinking_repair": False,
+                    "is_blank": False,
+                    "is_irrelevant": False,
+                    "confidence": 0.6,
+                    "needs_review": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return FakeCompletedProcess(stdout="events")
+
+    output = BrainAdapter(
+        make_provider(runner=runner, image_input_enabled=True)
+    ).transcribe_image(image_bytes=b"page", mime_type="image/png", label="Q1")
+
+    assert output.draft_text.startswith("[unclear correction]")
+    assert len(execution_prompts) == 2
+    assert "uncertain correction must remain explicit" in execution_prompts[1]
+
+
 def test_codex_grading_discards_known_criterion_status_before_strict_validation() -> None:
     payload = valid_codex_output()
     payload["rubric_breakdown"][0]["criterion_status"] = "partially_met"
 
-    def runner(cmd: list[str], **_kwargs: object) -> FakeCompletedProcess:
+    def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
         if cmd == ["codex", "--version"]:
             return FakeCompletedProcess(stdout="codex-cli 0.128.0")
         if cmd == ["codex", "exec", "--help"]:
             return FakeCompletedProcess(stdout="--cd\n--sandbox\n--output-last-message")
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "strict"
         Path(cmd[cmd.index("--output-last-message") + 1]).write_text(
             json.dumps(payload), encoding="utf-8"
         )

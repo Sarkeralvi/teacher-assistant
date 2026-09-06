@@ -27,6 +27,7 @@ from app.services.reference_extraction_service import (
     ReferenceExtractionError,
     ReferenceExtractionService,
 )
+from packages.brain.capabilities import BrainCapability
 
 
 class FakePaddleBlock:
@@ -45,6 +46,44 @@ class FakePaddleBlock:
             "text": self.text,
             "bbox": self.bbox,
         }
+
+
+def test_reference_extraction_resolves_explicit_named_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import reference_extraction_service as module
+
+    validated: dict[str, object] = {}
+    policy = SimpleNamespace(
+        reference_extraction_enabled=True,
+        visual_preparation_enabled=True,
+        provider="claude_cli",
+        model="sonnet",
+    )
+
+    def validate_request(**kwargs: object) -> None:
+        validated.update(kwargs)
+
+    policy.validate_request = validate_request
+    monkeypatch.setattr(
+        module,
+        "brain_policy_for_profile",
+        lambda _settings, profile_id: policy
+        if profile_id == "claude_cli"
+        else pytest.fail("unexpected profile"),
+    )
+    monkeypatch.setattr(
+        module,
+        "brain_policy_from_settings",
+        lambda *_args, **_kwargs: pytest.fail("legacy provider path used"),
+    )
+    service = ReferenceExtractionService(
+        None,  # type: ignore[arg-type]
+        settings=Settings(),
+    )
+
+    assert service._assert_enabled("sonnet", provider="claude_cli") is policy
+    assert validated["capability"] is BrainCapability.VISUAL_REFERENCE_EXTRACTION
 
 
 class FakePaddleClient:

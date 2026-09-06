@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -153,12 +154,45 @@ def test_mapping_policy_fails_closed_on_low_confidence_and_continuation() -> Non
         answer_region=object(),
         blocker_reason=None,
         confidence=Decimal("0.89"),
+        teacher_confirmed=False,
         source_reference={"warnings": ["Possible continuation on next page"]},
     )
 
     codes = _service()._mapping_exception_codes(mapping, set())
 
     assert codes == ["possible_continuation", "incomplete_region"]
+
+
+def test_teacher_confirmation_clears_only_low_confidence_mapping_exception() -> None:
+    mapping = SimpleNamespace(
+        question_id=11,
+        answer_region=object(),
+        blocker_reason="Qwen marked this mapping uncertain",
+        confidence=Decimal("0.83"),
+        teacher_confirmed=True,
+        source_reference={"warnings": []},
+    )
+
+    codes = _service()._mapping_exception_codes(mapping, set())
+
+    assert codes == []
+
+
+def test_teacher_confirmation_clears_inferred_question_label_exception() -> None:
+    mapping = SimpleNamespace(
+        question_id=11,
+        answer_region=object(),
+        blocker_reason="Qwen marked this mapping uncertain",
+        confidence=Decimal("0.83"),
+        teacher_confirmed=True,
+        source_reference={
+            "warnings": ["inferred_question_label_requires_teacher_review"]
+        },
+    )
+
+    codes = _service()._mapping_exception_codes(mapping, set())
+
+    assert codes == []
 
 
 def test_critical_math_tokens_preserve_decimal_fraction_and_complement_signals() -> None:
@@ -680,6 +714,275 @@ def test_page_read_resume_item_reuses_persisted_evidence_without_spending_a_call
     assert run.calls_used == 720
     assert item.mapping_id == 201
     assert item.answer_region_id == 101
+
+
+def test_page_read_resume_preserves_teacher_confirmed_thinking_repair() -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=4,
+        created_by_teacher_id=1,
+        status="completed_with_exceptions",
+        stage="review",
+        authorized_call_limit=16,
+        calls_used=4,
+        import_manifest={"visual_evidence_path": "page_read"},
+    )
+    item = BulkEvaluationItem(
+        id=21,
+        run_id=4,
+        submission_id=62,
+        question_id=72,
+        mapping_id=201,
+        answer_region_id=101,
+        transcription_run_id=558,
+        status="exception",
+        stage="transcription",
+        exception_codes=["verification_disagreement"],
+        warnings=[],
+    )
+    run.items = [item]
+    region = AnswerRegion(id=101, question_id=72, segments=[])
+    mapping = AnswerRegionMapping(
+        id=201,
+        submission_id=62,
+        question_id=72,
+        answer_region_id=101,
+        answer_region=region,
+        confidence=Decimal("0.95"),
+        teacher_confirmed=True,
+        blocker_reason=None,
+        source_reference={},
+    )
+    repair = AnswerRegionOcrRun(
+        id=558,
+        answer_region_id=101,
+        profile="qwen38_thinking_repair",
+        status="confirmed",
+        confirmed_by_teacher_id=1,
+    )
+    db.get.side_effect = lambda model, object_id: {
+        (AnswerRegionMapping, 201): mapping,
+        (AnswerRegion, 101): region,
+        (AnswerRegionOcrRun, 558): repair,
+    }.get((model, object_id))
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+
+    resumed = service.resume_item(run, item, teacher_id=1)
+
+    assert resumed.stage == "transcription"
+    assert resumed.transcription_run_id == 558
+    assert run.stage == "transcription"
+    assert run.calls_used == 4
+
+
+def test_resumed_page_read_with_preserved_edits_advances_to_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=4,
+        created_by_teacher_id=1,
+        status="mapping",
+        stage="mapping",
+        authorized_call_limit=16,
+        calls_used=2,
+        import_manifest={"visual_evidence_path": "page_read"},
+    )
+    item = BulkEvaluationItem(
+        id=21,
+        run_id=4,
+        submission_id=62,
+        question_id=72,
+        status="pending",
+        stage="read",
+        exception_codes=[],
+        warnings=[],
+    )
+    region = AnswerRegion(id=101, question_id=72, segments=[])
+    mapping = AnswerRegionMapping(
+        id=201,
+        submission_id=62,
+        question_id=72,
+        answer_region_id=101,
+        answer_region=region,
+        confidence=Decimal("0.83"),
+        teacher_confirmed=True,
+        blocker_reason="Qwen marked this mapping uncertain",
+        source_reference={
+            "warnings": ["inferred_question_label_requires_teacher_review"]
+        },
+    )
+    transcript = AnswerRegionOcrRun(
+        id=555,
+        answer_region_id=101,
+        profile="qwen38_visual_page_read",
+        status="succeeded",
+        draft_text="[visibly crossed] x=3\nx=4",
+        normalized_result={"confidence": "0.95", "requires_thinking_repair": True},
+    )
+    submission = Submission(id=62, pages=[])
+    teacher = User(id=1)
+    db.scalar.return_value = submission
+    db.scalars.return_value.all.return_value = [item]
+    db.get.side_effect = lambda model, _id: teacher if model is User else None
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._next_read_submission = MagicMock(return_value=62)
+    service._existing_submission_mappings = MagicMock(return_value=[mapping])
+    service._page_read_runs_by_question = MagicMock(return_value={72: transcript})
+    service._overlapping_question_ids = MagicMock(return_value=set())
+    service._accept_or_quarantine_transcription = MagicMock()
+    page_read = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.LocalScriptPageReadService",
+        page_read,
+    )
+
+    service._process_read(run)
+
+    page_read.assert_not_called()
+    service._accept_or_quarantine_transcription.assert_not_called()
+    assert item.transcription_run_id == 555
+    assert item.status == "pending"
+    assert item.stage == "transcription"
+    assert item.exception_codes == []
+    assert item.warnings == ["thinking_repair_pending"]
+
+
+def test_page_read_with_preserved_edits_is_routed_to_thinking_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=5,
+        created_by_teacher_id=1,
+        status="mapping",
+        stage="mapping",
+        provider="codex_cli",
+        model_name="gpt-5.5",
+        authorized_call_limit=16,
+        calls_used=2,
+    )
+    item = BulkEvaluationItem(
+        id=22,
+        run_id=5,
+        submission_id=63,
+        question_id=73,
+        answer_region_id=102,
+        transcription_run_id=556,
+        status="pending",
+        stage="transcription",
+        exception_codes=[],
+        warnings=[],
+    )
+    region = AnswerRegion(id=102, question_id=73, segments=[])
+    teacher = User(id=1)
+    page_read = AnswerRegionOcrRun(
+        id=556,
+        answer_region_id=102,
+        profile="qwen38_visual_page_read",
+        status="succeeded",
+        draft_text="[visibly crossed] x=3\nx=4",
+        normalized_result={"confidence": "0.91", "requires_thinking_repair": True},
+    )
+    repair = AnswerRegionOcrRun(id=557, profile="qwen38_thinking_repair", status="queued")
+    visual_service = MagicMock()
+    visual_service.create_thinking_repair.return_value = repair
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.Qwen38VisualTranscriptionService",
+        MagicMock(return_value=visual_service),
+    )
+    db.get.side_effect = lambda model, object_id: {
+        (AnswerRegion, 102): region,
+        (User, 1): teacher,
+        (AnswerRegionOcrRun, 556): page_read,
+    }.get((model, object_id))
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._next_transcription_item = MagicMock(return_value=item)
+    service._require_calls = MagicMock()
+    service._refresh_counts = MagicMock()
+
+    service._process_transcription(run)
+
+    service._require_calls.assert_called_once_with(run, 3)
+    visual_service.create_thinking_repair.assert_called_once_with(
+        region,
+        page_read,
+        teacher=teacher,
+        expected_model="gpt-5.5",
+        provider="codex_cli",
+    )
+    assert item.transcription_run_id == 557
+    assert item.status == "pending"
+    assert item.stage == "transcription"
+    assert item.warnings == ["thinking_repair_pending"]
+
+
+def test_teacher_confirmed_thinking_repair_advances_without_another_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=6,
+        created_by_teacher_id=1,
+        status="review_ready",
+        stage="review",
+        provider="codex_cli",
+        model_name="gpt-5.5",
+        authorized_call_limit=16,
+        calls_used=4,
+    )
+    item = BulkEvaluationItem(
+        id=23,
+        run_id=6,
+        submission_id=64,
+        question_id=74,
+        answer_region_id=103,
+        transcription_run_id=558,
+        status="pending",
+        stage="transcription",
+        exception_codes=[],
+        warnings=[],
+    )
+    region = AnswerRegion(id=103, question_id=74, segments=[])
+    teacher = User(id=1)
+    confirmed_text = "P(Y|X-bar)=3/16"
+    repair = AnswerRegionOcrRun(
+        id=558,
+        answer_region_id=103,
+        profile="qwen38_thinking_repair",
+        status="confirmed",
+        draft_text=confirmed_text,
+        confirmed_text=confirmed_text,
+        confirmed_by_teacher_id=1,
+        normalized_result={"confidence": "0.78"},
+    )
+    visual_service = MagicMock()
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.Qwen38VisualTranscriptionService",
+        MagicMock(return_value=visual_service),
+    )
+    db.get.side_effect = lambda model, object_id: {
+        (AnswerRegion, 103): region,
+        (User, 1): teacher,
+        (AnswerRegionOcrRun, 558): repair,
+    }.get((model, object_id))
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._next_transcription_item = MagicMock(return_value=item)
+    service._refresh_counts = MagicMock()
+
+    service._process_transcription(run)
+
+    visual_service.run_thinking_repair.assert_not_called()
+    assert run.calls_used == 4
+    assert item.status == "pending"
+    assert item.stage == "grading"
+    assert item.verification_source == "teacher"
+    assert item.transcription_confidence == Decimal("0.78")
+    assert item.evidence_snapshot_sha256 == hashlib.sha256(
+        confirmed_text.encode("utf-8")
+    ).hexdigest()
 
 
 def test_bulk_audit_payload_records_hashes_and_counts_not_raw_answer_text() -> None:

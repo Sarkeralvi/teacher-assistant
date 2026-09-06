@@ -166,6 +166,64 @@ def test_page_read_transcript_with_unresolved_evidence_cannot_be_confirmed() -> 
         )
 
 
+def test_page_read_transcript_can_seed_thinking_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = SimpleNamespace(
+        scalar=lambda _statement: None,
+        add=lambda _value: None,
+        flush=lambda: None,
+        commit=lambda: None,
+        refresh=lambda _value: None,
+    )
+    service = Qwen38VisualTranscriptionService(db)  # type: ignore[arg-type]
+    policy = SimpleNamespace(
+        model_asset_sha256="a" * 64,
+        auxiliary_model_asset_sha256="b" * 64,
+        provider="codex_cli",
+        model="gpt-5.5",
+    )
+    source_run = SimpleNamespace(
+        id=51,
+        answer_region_id=42,
+        profile="qwen38_visual_page_read",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        status="succeeded",
+        draft_text="[visibly crossed] x=3\nx=4",
+        normalized_result={"is_blank": False, "requires_thinking_repair": True},
+        source_image_sha256="c" * 64,
+    )
+    region = SimpleNamespace(
+        id=42,
+        segments=[SimpleNamespace(image_path="answer.png")],
+        grading_jobs=[],
+        grade_suggestions=[],
+    )
+    monkeypatch.setattr(
+        service,
+        "_assert_thinking_repair_enabled",
+        lambda _model, provider: policy,
+    )
+    monkeypatch.setattr(
+        service, "_mapping_for_region", lambda _region_id: SimpleNamespace(teacher_confirmed=True)
+    )
+    monkeypatch.setattr(service, "_source_hash", lambda _region: "c" * 64)
+    monkeypatch.setattr(service, "_source_hashes", lambda _region: ["c" * 64])
+    monkeypatch.setattr(service, "_audit", lambda *_args, **_kwargs: None)
+
+    repair = service.create_thinking_repair(
+        region,  # type: ignore[arg-type]
+        source_run,  # type: ignore[arg-type]
+        teacher=SimpleNamespace(id=7),  # type: ignore[arg-type]
+        expected_model="gpt-5.5",
+        provider="codex_cli",
+    )
+
+    assert repair.profile == "qwen38_thinking_repair"
+    assert repair.normalized_result["source_run_id"] == 51
+    assert repair.provider == "codex_cli"
+
+
 def test_page_read_run_can_be_rejected() -> None:
     class FakeDb:
         def commit(self):

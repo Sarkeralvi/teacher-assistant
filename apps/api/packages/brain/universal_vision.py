@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from packages.brain.llama_cpp_qwen_provider import QwenReferenceBundlePayload
 from packages.brain.schemas_qwen38 import (
@@ -43,6 +43,21 @@ class _VisualTranscriptionDraft(BaseModel):
     is_irrelevant: bool = False
     confidence: float = Field(ge=0, le=1)
     needs_review: bool = True
+
+    @model_validator(mode="after")
+    def evidence_flags_match_the_draft(self) -> _VisualTranscriptionDraft:
+        if self.is_blank and self.draft_text.strip():
+            raise ValueError("blank visual transcriptions must use an empty draft_text")
+        if not self.is_blank and not self.draft_text.strip():
+            raise ValueError("nonblank visual transcriptions require draft_text")
+        statuses = {mark.status for mark in self.editing_marks}
+        if (
+            (self.uncertain_correction_detected or "uncertain_correction" in statuses)
+            and not self.requires_thinking_repair
+            and "[unclear correction]" not in self.draft_text
+        ):
+            raise ValueError("uncertain correction must remain explicit in draft_text")
+        return self
 
 
 _QUESTION_EXTRACTION_PROMPT = """
@@ -378,6 +393,14 @@ class UniversalVisionProviderMixin:
             max_tokens=max_tokens,
         )
         draft = _VisualTranscriptionDraft.model_validate(completion.payload)
+        statuses = {mark.status for mark in draft.editing_marks}
+        draft = draft.model_copy(
+            update={
+                "cancellation_detected": "cancelled" in statuses,
+                "replacement_detected": "replacement" in statuses,
+                "uncertain_correction_detected": "uncertain_correction" in statuses,
+            }
+        )
         image_hash = hashlib.sha256(b"".join(item[0] for item in images)).hexdigest()
         return VisualTranscriptionOutput.model_validate(
             {

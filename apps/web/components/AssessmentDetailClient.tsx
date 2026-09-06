@@ -2022,6 +2022,21 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
       </form>
       </details>
 
+      <BrainProfileSelector
+        profiles={brainProfiles}
+        requiredCapability="visual_mapping"
+        run={activeGradingRun}
+        selectedProfileId={selectedProfileId}
+        consentConfirmed={providerDataBoundaryConfirmed}
+        busy={submitting}
+        onProfileChange={(profileId) => {
+          setSelectedProfileId(profileId);
+          setProviderDataBoundaryConfirmed(false);
+        }}
+        onConsentChange={setProviderDataBoundaryConfirmed}
+        onLock={() => void handleLockBrainProfile()}
+      />
+
       <section className="rounded border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-xl font-semibold">Uploaded scripts</h2>
         <p className="mt-1 text-sm text-slate-400">
@@ -2124,20 +2139,6 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
             </button>
           ))}
         </div>
-        <BrainProfileSelector
-          profiles={brainProfiles}
-          requiredCapability="visual_mapping"
-          run={activeGradingRun}
-          selectedProfileId={selectedProfileId}
-          consentConfirmed={providerDataBoundaryConfirmed}
-          busy={submitting}
-          onProfileChange={(profileId) => {
-            setSelectedProfileId(profileId);
-            setProviderDataBoundaryConfirmed(false);
-          }}
-          onConsentChange={setProviderDataBoundaryConfirmed}
-          onLock={() => void handleLockBrainProfile()}
-        />
         <div className="grid gap-2 rounded border border-slate-800 p-3 text-xs text-slate-300 md:grid-cols-3">
           <p>Finalized references: {referencesReady ? "ready" : "blocked"}</p>
           <p>Script pages: {pages.length}</p>

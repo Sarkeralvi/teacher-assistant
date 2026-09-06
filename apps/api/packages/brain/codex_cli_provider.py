@@ -118,6 +118,7 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
         configured_parent = Path(self.workdir)
         workspace_parent = str(configured_parent) if configured_parent.is_dir() else None
         started = time.perf_counter()
+        deadline = started + self.timeout_seconds
         with tempfile.TemporaryDirectory(
             prefix="ta-codex-cli-", dir=workspace_parent
         ) as tmp_dir:
@@ -142,37 +143,81 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
                 image_paths=image_paths,
                 cwd=workspace,
             )
-            try:
-                completed = self._runner(
-                    command,
-                    cwd=workspace,
-                    capture_output=True,
-                    text=True,
-                    input=prompt,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise CodexCliProviderError(
-                    f"Codex CLI vision call timed out after {self.timeout_seconds:g}s"
-                ) from exc
-            self._require_bounded_process_output(completed)
-            if completed.returncode != 0:
-                raise CodexCliProviderError(
-                    self._format_process_failure(completed, command=command)
-                )
-            payload = self._read_json_output(output_file)
-        if response_model is not None:
-            try:
-                payload = response_model.model_validate(payload).model_dump(mode="json")
-            except ValidationError as exc:
-                raise CodexCliProviderError(
-                    f"Codex CLI structured response was not usable: {exc}"
-                ) from exc
+            payload = self._run_structured_vision_command(
+                command=command,
+                cwd=workspace,
+                output_file=output_file,
+                prompt=prompt,
+                deadline=deadline,
+            )
+            if response_model is not None:
+                try:
+                    payload = response_model.model_validate(payload).model_dump(mode="json")
+                except ValidationError as first_error:
+                    repair_prompt = (
+                        f"{prompt}\n\nYour previous JSON failed strict validation. Correct only "
+                        "the schema/field errors and return the full corrected JSON object. "
+                        "Do not change visible evidence. Bboxes use integer coordinates from 0 "
+                        "to 1000 with x1 < x2 and y1 < y2.\nValidation error:\n"
+                        f"{str(first_error)[:2000]}\nPrevious JSON:\n"
+                        f"{json.dumps(payload, ensure_ascii=False)[:_MAX_OUTPUT_BYTES]}"
+                    )
+                    output_file.unlink(missing_ok=True)
+                    payload = self._run_structured_vision_command(
+                        command=command,
+                        cwd=workspace,
+                        output_file=output_file,
+                        prompt=repair_prompt,
+                        deadline=deadline,
+                    )
+                    try:
+                        payload = response_model.model_validate(payload).model_dump(mode="json")
+                    except ValidationError as exc:
+                        raise CodexCliProviderError(
+                            "Codex CLI structured response remained unusable after one "
+                            f"repair attempt: {exc}"
+                        ) from exc
         return UniversalVisionCompletion(
             payload=payload,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
+
+    def _run_structured_vision_command(
+        self,
+        *,
+        command: list[str],
+        cwd: Path,
+        output_file: Path,
+        prompt: str,
+        deadline: float,
+    ) -> dict[str, Any]:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise CodexCliProviderError(
+                f"Codex CLI vision call timed out after {self.timeout_seconds:g}s"
+            )
+        try:
+            completed = self._runner(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                input=prompt,
+                timeout=remaining,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CodexCliProviderError(
+                f"Codex CLI vision call timed out after {self.timeout_seconds:g}s"
+            ) from exc
+        self._require_bounded_process_output(completed)
+        if completed.returncode != 0:
+            raise CodexCliProviderError(
+                self._format_process_failure(completed, command=command)
+            )
+        return self._read_json_output(output_file)
 
     def grade(
         self,
@@ -230,6 +275,8 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
                     cwd=workspace,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="strict",
                     input=prompt,
                     timeout=self.timeout_seconds,
                     check=False,
@@ -298,6 +345,8 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="strict",
                 timeout=min(self.timeout_seconds, 30),
                 check=False,
             )
@@ -604,11 +653,17 @@ reason, evidence, confidence. Awarded marks must sum to score.
 
 
 def _codex_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Make Pydantic object defaults explicit for Codex strict response schemas."""
+    """Make Pydantic schemas compatible with Codex strict structured output."""
 
     def normalize(value: Any) -> Any:
         if isinstance(value, dict):
-            normalized = {key: normalize(item) for key, item in value.items()}
+            # Codex/OpenAI structured outputs reject ECMA regex features such as
+            # lookarounds that Pydantic emits for some Decimal constraints. The
+            # application still validates the returned payload with Pydantic, so
+            # dropping provider-side patterns does not weaken the final contract.
+            normalized = {
+                key: normalize(item) for key, item in value.items() if key != "pattern"
+            }
             properties = normalized.get("properties")
             if normalized.get("type") == "object" and isinstance(properties, dict):
                 normalized["required"] = list(properties)

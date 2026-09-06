@@ -122,10 +122,10 @@ if (referencePage.includes("localAi.paddle_ocr.enabled")) {
   throw new Error("Qwen3.8 reference extraction must not depend on retired PaddleOCR");
 }
 for (const marker of [
-  "localAi.brain.configured",
-  "localAi.brain.available",
-  "localAi.brain.reference_extraction_enabled",
-  'localAi.brain.capabilities.includes("visual_reference_extraction")',
+  "selectedBrainProfile?.ready",
+  'selectedBrainProfile.capabilities.includes("visual_reference_extraction")',
+  "Run brain locked",
+  "Brain profile ready",
 ]) {
   if (!referencePage.includes(marker)) {
     throw new Error(`Reference preparation readiness is missing brain marker: ${marker}`);
@@ -187,7 +187,7 @@ for (const marker of [
   "Required: confirm each image-grounded editing decision",
   "Discard Thinking alternative",
   "Unresolved edits or uncertain surviving glyphs fail closed",
-  "thinking_repair_enabled",
+  'selectedBrainProfile?.capabilities.includes("transcription_repair")',
   "Grade all approved transcriptions",
   "Server ceiling: 25 calls",
   "Create answer region",
@@ -301,6 +301,22 @@ for (const marker of [
 const bulk = readFileSync(join(root, "components/BulkEvaluationClient.tsx"), "utf8");
 if (!bulk.includes("window.setTimeout(() => URL.revokeObjectURL(url), 0)")) {
   throw new Error("Bulk result downloads must defer Blob URL revocation until after click dispatch");
+}
+for (const marker of [
+  'data-testid="bulk-brain-profile-select"',
+  "getBrainProfiles()",
+  "profileEligibleForBulk",
+  "selectedProfile.data_destination",
+]) {
+  if (!bulk.includes(marker)) {
+    throw new Error(`Bulk profile selection UI missing marker: ${marker}`);
+  }
+}
+if (referencePage.includes("Brain configured")) {
+  throw new Error("Reference workspace must not present the process-default brain as the locked run profile");
+}
+if (!referencePage.includes("Run brain locked")) {
+  throw new Error("Reference workspace must identify the profile locked to the current run");
 }
 
 const browserUi = `${referencePage}\n${assessment}\n${review}`;

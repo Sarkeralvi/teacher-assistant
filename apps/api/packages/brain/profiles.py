@@ -115,6 +115,49 @@ def _generic_profile_selected(settings: Settings) -> bool:
     return any((settings.brain_model, settings.brain_api_key, settings.brain_base_url))
 
 
+def legacy_profile_settings(settings: Settings, profile_id: str) -> Settings:
+    """Translate process-wide BRAIN_* overrides for the legacy provider path only."""
+
+    normalized = profile_id.strip().lower()
+    if normalized in {"mock", "openai_compatible"} or not _generic_profile_selected(settings):
+        return settings
+    field_prefix = {
+        "openai": "openai",
+        "gemini": "gemini",
+        "codex_cli": "codex_cli",
+        "claude_cli": "claude_cli",
+        "llama_cpp_qwen": "local_qwen",
+        "llama_cpp_qwen38": "local_qwen38",
+        "antigravity_gemini": "antigravity_gemini",
+    }.get(normalized)
+    if field_prefix is None:
+        return settings
+    updates: dict[str, object] = {}
+    if settings.brain_model:
+        updates[f"{field_prefix}_model"] = settings.brain_model
+    updates[f"{field_prefix}_timeout_seconds"] = settings.brain_timeout_seconds
+    if settings.brain_api_key and normalized in {
+        "openai",
+        "gemini",
+        "llama_cpp_qwen",
+        "llama_cpp_qwen38",
+    }:
+        updates[f"{field_prefix}_api_key"] = settings.brain_api_key
+    if settings.brain_base_url and normalized in {
+        "openai",
+        "llama_cpp_qwen",
+        "llama_cpp_qwen38",
+    }:
+        updates[f"{field_prefix}_base_url"] = settings.brain_base_url
+    if settings.brain_image_input_enabled is not None and normalized in {
+        "openai",
+        "gemini",
+        "codex_cli",
+    }:
+        updates[f"{field_prefix}_image_input_enabled"] = settings.brain_image_input_enabled
+    return settings.model_copy(update=updates)
+
+
 def _image_capabilities(enabled: bool) -> frozenset[BrainCapability]:
     capabilities = {BrainCapability.GRADING}
     if enabled:
@@ -193,18 +236,18 @@ def _openai_configuration(
     *,
     profile_id: str,
 ) -> BrainProviderProfileConfiguration:
-    generic_profile = profile_id == "openai_compatible" or _generic_profile_selected(
-        settings
-    )
-    model = settings.brain_model or settings.openai_model or (
+    generic_profile = profile_id == "openai_compatible"
+    model = (settings.brain_model if generic_profile else settings.openai_model) or (
         "gpt-4o-mini" if profile_id == "openai" else ""
     )
-    endpoint = settings.brain_base_url or settings.openai_base_url or (
+    endpoint = (
+        settings.brain_base_url if generic_profile else settings.openai_base_url
+    ) or (
         "https://api.openai.com/v1" if profile_id == "openai" else ""
     )
     image_enabled = (
         settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
+        if generic_profile and settings.brain_image_input_enabled is not None
         else settings.openai_image_input_enabled
     )
     return BrainProviderProfileConfiguration(
@@ -217,19 +260,21 @@ def _openai_configuration(
         model=model,
         endpoint=endpoint or "n/a",
         capabilities=_image_capabilities(bool(image_enabled)),
-        destination=_resolve_location(
-            settings,
-            base_url=endpoint,
-            default=BrainExecutionLocation.CLOUD,
+        destination=(
+            _resolve_location(
+                settings,
+                base_url=endpoint,
+                default=BrainExecutionLocation.CLOUD,
+            )
+            if generic_profile
+            else BrainExecutionLocation.CLOUD
         ),
         timeout_seconds=(
-            settings.brain_timeout_seconds
-            if generic_profile
-            else settings.openai_timeout_seconds
+            settings.brain_timeout_seconds if generic_profile else settings.openai_timeout_seconds
         ),
         structured_output_mode=settings.brain_structured_output_mode,
         secret_reference=(
-            "BRAIN_API_KEY or OPENAI_API_KEY"
+            "OPENAI_API_KEY"
             if profile_id == "openai"
             else "BRAIN_API_KEY"
         ),
@@ -242,7 +287,11 @@ def _build_openai_compatible(
     configuration: BrainProviderProfileConfiguration,
     provider_constructor: ProviderConstructor,
 ) -> ProviderBuildResult:
-    api_key = settings.brain_api_key or settings.openai_api_key
+    api_key = (
+        settings.brain_api_key
+        if configuration.profile_id == "openai_compatible"
+        else settings.openai_api_key
+    )
     if not configuration.model:
         raise BrainProviderConfigurationError("BRAIN_MODEL is required")
     if configuration.endpoint == "n/a":
@@ -278,23 +327,19 @@ def _build_openai_compatible(
 
 
 def _gemini_configuration(settings: Settings) -> BrainProviderProfileConfiguration:
-    image_enabled = (
-        settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
-        else settings.gemini_image_input_enabled
-    )
+    image_enabled = settings.gemini_image_input_enabled
     return BrainProviderProfileConfiguration(
         profile_id="gemini",
         display_name="Google Gemini API",
         vendor="Google",
         transport=BrainTransport.HTTP,
-        model=settings.brain_model or settings.gemini_model,
+        model=settings.gemini_model,
         endpoint="https://generativelanguage.googleapis.com",
         capabilities=_image_capabilities(bool(image_enabled)),
         destination=BrainExecutionLocation.CLOUD,
-        timeout_seconds=settings.brain_timeout_seconds,
+        timeout_seconds=settings.gemini_timeout_seconds,
         structured_output_mode=settings.brain_structured_output_mode,
-        secret_reference="BRAIN_API_KEY or GEMINI_API_KEY",
+        secret_reference="GEMINI_API_KEY",
         enabled=settings.brain_allow_real_providers,
     )
 
@@ -304,7 +349,7 @@ def _build_gemini(
     configuration: BrainProviderProfileConfiguration,
     provider_constructor: ProviderConstructor,
 ) -> ProviderBuildResult:
-    api_key = settings.brain_api_key or settings.gemini_api_key
+    api_key = settings.gemini_api_key
     if not api_key:
         raise BrainProviderConfigurationError(
             "GEMINI_API_KEY or BRAIN_API_KEY is required when BRAIN_PROVIDER=gemini"
@@ -322,25 +367,17 @@ def _build_gemini(
 
 
 def _codex_configuration(settings: Settings) -> BrainProviderProfileConfiguration:
-    image_enabled = (
-        settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
-        else settings.codex_cli_image_input_enabled
-    )
+    image_enabled = settings.codex_cli_image_input_enabled
     return BrainProviderProfileConfiguration(
         profile_id="codex_cli",
         display_name="Codex CLI",
         vendor="OpenAI",
         transport=BrainTransport.CLI,
-        model=settings.brain_model or settings.codex_cli_model,
+        model=settings.codex_cli_model,
         endpoint="n/a",
         capabilities=_image_capabilities(bool(image_enabled)),
         destination=BrainExecutionLocation.CLOUD,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.codex_cli_timeout_seconds
-        ),
+        timeout_seconds=settings.codex_cli_timeout_seconds,
         structured_output_mode="json" if settings.codex_cli_use_json else "text",
         secret_reference="CLI-managed authentication",
         enabled=settings.brain_allow_real_providers,
@@ -360,11 +397,7 @@ def _build_codex_cli(
         raise BrainProviderConfigurationError(
             "CODEX_CLI_SANDBOX=danger-full-access is not allowed"
         )
-    image_enabled = (
-        settings.brain_image_input_enabled
-        if settings.brain_image_input_enabled is not None
-        else settings.codex_cli_image_input_enabled
-    )
+    image_enabled = settings.codex_cli_image_input_enabled
     return ProviderBuildResult(
         provider_constructor(
             command=settings.codex_cli_command,
@@ -386,15 +419,11 @@ def _claude_configuration(settings: Settings) -> BrainProviderProfileConfigurati
         display_name="Claude Code CLI",
         vendor="Anthropic",
         transport=BrainTransport.CLI,
-        model=settings.brain_model or settings.claude_cli_model,
+        model=settings.claude_cli_model,
         endpoint="n/a",
         capabilities=ClaudeCliProvider.capabilities,
         destination=BrainExecutionLocation.CLOUD,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.claude_cli_timeout_seconds
-        ),
+        timeout_seconds=settings.claude_cli_timeout_seconds,
         structured_output_mode="json_schema",
         secret_reference="CLI-managed authentication",
         enabled=settings.brain_allow_real_providers and settings.claude_cli_enabled,
@@ -427,15 +456,11 @@ def _qwen_configuration(settings: Settings) -> BrainProviderProfileConfiguration
         display_name="Local Qwen 3.6",
         vendor="llama.cpp",
         transport=BrainTransport.HTTP,
-        model=settings.brain_model or settings.local_qwen_model,
-        endpoint=settings.brain_base_url or settings.local_qwen_base_url,
+        model=settings.local_qwen_model,
+        endpoint=settings.local_qwen_base_url,
         capabilities=LlamaCppQwenProvider.capabilities,
         destination=BrainExecutionLocation.LOCAL,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.local_qwen_timeout_seconds
-        ),
+        timeout_seconds=settings.local_qwen_timeout_seconds,
         structured_output_mode="json_schema",
         secret_reference="BRAIN_API_KEY or LOCAL_QWEN_API_KEY",
         enabled=(
@@ -453,7 +478,7 @@ def _build_qwen(
         raise BrainProviderConfigurationError(
             "LOCAL_QWEN_ENABLED must be true for BRAIN_PROVIDER=llama_cpp_qwen"
         )
-    api_key = settings.brain_api_key or settings.local_qwen_api_key
+    api_key = settings.local_qwen_api_key
     if not api_key:
         raise BrainProviderConfigurationError(
             "LOCAL_QWEN_API_KEY or BRAIN_API_KEY is required for llama_cpp_qwen"
@@ -474,15 +499,11 @@ def _qwen38_configuration(settings: Settings) -> BrainProviderProfileConfigurati
         display_name="Local Qwen 3.8 Vision",
         vendor="llama.cpp",
         transport=BrainTransport.HTTP,
-        model=settings.brain_model or settings.local_qwen38_model,
-        endpoint=settings.brain_base_url or settings.local_qwen38_base_url,
+        model=settings.local_qwen38_model,
+        endpoint=settings.local_qwen38_base_url,
         capabilities=LlamaCppQwen38VisionProvider.capabilities,
         destination=BrainExecutionLocation.LOCAL,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.local_qwen38_timeout_seconds
-        ),
+        timeout_seconds=settings.local_qwen38_timeout_seconds,
         structured_output_mode="json_schema",
         secret_reference="BRAIN_API_KEY or LOCAL_QWEN38_API_KEY",
         enabled=(
@@ -500,7 +521,7 @@ def _build_qwen38(
         raise BrainProviderConfigurationError(
             "LOCAL_QWEN38_ENABLED must be true for BRAIN_PROVIDER=llama_cpp_qwen38"
         )
-    api_key = settings.brain_api_key or settings.local_qwen38_api_key
+    api_key = settings.local_qwen38_api_key
     if not api_key:
         raise BrainProviderConfigurationError(
             "LOCAL_QWEN38_API_KEY or BRAIN_API_KEY is required for llama_cpp_qwen38"
@@ -523,15 +544,11 @@ def _antigravity_configuration(settings: Settings) -> BrainProviderProfileConfig
         display_name="Antigravity Gemini CLI",
         vendor="Google",
         transport=BrainTransport.CLI,
-        model=settings.brain_model or settings.antigravity_gemini_model,
+        model=settings.antigravity_gemini_model,
         endpoint="n/a",
         capabilities=AntigravityGeminiVisionProvider.capabilities,
         destination=BrainExecutionLocation.CLOUD,
-        timeout_seconds=(
-            settings.brain_timeout_seconds
-            if _generic_profile_selected(settings)
-            else settings.antigravity_gemini_timeout_seconds
-        ),
+        timeout_seconds=settings.antigravity_gemini_timeout_seconds,
         structured_output_mode="agy_schema",
         secret_reference="CLI-managed authentication",
         enabled=(

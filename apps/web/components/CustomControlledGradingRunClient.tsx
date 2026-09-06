@@ -11,7 +11,6 @@ import {
   getAssessment,
   getGradingRun,
   getBrainProfiles,
-  getBrainStatus,
   getReferenceExtraction,
   listAssessmentGradingRuns,
   selectGradingRunBrainProfile,
@@ -20,7 +19,6 @@ import {
   type Assessment,
   type BrainProfile,
   type GradingRun,
-  type LocalAiStatus,
   type ReferenceExtraction,
   type ReferenceQuestionConfirmation,
 } from "../lib/api";
@@ -43,7 +41,6 @@ export function CustomControlledGradingRunClient({
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [run, setRun] = useState<GradingRun | null>(null);
   const [extraction, setExtraction] = useState<ReferenceExtraction | null>(null);
-  const [localAi, setLocalAi] = useState<LocalAiStatus | null>(null);
   const [brainProfiles, setBrainProfiles] = useState<BrainProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [profileConsentConfirmed, setProfileConsentConfirmed] = useState(false);
@@ -77,16 +74,14 @@ export function CustomControlledGradingRunClient({
     setLoading(true);
     setError(null);
     try {
-      const [assessmentData, runs, localStatus, profiles] = await Promise.all([
+      const [assessmentData, runs, profiles] = await Promise.all([
         getAssessment(assessmentId),
         listAssessmentGradingRuns(assessmentId),
-        getBrainStatus().catch(() => null),
         getBrainProfiles(),
       ]);
       const currentRun = runs.at(-1) ?? null;
       setAssessment(assessmentData);
       setRun(currentRun);
-      setLocalAi(localStatus);
       setBrainProfiles(profiles);
       const lockedProfileId = currentRun?.brain_profile_id ?? "";
       const defaultProfile = profiles.find(
@@ -347,7 +342,7 @@ export function CustomControlledGradingRunClient({
             {assessment?.title ?? "Assessment"}: upload the three source documents once, extract them together, then review the drafts before any student grading.
           </p>
         </div>
-        <RuntimeBadge status={localAi} />
+        <RuntimeBadge profile={selectedBrainProfile} locked={Boolean(run?.brain_profile_id)} />
       </header>
 
       <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 px-5 py-4 text-sm text-amber-100">
@@ -737,18 +732,21 @@ function friendlyExtractionError(error: string | null): string {
   return error;
 }
 
-function RuntimeBadge({ status }: Readonly<{ status: LocalAiStatus | null }>) {
-  const phase = status?.brain.available
-    ? `${status.brain.provider} · ${status.brain.model} · ${status.brain.location}`
-    : "The configured brain is unavailable";
+function RuntimeBadge({
+  profile,
+  locked,
+}: Readonly<{ profile: BrainProfile | undefined; locked: boolean }>) {
   const configured = Boolean(
-    status?.real_providers_allowed &&
-    status.brain.enabled &&
-    status.brain.reference_extraction_enabled,
+    profile?.ready && profile.capabilities.includes("visual_reference_extraction"),
   );
+  const phase = profile
+    ? `${profile.display_name} · ${profile.model} · ${profile.data_destination}`
+    : "Select a brain profile below";
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${configured ? "border-emerald-800 bg-emerald-950/30 text-emerald-200" : "border-amber-800 bg-amber-950/30 text-amber-200"}`}>
-      <p className="font-semibold">{configured ? "Brain configured" : "Brain unavailable"}</p>
+      <p className="font-semibold">
+        {configured ? (locked ? "Run brain locked" : "Brain profile ready") : "Brain profile unavailable"}
+      </p>
       <p className="mt-1 text-xs opacity-80">{phase}</p>
     </div>
   );

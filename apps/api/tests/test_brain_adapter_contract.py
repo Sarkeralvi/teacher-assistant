@@ -6,6 +6,7 @@ from app.core.config import Settings
 from packages.brain.adapter import (
     BrainAdapter,
     BrainProviderConfigurationError,
+    configured_brain_profiles,
 )
 from packages.brain.capabilities import BrainCapability
 from packages.brain.mock_provider import MockBrainProvider
@@ -124,6 +125,52 @@ def test_real_provider_kill_switch_is_enforced_before_initialization(provider: s
         match="BRAIN_ALLOW_REAL_PROVIDERS must be true",
     ):
         BrainAdapter.from_settings(settings)
+
+
+def test_named_codex_profile_ignores_legacy_process_wide_model_and_timeout() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_MODEL="ambient-model-that-must-not-leak",
+        BRAIN_TIMEOUT_SECONDS=11,
+        CODEX_CLI_MODEL="profile-codex-model",
+        CODEX_CLI_TIMEOUT_SECONDS=222,
+    )
+
+    profiles = {profile.profile_id: profile for profile in configured_brain_profiles(settings)}
+    adapter = BrainAdapter.for_profile(settings, "codex_cli")
+
+    assert profiles["codex_cli"].model == "profile-codex-model"
+    assert profiles["codex_cli"].timeout_seconds == 222
+    assert adapter.runtime.model == "profile-codex-model"
+
+
+def test_legacy_provider_path_still_honors_process_wide_overrides() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_MODEL="legacy-codex-model",
+        BRAIN_TIMEOUT_SECONDS=17,
+        CODEX_CLI_MODEL="profile-codex-model",
+        CODEX_CLI_TIMEOUT_SECONDS=222,
+    )
+
+    adapter = BrainAdapter.for_provider(settings, "codex_cli")
+
+    assert adapter.runtime.model == "legacy-codex-model"
+    assert adapter.provider.timeout_seconds == 17
+
+
+def test_named_openai_profile_cannot_be_reclassified_local_by_legacy_endpoint_type() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_ENDPOINT_TYPE="local",
+        BRAIN_BASE_URL="http://127.0.0.1:9000/v1",
+        OPENAI_API_KEY="test-only-openai-key",
+    )
+
+    profiles = {profile.profile_id: profile for profile in configured_brain_profiles(settings)}
+
+    assert profiles["openai"].destination.value == "cloud"
+    assert profiles["openai"].endpoint == "https://api.openai.com/v1"
 
 
 def test_marking_policy_prompt_text_is_distinct_for_each_policy() -> None:

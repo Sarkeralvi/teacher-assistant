@@ -299,6 +299,7 @@ BulkExceptionCode = Literal[
     "missing_answer",
     "probable_blank",
     "cross_question_overlap",
+    "inferred_question_label",
     "verification_disagreement",
     "image_quality",
     "provider_contract_failure",

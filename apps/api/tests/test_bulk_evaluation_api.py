@@ -199,8 +199,8 @@ def test_bulk_cloud_provider_requires_explicit_data_boundary_confirmation(
 ) -> None:
     teacher, run = _teacher_and_run(client, "CloudBoundary")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
-    monkeypatch.setenv("BRAIN_API_KEY", "test-only-gemini-key")
-    monkeypatch.setenv("BRAIN_MODEL", "gemini-test-model")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only-gemini-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-test-model")
     get_settings.cache_clear()
     data = _multipart(int(run["id"]))
     data.update(
@@ -228,6 +228,7 @@ def test_bulk_cloud_provider_requires_explicit_data_boundary_confirmation(
 
 def test_bulk_create_enqueues_only_its_own_run_and_hides_it_from_other_teachers(
     client: TestClient,
+    db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     qwen38_policy: None,
 ) -> None:
@@ -252,12 +253,43 @@ def test_bulk_create_enqueues_only_its_own_run_and_hides_it_from_other_teachers(
     assert response.status_code == 202
     run_id = response.json()["id"]
     assert enqueued == [run_id]
+    question = Question(
+        assessment_id=int(teacher["assessment"]["id"]),
+        question_no="1",
+        question_text="Synthetic question",
+        model_answer="Synthetic answer",
+        total_marks=Decimal("1.00"),
+    )
+    submission = Submission(
+        assessment_id=int(teacher["assessment"]["id"]),
+        student_identifier="INFERRED-001",
+        student_name="Synthetic Student",
+        status="uploaded",
+    )
+    db_session.add_all((question, submission))
+    db_session.flush()
+    db_session.add(
+        BulkEvaluationItem(
+            run_id=run_id,
+            submission_id=submission.id,
+            question_id=question.id,
+            status="exception",
+            stage="read",
+            exception_codes=["inferred_question_label"],
+            warnings=["inferred_question_label_requires_teacher_review"],
+        )
+    )
+    db_session.commit()
     assert client.get(
         f"/bulk-evaluation-runs/{run_id}", headers=_headers(str(intruder["token"]))
     ).status_code == 404
-    assert client.get(
+    owner_response = client.get(
         f"/bulk-evaluation-runs/{run_id}", headers=_headers(str(teacher["token"]))
-    ).status_code == 200
+    )
+    assert owner_response.status_code == 200
+    assert owner_response.json()["items"][0]["exception_codes"] == [
+        "inferred_question_label"
+    ]
 
 
 def test_bulk_enqueue_failure_pauses_only_the_newly_created_run(
