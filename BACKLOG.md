@@ -1,4 +1,39 @@
-﻿# TA-SEC-001 — Auth, grading-gate, and evidence-storage hardening audit
+﻿# TA-BRAIN-003 — Provider job-timeout fix and cloud-default correction
+
+- Recorded at: 2026-09-08
+- Baseline commit: `8e76f35` (carrying commit: `3684045`)
+- Canonical workflow: cross-cutting (Custom Controlled reference extraction, Bulk Supervised).
+- Found during a founder-authorized live multi-provider UI check on real material.
+- Implemented: `brain_policy_from_settings` now derives the RQ job timeout from the selected
+  profile's own `timeout_seconds`, falling back to `BRAIN_TIMEOUT_SECONDS` only when the
+  provider exposes none. Previously every non-Qwen38 profile got `max(300, 120+60) = 300`,
+  so a Codex CLI reference extraction was killed by RQ at 300s with `Task exceeded maximum
+  timeout value (300 seconds)` while `CODEX_CLI_TIMEOUT_SECONDS=600` was still counting.
+  Antigravity carried the same latent fault and survived only because it finished in 151s.
+  An explicit `BRAIN_JOB_TIMEOUT_SECONDS` still takes precedence.
+- Implemented: bulk intake's duplicate-identifier refusal now names the colliding identifiers,
+  states that nothing was imported, and points at the remedy (import the cohort into a separate
+  assessment). The guard is unchanged and still protects existing scripts.
+- Implemented: the bulk error banner gained `role="alert"`/`aria-live`, so a refused run is
+  announced rather than only painted.
+- Implemented: readiness preflight now asserts `BRAIN_PROVIDER=llama_cpp_qwen38`. The machine was
+  found configured with `BRAIN_PROVIDER=antigravity_gemini` (Google, cloud) as the active brain,
+  with visual preparation, page read and transcription enabled, while Qwen3.8 was resident —
+  a rehearsal started in that state would have sent answer-script images to a cloud provider.
+  The machine-local `.env.local-ai` (gitignored, not committed) was reset to the local brain.
+- Safety: no grading behaviour changed; the fix only lengthens a worker deadline so a call is
+  not killed mid-flight. `COHORT_MODEL_GRADING_ENABLED=false` unchanged. No approval, export,
+  or `FinalGrade` created.
+- Verification completed: 727 backend tests passed / 6 skipped, Ruff clean, `tsc --noEmit` clean,
+  frontend workflow guard passed, plus two new regression tests pinning the job timeout above the
+  provider call timeout.
+- Verification remaining: the running API and frontend still serve the pre-fix build; a restart and
+  frontend rebuild are needed before the fix is live. Codex CLI has not been re-run since the fix.
+- Pilot status: unchanged. Both gates (curated quality `PASS`, founder-supervised rehearsal) remain open.
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: Done (code-level); not yet exercised against a live Codex run.
+
+# TA-SEC-001 — Auth, grading-gate, and evidence-storage hardening audit
 
 - Recorded at: 2026-09-03
 - Baseline commit: `d52dab4` (carrying commit: `1817783`)

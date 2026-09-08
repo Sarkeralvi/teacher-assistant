@@ -2277,3 +2277,72 @@ that the branch is "97 commits ahead of `origin/master` and nothing has been
 pushed" is therefore stale in both halves: the count is 131, and a remote branch
 already existed at `783444c` ("Let a page-read transcript be directly confirmed
 instead of re-transcribed"). No merge, no PR, and no change to `master`.
+
+# TA-BRAIN-003 — Live multi-provider UI check and provider job-timeout fix (2026-09-08)
+
+- Recorded at: 2026-09-08
+- Baseline commit: `8e76f35`; carrying commit: `3684045`
+- Workflow type: founder-authorized live UI exercise, then manual controlled code fix
+- VSCode/Codex used: no
+- Additional coding agent used: no
+- Provider/model calls: 5 real calls, all founder-authorized in advance
+  - `llama_cpp_qwen38` reference extraction, grading run #148 — succeeded, 3m53s
+  - `codex_cli` (gpt-5.5) reference extraction, grading run #149 — killed by the RQ job
+    timeout, `Task exceeded maximum timeout value (300 seconds)`, 11m31s wall
+  - `antigravity_gemini` reference extraction, grading run #150 — succeeded, 2m31s
+  - `llama_cpp_qwen38` Bulk Supervised run #22 — `completed_with_exceptions`
+  - `antigravity_gemini` Bulk Supervised run #23 — started
+- Real material used: the founder's own `Question.pdf`, `Solution.pdf`, `rubric.pdf`, and
+  `Scripts-flat.zip` (2 student scripts), with explicit authorization to transfer student
+  evidence to non-local providers. Reference pages and script evidence therefore reached
+  OpenAI (Codex attempt) and Google (Antigravity).
+- Batch grading: Bulk Supervised runs #22 and #23 only, both bounded by an operator call cap
+- Autonomous loop: not enabled
+- GradeSuggestion created: 0 (every packet in run #22 was quarantined before grading)
+- FinalGrade created: 0
+- Private files/artifacts used: yes — founder-supplied material, none committed
+- Running app stack stopped/restarted/rebuilt/modified: started only, on explicit instruction
+
+## Change made
+
+Live check first. Course #134 and assessments #147/#148/#149 were created through the UI to
+exercise brain selection at both stages. Findings:
+
+1. The RQ job timeout for any non-Qwen38 profile computed to `max(300, BRAIN_TIMEOUT_SECONDS+60)`
+   = 300s, independent of the profile's own call timeout, so Codex was killed mid-call while
+   `CODEX_CLI_TIMEOUT_SECONDS=600` was still counting. Fixed in `packages/brain/policy.py` by
+   preferring `adapter.provider.timeout_seconds`; two regression tests added.
+2. Bulk intake's duplicate-identifier guard (`bulk_evaluation_service.py`) refused a second run of
+   the same ZIP in one assessment. The guard is correct; its message now names the collisions and
+   the remedy, and the bulk error banner gained `role="alert"`/`aria-live`.
+3. `.env.local-ai` had `BRAIN_PROVIDER=antigravity_gemini` — a cloud profile as the machine default
+   while Qwen3.8 was resident. Reset to `llama_cpp_qwen38` (file gitignored, not committed) and the
+   readiness preflight now asserts it.
+
+Behaviour observed and unchanged: student work stayed locked until references were confirmed;
+the profile locked per grading run; cloud profiles required a separate evidence-transfer
+confirmation; run #22 quarantined all 14 packets and produced zero clean drafts with the approve
+control disabled; the failed Codex extraction offered manual re-authorization rather than retrying.
+
+## Safety result
+
+No approval, export, deletion, or `FinalGrade`. `COHORT_MODEL_GRADING_ENABLED=false` throughout and
+verified in the pilot status output. The code fix only lengthens a worker deadline; no grading path,
+threshold, or gate was altered. Every provider call was authorized in advance by the founder, who
+was told before the first one that cloud providers would receive real student evidence.
+
+## Checks run
+
+- `python -m pytest -q --basetemp ..\..\tmp\pytest-claude` from `apps/api` — **727 passed, 6 skipped**
+- `python -m ruff check .` from `apps/api` — clean
+- `npm run lint` (`tsc --noEmit`) from `apps/web` — clean
+- `node apps\web\tests\workflow-ui.test.mjs` — passed
+- `Get-TeacherPilotStatus.ps1 -RequireAll` — all six services ready, Qwen3.6 off, cohort grading false
+
+## Risks / follow-ups
+
+- The running API and frontend still serve the pre-fix build; a restart and frontend rebuild are
+  required before the timeout fix takes effect. Not done — that is an operational action.
+- Codex CLI has not been re-run since the fix, so the 660s job timeout is untested against a live call.
+- Claude Code CLI was never exercised; it remains unverified end to end.
+- Bulk run #23 (Antigravity) was still in `mapping` when this entry was written.
