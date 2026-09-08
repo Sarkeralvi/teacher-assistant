@@ -591,9 +591,15 @@ class BulkEvaluationService:
             ).all()
         }
         if incoming & existing:
+            colliding = sorted(incoming & existing)
+            shown = ", ".join(colliding[:5])
+            if len(colliding) > 5:
+                shown = f"{shown}, and {len(colliding) - 5} more"
             raise BulkEvaluationError(
-                "A student identifier already exists in this assessment; "
-                "existing scripts were preserved"
+                f"{len(colliding)} student identifier(s) already exist in this "
+                f"assessment ({shown}); existing scripts were preserved and nothing "
+                "was imported. To evaluate the same cohort with a different brain, "
+                "import it into a separate assessment."
             )
 
     def _import_unit(

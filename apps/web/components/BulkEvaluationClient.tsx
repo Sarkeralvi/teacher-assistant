@@ -258,7 +258,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         </p>
       </header>
 
-      {error ? <div className="rounded-lg border border-rose-700 bg-rose-950/40 p-4 text-rose-100">{error}</div> : null}
+      {error ? <div role="alert" aria-live="assertive" className="rounded-lg border border-rose-700 bg-rose-950/40 p-4 text-rose-100">{error}</div> : null}
       {loading ? <p className="text-sm text-slate-400">Loading bulk evaluation state…</p> : null}
 
       <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-6 lg:grid-cols-4">

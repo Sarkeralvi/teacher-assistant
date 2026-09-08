@@ -342,6 +342,35 @@ def test_profile_policy_requires_consent_for_a_cloud_destination() -> None:
         )
 
 
+def test_profile_job_timeout_outlives_the_provider_call_timeout() -> None:
+    # A Codex CLI reference extraction was killed by the RQ job timeout at 300s
+    # while CODEX_CLI_TIMEOUT_SECONDS=600 was still counting, because the job
+    # timeout was derived from the global BRAIN_TIMEOUT_SECONDS (120) instead of
+    # the selected profile's own call timeout.
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        CODEX_CLI_TIMEOUT_SECONDS=600.0,
+        BRAIN_TIMEOUT_SECONDS=120.0,
+    )
+
+    policy = brain_policy_for_profile(settings, "codex_cli")
+
+    assert policy.job_timeout_seconds > settings.codex_cli_timeout_seconds
+    assert policy.job_timeout_seconds == 660
+
+
+def test_explicit_brain_job_timeout_still_wins() -> None:
+    settings = Settings(
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        CODEX_CLI_TIMEOUT_SECONDS=600.0,
+        BRAIN_JOB_TIMEOUT_SECONDS=900,
+    )
+
+    policy = brain_policy_for_profile(settings, "codex_cli")
+
+    assert policy.job_timeout_seconds == 900
+
+
 def test_local_provider_double_declares_its_runtime_metadata() -> None:
     class QwenDouble(BrainProvider):
         provider_name = "llama_cpp_qwen"

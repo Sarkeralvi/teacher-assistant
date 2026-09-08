@@ -102,6 +102,12 @@ by hand. Verify, do not assume.
 3. Confirm the API's effective storage root is `E:\teacher-assistant\data` and
    record the value observed, not the value expected.
 4. Confirm `COHORT_MODEL_GRADING_ENABLED=false`.
+4a. Confirm the **active brain is local**: `BRAIN_PROVIDER=llama_cpp_qwen38`, and that
+   no cloud profile is selected for the run. Residency alone is not enough — on
+   2026-09-08 the stack was found configured with `BRAIN_PROVIDER=antigravity_gemini`
+   (a Google cloud profile) with visual preparation, page read and transcription all
+   enabled, while Qwen3.8 was resident. A rehearsal started in that state would have
+   sent answer-script images to a cloud provider and failed its own no-cloud-call rule.
 5. Confirm the worktree is clean and record the commit hash.
 6. Confirm no previous draft, job, or final grade exists for the rehearsal
    assessment.

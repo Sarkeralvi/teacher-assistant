@@ -212,11 +212,21 @@ def brain_policy_from_settings(
 
     timeout = settings.brain_job_timeout_seconds
     if timeout is None:
-        timeout = (
-            settings.local_qwen38_visual_job_timeout_seconds
-            if is_qwen38
-            else min(3600, max(300, int(settings.brain_timeout_seconds) + 60))
-        )
+        if is_qwen38:
+            timeout = settings.local_qwen38_visual_job_timeout_seconds
+        else:
+            # The RQ job must outlive the provider's own call timeout. Deriving it
+            # from the global brain timeout instead killed a Codex CLI extraction
+            # at 300s while CODEX_CLI_TIMEOUT_SECONDS=600 was still counting, so
+            # prefer the selected profile's timeout whenever it exposes one.
+            provider_timeout = getattr(adapter.provider, "timeout_seconds", None)
+            try:
+                call_timeout = float(provider_timeout or 0)
+            except (TypeError, ValueError):
+                call_timeout = 0.0
+            if call_timeout <= 0:
+                call_timeout = float(settings.brain_timeout_seconds)
+            timeout = min(3600, max(300, int(call_timeout) + 60))
     model_hash = settings.brain_model_sha256 or (
         settings.local_qwen38_model_sha256 if is_qwen38 else ""
     )
