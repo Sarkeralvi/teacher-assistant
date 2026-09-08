@@ -2266,3 +2266,14 @@ claims no result from the curated gate.
   single parameter, `[qwen3.6-35b-a3b-q4km]`.
 - Full backend suite, Ruff, and frontend checks were not run: this task changed
   no application code.
+
+## Follow-up recorded after this entry was committed
+
+The founder then authorized one bounded push of `rescue/paddle-qwen36-hybrid` to
+`origin` under its existing name. `git push -u origin
+rescue/paddle-qwen36-hybrid` **fast-forwarded an existing remote branch**,
+`783444c..a732630` — it was not a first push. The 2026-08-31 handoff's statement
+that the branch is "97 commits ahead of `origin/master` and nothing has been
+pushed" is therefore stale in both halves: the count is 131, and a remote branch
+already existed at `783444c` ("Let a page-read transcript be directly confirmed
+instead of re-transcribed"). No merge, no PR, and no change to `master`.
