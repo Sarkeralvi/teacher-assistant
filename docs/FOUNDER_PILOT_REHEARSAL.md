@@ -2,6 +2,8 @@
 
 This rehearsal proves the Custom Controlled workflow end to end. It is not unattended marking. Every extraction, mapping, transcript, and grade remains a draft until the teacher performs its specific confirmation.
 
+Before scheduling an attempt, settle `docs/FOUNDER_PILOT_REHEARSAL_READINESS.md`: the signed claim boundary, the abort/no-resume policy, the startup-path and storage-root preflight, and the per-phase pass/fail criteria. Record the run in a copy of `docs/templates/REHEARSAL_EVIDENCE_RECORD.md`.
+
 ## Prerequisites
 
 - Reviewed commit and clean worktree.

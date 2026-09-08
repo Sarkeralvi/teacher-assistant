@@ -2185,3 +2185,84 @@ without an explicit teacher approve/edit/reject/approve-selected action.
 - `npm run lint` (`tsc --noEmit`) from `apps/web` — clean.
 - `npm run build` from `apps/web` — clean production build.
 - `node apps\web\tests\workflow-ui.test.mjs` — passed.
+
+# TA-REH-001 — Rehearsal readiness protocol and curated-gate status correction (2026-09-08)
+
+- Recorded at: 2026-09-08
+- Baseline commit: `29502c5`; carrying commit: recorded at commit time
+- Workflow type: manual controlled documentation and code-reading verification
+- VSCode/Codex used: no
+- Additional coding agent used: yes — four analysis-only Claude subagents (PM,
+  Architect, Developer, QA perspectives on rehearsal readiness), launched on
+  read-only agent types with Read/Grep/Glob tools only. They wrote no files, ran
+  no commands, and made no provider calls.
+- Real Codex calls: 0
+- Provider/model calls: 0
+- Local Qwen calls: 0 (`qwen-local` MCP bridge was down, `CONNECTION_CLOSED`; all
+  reading was done directly)
+- Real Codex grading/mapping: not run
+- Batch grading: not run
+- Autonomous loop: not enabled
+- Teacher observation: not started
+- GradeSuggestion created: 0
+- FinalGrade created: 0
+- GradingJob created: 0
+- Private files/artifacts used: no
+- Running app stack stopped/restarted/rebuilt/modified: no
+
+## Change made
+
+Added `docs/FOUNDER_PILOT_REHEARSAL_READINESS.md`: the signed claim boundary for
+what a rehearsal `PASS` may and may not claim, an abort/no-resume failure policy
+covering clean provider failure, hash mismatch and mid-run bugcheck, a
+startup-path and storage-root preflight, per-phase mechanical pass/fail criteria,
+and the two verification records below. Added
+`docs/templates/REHEARSAL_EVIDENCE_RECORD.md`, a fill-in run record for IDs,
+hashes, per-call phase log, teacher gates, safety counters and anomalies, which
+carries the runbook's no-raw-answer-text constraint. Added a pointer to both from
+`docs/FOUNDER_PILOT_REHEARSAL.md`. Recorded a dated status correction in
+`BACKLOG.md` under TA-LOCAL-005.
+
+Verification finding 1 — guardrails. Enforced in code: `config.py:197` pins
+`cohort_provider_retry_count` to `ge=0, le=0`; `config.py:193` defaults
+`cohort_model_grading_enabled` to `False`;
+`grading_dispatch_service.py:257` marks a heartbeat-expired item `uncertain`
+with "no retry is allowed" and does not re-dispatch; the curated harness's
+`GradingRunResult` pins retry/fallback/cloud counts as `Literal[0]`. Residual
+gap: `llama_cpp_qwen38_vision_provider.py:22-23` states zero-retry and
+no-fallback as a docstring invariant with no test asserting it (no retry loop was
+found in the module). Noted for future readers that `fallback` matches in
+`packages/brain/policy.py:296-297` are `_coalesce` settings defaults, not a
+provider fallback path.
+
+Verification finding 2 — curated gate. The handoff's and the 2026-08-20 backlog
+entry's claim that the 20-case gate "is not runnable because its OCR stage is not
+rewired" is contradicted by the code at HEAD; the OCR stage is rewired to Qwen3.8
+visual transcription (`local_curated_evaluation.py:28`, `:302-335`, `:2559`).
+Runnability itself remains unverified. Separately, an unresolved contradiction
+was recorded, not adjudicated: runbook §4's `--expected-model
+qwen3.8-27b-q4km` is refused by `local_curated_evaluation.py:3651` against
+`SUPPORTED_GRADING_MODELS = ("qwen3.6-35b-a3b-q4km",)` at `:33`.
+
+## Safety result
+
+No provider/model call, upload, deletion, batch run, push, export, or stack
+operation was made. `COHORT_MODEL_GRADING_ENABLED` was not changed. No
+application behaviour was modified; the only code-adjacent action was reading.
+No grade, suggestion, job, or final-grade artifact was created. The two gates
+blocking a teacher pilot are unchanged and both remain open, and this entry
+claims no result from the curated gate.
+
+## Checks run
+
+- `git status --short` — clean at start.
+- `git rev-list --count origin/master..HEAD` — **130** (the 2026-08-31 handoff
+  records 97; roughly 33 commits have landed since that baseline).
+- `python -m pytest -q tests/test_local_curated_evaluation_integration.py
+  --basetemp ..\..\tmp\pytest-claude` from `apps/api` — **did not run**: 1 error
+  at setup, `sqlalchemy.exc.OperationalError: (psycopg.errors.ConnectionTimeout)
+  connection timeout expired` connecting to `teacher_assistant_test`. The pilot
+  stack was not running and starting it was not authorized. Collection showed a
+  single parameter, `[qwen3.6-35b-a3b-q4km]`.
+- Full backend suite, Ruff, and frontend checks were not run: this task changed
+  no application code.
