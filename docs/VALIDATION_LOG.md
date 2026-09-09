@@ -2346,3 +2346,44 @@ was told before the first one that cloud providers would receive real student ev
 - Codex CLI has not been re-run since the fix, so the 660s job timeout is untested against a live call.
 - Claude Code CLI was never exercised; it remains unverified end to end.
 - Bulk run #23 (Antigravity) was still in `mapping` when this entry was written.
+
+## Follow-up — 2026-09-09, fix verified live
+
+Bulk run #23 completed at 23:40:06 on 2026-09-08. The machine was then shut down
+deliberately (System log `1074`, `shutdown.exe`, 23:31:10) and booted again at
+06:19:58 on 2026-09-09; there was **no** Kernel-Power `41` and no bugcheck `1001`,
+so this was not an instance of the documented stability fault.
+
+The stack was restarted with `-RebuildFrontend -StartLocalAi -LocalAiMode Qwen38`
+and all six services reported ready. Reading the deployed `.env.local-ai` through
+`Settings` and `brain_policy_for_profile` confirms the fix is live:
+
+| profile | job timeout | call timeout | location |
+|---|---|---|---|
+| `llama_cpp_qwen38` | 2400s | n/a | local |
+| `codex_cli` | 660s (was 300s) | 600s | cloud |
+| `claude_cli` | 660s | 600s | cloud |
+| `antigravity_gemini` | 660s | 600s | cloud |
+
+`BRAIN_PROVIDER` now reads `llama_cpp_qwen38`, so the machine default is local again.
+
+Both CLI adapters were smoke-tested directly against a synthetic algebra image
+(no student material, no database writes, no grade artifacts), via
+`transcribe_image`:
+
+- `claude_cli` (Claude Code CLI 2.1.266) — OK in 8.0s, `2x + 3 = 11 / 2x = 8 / x = 4`
+- `codex_cli` — OK in 22.6s, same content in LaTeX
+
+Neither CLI adapter is defective. The earlier Codex reference-extraction failure was
+solely the 300s RQ job timeout; Claude Code CLI had simply never been exercised.
+
+Remaining risk addressed: the failed Codex extraction had measured 690s wall, so
+600s left no headroom even after the job-timeout fix — the CLI's own limit would
+have fired instead. `CODEX_CLI_TIMEOUT_SECONDS` and `CLAUDE_CLI_TIMEOUT_SECONDS`
+were raised to 900 in the machine-local `.env.local-ai` (gitignored, not committed),
+which moves the derived job timeout to 960s with them.
+
+Still outstanding: the app-level end-to-end re-test of Codex and Claude through the
+UI. The browser login had expired (`Your login session expired. Please log in
+again.`) and entering a password is out of scope for the assistant, so that step is
+waiting on the founder.
