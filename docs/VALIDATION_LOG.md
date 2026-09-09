@@ -2531,3 +2531,61 @@ before this endpoint is used at cohort scale.
 All five profiles now resolve READY with full stage coverage:
 `llama_cpp_qwen38` (local, 2400s), `openai_compatible` Qwen/Qwen3.8-27B (cloud, 660s),
 `codex_cli` (cloud, 960s), `claude_cli` (cloud, 960s), `antigravity_gemini` (cloud, 660s).
+
+# TA-OPS-001 — Founder-authorized reset to a clean state before the rehearsal (2026-09-09)
+
+- Recorded at: 2026-09-09
+- Workflow type: manual controlled destructive maintenance, founder-authorized scope
+- Provider/model calls: 0. GradeSuggestion created: 0. FinalGrade created: 0.
+- `COHORT_MODEL_GRADING_ENABLED=false` throughout.
+
+## Change made
+
+The founder asked for a clean system before the supervised rehearsal and chose the scope
+"keep login and gate evidence" from an explicit option list.
+
+Backup taken first: `pg_dump -Fc` to
+`.local-ai/backups/teacher_assistant-20260909-123148.dump` (0.43 MB, gitignored). This is
+the only route back — the deletions below are irreversible without it.
+
+Truncated 30 of 32 tables with `TRUNCATE ... RESTART IDENTITY CASCADE`, keeping `users`
+(92 rows, so the founder's login survives — the assistant cannot create accounts) and
+`alembic_version` (migration state). Deleted before/after:
+
+| | before | after |
+|---|---|---|
+| courses | 78 | 0 |
+| assessments | 96 | 0 |
+| grading_runs | 103 | 0 |
+| submissions / submission_pages | 98 / 186 | 0 / 0 |
+| answer_regions | 160 | 0 |
+| grade_suggestions | 71 | 0 |
+| **final_grades** | **10** | 0 |
+| bulk_evaluation_runs / items | 23 / 88 | 0 / 0 |
+| **audit_logs** | **1013** | 0 |
+| extraction_runs, question_nodes, rubrics, mappings, OCR runs/bands/candidates/segments | populated | 0 |
+
+Two of those deserve naming rather than burying: **10 `final_grades`** (approved marks from
+earlier test runs) and **1013 `audit_logs`** (the audit trail). Both fell inside the chosen
+"every app table except users" scope and were destroyed deliberately, not incidentally. If
+either is ever needed, it exists only in the dump above.
+
+Filesystem: `data/uploads` 351 files / 132.81 MB and `data/artifacts` 512 files / 337.58 MB
+deleted, `.gitkeep` preserved; both now report 0 files. `data/evaluation` (89 files /
+17.45 MB, the curated 20-case gate artifacts) was **kept** by explicit choice.
+
+## Verification
+
+Stack stopped and restarted; all six services report ready and cohort grading remains
+false. The UI shows "No courses yet." while still signed in as the founder, confirming the
+data is gone and the login is intact.
+
+## Risks / follow-ups
+
+- Everything from the multi-provider exercise is gone: assessments #147-#152, grading runs
+  #148-#153, bulk runs #22 and #23 including run #23's 9 clean drafts and 5 unresolved
+  exceptions. Those were never approved, so no grade was lost, but the exception inbox that
+  was awaiting review no longer exists.
+- The rehearsal's own precondition "no previous draft/job/final grade exists for the
+  rehearsal assessment" is now trivially satisfied for a fresh assessment.
+- Both pilot gates remain open; this reset changes nothing about them.
