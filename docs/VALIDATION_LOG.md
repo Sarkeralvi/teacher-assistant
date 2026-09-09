@@ -2419,3 +2419,73 @@ revisiting.
 
 Checks: 728 backend tests passed / 6 skipped, Ruff clean. No approval, export, or
 `FinalGrade` was created; `COHORT_MODEL_GRADING_ENABLED=false` throughout.
+
+# TA-BRAIN-004 — AkashML (GLM-5.3) onboarding and an env-precedence safety hole (2026-09-09)
+
+- Recorded at: 2026-09-09
+- Workflow type: manual controlled configuration, live provider probing
+- Provider/model calls: 1 refused reference extraction (400) plus 6 direct probe calls to
+  AkashML on synthetic/trivial prompts. No student material reached AkashML.
+- GradeSuggestion created: 0 by this task. FinalGrade created: 0.
+- `COHORT_MODEL_GRADING_ENABLED=false` throughout.
+
+## Change made
+
+Added AkashML `zai-org/GLM-5.3` through the existing `openai_compatible` profile — no code
+change. Configuration lives in the gitignored machine-local `.env.local-ai`
+(`BRAIN_API_KEY`, `BRAIN_BASE_URL=https://api.akashml.com/v1`, `BRAIN_MODEL`,
+`BRAIN_TIMEOUT_SECONDS=600`).
+
+**Env precedence trap.** `scripts/pilot/Common.ps1:50-63` imports `.env.local-ai` first and
+the repository-root `.env` **second**, so `.env` wins. The root file carried empty
+`BRAIN_MODEL=`, `BRAIN_API_KEY=` and `BRAIN_BASE_URL=`, which silently blanked the
+machine-local AkashML settings; the profile never became ready and never appeared in the
+run pickers, while a check that read only `.env.local-ai` reported it perfectly configured.
+Those three lines are now left unset in `.env` with a comment explaining why.
+
+**Safety hole found and closed.** The same file set `BRAIN_ENDPOINT_TYPE=local`. For the
+generic profile `_resolve_location` returns the configured value verbatim when it is not
+`auto`/empty, so **any** OpenAI-compatible cloud endpoint would have been classified
+`LOCAL` — and the evidence-transfer consent gate only fires on `CLOUD`. A cloud provider
+could therefore have received student evidence without the teacher ticking the cloud
+authorization. Now `BRAIN_ENDPOINT_TYPE=auto`, and `api.akashml.com` correctly resolves
+`cloud`, with the consent checkbox required.
+
+**Two further `.env` overrides corrected**: `CODEX_CLI_TIMEOUT_SECONDS=300` was beating the
+machine's 900 (effective Codex job timeout was 360s, not the 960s previously recorded — that
+earlier figure was measured against `.env.local-ai` alone and was wrong), and
+`CODEX_CLI_WORKDIR=/home/newton/teacher-assistant` is a Linux path on a Windows host. Both
+are now left to `.env.local-ai`.
+
+## Measured provider capability
+
+Direct probes against `https://api.akashml.com/v1/chat/completions`:
+
+| Request | Result |
+|---|---|
+| plain text | 200 |
+| `response_format: json_schema` | 200 |
+| `response_format: json_object` | 200 |
+| image content part (`image_url`) | **400** `Model only supports text input; received unsupported content type 'image_url'.` |
+| `GET /models` | 200, `zai-org/GLM-5.3` listed |
+
+So GLM-5.3 here is **text-only**. `BRAIN_IMAGE_INPUT_ENABLED=false`, leaving the profile with
+`GRADING` only: it can draft a score from a teacher-confirmed transcript but cannot do
+reference extraction, mapping or transcription. Verified in the UI — AkashML is offered on
+the references screen but is correctly **absent from the Bulk Supervised picker**, which
+requires visual mapping and transcription.
+
+Also measured: GLM-5.3 is a reasoning model returning `reasoning_content` before `content`.
+At `max_tokens=64` it returned `finish_reason=length` with an **empty** `content`; at 1024 it
+returned `{"ok": true}` correctly. The provider only sends `max_tokens` when a caller
+specifies one, so the endpoint default applies — but any caller passing a small ceiling will
+get empty output from this model.
+
+## Risks / follow-ups
+
+- AkashML's grading path is not yet exercised end to end; that needs a teacher-confirmed
+  transcript, which requires a vision brain first.
+- The profile is displayed as "OpenAI-compatible API" / vendor "OpenAI-compatible" rather
+  than AkashML or GLM. Cosmetic; a dedicated profile would fix it.
+- Bulk run #23 (Antigravity, assessment #149) reached `review_ready` with 9 clean drafts and
+  5 exceptions. No approval was made.
