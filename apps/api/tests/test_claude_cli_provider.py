@@ -129,6 +129,49 @@ def test_claude_rejects_malformed_structured_output(tmp_path: Path) -> None:
         )
 
 
+def test_claude_runner_decodes_cli_output_as_utf8(tmp_path: Path) -> None:
+    # Text mode without an explicit codec decodes with the locale codepage, which
+    # on Windows turned a live extraction's "P(X^c ∩ Y^c) ≈ 0.2583" into
+    # "P(X^c âˆ© Y^c) â‰ˆ 0.2583".
+    captured: dict[str, object] = {}
+
+    def runner(_command: list[str], **kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "type": "result",
+                    "result": json.dumps(
+                        {
+                            "regions": [],
+                            "notes": "P(X^c ∩ Y^c) ≈ 0.2583",
+                        }
+                    ),
+                }
+            ),
+            stderr="",
+        )
+
+    provider = ClaudeCliProvider(
+        workdir=str(tmp_path),
+        which=lambda _command: "claude.cmd",
+        runner=runner,
+    )
+    try:
+        provider.map_page_answer_regions(
+            image_bytes=b"page",
+            mime_type="image/png",
+            question_labels=["Q1"],
+        )
+    except ClaudeCliProviderError:
+        # The payload shape is irrelevant here; only the decoding contract is.
+        pass
+
+    assert captured.get("encoding") == "utf-8"
+    assert captured.get("errors") == "strict"
+
+
 def test_claude_profile_constructs_without_running_the_cli() -> None:
     adapter = BrainAdapter.for_profile(
         Settings(BRAIN_ALLOW_REAL_PROVIDERS=True, CLAUDE_CLI_ENABLED=True),

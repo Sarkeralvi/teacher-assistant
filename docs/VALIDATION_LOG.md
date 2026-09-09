@@ -2383,7 +2383,39 @@ have fired instead. `CODEX_CLI_TIMEOUT_SECONDS` and `CLAUDE_CLI_TIMEOUT_SECONDS`
 were raised to 900 in the machine-local `.env.local-ai` (gitignored, not committed),
 which moves the derived job timeout to 960s with them.
 
-Still outstanding: the app-level end-to-end re-test of Codex and Claude through the
-UI. The browser login had expired (`Your login session expired. Please log in
-again.`) and entering a password is out of scope for the assistant, so that step is
-waiting on the founder.
+Still outstanding at the time of writing: the app-level end-to-end re-test of Codex
+and Claude through the UI, blocked on an expired browser login.
+
+## Follow-up — 2026-09-09, app-level re-test completed
+
+The founder restored the browser session and all four brains have now been exercised
+through the live UI on the real reference material.
+
+| Brain | Grading run | Result | Duration |
+|---|---|---|---|
+| `codex_cli` (gpt-5.5) | #149 re-run | **passed**, 1/1 calls, 7 questions | 1m08s |
+| `claude_cli` (sonnet) | #151 | **passed**, 1/1 calls, 7 questions | ~2m |
+| `claude_cli` (sonnet) | #152 (encoding re-check) | **passed**, 1/1 calls | 2m37s |
+
+The Codex re-run reused the exact artifacts of the run that RQ had killed at 300s,
+with the profile still locked to Codex; it now completes well inside the raised
+ceiling. Its earlier 11m30s remains unexplained but was not reproduced.
+
+A new defect was found by the Claude run and fixed. `ClaudeCliProvider` called
+`subprocess.run(..., text=True)` without an explicit codec, so CLI output was
+decoded with the host locale codepage (cp1252). A live extraction rendered
+`P(X^c ∩ Y^c) ≈ 0.2583` as `P(X^c âˆ© Y^c) â‰ˆ 0.2583` — mathematical symbols
+corrupted in teacher-facing draft references. `CodexCliProvider` already pinned
+`encoding="utf-8", errors="strict"`; the Claude provider now matches, with a
+regression test asserting the runner receives both. Re-run #152 returned
+`P(X^c ∩ Y^c) = P(X^c)·P(Y^c|X^c) = (5/12)(31/50) = 31/120 ≈ 0.2583` intact.
+
+Observation, not yet changed: the grading-run profile picker still preselects
+Antigravity Gemini CLI on a fresh run even though `BRAIN_PROVIDER=llama_cpp_qwen38`.
+The picker default appears independent of the configured brain. Every run in this
+session set the profile explicitly, and the readiness preflight already requires
+checking the active brain, but a cloud-first default in the picker is worth
+revisiting.
+
+Checks: 728 backend tests passed / 6 skipped, Ruff clean. No approval, export, or
+`FinalGrade` was created; `COHORT_MODEL_GRADING_ENABLED=false` throughout.

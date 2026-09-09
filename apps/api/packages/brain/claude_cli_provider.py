@@ -203,6 +203,13 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
                     cwd=workspace,
                     capture_output=True,
                     text=True,
+                    # Without an explicit codec, text mode decodes with the
+                    # locale codepage (cp1252 on this Windows host), which turned
+                    # a live extraction's "P(X^c ∩ Y^c) ≈ 0.2583" into
+                    # "P(X^c âˆ© Y^c) â‰ˆ 0.2583". The Codex provider already pins
+                    # UTF-8; match it so mathematical symbols survive.
+                    encoding="utf-8",
+                    errors="strict",
                     input=isolated_prompt,
                     timeout=self.timeout_seconds,
                     check=False,
