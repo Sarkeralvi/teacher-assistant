@@ -2489,3 +2489,45 @@ get empty output from this model.
   than AkashML or GLM. Cosmetic; a dedicated profile would fix it.
 - Bulk run #23 (Antigravity, assessment #149) reached `review_ready` with 9 clean drafts and
   5 exceptions. No approval was made.
+
+## Follow-up — model swapped to Qwen/Qwen3.8-27B, and the real 500 explained
+
+The founder replaced `zai-org/GLM-5.3` with `Qwen/Qwen3.8-27B` on the same AkashML key and
+endpoint. Measured on the new model: image parts are **accepted** (200) and transcribed
+correctly, so vision is back ON and the profile covers every stage. Confirmed in the UI —
+the profile is now offered on the Bulk picker as well.
+
+The first extraction on the new model still failed, with **500** rather than the earlier 400.
+Isolated by probing the endpoint directly:
+
+| Probe | Result |
+|---|---|
+| 1 small image | 200 |
+| 1 / 2 / 4 A4 pages at 300 DPI | 200 (34,343 prompt tokens for four) |
+| 4 heavy A4 pages, 6.18 MB base64 | 200 |
+| 4 pages + large schema + `response_format {"type":"json_object"}` | 200 |
+| 4 pages + large schema, no `response_format` | 200 |
+
+So it was neither payload size, image count, nor prompt length. The difference was the
+`response_format` **form**: `openai_provider.py:156-164` sends
+`{"type":"json_schema","json_schema":{"strict":true,"schema":<pydantic schema with
+$defs/$ref>}}` whenever `structured_output_mode == "json_schema"` and a response model
+exists, and AkashML answers 500 to that. A plain `{"type":"json_object"}` — the branch at
+`:165-166` — succeeds on the identical payload.
+
+`BRAIN_STRUCTURED_OUTPUT_MODE=json_object` is therefore set for this host (in
+`.env.local-ai`; the root `.env` line was neutralised so it cannot override). With that,
+grading run #153 completed: `Drafts ready for teacher review`, provider
+`openai_compatible · cloud`, 1/1 brain calls, 7 questions, 4 extraction warnings — including
+that rubric p.4 is handwritten with an illegible secondary mark column, and the
+`defect` -> `detect` correction on 1(c)(ii).
+
+Also measured on this model: thinking is ON by default and the provider cannot send
+`chat_template_kwargs {"thinking": false}`. On one image that was 78 completion tokens with
+reasoning versus 15 without. Adding pass-through for that kwarg would cut cost and latency
+and match the local Qwen3.8 path, which runs reasoning off — not done, and worth doing
+before this endpoint is used at cohort scale.
+
+All five profiles now resolve READY with full stage coverage:
+`llama_cpp_qwen38` (local, 2400s), `openai_compatible` Qwen/Qwen3.8-27B (cloud, 660s),
+`codex_cli` (cloud, 960s), `claude_cli` (cloud, 960s), `antigravity_gemini` (cloud, 660s).
