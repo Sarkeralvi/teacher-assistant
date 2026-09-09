@@ -84,11 +84,18 @@ export function CustomControlledGradingRunClient({
       setRun(currentRun);
       setBrainProfiles(profiles);
       const lockedProfileId = currentRun?.brain_profile_id ?? "";
-      const defaultProfile = profiles.find(
+      const eligibleProfiles = profiles.filter(
         (profile) =>
           profile.ready &&
           profile.capabilities.includes("visual_reference_extraction"),
       );
+      // Prefer a local destination. Taking the first eligible profile made a fresh
+      // grading run default to whichever cloud provider happened to sort first
+      // (Antigravity Gemini), so a teacher who locked without reading the dropdown
+      // would send reference pages off the machine.
+      const defaultProfile =
+        eligibleProfiles.find((profile) => profile.data_destination === "local") ??
+        eligibleProfiles[0];
       setSelectedProfileId(lockedProfileId || defaultProfile?.id || "");
       setProfileConsentConfirmed(
         Boolean(currentRun?.brain_profile_data_boundary_confirmed_at),

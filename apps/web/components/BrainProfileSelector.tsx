@@ -55,12 +55,15 @@ export function BrainProfileSelector({
           The choice is locked to this grading run.
         </p>
       </div>
+      {/* The select stays enabled before the grading run exists: the choice is
+          client state until it is locked, and disabling it there made the control
+          look permanently fixed to whichever profile was preselected. */}
       <label className="grid gap-2 text-sm text-slate-200">
         Provider profile
         <select
           className={inputClass}
           data-testid="brain-profile-select"
-          disabled={busy || locked || !run}
+          disabled={busy || locked}
           value={selectedProfile?.id ?? ""}
           onChange={(event) => onProfileChange(event.target.value)}
         >
@@ -115,7 +118,10 @@ export function BrainProfileSelector({
           </div>
         )
       ) : (
-        <p className="text-sm text-amber-200">Create a grading run before selecting a profile.</p>
+        <p className="text-sm text-amber-200">
+          Pick a profile now if you like. Upload the reference files to create the grading
+          run, then lock the choice to it.
+        </p>
       )}
       {matchingProfiles.length === 0 ? (
         <p className="text-sm text-amber-200">No registered profile supports this capability.</p>
