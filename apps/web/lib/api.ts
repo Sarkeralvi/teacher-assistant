@@ -934,16 +934,19 @@ export type LocalAiServiceStatus = {
   device: string;
   detail: string | null;
   models: string[];
-  visual_preparation_enabled: boolean;
-  transcription_enabled: boolean;
-  thinking_repair_enabled: boolean;
-  grading_enabled: boolean;
   configured: boolean;
   location: "mock" | "local" | "cloud" | "cli" | string;
   capabilities: string[];
-  reference_extraction_enabled: boolean;
-  script_preparation_enabled: boolean;
-  bulk_evaluation_enabled: boolean;
+  // The API omits every capability flag below when the configured provider
+  // cannot be constructed, so they are absent rather than false. Treat a
+  // missing flag as unknown; only an explicit false means the feature is off.
+  visual_preparation_enabled?: boolean;
+  transcription_enabled?: boolean;
+  thinking_repair_enabled?: boolean;
+  grading_enabled?: boolean;
+  reference_extraction_enabled?: boolean;
+  script_preparation_enabled?: boolean;
+  bulk_evaluation_enabled?: boolean;
 };
 
 export type LocalAiStatus = {

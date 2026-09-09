@@ -138,11 +138,26 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const consentRequired = Boolean(
     selectedProfile && !["local", "mock"].includes(selectedProfile.data_destination),
   );
+  // The run is executed by the profile posted below, not by the configured
+  // brain, so readiness is read off the selected profile. /brain/status only
+  // contributes the deployment-wide bulk switch, and only when it actually
+  // reports it: the key is absent whenever the configured provider fails to
+  // build, which used to disable this button for an unrelated provider.
+  const bulkFeatureDisabled = localAi?.brain.bulk_evaluation_enabled === false;
   const brainReady = Boolean(
-    localAi?.brain.bulk_evaluation_enabled
-      && selectedProfile?.ready
-      && profileEligibleForBulk(selectedProfile),
+    !bulkFeatureDisabled && selectedProfile?.ready && profileEligibleForBulk(selectedProfile),
   );
+  const startBlockedReason = (() => {
+    if (bulkFeatureDisabled) return "Bulk supervised evaluation is disabled for this deployment.";
+    if (!selectedProfile) return "Select a provider profile.";
+    if (!selectedProfile.ready) {
+      return `${selectedProfile.display_name} is not ready: ${selectedProfile.readiness_detail}`;
+    }
+    if (!file) return "Choose a submissions ZIP.";
+    if (!gradingRunId) return "Select a finalized reference run.";
+    if (!authorized) return "Confirm the authorization checkbox.";
+    return null;
+  })();
   const cleanSuggestionIds = useMemo(
     () =>
       activeRun?.items
@@ -164,7 +179,9 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   );
 
   async function createRun() {
-    if (!file || !gradingRunId || !selectedProfile || !expectedModel || !authorized) return;
+    if (!file || !gradingRunId || !selectedProfile || !expectedModel || !authorized || !brainReady) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -323,6 +340,11 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         <button className={buttonClass} disabled={busy || !file || !gradingRunId || !expectedModel || !authorized || !brainReady} type="button" onClick={() => void createRun()}>
           {busy ? "Working…" : "Start bulk evaluation"}
         </button>
+        {startBlockedReason && !busy ? (
+          <p className="text-sm text-amber-200" data-testid="bulk-start-blocked-reason">
+            Cannot start yet: {startBlockedReason}
+          </p>
+        ) : null}
       </section>
 
       {activeRun ? (
