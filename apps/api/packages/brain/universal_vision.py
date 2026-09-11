@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from packages.brain.llama_cpp_qwen_provider import QwenReferenceBundlePayload
 from packages.brain.schemas_qwen38 import (
@@ -21,12 +22,52 @@ from packages.brain.schemas_qwen38 import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class UniversalVisionCompletion:
     payload: dict[str, Any]
     latency_ms: int
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+
+
+def _salvage_list_field(
+    parsed: Any, field: str, exc: ValidationError
+) -> dict[str, Any] | None:
+    """Drop only the malformed entries of one top-level list field.
+
+    Mirrors llama_cpp_qwen38_vision_provider._salvage_list_field: one
+    degenerate entry (an incomplete or hallucinated extra region) otherwise
+    invalidates every entry the model read correctly, failing a whole page
+    over one bad element. Returns None (never salvageable) whenever any
+    reported error falls outside this one list field, so a genuinely
+    structural violation still fails closed exactly as before.
+    """
+
+    if not isinstance(parsed, dict) or not isinstance(parsed.get(field), list):
+        return None
+    items = parsed[field]
+    bad_indices: set[int] = set()
+    for error in exc.errors():
+        loc = error["loc"]
+        if len(loc) < 2 or loc[0] != field or not isinstance(loc[1], int):
+            return None
+        bad_indices.add(loc[1])
+    if not bad_indices or bad_indices == set(range(len(items))):
+        return None
+    logger.warning(
+        "universal_vision: dropped %d malformed %r entr%s out of %d "
+        "rather than failing the whole response",
+        len(bad_indices),
+        field,
+        "y" if len(bad_indices) == 1 else "ies",
+        len(items),
+    )
+    salvaged = dict(parsed)
+    salvaged[field] = [item for idx, item in enumerate(items) if idx not in bad_indices]
+    return salvaged
 
 
 class _VisualTranscriptionDraft(BaseModel):
@@ -201,8 +242,19 @@ class UniversalVisionProviderMixin:
             + json.dumps(references, ensure_ascii=False)
             + "\nOPEN CONTINUATIONS: "
             + json.dumps(open_continuations or [], ensure_ascii=False)
-            + "\nReturn JSON matching this schema exactly: "
-            + json.dumps(VisualPageMappingOutput.model_json_schema(), ensure_ascii=False)
+            + "\nReturn exactly this JSON shape with no extra keys: "
+            # A concrete filled example, not the raw Pydantic schema. Dumping
+            # model_json_schema() here previously handed a weaker model a
+            # document containing "$defs", "properties", and "required" and
+            # told it to "match this schema exactly" - AkashML's Qwen3.8-27B
+            # took that literally and returned the schema itself back as its
+            # answer (regions missing, $defs present), which is exactly what
+            # the local llama.cpp Qwen3.8 provider's hand-written prompt for
+            # this same call avoids by showing a filled instance instead.
+            + '{"regions":[{"question_label":"one supplied label","bbox":[0,0,1000,1000],'
+            '"continues_from_previous":false,"continues_to_next":false,'
+            '"confidence":0.0,"warnings":[]}],"needs_review":true}. '
+            "Use an empty regions array only if this page has no visible answer segment."
         )
         completion = self._complete_structured_vision(
             prompt=prompt,
@@ -210,7 +262,19 @@ class UniversalVisionProviderMixin:
             response_model=VisualPageMappingOutput,
             schema_name="visual_page_mapping",
         )
-        return VisualPageMappingOutput.model_validate(completion.payload)
+        try:
+            return VisualPageMappingOutput.model_validate(completion.payload)
+        except ValidationError as exc:
+            # A region carries only placement geometry, never evidence text;
+            # dropping one malformed entry loses nothing the rest of the
+            # response didn't already lose, and downstream already treats an
+            # unmapped label as a normal "not_found" state to review - the
+            # same tradeoff the local Qwen3.8 provider already makes for this
+            # exact call.
+            salvaged = _salvage_list_field(completion.payload, "regions", exc)
+            if salvaged is not None:
+                return VisualPageMappingOutput.model_validate(salvaged)
+            raise
 
     def read_page(
         self,

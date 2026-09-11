@@ -149,6 +149,115 @@ def test_gemini_visual_mapping_uses_the_shared_validated_contract() -> None:
     assert result.regions[0].question_label == "Q1"
 
 
+def test_visual_mapping_prompt_never_dumps_the_raw_pydantic_schema() -> None:
+    """Reproduces the AkashML/Qwen3.8-27B failure: told to "match this schema
+    exactly" against a raw model_json_schema() dump (which contains $defs), a
+    weaker model returned the schema itself as its answer - missing every
+    real field, carrying $defs it was never supposed to emit. The fix is a
+    concrete filled example instead of the schema dump; assert the schema
+    artifacts that caused it are gone from the prompt, not just that a
+    plausible-looking prompt exists.
+    """
+    settings = Settings(
+        BRAIN_PROVIDER="gemini",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_IMAGE_INPUT_ENABLED=True,
+    )
+    adapter = BrainAdapter.from_settings(settings)
+    captured: dict[str, Any] = {}
+
+    def _capture(_contents: Any, **_kwargs: Any) -> Any:
+        captured["prompt"] = _contents
+        return SimpleNamespace(
+            text=json.dumps({"regions": [], "needs_review": True}),
+            usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1),
+        )
+
+    adapter.provider._generate = _capture
+    adapter.map_page_answer_regions(
+        image_bytes=b"not-a-real-image-but-never-decoded",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
+
+    prompt_text = "".join(part for part in captured["prompt"] if isinstance(part, str))
+    assert "$defs" not in prompt_text
+    assert "model_json_schema" not in prompt_text
+    assert '"regions":[{"question_label"' in prompt_text
+
+
+def test_visual_mapping_salvages_one_malformed_region_instead_of_failing_the_page() -> None:
+    """Reproduces the second failure the live rehearsal hit after the schema-echo
+    fix: AkashML returned one well-formed region plus a second, incomplete
+    region containing only {"needs_review": true}. That must not fail the
+    whole page - a region carries only placement geometry, and downstream
+    already treats an unmapped label as a normal not_found state to review.
+    """
+    settings = Settings(
+        BRAIN_PROVIDER="gemini",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_IMAGE_INPUT_ENABLED=True,
+    )
+    adapter = BrainAdapter.from_settings(settings)
+    response = SimpleNamespace(
+        text=json.dumps(
+            {
+                "regions": [
+                    {
+                        "question_label": "Q1",
+                        "bbox": [10, 20, 900, 800],
+                        "continues_from_previous": False,
+                        "continues_to_next": False,
+                        "confidence": "0.91",
+                        "warnings": [],
+                    },
+                    {"needs_review": True},
+                ],
+                "needs_review": True,
+            }
+        ),
+        usage_metadata=SimpleNamespace(prompt_token_count=10, candidates_token_count=20),
+    )
+    adapter.provider._generate = lambda _contents, **_kwargs: response
+
+    result = adapter.map_page_answer_regions(
+        image_bytes=b"not-a-real-image-but-never-decoded",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
+
+    assert len(result.regions) == 1
+    assert result.regions[0].question_label == "Q1"
+
+
+def test_visual_mapping_still_fails_closed_on_a_structural_violation() -> None:
+    """The salvage path must not paper over a genuinely structural failure -
+    e.g. "regions" itself being the wrong type, not one malformed entry
+    within it. That should still raise, exactly as before.
+    """
+    settings = Settings(
+        BRAIN_PROVIDER="gemini",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_IMAGE_INPUT_ENABLED=True,
+    )
+    adapter = BrainAdapter.from_settings(settings)
+    response = SimpleNamespace(
+        text=json.dumps({"regions": "not-a-list", "needs_review": True}),
+        usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1),
+    )
+    adapter.provider._generate = lambda _contents, **_kwargs: response
+
+    with pytest.raises(Exception, match="regions"):
+        adapter.map_page_answer_regions(
+            image_bytes=b"not-a-real-image-but-never-decoded",
+            mime_type="image/png",
+            question_labels=["Q1"],
+        )
+
+
 def test_new_provider_can_register_without_workflow_changes() -> None:
     class ExampleProvider(MockBrainProvider):
         provider_name = "example_provider"
