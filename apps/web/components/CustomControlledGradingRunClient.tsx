@@ -470,8 +470,12 @@ export function CustomControlledGradingRunClient({
                   {busy ? "Starting\u2026" : extraction?.status === "failed" ? "Start a new extraction" : "Confirm and extract drafts"}
                 </button>
                 {!brainProviderConfigured ? (
-                  <span className="text-sm text-amber-200">
-                    Visual brain extraction is not ready. Check the brain status, capabilities, and backend safety switches.
+                  <span className="text-sm text-amber-200" data-testid="extraction-blocked-reason">
+                    {!run?.brain_profile_id
+                      ? "Lock a brain profile above first."
+                      : !selectedBrainProfile?.ready
+                        ? `${selectedBrainProfile?.display_name ?? "The locked profile"} is not ready: ${selectedBrainProfile?.readiness_detail ?? "check its status above."}`
+                        : "The locked profile does not support visual reference extraction."}
                   </span>
                 ) : null}
               </div>
