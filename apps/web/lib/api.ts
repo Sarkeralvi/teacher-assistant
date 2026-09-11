@@ -937,16 +937,21 @@ export type LocalAiServiceStatus = {
   configured: boolean;
   location: "mock" | "local" | "cloud" | "cli" | string;
   capabilities: string[];
-  // The API omits every capability flag below when the configured provider
-  // cannot be constructed, so they are absent rather than false. Treat a
-  // missing flag as unknown; only an explicit false means the feature is off.
+  // These describe the *configured* provider specifically. The response
+  // schema defaults every one of them to false on the wire when that
+  // provider fails to build, so they read as "off" rather than "unknown" -
+  // true of this provider, not of the deployment.
   visual_preparation_enabled?: boolean;
   transcription_enabled?: boolean;
   thinking_repair_enabled?: boolean;
   grading_enabled?: boolean;
   reference_extraction_enabled?: boolean;
   script_preparation_enabled?: boolean;
-  bulk_evaluation_enabled?: boolean;
+  // Unlike the flags above, this one is deployment-wide (BRAIN_BULK_EVALUATION_ENABLED /
+  // BULK_SUPERVISED_ENABLED) and the backend reports it correctly even when the
+  // configured provider fails to build - see deployment_bulk_evaluation_enabled
+  // in packages/brain/policy.py. Safe to read as authoritative on its own.
+  bulk_evaluation_enabled: boolean;
 };
 
 export type LocalAiStatus = {

@@ -200,10 +200,7 @@ def brain_policy_from_settings(
         settings.brain_grading_enabled,
         settings.local_qwen38_grading_enabled if is_qwen38 else single_grade_enabled,
     )
-    bulk_enabled = _coalesce(
-        settings.brain_bulk_evaluation_enabled,
-        settings.bulk_supervised_enabled,
-    )
+    bulk_enabled = deployment_bulk_evaluation_enabled(settings)
     if not vision_transport_enabled:
         visual_enabled = False
         page_read_enabled = False
@@ -305,6 +302,20 @@ def normalize_brain_adapter(
 
 def _coalesce(value: bool | None, fallback: bool) -> bool:
     return fallback if value is None else value
+
+
+def deployment_bulk_evaluation_enabled(settings: Settings) -> bool:
+    """Whether bulk supervised evaluation is on for this deployment at all.
+
+    Unlike every other flag on BrainPolicy, this one does not depend on which
+    provider gets built: it is the same BRAIN_BULK_EVALUATION_ENABLED /
+    BULK_SUPERVISED_ENABLED switch regardless of profile. Status reporting
+    needs it even when the *configured* brain fails to build, so it is exposed
+    standalone instead of only living inside a BrainPolicy that a broken
+    provider would prevent from ever being constructed.
+    """
+
+    return _coalesce(settings.brain_bulk_evaluation_enabled, settings.bulk_supervised_enabled)
 
 
 def _legacy_runtime(

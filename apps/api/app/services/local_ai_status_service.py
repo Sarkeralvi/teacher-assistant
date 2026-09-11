@@ -11,7 +11,11 @@ from packages.brain.adapter import (
     BrainProviderConfigurationError,
     configured_brain_profiles,
 )
-from packages.brain.policy import brain_policy_from_settings, configured_visual_provider
+from packages.brain.policy import (
+    brain_policy_from_settings,
+    configured_visual_provider,
+    deployment_bulk_evaluation_enabled,
+)
 
 
 class LocalAiStatusService:
@@ -71,6 +75,12 @@ class LocalAiStatusService:
             "detail": None,
             "models": [self.settings.brain_model] if self.settings.brain_model else [],
             "capabilities": [],
+            # Deployment-wide, not tied to whether *this* provider builds: a
+            # broken configured brain (see the except branches below) used to
+            # make this come back false regardless of the real switch, which
+            # then blocked bulk evaluation UIs for every profile, not just the
+            # broken one.
+            "bulk_evaluation_enabled": deployment_bulk_evaluation_enabled(self.settings),
         }
         if provider != "mock" and not self.settings.brain_allow_real_providers:
             base["detail"] = "blocked_by_provider_kill_switch"

@@ -140,9 +140,12 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   );
   // The run is executed by the profile posted below, not by the configured
   // brain, so readiness is read off the selected profile. /brain/status only
-  // contributes the deployment-wide bulk switch, and only when it actually
-  // reports it: the key is absent whenever the configured provider fails to
-  // build, which used to disable this button for an unrelated provider.
+  // contributes the deployment-wide bulk switch (BULK_SUPERVISED_ENABLED /
+  // BRAIN_BULK_EVALUATION_ENABLED), which the backend now reports correctly
+  // even when the configured provider fails to build - see
+  // deployment_bulk_evaluation_enabled in packages/brain/policy.py. It used
+  // to be read straight off the configured provider's own policy, so a
+  // broken configured provider reported this false for every profile.
   const bulkFeatureDisabled = localAi?.brain.bulk_evaluation_enabled === false;
   const brainReady = Boolean(
     !bulkFeatureDisabled && selectedProfile?.ready && profileEligibleForBulk(selectedProfile),
