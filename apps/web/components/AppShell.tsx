@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getCurrentUser, logout, type User } from "../lib/api";
 
@@ -81,7 +81,24 @@ export function EmptyState({ message }: Readonly<{ message: string }>) {
 }
 
 export function ErrorState({ message }: Readonly<{ message: string }>) {
-  return <p className="rounded border border-red-800 bg-red-950/40 p-4 text-red-200">{message}</p>;
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    // A button click below a long form (drafts to review, criteria to edit)
+    // used to set this exact message and leave it rendered off-screen above,
+    // at the top of the page - clicking the button looked like it did
+    // nothing. Bring the message to wherever the teacher actually is.
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [message]);
+  return (
+    <p
+      ref={ref}
+      className="rounded border border-red-800 bg-red-950/40 p-4 text-red-200"
+      role="alert"
+      aria-live="assertive"
+    >
+      {message}
+    </p>
+  );
 }
 
 export function LoadingState() {

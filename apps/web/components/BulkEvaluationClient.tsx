@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   approveCleanBulkEvaluation,
@@ -75,7 +75,15 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const activeRun = runs.find((run) => run.id === activeRunId) ?? runs[0] ?? null;
+
+  useEffect(() => {
+    // A rejected request here used to only ever show at the top of the page,
+    // which a teacher scrolled down to "Start bulk evaluation" would never
+    // see - the click looked like it silently did nothing.
+    if (error) errorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [error]);
 
   const refresh = useCallback(async () => {
     const [runRows, gradingRows, status, profileRows] = await Promise.all([
@@ -278,7 +286,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         </p>
       </header>
 
-      {error ? <div role="alert" aria-live="assertive" className="rounded-lg border border-rose-700 bg-rose-950/40 p-4 text-rose-100">{error}</div> : null}
+      {error ? <div ref={errorRef} role="alert" aria-live="assertive" className="rounded-lg border border-rose-700 bg-rose-950/40 p-4 text-rose-100">{error}</div> : null}
       {loading ? <p className="text-sm text-slate-400">Loading bulk evaluation state…</p> : null}
 
       <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-6 lg:grid-cols-4">
