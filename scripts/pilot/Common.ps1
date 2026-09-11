@@ -233,6 +233,59 @@ function Test-PilotPort {
     return $null -ne (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
+function Get-PilotRuntimePostgresProcess {
+    param([Parameter(Mandatory = $true)][hashtable]$Paths)
+
+    # Only ever touch postgres.exe that lives in the pilot's own runtime.  A
+    # teacher may have an unrelated PostgreSQL service installed, and killing
+    # that would be far worse than leaving the pilot's port occupied.
+    $binRoot = (Resolve-Path -LiteralPath $Paths.PostgresBin).Path
+    return @(
+        Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" |
+            Where-Object {
+                $_.ExecutablePath -and
+                $_.ExecutablePath.StartsWith($binRoot, [StringComparison]::OrdinalIgnoreCase)
+            }
+    )
+}
+
+function Test-PilotPostgresReady {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [int]$TimeoutSeconds = 10
+    )
+
+    # A postmaster that was force-killed mid-restart can leave an orphaned child
+    # holding the listening socket: the TCP connection is accepted but no answer
+    # ever comes, so a bare `psql` blocks forever.  That is exactly how a failed
+    # stop used to turn the next start into a silent hang, so every readiness
+    # probe is bounded and a blocked probe counts as "not ready".
+    $psql = Join-Path $Paths.PostgresBin "psql.exe"
+    $stdoutPath = [IO.Path]::GetTempFileName()
+    $stderrPath = [IO.Path]::GetTempFileName()
+    try {
+        # The query keeps its own quotes: Start-Process joins ArgumentList with
+        # spaces and no quoting, so a bare SELECT 1 reaches psql as two arguments
+        # and the probe fails against a perfectly healthy server.
+        $probe = Start-Process -FilePath $psql -ArgumentList @(
+            "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres", "-Atc", '"SELECT 1"'
+        ) -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        if (-not $probe.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+        # Judged from the query's own output.  Start-Process does not reliably
+        # populate ExitCode on a -PassThru process, so testing it here would make
+        # every probe report failure.
+        $output = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
+        return ($null -ne $output -and $output.Trim() -eq "1")
+    } catch {
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Wait-PilotHttp {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,

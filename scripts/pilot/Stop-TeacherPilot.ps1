@@ -59,15 +59,53 @@ if ($null -ne $redisProcess) {
 }
 
 $postgresExe = Join-Path $paths.PostgresBin "postgres.exe"
-Stop-PilotProcess -Paths $paths -Name "postgres" -ExpectedExecutable $postgresExe
 $pgCtl = Join-Path $paths.PostgresBin "pg_ctl.exe"
+
+# Ask PostgreSQL to shut itself down before anything is terminated.  The reverse
+# order used to wedge the machine: Stop-PilotProcess kills the postmaster's
+# children first, the postmaster answers that by respawning a fresh set, and
+# force-killing it mid-respawn orphans a postgres.exe that inherits the 5432
+# listener.  The port then accepts connections nobody answers, so the next start
+# hung on its first psql probe while this script reported success.
 & $pgCtl status -D $paths.PostgresData *> $null
 if ($LASTEXITCODE -eq 0) {
-    & $pgCtl stop -D $paths.PostgresData -m fast -w
-    if ($LASTEXITCODE -ne 0) {
-        throw "PostgreSQL failed to stop cleanly."
+    & $pgCtl stop -D $paths.PostgresData -m fast -w *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Remove-Item -LiteralPath (Get-PilotPidPath -Paths $paths -Name "postgres") `
+            -Force -ErrorAction SilentlyContinue
+        Write-Host "PostgreSQL stopped."
+    } else {
+        Write-Warning "pg_ctl could not stop PostgreSQL; terminating the tracked postmaster instead."
+        Stop-PilotProcess -Paths $paths -Name "postgres" -ExpectedExecutable $postgresExe
     }
-    Write-Host "PostgreSQL stopped."
 } else {
-    Write-Host "PostgreSQL is already stopped."
+    Stop-PilotProcess -Paths $paths -Name "postgres" -ExpectedExecutable $postgresExe
+}
+
+# Never report a clean stop while something still owns 5432.  An orphan there is
+# invisible until the next start hangs, which is the failure this check exists
+# to make loud.
+$pgPortDeadline = [DateTime]::UtcNow.AddSeconds(15)
+while ((Test-PilotPort -Port 5432) -and [DateTime]::UtcNow -lt $pgPortDeadline) {
+    Start-Sleep -Milliseconds 250
+}
+if (Test-PilotPort -Port 5432) {
+    # Wrapped at the call site: PowerShell unrolls a returned array, so a single
+    # orphan would arrive as a scalar and .Count would throw under StrictMode.
+    $orphans = @(Get-PilotRuntimePostgresProcess -Paths $paths)
+    if ($orphans.Count -eq 0) {
+        throw @"
+Port 5432 is still listening after PostgreSQL was stopped, and no postgres.exe
+from $($paths.PostgresBin) owns it. Something outside the pilot holds that port;
+starting now would hang on the first database probe.
+"@
+    }
+    foreach ($orphan in $orphans) {
+        Stop-Process -Id ([int]$orphan.ProcessId) -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+    if (Test-PilotPort -Port 5432) {
+        throw "Port 5432 is still listening after clearing $($orphans.Count) orphaned postgres process(es)."
+    }
+    Write-Host "Cleared $($orphans.Count) orphaned postgres process(es) that still held port 5432."
 }

@@ -2589,3 +2589,87 @@ data is gone and the login is intact.
 - The rehearsal's own precondition "no previous draft/job/final grade exists for the
   rehearsal assessment" is now trivially satisfied for a fresh assessment.
 - Both pilot gates remain open; this reset changes nothing about them.
+
+---
+
+# TA-OPS-002 â€” A failed pilot stop wedged PostgreSQL and made every start hang silently
+
+## What happened
+
+`Stop-TeacherPilot.ps1` was run before a rebuild. It reported success:
+
+```
+frontend stopped.  worker stopped.  api stopped.
+Redis-compatible service stopped.
+postgres stopped.
+PostgreSQL is already stopped.
+```
+
+It had not stopped PostgreSQL. `.local-ai/logs/postgres.stderr.log` records what the
+postmaster did at that moment:
+
+```
+21:29:13 [23252] background worker "logical replication launcher" (PID 17700) was terminated by exception 0xFFFFFFFF
+21:29:13 [23252] LOG:  terminating any other active server processes
+21:29:13 [23252] LOG:  all server processes terminated; reinitializing
+```
+
+The log ends there. Port 5432 stayed in LISTEN, owned by an orphaned `postgres.exe`, and
+accepted TCP connections that were never answered.
+
+## Why it stayed invisible
+
+`Stop-PilotProcess` kills a service's children before the service itself. For PostgreSQL
+that is backwards: killing the backends makes the postmaster respawn a fresh set, and
+force-killing it mid-respawn orphans a child that inherits the listening socket. The
+postmaster is then gone, so `pg_ctl status` reports "not running" and the script prints
+success over a half-dead server.
+
+`Start-TeacherPilot.ps1` opened with an unbounded `psql -Atc "SELECT 1"` before its first
+`Write-Host`. Against that orphan, `psql` blocked forever. Every start attempt â€” the
+desktop shortcut included â€” therefore hung producing no output at all, for as long as it
+was left running. The stack looked broken for reasons no log explained.
+
+Recovering took a hard kill of the wedged postmaster, removal of the stale
+`postmaster.pid`, and a restart; crash recovery replayed normally.
+
+## Fix
+
+- `Stop-TeacherPilot.ps1` asks `pg_ctl stop -m fast -w` first and only falls back to
+  terminating the tracked postmaster if that fails.
+- The stop then verifies port 5432 is actually free. If it is not, it clears orphaned
+  `postgres.exe` processes **that live under the pilot's own runtime directory** (never a
+  teacher's separately installed PostgreSQL) and throws if the port is still held.
+- `Test-PilotPostgresReady` in `Common.ps1` bounds every readiness probe with a timeout and
+  treats a blocked probe as "not ready", so no pilot script can hang on this again.
+- The start's "port occupied" error now names the orphan case and the remedy.
+
+## Verification
+
+Each branch was exercised against the real runtime rather than reasoned about, which caught
+three defects in the first draft of the probe:
+
+| Check | Result |
+| --- | --- |
+| `Test-PilotPostgresReady`, server running | `True` in 41 ms |
+| `Test-PilotPostgresReady`, server down | `False` in 2.1 s, no hang |
+| `Get-PilotRuntimePostgresProcess`, server running | 6 processes |
+| `Get-PilotRuntimePostgresProcess`, server down | 0 processes |
+| Full `Stop-TeacherPilot.ps1` | one `PostgreSQL stopped.`, all four ports free, no throw |
+| Full `Start-TeacherPilot.ps1` after that stop | four ports LISTEN, `/health` `{"status":"ok"...}` |
+
+The three defects the run caught: `Start-Process -ArgumentList` joins without quoting, so
+`SELECT 1` reached `psql` as two arguments (`extra command-line argument "1" ignored`) and
+the probe reported a healthy server as unready; `ExitCode` is not reliably populated on a
+`-PassThru` process, so testing it made every probe fail; and PowerShell unrolls a returned
+array, so a single orphan arrived as a scalar and `.Count` threw under `StrictMode`.
+
+## Risks / follow-ups
+
+- The orphan-clearing branch is verified by construction and unit-exercised, but has not
+  been run against a genuinely wedged postmaster â€” reproducing that means deliberately
+  crashing the database, which was not done on the founder's live data.
+- `Stop-PilotProcess`'s children-first order is still wrong in principle for any service
+  that respawns its own workers. PostgreSQL is the only such service in the pilot today.
+- Both pilot gates remain open; this changes nothing about them.
+

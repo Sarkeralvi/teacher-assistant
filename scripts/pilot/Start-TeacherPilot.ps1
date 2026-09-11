@@ -51,31 +51,28 @@ if ($StartLocalAi -and $SkipLocalAi) {
 
 $psql = Join-Path $paths.PostgresBin "psql.exe"
 $postgresExe = Join-Path $paths.PostgresBin "postgres.exe"
-$pgReady = $false
-try {
-    $pgReady = (& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1"
-} catch {
-    $pgReady = $false
-}
+$pgReady = Test-PilotPostgresReady -Paths $paths
 if (-not $pgReady) {
     if (Test-PilotPort -Port 5432) {
-        throw "Port 5432 is already occupied by an unrecognized PostgreSQL instance."
+        throw @"
+Port 5432 is listening but PostgreSQL never answered a query.
+If the pilot was stopped while PostgreSQL was restarting, an orphaned
+postgres.exe can keep the listener while accepting nothing, and every start
+after that would hang here. Run Stop-TeacherPilot.ps1, which now clears that
+state, and start again.
+"@
     }
     $pgProcess = Start-PilotProcess -Paths $paths -Name "postgres" `
         -Executable $postgresExe -Arguments @("-D", $paths.PostgresData) `
         -WorkingDirectory $paths.RepositoryRoot
-    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while ([DateTime]::UtcNow -lt $deadline -and -not $pgReady) {
-        try {
-            $pgReady = (& $psql -h 127.0.0.1 -U postgres -d postgres -Atc "SELECT 1" 2>&1) -eq "1"
-        } catch {
-            $pgReady = $false
-        }
+        $pgReady = Test-PilotPostgresReady -Paths $paths -TimeoutSeconds 5
         if ($pgReady) { break }
         Start-Sleep -Milliseconds 200
     }
     if (-not $pgReady) {
-        throw "PostgreSQL failed to start."
+        throw "PostgreSQL failed to start. See .local-ai\logs\postgres.stderr.log."
     }
 } else {
     Write-Host "PostgreSQL is already running."
