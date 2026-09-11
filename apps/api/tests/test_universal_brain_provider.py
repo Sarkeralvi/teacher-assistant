@@ -187,6 +187,45 @@ def test_visual_mapping_prompt_never_dumps_the_raw_pydantic_schema() -> None:
     assert '"regions":[{"question_label"' in prompt_text
 
 
+def test_visual_mapping_prompt_states_the_bbox_scale_explicitly() -> None:
+    """Reproduces the live rehearsal's third failure: after the schema-echo and
+    single-region fixes, AkashML returned bbox [130, 130, 950, 1760] - raw
+    image-pixel coordinates (y2=1760, a real scanned-page height), not the
+    0-1000 normalized scale the schema requires. The prompt said "normalized
+    [x1,y1,x2,y2]" but only implied the 0-1000 scale through the JSON example's
+    [0,0,1000,1000] box, never stating it in words - unlike the local Qwen3.8
+    provider's proven prompt, which says "coordinates from 0 to 1000" outright.
+    Assert the explicit scale statement is present, not just a plausible
+    example.
+    """
+    settings = Settings(
+        BRAIN_PROVIDER="gemini",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_IMAGE_INPUT_ENABLED=True,
+    )
+    adapter = BrainAdapter.from_settings(settings)
+    captured: dict[str, Any] = {}
+
+    def _capture(_contents: Any, **_kwargs: Any) -> Any:
+        captured["prompt"] = _contents
+        return SimpleNamespace(
+            text=json.dumps({"regions": [], "needs_review": True}),
+            usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1),
+        )
+
+    adapter.provider._generate = _capture
+    adapter.map_page_answer_regions(
+        image_bytes=b"not-a-real-image-but-never-decoded",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
+
+    prompt_text = "".join(part for part in captured["prompt"] if isinstance(part, str))
+    assert "0 to 1000" in prompt_text
+    assert "pixel" in prompt_text
+
+
 def test_visual_mapping_salvages_one_malformed_region_instead_of_failing_the_page() -> None:
     """Reproduces the second failure the live rehearsal hit after the schema-echo
     fix: AkashML returned one well-formed region plus a second, incomplete
@@ -251,6 +290,49 @@ def test_visual_mapping_still_fails_closed_on_a_structural_violation() -> None:
     adapter.provider._generate = lambda _contents, **_kwargs: response
 
     with pytest.raises(Exception, match="regions"):
+        adapter.map_page_answer_regions(
+            image_bytes=b"not-a-real-image-but-never-decoded",
+            mime_type="image/png",
+            question_labels=["Q1"],
+        )
+
+
+def test_visual_mapping_fails_closed_when_the_only_region_uses_pixel_coordinates() -> None:
+    """Live reproduction, verbatim: AkashML returned exactly one region with
+    bbox [130, 130, 950, 1760] - raw image-pixel coordinates (y2 far past the
+    0-1000 normalized ceiling) instead of the required 0-1000 scale. With only
+    one region and it being the bad one, salvage must decline (dropping it
+    would leave zero regions, which is not the same claim as "the model saw no
+    answer here") and the call must still raise for teacher review.
+    """
+    settings = Settings(
+        BRAIN_PROVIDER="gemini",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_IMAGE_INPUT_ENABLED=True,
+    )
+    adapter = BrainAdapter.from_settings(settings)
+    response = SimpleNamespace(
+        text=json.dumps(
+            {
+                "regions": [
+                    {
+                        "question_label": "Q1",
+                        "bbox": [130, 130, 950, 1760],
+                        "continues_from_previous": False,
+                        "continues_to_next": False,
+                        "confidence": 0.9,
+                        "warnings": [],
+                    }
+                ],
+                "needs_review": True,
+            }
+        ),
+        usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1),
+    )
+    adapter.provider._generate = lambda _contents, **_kwargs: response
+
+    with pytest.raises(Exception, match="normalized"):
         adapter.map_page_answer_regions(
             image_bytes=b"not-a-real-image-but-never-decoded",
             mime_type="image/png",

@@ -224,9 +224,11 @@ class UniversalVisionProviderMixin:
         ]
         prompt = (
             "Map visible student answer segments on this complete script page only to the "
-            "supplied finalized labels. Return at most one normalized [x1,y1,x2,y2] union "
-            "box per label, using the full writable width and ending immediately before the "
-            "next visible part heading. Preserve wrong, partial, crossed-out, and irrelevant "
+            "supplied finalized labels. Return at most one union box per label. Boxes use "
+            "normalized [x1,y1,x2,y2] coordinates from 0 to 1000 regardless of this image's "
+            "actual pixel resolution - never return raw pixel coordinates. Use the full "
+            "writable width and end immediately before the next visible part heading. "
+            "Preserve wrong, partial, crossed-out, and irrelevant "
             "work as physical answer evidence. Do not transcribe, solve, or grade. Set all "
             "results for teacher review. A continuation and a new labeled part on one page "
             "must be separate regions. When uncertain, widen the box and add a warning. "
@@ -274,6 +276,10 @@ class UniversalVisionProviderMixin:
             salvaged = _salvage_list_field(completion.payload, "regions", exc)
             if salvaged is not None:
                 return VisualPageMappingOutput.model_validate(salvaged)
+            logger.warning(
+                "universal_vision: visual mapping failed closed, raw payload: %s",
+                completion.payload,
+            )
             raise
 
     def read_page(
