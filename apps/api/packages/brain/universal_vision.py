@@ -407,10 +407,22 @@ class UniversalVisionProviderMixin:
             "images. Preserve every coherent line, mathematical symbol, mistake, crossing "
             "out, and replacement. Never solve, correct, summarize, grade, or use outside "
             "knowledge. Use Markdown/LaTeX. Mark unresolved glyphs explicitly and describe "
-            "visible editing marks with normalized page-indexed boxes. An actually empty "
-            "region has is_blank=true and an empty draft_text. Every result needs teacher "
-            f"review. Canonical label for navigation only: {label}. Return JSON matching: "
-            + json.dumps(_VisualTranscriptionDraft.model_json_schema(), ensure_ascii=False)
+            "visible editing marks with page-indexed boxes; boxes use normalized "
+            "[x1,y1,x2,y2] coordinates from 0 to 1000 regardless of image pixel resolution. "
+            "An actually empty region has is_blank=true and an empty draft_text. Every "
+            f"result needs teacher review. Canonical label for navigation only: {label}. "
+            + "Return exactly this JSON shape with no extra keys: "
+            # A concrete filled example, not the raw Pydantic schema - see
+            # map_page_answer_regions for why a schema dump containing $defs
+            # gets echoed back verbatim by a weaker model instead of filled in.
+            + '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
+            '"alternatives":["option 1","option 2"]}],"editing_marks":['
+            '{"page_index":1,"bbox":[0,0,1000,1000],'
+            '"status":"cancelled|replacement|retained",'
+            '"position_hint":"location only"}],"cancellation_detected":false,'
+            '"replacement_detected":false,"uncertain_correction_detected":false,'
+            '"is_blank":false,"is_irrelevant":false,"confidence":0.0,"needs_review":true}. '
+            "Use an empty uncertain_glyphs array when there are no ambiguities."
         )
         return self._transcription_completion(
             prompt=prompt,
@@ -431,12 +443,20 @@ class UniversalVisionProviderMixin:
             "uncertain. Return a fresh visual transcription, not an edit based on mathematical "
             "correctness. Preserve student mistakes and resolve only what the pixels support. "
             "Keep unresolved writing explicit. Every cancellation or replacement decision "
-            "needs a normalized image box and teacher review.\nPRIOR DRAFT:\n"
+            "needs a normalized [x1,y1,x2,y2] image box, scaled 0 to 1000 regardless of "
+            "image pixel resolution, and teacher review.\nPRIOR DRAFT:\n"
             + rejected_transcript
             + "\nPRIOR EDIT LOCATIONS:\n"
             + json.dumps(source_editing_marks or [], ensure_ascii=False)
-            + "\nReturn JSON matching: "
-            + json.dumps(_VisualTranscriptionDraft.model_json_schema(), ensure_ascii=False)
+            + "\nReturn exactly this JSON shape with no extra keys: "
+            + '{"draft_text":"string","uncertain_glyphs":[{"position_hint":"string",'
+            '"alternatives":["option 1","option 2"]}],"editing_marks":['
+            '{"page_index":1,"bbox":[0,0,1000,1000],'
+            '"status":"cancelled|replacement|retained",'
+            '"position_hint":"location only"}],"cancellation_detected":false,'
+            '"replacement_detected":false,"uncertain_correction_detected":false,'
+            '"is_blank":false,"is_irrelevant":false,"confidence":0.0,"needs_review":true}. '
+            "Use an empty uncertain_glyphs array when there are no ambiguities."
         )
         return self._transcription_completion(
             prompt=prompt,

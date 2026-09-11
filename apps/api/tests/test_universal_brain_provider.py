@@ -297,6 +297,57 @@ def test_visual_mapping_still_fails_closed_on_a_structural_violation() -> None:
         )
 
 
+def test_transcription_prompt_never_dumps_the_raw_pydantic_schema() -> None:
+    """The live run's fourth failure, at the transcription stage: the same
+    schema-echo defect fixed for map_page_answer_regions (98ce323) was still
+    present in transcribe_images and repair_transcription_images, which built
+    their prompts from _VisualTranscriptionDraft.model_json_schema(). Live
+    reproduction: AkashML returned the schema document itself
+    ({'$defs': {...}}), failing "9 validation errors ... draft_text Field
+    required". Assert the schema artifacts are gone, not just that a
+    plausible prompt exists.
+    """
+    settings = Settings(
+        BRAIN_PROVIDER="gemini",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_IMAGE_INPUT_ENABLED=True,
+    )
+    adapter = BrainAdapter.from_settings(settings)
+    captured: dict[str, Any] = {}
+
+    def _capture(_contents: Any, **_kwargs: Any) -> Any:
+        captured["prompt"] = _contents
+        return SimpleNamespace(
+            text=json.dumps({"draft_text": "", "is_blank": True, "confidence": 0.5}),
+            usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1),
+        )
+
+    adapter.provider._generate = _capture
+    adapter.transcribe_image(
+        image_bytes=b"not-a-real-image-but-never-decoded",
+        mime_type="image/png",
+        label="Q1",
+    )
+
+    prompt_text = "".join(part for part in captured["prompt"] if isinstance(part, str))
+    assert "$defs" not in prompt_text
+    assert "model_json_schema" not in prompt_text
+    assert '"draft_text":"string"' in prompt_text
+    assert "0 to 1000" in prompt_text
+
+    captured.clear()
+    adapter.provider._generate = _capture
+    adapter.repair_transcription_images(
+        images=[(b"not-a-real-image-but-never-decoded", "image/png")],
+        rejected_transcript="prior text",
+    )
+    repair_prompt_text = "".join(part for part in captured["prompt"] if isinstance(part, str))
+    assert "$defs" not in repair_prompt_text
+    assert "model_json_schema" not in repair_prompt_text
+    assert '"draft_text":"string"' in repair_prompt_text
+
+
 def test_visual_mapping_fails_closed_when_the_only_region_uses_pixel_coordinates() -> None:
     """Live reproduction, verbatim: AkashML returned exactly one region with
     bbox [130, 130, 950, 1760] - raw image-pixel coordinates (y2 far past the
