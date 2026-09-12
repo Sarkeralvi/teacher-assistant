@@ -2673,3 +2673,75 @@ array, so a single orphan arrived as a scalar and `.Count` threw under `StrictMo
   that respawns its own workers. PostgreSQL is the only such service in the pilot today.
 - Both pilot gates remain open; this changes nothing about them.
 
+# TA-BRAIN-005 — Generic BRAIN_* overrides no longer leak into local Qwen profiles (2026-09-12)
+
+- Recorded at: 2026-09-12
+- Baseline commit: `2bcfa3f`
+- Workflow type: manual controlled diagnostic (TA-DIAG-001, user-authorized) plus a scoped
+  code fix, both synthetic data only.
+- Provider/model calls: 3 real local Qwen3.8 calls total (1 single-answer grading, 2 Bulk
+  Supervised mapping/transcription) during diagnosis; 0 cloud calls. No calls made by the fix
+  itself.
+- GradeSuggestion created: 1 (draft, `needs_review=true`, synthetic data, not approved).
+  FinalGrade created: 0. `COHORT_MODEL_GRADING_ENABLED=false` throughout.
+
+## What happened
+
+Both single-answer and Bulk Supervised grading were reported broken. Reproduced against the
+real running pilot stack (Postgres/Redis/backend/worker/frontend/local Qwen3.8 all green,
+`BRAIN_PROVIDER=llama_cpp_qwen38`): every grading attempt failed before any provider request
+was built, with `LOCAL_QWEN38_BASE_URL must be a loopback address; got
+'https://api.akashml.com/v1'`, raised in `llama_cpp_qwen38_vision_provider.py:761`.
+
+## Why it stayed invisible
+
+TA-BRAIN-004 (2026-09-09) onboarded the AkashML `openai_compatible` cloud profile via the
+universal `BRAIN_MODEL`/`BRAIN_API_KEY`/`BRAIN_BASE_URL` slots and left all five profiles
+showing READY, `llama_cpp_qwen38` included. That readiness check does not construct the real
+provider, so it never exercises the loopback-address guard that only fires inside
+`llama_cpp_qwen38_vision_provider.py`'s constructor at actual call time. The misrouting bug
+was therefore live and silent from 2026-09-09 onward: `packages/brain/profiles.py`'s
+`legacy_profile_settings` copied the generic `BRAIN_*` values into
+`LOCAL_QWEN38_BASE_URL`/`LOCAL_QWEN38_API_KEY`/`LOCAL_QWEN38_MODEL` whenever
+`BRAIN_PROVIDER=llama_cpp_qwen38` was selected and any generic slot was non-empty — despite
+`.env.local-ai`'s own comment already stating those slots are "read only by the
+openai_compatible profile."
+
+## Fix
+
+`legacy_profile_settings` (`packages/brain/profiles.py`) no longer includes
+`"llama_cpp_qwen"`/`"llama_cpp_qwen38"` in the override-eligible sets for `brain_model`,
+`brain_api_key`, or `brain_base_url`. The universal `brain_timeout_seconds` override is
+unchanged (documented as intentionally universal); `openai`/`gemini`/`codex_cli`/
+`claude_cli`/`antigravity_gemini` override behaviour is unchanged.
+
+## Verification
+
+Each branch was exercised against the real runtime, not reasoned about:
+
+| Check | Result |
+| --- | --- |
+| Single-answer grade, as-shipped config | HTTP 409, loopback guard, 0 provider calls |
+| Single-answer grade, generic slots excluded | HTTP 201, job succeeded, GradeSuggestion drafted, 1 real Qwen3.8 call, ~32s |
+| Bulk Supervised intake, as-shipped config | `BulkEvaluationError`, same guard, 0 provider calls |
+| Bulk Supervised, generic slots excluded | `review_ready`, mapping+transcription+grading present, 2 real Qwen3.8 calls |
+| New regression tests (`tests/test_brain_profiles.py`, 3 cases) | pass — none existed before; `legacy_profile_settings` had zero prior coverage |
+| Full backend suite | 736 passed, 6 skipped (up from 733 passed pre-fix) |
+| Ruff | same 1 pre-existing unrelated `I001` in `universal_vision.py:1`, not introduced here |
+| Frontend lint/build | pass |
+
+One pre-existing unrelated failure noted, not fixed here (out of this task's scope):
+`test_frontend_upload_auth_static.py::test_frontend_has_no_direct_codex_or_llm_calls` flags
+`CustomControlledGradingRunClient.tsx:94` for the word "Gemini" inside a code comment, not an
+actual provider call.
+
+## Risks / follow-ups
+
+- Both pilot gates (curated quality `PASS`, founder-signed rehearsal) remain open; this
+  diagnostic is explicitly not that rehearsal and does not satisfy it.
+- The AkashML cloud values staying in `.env.local-ai` is what triggers this class of bug
+  whenever a local profile is selected; worth deciding whether they belong somewhere that
+  can't leak, independent of this fix.
+- The single-answer leg of this smoke exercised only the teacher-confirmed-text grading call,
+  not Custom Controlled's vision-based reference-extraction/mapping/transcription stages.
+

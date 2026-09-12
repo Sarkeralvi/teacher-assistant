@@ -133,20 +133,16 @@ def legacy_profile_settings(settings: Settings, profile_id: str) -> Settings:
     if field_prefix is None:
         return settings
     updates: dict[str, object] = {}
-    if settings.brain_model:
+    if settings.brain_model and normalized not in {"llama_cpp_qwen", "llama_cpp_qwen38"}:
         updates[f"{field_prefix}_model"] = settings.brain_model
     updates[f"{field_prefix}_timeout_seconds"] = settings.brain_timeout_seconds
     if settings.brain_api_key and normalized in {
         "openai",
         "gemini",
-        "llama_cpp_qwen",
-        "llama_cpp_qwen38",
     }:
         updates[f"{field_prefix}_api_key"] = settings.brain_api_key
     if settings.brain_base_url and normalized in {
         "openai",
-        "llama_cpp_qwen",
-        "llama_cpp_qwen38",
     }:
         updates[f"{field_prefix}_base_url"] = settings.brain_base_url
     if settings.brain_image_input_enabled is not None and normalized in {

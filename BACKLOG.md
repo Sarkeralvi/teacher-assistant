@@ -1,4 +1,55 @@
-﻿# TA-BRAIN-003 — Provider job-timeout fix and cloud-default correction
+﻿# TA-BRAIN-005 — Generic BRAIN_* overrides no longer leak into local Qwen profiles
+
+- Recorded at: 2026-09-12
+- Baseline commit: `2bcfa3f` (carrying commit: pending)
+- Canonical workflow: cross-cutting (Custom Controlled single-answer grading, Bulk Supervised).
+- Found during a user-authorized diagnostic (TA-DIAG-001) after both single-answer and Bulk
+  Supervised grading were reported broken. Reproduced empirically against the real running pilot
+  stack with synthetic data only, local Qwen3.8, zero cloud calls: single-answer grading and Bulk
+  Supervised both failed at the first provider call with `LOCAL_QWEN38_BASE_URL must be a loopback
+  address; got 'https://api.akashml.com/v1'`, before any HTTP request was built.
+- Root cause: `packages/brain/profiles.py`'s `legacy_profile_settings` treated the universal
+  `BRAIN_MODEL`/`BRAIN_API_KEY`/`BRAIN_BASE_URL` slots as eligible overrides for the dedicated
+  local-loopback `llama_cpp_qwen`/`llama_cpp_qwen38` profiles, alongside the intentionally
+  universal `openai`/`gemini` legacy profiles. Once `.env.local-ai` configured those generic slots
+  for the `openai_compatible` AkashML cloud profile (2026-09-09), selecting `BRAIN_PROVIDER=
+  llama_cpp_qwen38` (correctly, local) silently had its own `LOCAL_QWEN38_BASE_URL`/
+  `LOCAL_QWEN38_API_KEY`/`LOCAL_QWEN38_MODEL` overwritten by the AkashML values on every call.
+  `.env.local-ai`'s own comment already documented those slots as "read only by the
+  openai_compatible profile" — the code did not enforce that.
+- Implemented: removed `"llama_cpp_qwen"`/`"llama_cpp_qwen38"` from the override-eligible sets for
+  `brain_model`, `brain_api_key`, and `brain_base_url` in `legacy_profile_settings`. The universal
+  `brain_timeout_seconds` override is unchanged and still applies to every profile (documented as
+  intentionally universal). `openai`/`gemini`/`codex_cli`/`claude_cli`/`antigravity_gemini`
+  override behaviour is unchanged.
+- Safety: no grading behaviour changed beyond restoring the local profile's own configured
+  endpoint/key/model. No `GradeSuggestion`/`FinalGrade`/export/approval created by this change.
+  `COHORT_MODEL_GRADING_ENABLED=false` unchanged. No provider permissions broadened.
+- Verification completed: added `apps/api/tests/test_brain_profiles.py` (3 new regression tests —
+  no test previously covered `legacy_profile_settings` at all). Full backend suite: 736 passed, 6
+  skipped (up from 733 passed pre-fix), same one pre-existing unrelated failure noted below. Ruff:
+  same one pre-existing unrelated issue noted below. Frontend lint/build: passed. Live re-verified
+  against the real running stack: one synthetic single-answer grade completed to a draft
+  `GradeSuggestion` (`needs_review=true`) via one real local Qwen3.8 call; one synthetic Bulk
+  Supervised cohort reached `review_ready` via two real local Qwen3.8 calls. Zero cloud calls made.
+- Two pre-existing issues found during this diagnostic, unrelated to this fix, logged but not
+  fixed (out of this task's approved scope):
+  - `tests/test_frontend_upload_auth_static.py::test_frontend_has_no_direct_codex_or_llm_calls`
+    fails on `apps/web/components/CustomControlledGradingRunClient.tsx:94`, which matches the
+    guard's forbidden-term list only inside a code comment ("Antigravity Gemini") mentioning a
+    provider name in a dropdown, not an actual direct provider call. The 2026-08-31 handoff's
+    "Ruff clean" / "Backend tests 594 passed, 3 skipped" baseline predates this; current baseline
+    is 733 passed / 1 pre-existing failure before this fix's 3 new tests.
+  - `ruff check .` reports one pre-existing `I001` unsorted-import error in
+    `packages/brain/universal_vision.py:1`, auto-fixable, cosmetic only.
+- Pilot status: unchanged. Both gates (curated quality `PASS`, founder-supervised rehearsal)
+  remain open. This diagnostic is not the founder-signed rehearsal in
+  `docs/FOUNDER_PILOT_REHEARSAL.md` and does not satisfy that gate.
+- Semi/Fully Automated status: Disabled and out of scope.
+- Status: Done (code-level fix + regression tests); not yet exercised against a live teacher
+  rehearsal.
+
+# TA-BRAIN-003 — Provider job-timeout fix and cloud-default correction
 
 - Recorded at: 2026-09-08
 - Baseline commit: `8e76f35` (carrying commit: `3684045`)
