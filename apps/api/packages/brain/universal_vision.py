@@ -321,7 +321,9 @@ class UniversalVisionProviderMixin:
         prompt = (
             "Read this complete handwritten mathematics exam-script page once. Return every "
             "visible answer block in top-to-bottom visual order, with both its normalized "
-            "[x1,y1,x2,y2] geometry and verbatim text. Question identity is supplied by the "
+            "[x1,y1,x2,y2] geometry and verbatim text. Boxes use integer coordinates from "
+            "0 to 1000 regardless of image pixel resolution, never raw pixel coordinates. "
+            "Question identity is supplied by the "
             "caller: every non-null question_label must be exactly one FINALIZED LABEL below; "
             "never invent, transcribe, or use a handwritten label outside that set. Use null "
             "only for a continuation of the nearest labelled block above it. The supplied "
@@ -346,8 +348,14 @@ class UniversalVisionProviderMixin:
             + json.dumps(references, ensure_ascii=False)
             + "\nOPEN CONTINUATIONS: "
             + json.dumps(canonical_open_continuations, ensure_ascii=False)
-            + "\nReturn JSON matching this schema exactly: "
-            + json.dumps(VisualPageTranscriptOutput.model_json_schema(), ensure_ascii=False)
+            + "\nReturn exactly this JSON shape with no extra keys: "
+            # A concrete filled example, not the raw Pydantic schema - see
+            # map_page_answer_regions for why AkashML's Qwen3.8-27B echoes
+            # a schema dump containing $defs instead of filling in evidence.
+            + '{"blocks":[{"question_label":"one supplied label",'
+            '"bbox":[0,0,1000,1000],"text":"verbatim visible writing",'
+            '"continues_from_previous":false,"label_source":"heading","confidence":0.0}],'
+            '"is_blank_page":false,"needs_review":true}.'
         )
         completion = self._complete_structured_vision(
             prompt=prompt,
@@ -442,7 +450,24 @@ class UniversalVisionProviderMixin:
             "Reinspect these ordered answer images because a prior evidence transcript was "
             "uncertain. Return a fresh visual transcription, not an edit based on mathematical "
             "correctness. Preserve student mistakes and resolve only what the pixels support. "
-            "Keep unresolved writing explicit. Every cancellation or replacement decision "
+            # TA-BRAIN-006: AkashML returned an uncertainty flag without the
+            # marker required by the output validator. State that contract;
+            # never suppress uncertainty or relax the confirmation gate.
+            "Put only surviving student writing in draft_text; record visibly cancelled "
+            "writing in editing_marks instead of copying it into the surviving transcript. "
+            "The characters inside a clearly cancelled passage need not be deciphered: "
+            "omit that passage from draft_text, with its complete cancellation box in "
+            "editing_marks. Do not add uncertainty placeholders for definitely cancelled text. "
+            "Content you mark cancelled must not also remain in draft_text. After identifying "
+            "edit boxes, reread only the uncancelled writing to build the transcript; do not "
+            "copy the prior draft and merely remove its uncertainty markers. Preserve surviving "
+            "overbars, subscripts, fractions, and every visible mathematical symbol exactly, "
+            "even when the student's result is wrong. "
+            "If a correction cannot be resolved from the image, put the literal "
+            "[unclear correction] "
+            "at that location in draft_text, use status uncertain_correction for its editing mark, "
+            "and set uncertain_correction_detected=true. Never guess to clear an uncertainty. "
+            "Every cancellation or replacement decision "
             "needs a normalized [x1,y1,x2,y2] image box, scaled 0 to 1000 regardless of "
             "image pixel resolution, and teacher review.\nPRIOR DRAFT:\n"
             + rejected_transcript

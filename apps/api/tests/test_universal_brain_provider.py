@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
@@ -19,6 +20,7 @@ from packages.brain.capabilities import (
     BrainTransport,
 )
 from packages.brain.mock_provider import MockBrainProvider
+from packages.brain.openai_provider import OpenAICompatibleProvider
 from packages.brain.policy import brain_policy_for_profile, brain_policy_from_settings
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas_qwen38 import (
@@ -58,6 +60,134 @@ def test_openai_compatible_cloud_endpoint_requires_an_api_key() -> None:
 
     with pytest.raises(BrainProviderConfigurationError, match="BRAIN_API_KEY"):
         BrainAdapter.from_settings(settings)
+
+
+@pytest.mark.parametrize("image_input_enabled", [False, True])
+def test_openai_compatible_page_read_follows_image_capability(
+    image_input_enabled: bool,
+) -> None:
+    settings = Settings(
+        BRAIN_PROVIDER="openai_compatible",
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_API_KEY="test-only-key",
+        BRAIN_MODEL="Qwen/Qwen3.8-27B",
+        BRAIN_BASE_URL="https://models.example.invalid/v1",
+        BRAIN_ENDPOINT_TYPE="cloud",
+        BRAIN_IMAGE_INPUT_ENABLED=image_input_enabled,
+        BRAIN_STRUCTURED_OUTPUT_MODE="json_object",
+        BRAIN_SCRIPT_PREPARATION_ENABLED=True,
+    )
+
+    for policy in (
+        brain_policy_from_settings(settings),
+        brain_policy_for_profile(settings, "openai_compatible"),
+    ):
+        assert policy.provider == "openai_compatible"
+        assert policy.adapter.provider.vision_enabled is image_input_enabled
+        assert policy.supports(BrainCapability.VISUAL_PAGE_READ) is image_input_enabled
+        assert policy.page_read_enabled is image_input_enabled
+
+
+def test_page_read_prompt_never_dumps_the_raw_pydantic_schema() -> None:
+    # Exercise AkashML's JSON-object transport: the prompt must show a filled
+    # instance, as for mapping/transcription, rather than invite schema echo.
+    captured: list[dict[str, Any]] = []
+    payload = {
+        "blocks": [
+            {
+                "question_label": "Q1",
+                "bbox": [10, 20, 900, 800],
+                "text": "x = 4",
+                "continues_from_previous": False,
+                "label_source": "heading",
+                "confidence": 0.9,
+            }
+        ],
+        "is_blank_page": False,
+        "needs_review": True,
+    }
+
+    def capture(_path: str, **kwargs: Any) -> Any:
+        captured.append(kwargs["json"])
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"choices": [{"message": {"content": json.dumps(payload)}}]},
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="test-only-key",
+        model_name="Qwen/Qwen3.8-27B",
+        provider_name="openai_compatible",
+        image_input_enabled=True,
+        structured_output_mode="json_object",
+        client=SimpleNamespace(post=capture),
+    )
+    result = provider.read_page(
+        image_bytes=b"not-a-real-image-but-never-sent",
+        mime_type="image/png",
+        question_labels=["Q1"],
+    )
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request["response_format"] == {"type": "json_object"}
+    prompt_text = request["messages"][0]["content"][0]["text"]
+    assert "$defs" not in prompt_text
+    assert '"properties"' not in prompt_text
+    assert "model_json_schema" not in prompt_text
+    assert '"blocks":[{"question_label"' in prompt_text
+    assert "0 to 1000" in prompt_text
+    example_text = prompt_text.split("Return exactly this JSON shape with no extra keys: ")[1]
+    example, _tail = json.JSONDecoder().raw_decode(example_text)
+    VisualPageTranscriptOutput.model_validate(example)
+    assert result.blocks[0].text == "x = 4"
+    assert result.needs_review is True
+
+
+def test_openai_compatible_grading_discards_prompt_only_criterion_status() -> None:
+    payload = {
+        "score": 2,
+        "max_score": 5,
+        "confidence": 0.5,
+        "needs_review": True,
+        "rubric_breakdown": [{
+            "criterion_id": "sample_space",
+            "criterion": "Construct the sample space",
+            "criterion_status": "partially_met",
+            "max_marks": 5,
+            "awarded_marks": 2,
+            "reason": "The response is incomplete.",
+            "evidence": "Student work",
+            "confidence": 0.5,
+        }],
+        "detected_answer_summary": "A draft answer.",
+        "major_errors": [],
+        "feedback_to_student": "Review the sample space.",
+        "review_flags": ["teacher_review_required"],
+    }
+
+    def capture(_path: str, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"choices": [{"message": {"content": json.dumps(payload)}}]},
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="test-only-key",
+        model_name="Qwen/Qwen3.8-27B",
+        image_input_enabled=False,
+        structured_output_mode="json_object",
+        client=SimpleNamespace(post=capture),
+    )
+    result = provider.grade(
+        question_text="Question",
+        question_total_marks=Decimal("5"),
+        rubric_json={"total_marks": 5, "criteria": []},
+        answer_image_path="unused",
+        prompt_version="test",
+        messages=[{"role": "user", "content": "Grade this."}],
+    )
+    assert result.rubric_breakdown[0].criterion_id == "sample_space"
 
 
 def test_gemini_uses_the_universal_key_model_and_capability_policy() -> None:
@@ -346,6 +476,58 @@ def test_transcription_prompt_never_dumps_the_raw_pydantic_schema() -> None:
     assert "$defs" not in repair_prompt_text
     assert "model_json_schema" not in repair_prompt_text
     assert '"draft_text":"string"' in repair_prompt_text
+
+
+def test_repair_prompt_states_the_uncertain_correction_contract() -> None:
+    # TA-BRAIN-006: a real AkashML repair set uncertain_correction_detected
+    # without the required marker, failing validation before teacher review.
+    captured: list[str] = []
+    payload = {
+        "draft_text": "x = [unclear correction]",
+        "editing_marks": [{
+            "page_index": 1,
+            "bbox": [10, 20, 100, 200],
+            "status": "uncertain_correction",
+            "position_hint": "upper line",
+        }],
+        "uncertain_correction_detected": True,
+        "is_blank": False,
+        "confidence": 0.5,
+    }
+
+    def capture(_path: str, **kwargs: Any) -> Any:
+        captured.append(kwargs["json"]["messages"][0]["content"][0]["text"])
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"choices": [{"message": {"content": json.dumps(payload)}}]},
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="test-only-key",
+        model_name="Qwen/Qwen3.8-27B",
+        image_input_enabled=True,
+        structured_output_mode="json_object",
+        client=SimpleNamespace(post=capture),
+    )
+    result = provider.repair_transcription_images(
+        images=[(b"synthetic-image-never-sent", "image/png")],
+        rejected_transcript="x = [visibly crossed]",
+    )
+    assert "literal [unclear correction]" in captured[0]
+    assert "surviving" in captured[0]
+    assert "clearly cancelled passage" in captured[0]
+    assert "need not be deciphered" in captured[0]
+    assert "Content you mark cancelled" in captured[0]
+    assert "overbars" in captured[0]
+    assert result.uncertain_correction_detected is True
+    assert result.needs_review is True
+    # The prompt fix must not weaken the fail-closed output contract.
+    payload["draft_text"] = "x = 4"
+    with pytest.raises(ValueError, match="uncertain correction must remain explicit"):
+        provider.repair_transcription_images(
+            images=[(b"synthetic-image-never-sent", "image/png")],
+            rejected_transcript="x = [visibly crossed]",
+        )
 
 
 def test_visual_mapping_fails_closed_when_the_only_region_uses_pixel_coordinates() -> None:

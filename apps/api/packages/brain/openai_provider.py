@@ -61,6 +61,7 @@ class OpenAICompatibleProvider(UniversalVisionProviderMixin, BrainProvider):
                     BrainCapability.RUBRIC_PDF_EXTRACTION,
                     BrainCapability.VISUAL_REFERENCE_EXTRACTION,
                     BrainCapability.VISUAL_MAPPING,
+                    BrainCapability.VISUAL_PAGE_READ,
                     BrainCapability.VISUAL_TRANSCRIPTION,
                     BrainCapability.TRANSCRIPTION_REPAIR,
                 }
@@ -111,6 +112,21 @@ class OpenAICompatibleProvider(UniversalVisionProviderMixin, BrainProvider):
         payload = response.json()
         content = self._extract_content(payload)
         raw_output = json.loads(content)
+        # The shared grading prompt asks providers to explain criterion status,
+        # but the canonical persisted breakdown intentionally does not store
+        # that presentation-only field.  OpenAI-compatible models return it
+        # reliably (AkashML did so in TA-BRAIN-006), so normalize it before the
+        # strict application schema validates the provider response.
+        rubric_breakdown = raw_output.get("rubric_breakdown")
+        if isinstance(rubric_breakdown, list):
+            raw_output["rubric_breakdown"] = [
+                (
+                    {key: value for key, value in item.items() if key != "criterion_status"}
+                    if isinstance(item, dict)
+                    else item
+                )
+                for item in rubric_breakdown
+            ]
         raw_output["model_provider"] = self.provider_name
         raw_output["model_name"] = self.model_name
         raw_output["prompt_version"] = prompt_version

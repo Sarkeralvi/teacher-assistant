@@ -2673,6 +2673,185 @@ array, so a single orphan arrived as a scalar and `.Count` threw under `StrictMo
   that respawns its own workers. PostgreSQL is the only such service in the pilot today.
 - Both pilot gates remain open; this changes nothing about them.
 
+# TA-BRAIN-006 — OpenAI-compatible page reads (2026-09-12; real verification blocked)
+
+- Baseline: `a53970e357b9fa41121b213280a4782f4cfc4ab5`,
+  `rescue/paddle-qwen36-hybrid`, clean preflight.
+- Manual controlled mode; task-scoped founder approval for Codex and one real script/question
+  using AkashML `openai_compatible`, model `Qwen/Qwen3.8-27B`, draft-only. DIRECT routing,
+  no Qwen bridge calls, no additional agents, no autonomous loop.
+- Real provider calls: **0**. Live `GradingJob`: **0**; `GradeSuggestion`: **0**;
+  `FinalGrade`: **0**. No real cloud transport was invoked. Tests use synthetic fixtures.
+
+## Confirmed defects and changes
+
+Read the required source/test/policy files before changes. Confirmed that the image-enabled
+OpenAI-compatible capability set lacked `VISUAL_PAGE_READ`, leaving page-read policy disabled,
+and generic `read_page` still embedded a raw Pydantic schema. Added the gated capability and
+replaced the page-read schema dump with a concrete JSON instance, explicit 0-1000 coordinate
+units, and the existing-style explanation of AkashML's schema-echo behavior.
+
+Regression coverage checks image input on/off, legacy and explicit-profile policy resolution,
+and the actual JSON-object transport prompt with a fake client. No speculative completion
+budget or salvage changes, no old preparation changes, and no Bulk Supervised changes.
+
+## Validation
+
+| Command / check | Result |
+| --- | --- |
+| `git status --short`; `git rev-parse HEAD`; branch/root checks | Expected clean baseline |
+| From `apps/api`: `..\..\.venv\Scripts\python.exe -m pytest tests/test_universal_brain_provider.py -k 'openai_compatible_page_read or page_read_prompt' -q` before production changes | 2 failed, 1 passed, 28 deselected; intended defects reproduced |
+| From `apps/api`: `..\..\.venv\Scripts\python.exe -m pytest tests/test_universal_brain_provider.py tests/test_qwen38_provider.py -q` | 79 passed |
+| `make test` | Command unavailable; no package installation attempted |
+| From `apps/api`: `..\..\.venv\Scripts\python.exe -m pytest -q` | 741 passed, 6 skipped, 1 failed, 2 warnings; captured rerun 75.61 seconds |
+| From `apps/api`: `..\..\.venv\Scripts\python.exe -m ruff check .` | Same 1 pre-existing `I001`, `packages/brain/universal_vision.py:1` |
+| `git diff --check` | Pass |
+| `scripts\pilot\Start-TeacherPilot.ps1`, without `-StartLocalAi` | Exit 0; API/worker/frontend restarted by supported script; managed Qwen3.8 stopped by script |
+| `scripts\pilot\Get-TeacherPilotStatus.ps1 -RequireAll` | Exit 1: all five core services ready; both local models off |
+| `scripts\pilot\Get-TeacherPilotStatus.ps1 -RequireCore` | Exit 0; cohort grading false |
+| Actual pilot `GET /health` | HTTP 200, status `ok`; no model call |
+
+The only full-suite failure is the previously recorded
+`test_frontend_upload_auth_static.py::test_frontend_has_no_direct_codex_or_llm_calls`, matching
+"Gemini" in a comment in `CustomControlledGradingRunClient.tsx`. It and the Ruff exception
+remain untouched. Initial full-suite output was lost to tool-output truncation, so the complete
+suite was repeated to obtain the exact result above before any real provider call.
+
+## Authorization stop
+
+No call was made. The one selected script's first page contains Q1(a)(i) but stops at an
+intermediate probability calculation. The requested conditional probability is not completed
+on that page. Under the single-question/page scope, continuation-resolved and complete-evidence
+claims cannot be made for this page. No other script or student page was inspected, and no
+placeholder answer text, fabricated confirmation, or synthetic-ready fixture was introduced.
+
+The initial page-read call also precedes the new answer-region/transcript's confirmation and
+queue snapshot, while step 10 explicitly applies all 15 pre-call policy items to it. This
+sequencing needs founder clarification or a genuinely complete manually reviewed preflight
+packet for the same answer; no waiver was inferred from the instruction to continue.
+
+Pre-call packet at stop:
+
+1. Assessment ID: no live verification assessment created.
+2. Grading unit: Q1(a)(i) observed on the selected page, not finalized in the app.
+3. Answer region/selected queue item: none created.
+4. Model answer/solution: authorized source PDF exists; not confirmed in app.
+5. Active rubric: authorized source PDF exists; not activated in app.
+6. Crop/segment visible: selected full page inspected in memory; no app crop uploaded.
+7. `evidence_status = complete`: not satisfied by the selected page.
+8. Continuation resolved: not satisfied; page ends at an intermediate calculation.
+9. `ready_for_grading = true`: not established.
+10. Blockers empty: not satisfied; incomplete answer/continuation.
+11. Queue item `stale_status = fresh`: no queue item created.
+12. Existing GradeSuggestion: none created by this task; no rerun attempted.
+13. Approved provider/model: AkashML `openai_compatible`, `Qwen/Qwen3.8-27B` only.
+14. Remaining authorized call count: no hard total cap; zero used; stop on three identical
+    unfixed consecutive failures; no automatic retries or fallback.
+15. Founder approval/draft-only scope: work order records approval; the preparation gate and
+    complete single-question input remain unresolved before invocation.
+
+This is **not** the requested first real-script/AkashML verified fix. No task-created persisted
+`AnswerRegionOcrRun` exists; the required proof value `qwen38-page-read-structured-v1` is an
+expectation, not an observed runtime result. TA-BRAIN-006 remains incomplete.
+
+## Safety and follow-ups
+
+- Four source files checked read-only. One selected script was read from ZIP into memory;
+  only its first page was rendered for inspection, along with the question reference. No
+  private file/image/transcript/provider payload was written or uploaded. In-memory image
+  buffers released; no session-derived disk artifacts required deletion. Sources untouched.
+- No live grading records, approvals, exports, or final grades created.
+  `COHORT_MODEL_GRADING_ENABLED=false`; no env/settings changes.
+- No real run reached assembler page-count, blank-page, label-source, or empty-transcript
+  cases (work order lines 297/321/337/349/354/377-380). All remain real-unverified. Empty
+  transcript text adds a per-question blocker, not necessarily a whole-submission exception.
+- Repository call-site search found no production callers for `prepare_from_tier1_ocr` or
+  `prepare_from_paddle_ocr`; TA-LOCAL-011's vision-escalation half remains a known-dead fix.
+- Actual session policy: approval `never`, sandbox `danger-full-access`, not the repo example
+  `workspace-write`; exact deployed model ID is not exposed to this assistant. No `--yolo`,
+  CLI/config-policy change, additional agent, or autonomous loop.
+- Next: founder clarifies preparatory-call gate and permits/selects a complete bounded answer;
+  perform the real-app run, record every call and persisted proof, then clean up derived data.
+  Scoped engineering changes staged; no commit or shipping approval.
+
+## TA-BRAIN-006 completion update (2026-09-12; direct single-answer verification)
+
+The founder then clarified the sequencing: page-read/preparation is performed first, and the
+15-item packet gates only the direct grading call. Queue-run dispatch is Bulk Supervised and is
+out of scope; packet item 11 (`queue item stale_status = fresh`) is therefore **N/A** here.
+The stale queue run created during the earlier attempt was removed directly: queue item 1 and
+queue run 1 were deleted, and `GET /assessments/3/grading-queue-runs/1` now returns 404.
+
+The same one selected script (S1), source page 5, one complete question `1(c)(i)`, was used.
+The final page-read run was `AnswerRegionOcrRun` 11, provider `openai_compatible`, model
+`Qwen/Qwen3.8-27B`, status `succeeded`, with literal
+`prompt_version=qwen38-page-read-structured-v1`. Full-answer confirmation reported
+`evidence_status=complete`, `continuation_confirmed_not_needed`, `ready_for_grading=true`,
+and no blockers. The direct endpoint was
+`POST /answer-regions/14/grade-brain` (no queue item). It created job 2 and exactly one draft
+`GradeSuggestion` (id 1, score 4/5, `needs_review=true`); the final-grade endpoint returned
+404 and no `FinalGrade` was created. These records were deleted during post-verification
+cleanup, so the IDs above are the audit record of what existed during the successful run.
+
+### Real AkashML call ledger
+
+All calls used the approved cloud profile `openai_compatible` / `Qwen/Qwen3.8-27B`, against
+S1/page 5/Q1(c)(i), and used the new evidence path (page-read plus edit-review); no Bulk
+Supervised call was made:
+
+| # | Call | Outcome | Measured latency |
+| --- | --- | --- | --- |
+| 1 | page-read | HTTP 200, preparation completed | 16,501 ms |
+| 2 | edit-review run 6 | rejected: uncertainty had to remain explicit | 22,618 ms job elapsed |
+| 3 | page-read | HTTP 200, preparation completed | 17,656 ms |
+| 4 | edit-review run 8 | valid JSON but unresolved transcript; not confirmed | 33,586 ms provider |
+| 5 | page-read | HTTP 200, preparation completed | 17,284 ms |
+| 6 | edit-review run 10 | valid JSON but fidelity review failed; not confirmed | 43,319 ms provider |
+| 7 | page-read | HTTP 200, preparation completed | 15,096 ms |
+| 8 | edit-review run 12 | succeeded and confirmed | 33,550 ms provider |
+| 9 | direct grade (first attempt) | HTTP 502: `criterion_status` was rejected by strict output schema | 17,950 ms app elapsed |
+| 10 | direct grade retry | HTTP 200, job 2 succeeded; one draft suggestion | 15,985 ms app elapsed (provider reported 15,109 ms) |
+
+The grading retry followed the smallest observed fix: normalize the presentation-only
+`criterion_status` field before strict validation. The edit-review prompt was also tightened
+only after its real responses demonstrated cancellation/fidelity failures. No identical failure
+occurred three times consecutively.
+
+### Grading authorization packet (confirmed immediately before call 9, then call 10)
+
+1. Assessment id: 3 (isolated task assessment).
+2. Question/grading unit: question id 31, label `1(c)(i)`.
+3. Answer region: `answer_region_id=14`; no queue item was required (direct endpoint).
+4. Model answer/solution: present from the authorized `Solution.pdf` reference upload.
+5. Active rubric: present as rubric id 31 from authorized `rubric.pdf`.
+6. Crop/segment visible: confirmed segment id 16 and source page 163 were visible.
+7. `evidence_status = complete`: confirmed after page-read and full-answer confirmation.
+8. Continuation resolved: `continuation_confirmed_not_needed`.
+9. `ready_for_grading = true`: confirmed.
+10. Blockers empty: confirmed (`[]`).
+11. Queue item `stale_status = fresh`: **N/A**; direct single-answer grading was explicitly
+    used, and queue run 1/item 1 was deleted.
+12. Existing `GradeSuggestion`: none before the first direct call; the retry was explicitly
+    authorized after the distinct schema failure and created the one draft suggestion.
+13. Approved provider/model: AkashML `openai_compatible`, `Qwen/Qwen3.8-27B` only.
+14. Remaining approved call count: no hard cap; 9 calls had been used before the final retry;
+    stop-on-three-identical-failures rule was not triggered.
+15. Founder approval/draft-only scope: confirmed in the task; manual controlled mode, one
+    script/one question, no approval/export/finalization.
+
+### Completion and safety
+
+Focused suites: 81 passed. Full backend: 742 passed, 6 skipped, 1 documented unrelated
+frontend-comment failure, 2 warnings. Ruff retained only the pre-existing `I001` at
+`packages/brain/universal_vision.py:1`. The known-dead TA-LOCAL-011 hybrid preparation fix
+was not touched. None of the page-assembler raise sites at lines 297/321/337/349/354/377-380
+were hit. The supported pilot stack was started/restarted as needed; it was not stopped after
+verification. `COHORT_MODEL_GRADING_ENABLED=false`; Bulk Supervised was untouched. The
+isolated assessment and all task-derived uploads/artifacts were deleted; source hashes for
+`Question.pdf`, `Solution.pdf`, `rubric.pdf`, and `Scripts-flat.zip` were unchanged, and no
+source or derived artifact was committed. No commit was made; scoped files are staged pending
+founder approval.
+
 # TA-BRAIN-005 — Generic BRAIN_* overrides no longer leak into local Qwen profiles (2026-09-12)
 
 - Recorded at: 2026-09-12

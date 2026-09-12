@@ -1816,3 +1816,80 @@ Tests required: docs/config-rules gates: `git status --short`, `git diff --check
 Risks: The contract improves future task quality only if future prompts actually use it and agents obey AGENTS.md.
 Status: Done
 
+# TA-BRAIN-006 — OpenAI-compatible page reads enabled; real verification completed
+
+- Recorded at: 2026-09-12
+- Baseline: `a53970e357b9fa41121b213280a4782f4cfc4ab5`, branch
+  `rescue/paddle-qwen36-hybrid`, clean preflight.
+- Confirmed both reported defects directly: the image-enabled OpenAI-compatible provider
+  omitted `VISUAL_PAGE_READ`; generic `read_page` still dumped the raw Pydantic schema.
+- Changed: capability declaration and generic page-read prompt only. The prompt now shows a
+  concrete schema-valid JSON instance and explicit integer 0-1000 coordinates.
+- Tests: regressions red (2 failed, 1 passed) before production changes; targeted suites
+  79 passed afterward. Full backend 741 passed, 6 skipped, 1 documented frontend-comment
+  failure. Ruff retains the documented `I001` at `universal_vision.py:1`. `make` is unavailable;
+  its backend pytest recipe was run directly. No installs.
+- Real calls: **0**. Live grading jobs/suggestions/final grades created: **0**. No bulk run.
+- Blocker: the first page of the one selected script contains Q1(a)(i), but stops at an
+  intermediate calculation. Complete evidence and resolved continuation cannot be confirmed
+  from that page. The work order requires all 15 authorization items before any real call;
+  they are not satisfied. No placeholder evidence or readiness flags were manufactured.
+- Also requires clarification: initial page read creates draft evidence; the task applies the
+  pre-grading packet requirement to this preparatory call too. A manually reviewed existing
+  packet might support preflight, but no complete one-page packet was established here.
+- Pilot: supported startup restarted API/worker/frontend and stopped managed local Qwen3.8.
+  All five core services healthy; `-RequireCore` passes. `-RequireAll` fails solely because
+  it additionally requires a local model. Cohort grading remains false.
+- Private data: source files inspected read-only; one script and its first page inspected
+  in memory, no private files written/uploaded, no provider payload or transcript created.
+- Known-dead fix: no production callers of hybrid preparation methods were found; the
+  TA-LOCAL-011 vision-escalation half remains untouched and unreachable from production.
+- Status: **incomplete**, staged without commit for founder review. This is NOT yet the
+  requested first real-script/AkashML verified fix. No real persisted prompt-version proof.
+  See the validation log for exact checks and remaining gate requirements.
+
+## TA-BRAIN-006 completion update (2026-09-12)
+
+Founder clarified that preparation precedes the grading authorization packet and that the
+queue packet is N/A for this direct single-answer endpoint. The same selected script (S1),
+page 5, question `1(c)(i)`, reached `evidence_status=complete`,
+`continuation_confirmed_not_needed`, and `ready_for_grading=true` after the new page-read
+run. Four page-read calls and four bounded edit-review calls were made; the first three
+edit-review attempts were rejected by observed fidelity/uncertainty validation, and the
+fourth was confirmed. The direct `/answer-regions/14/grade-brain` call then succeeded after
+one prior, distinct schema-validation failure. Across preparation and grading, 10 AkashML
+calls were made; no three identical failures occurred. The successful run created exactly
+one draft `GradeSuggestion` (`needs_review=true`, score 4/5), and zero `FinalGrade` records.
+The persisted page-read `AnswerRegionOcrRun.prompt_version` was
+`qwen38-page-read-structured-v1`. Queue run 1/item 1, created during the earlier mistaken
+queue attempt, was deleted; queue item 11 is N/A for this direct endpoint.
+
+The real verification assessment, submission, answer region, OCR runs, grading job,
+suggestion, reference uploads, and task-created database/storage data were deleted after
+verification. The four source files in `E:\Question, solution, rubric and scripts` were
+untouched. Committed after a `/code-review` pass; see follow-ups below for what that review
+found in this diff.
+
+## Code-review follow-ups (not blocking, logged 2026-09-13)
+
+`/code-review` on this diff found no correctness defect in the shipped change (the real
+AkashML grading run it produced was independently verified). Three findings are in scope for
+this diff specifically and are deferred, not silently dropped:
+
+- `openai_provider.py` strips the presentation-only `criterion_status` field from
+  `rubric_breakdown` before strict validation — the fourth separate copy of this same special
+  case (`agentic_cli.py`, `llama_cpp_qwen_provider.py`, `llama_cpp_qwen38_vision_provider.py`
+  already have their own). The shared root is `build_grading_prompt()` in `prompt_registry.py`,
+  consumed by every provider via `adapter.py:343`. `gemini_provider.py:298` never strips it, so
+  Gemini will hit the identical `ValidationError` the moment it complies with the same shared
+  prompt's own instruction to include that field. Fix once at the shared root in a follow-up
+  task rather than adding a fifth per-provider copy.
+- `universal_vision.py`'s generic `read_page` (the capability this diff just enabled for
+  `openai_compatible`) has no `_salvage_list_field` recovery path for one malformed block,
+  unlike its sibling `map_page_answer_regions`. Fails closed (whole page-read rejected, never a
+  wrong answer), did not fire during this task's real verification run, but is now live traffic
+  for a weaker model than it was written against.
+- `universal_vision.py::extract_reference_bundle_from_images` (untouched by this diff) still
+  dumps the raw Pydantic schema into its prompt — the same anti-pattern this diff fixed in
+  `read_page`. Reachable by the same AkashML provider at the reference-extraction step. Separate
+  task; out of this diff's stated scope.
