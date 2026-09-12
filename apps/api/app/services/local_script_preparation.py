@@ -212,19 +212,27 @@ class LocalScriptPreparationService:
                         ) from exc
                     calls_used += 1
                     seen: set[str] = set()
+                    duplicate_labels: set[str] = set()
                     next_continuations: list[str] = []
                     for region in result.regions:
                         label = region.question_label.casefold()
                         if label in seen:
-                            raise LocalScriptPreparationError(
-                                "The brain provider split one answer into multiple page regions"
-                            )
+                            duplicate_labels.add(label)
                         seen.add(label)
                         question = question_by_label.get(label)
                         if question is None:
                             raise LocalScriptPreparationError(
                                 "The brain provider returned an unknown finalized question"
                             )
+                    for label in duplicate_labels:
+                        question = question_by_label[label]
+                        boundary_blocker_by_question[question.id].append(
+                            f"the brain provider mapped {question.question_no} to more than "
+                            f"one area on page {page.page_no}; both areas were kept as separate "
+                            "evidence segments for this question — compare each against the "
+                            "source page and confirm nothing was missed or duplicated between "
+                            "them before grading"
+                        )
                     with Image.open(image_path) as image:
                         page_height = image.height
                         stabilized_regions = _stabilize_visual_page_regions(
@@ -1027,19 +1035,26 @@ class LocalScriptPreparationService:
                     ) from exc
                 calls += 1
                 seen: set[str] = set()
+                duplicate_labels: set[str] = set()
                 next_continuations: list[str] = []
                 for region in result.regions:
                     label = region.question_label.casefold()
                     if label in seen:
-                        raise LocalScriptPreparationError(
-                            "Qwen3.8 split one answer into multiple page regions"
-                        )
+                        duplicate_labels.add(label)
                     seen.add(label)
                     question = question_by_label.get(label)
                     if question is None:
                         raise LocalScriptPreparationError(
                             "Qwen3.8 returned an unknown finalized question"
                         )
+                for label in duplicate_labels:
+                    question = question_by_label[label]
+                    warning_by_question[question.id].append(
+                        f"Qwen3.8 mapped {question.question_no} to more than one area on page "
+                        f"{item.page.page_no}; both areas were kept as separate evidence "
+                        "segments for this question — compare each against the source page and "
+                        "confirm nothing was missed or duplicated between them before grading"
+                    )
                 with Image.open(image_path) as image:
                     stabilized_regions = _stabilize_visual_page_regions(
                         regions=result.regions,
@@ -1353,6 +1368,7 @@ class LocalScriptPreparationService:
             is_uncertain = any(
                 warning.startswith("Qwen3.6 marked this block mapping uncertain")
                 or warning.startswith("ambiguous OCR block claim was withheld")
+                or "to more than one area on page" in warning
                 for warning in warning_by_question[question.id]
             )
             mapped_uncovered_pages = sorted(

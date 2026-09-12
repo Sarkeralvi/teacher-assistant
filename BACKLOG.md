@@ -1,4 +1,43 @@
-﻿# TA-BRAIN-005 — Generic BRAIN_* overrides no longer leak into local Qwen profiles
+﻿# TA-LOCAL-011 — Same-page duplicate-label mapping no longer hard-fails script preparation
+
+- Recorded at: 2026-09-12
+- Baseline commit: `b1ad4dd`
+- Canonical workflow: Custom Controlled (`prepare`, primary text-model mapping path) and its
+  Qwen3.8 vision-escalation twin (`_map_escalated_pages_with_vision`, used from
+  `prepare_from_tier1_ocr`).
+- Found live: a teacher hit `LocalScriptPreparationError("The brain provider split one answer
+  into multiple page regions")` on a real script, blocking script preparation entirely with no
+  recovery path. Root cause: when the brain provider's per-page mapping call returned two
+  separate regions labelled with the same question number on one page, the service raised
+  immediately instead of handling it, even though the data model already supports multiple
+  segments per question (the same mechanism used for legitimate cross-page continuation). This
+  guard existed, untested, since the original Qwen3.8 vision-mapping feature shipped.
+- Implemented: both sites (`packages/brain`-driven `prepare` and the vision-escalation path) now
+  keep both regions as separate ordered segments under the same question instead of raising.
+  `prepare` appends a `boundary_blocker_by_question` entry, forcing `mapping_status="blocked"`
+  with an explicit `blocker_reason` naming the page — the same mandatory-confirmation mechanism
+  already used for missing/ambiguous internal boundaries, so it also gates the "blockers empty"
+  requirement in `docs/PROVIDER_USAGE_POLICY.md`'s pre-grading authorization packet. The
+  vision-escalation path (which has no `boundary_blocker` concept) appends the equivalent warning
+  and a new prefix check in `_persist_prepared_mappings` elevates it to `mapping_status=
+  "uncertain"`. Neither path silently merges or drops content; both force explicit teacher review
+  of exactly the ambiguous page before the answer can be confirmed or graded.
+- Safety: no grading behaviour changed beyond no longer hard-failing this case; the affected
+  question is always forced into a stronger review state (`blocked`/`uncertain`), never a clean
+  auto-pass. No `GradeSuggestion`/`FinalGrade`/export/approval created by this change.
+- Verification completed: two new regression tests in
+  `apps/api/tests/test_local_script_preparation_tiered.py` (previously zero coverage for this
+  exact scenario in either path), covering both a "blocked" outcome (primary path) and an
+  "uncertain" outcome with the same-page warning (vision-escalation path), and asserting both
+  segments are kept under one `AnswerRegion`. Full backend suite: 738 passed, 6 skipped (up from
+  736 pre-change), same one pre-existing unrelated failure carried from TA-BRAIN-005. Ruff: same
+  one pre-existing unrelated `I001`, not introduced here.
+- Pilot status: unchanged. Both gates (curated quality `PASS`, founder-supervised rehearsal)
+  remain open.
+- Status: Done (code-level fix + regression tests); not yet re-exercised against the specific
+  real script that triggered it.
+
+# TA-BRAIN-005 — Generic BRAIN_* overrides no longer leak into local Qwen profiles
 
 - Recorded at: 2026-09-12
 - Baseline commit: `2bcfa3f` (carrying commit: pending)

@@ -2745,3 +2745,63 @@ actual provider call.
 - The single-answer leg of this smoke exercised only the teacher-confirmed-text grading call,
   not Custom Controlled's vision-based reference-extraction/mapping/transcription stages.
 
+# TA-LOCAL-011 — Same-page duplicate-label mapping no longer hard-fails script preparation (2026-09-12)
+
+- Recorded at: 2026-09-12
+- Baseline commit: `b1ad4dd`
+- Workflow type: manual controlled bug report (real script, founder's own use) plus a scoped
+  code fix, tested on synthetic fixtures only.
+- Provider/model calls: 0 by this fix. No re-run against the original real script was performed.
+- GradeSuggestion created: 0. FinalGrade created: 0.
+
+## What happened
+
+A teacher hit `LocalScriptPreparationError: "The brain provider split one answer into multiple
+page regions"` on a real script, which stopped script preparation for that submission entirely.
+
+## Why it happened
+
+`app/services/local_script_preparation.py` maps one page image per brain-provider call. If that
+call returned two regions labelled with the same question number on the same page, the service
+raised immediately in both the primary path (`prepare`, line ~218) and the Qwen3.8
+vision-escalation path (`_map_escalated_pages_with_vision`, line ~1042) — with zero test coverage
+of the scenario in either place. The underlying data model already stores a *list* of segments
+per question (that's exactly how a legitimate cross-page continuation is represented), so nothing
+required failing outright; the guard was simply never given a second option.
+
+## Fix
+
+Both sites keep both regions as separate ordered segments under the same question instead of
+raising:
+
+- `prepare` appends to `boundary_blocker_by_question[question.id]`, which forces
+  `mapping_status="blocked"` with an explicit `blocker_reason` — the same mechanism already used
+  for missing/ambiguous internal boundary recovery, so it also satisfies the "blockers empty"
+  requirement in `docs/PROVIDER_USAGE_POLICY.md`'s pre-grading authorization packet.
+- `_map_escalated_pages_with_vision` (no `boundary_blocker` concept in that path) appends the
+  equivalent warning text, and a new prefix check (`"to more than one area on page" in warning`)
+  in `_persist_prepared_mappings`'s `is_uncertain` detection elevates the mapping to
+  `mapping_status="uncertain"`.
+
+Neither path merges the two boxes geometrically (a union could swallow unrelated content between
+them) or silently picks one — both keep everything and force a stronger, explicit review state.
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| `test_duplicate_same_page_label_is_kept_as_two_segments_and_blocked` (new) | pass — 1 mapping, `mapping_status="blocked"`, blocker names the page, `AnswerRegion` has 2 segments |
+| `test_vision_escalation_duplicate_same_page_label_is_kept_not_raised` (new) | pass — `mapping_status="uncertain"`, 2 segments, warning present |
+| First draft of the second test | failed on a substring mismatch in the `is_uncertain` check (`"mapped to more than one area"` vs. the actual `"mapped {question_no} to more than one area"`) — caught by running the test, not by inspection; fixed to `"to more than one area on page"` |
+| Full backend suite | 738 passed, 6 skipped (up from 736) |
+| Ruff | same 1 pre-existing unrelated `I001`, not introduced here |
+
+## Risks / follow-ups
+
+- Not re-verified against the actual real script that triggered the original report — the fix was
+  validated on synthetic fixtures only, per this repo's synthetic-data-first constraint.
+- The vision-escalation path still has no `boundary_blocker`/"blocked" concept at all (it only has
+  `mapped`/`uncertain`/`not_found`); this fix works within that existing, weaker model rather than
+  introducing a new one there.
+- Both pilot gates remain open; this changes nothing about them.
+

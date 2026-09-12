@@ -1249,6 +1249,64 @@ def test_visual_mapping_blocks_ambiguous_internal_boundary_without_recovery_budg
     assert mapping_by_label[labels[0]].source_reference["mapping_blockers"]
 
 
+def test_duplicate_same_page_label_is_kept_as_two_segments_and_blocked(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    """Regression: Qwen mapping the same question to two boxes on one page must
+
+    not hard-fail the run (TA-DIAG-002). Both areas are kept as segments on the
+    same AnswerRegion, and the mapping is forced to ``blocked`` so the teacher
+    reviews and confirms the split before grading.
+    """
+    labels = ("1(b)(i)",)
+    submission, teacher = _seed(db_session, tmp_path, page_count=1, labels=labels)
+    vision = FakeVisionProvider(
+        [
+            [
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[40, 60, 960, 380],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                ),
+                VisualPageRegion(
+                    question_label=labels[0],
+                    bbox=[40, 560, 960, 900],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.7"),
+                    warnings=[],
+                ),
+            ]
+        ]
+    )
+    service = LocalScriptPreparationService(
+        db_session,
+        settings=_settings(tmp_path),
+        storage=storage,
+        qwen_adapter=FakeAdapter(vision),  # type: ignore[arg-type]
+        phase_manager=FakePhaseManager(SwitchLog([])),  # type: ignore[arg-type]
+    )
+
+    mappings = service.prepare(
+        submission=submission,
+        teacher=teacher,
+        expected_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_ocr_calls=1,
+    )
+
+    assert vision.calls == 1
+    assert len(mappings) == 1
+    mapping = mappings[0]
+    assert mapping.mapping_status == "blocked"
+    assert "more than one area on page 1" in mapping.blocker_reason
+    assert mapping.answer_region is not None
+    assert len(mapping.answer_region.segments) == 2
+
+
 def test_no_vision_call_when_tier1_read_every_page(
     db_session: Session, tmp_path: Path, storage: LocalStorage
 ) -> None:
@@ -1428,6 +1486,65 @@ def test_an_unmapped_question_becomes_a_visible_blocker(
     assert missing.mapping_status == "blocked"
     assert missing.answer_region_id is None
     assert missing.blocker_reason
+
+
+def test_vision_escalation_duplicate_same_page_label_is_kept_not_raised(
+    db_session: Session, tmp_path: Path, storage: LocalStorage
+) -> None:
+    """Same regression as the primary mapper, for the vision-escalation path
+
+    (TA-DIAG-002): Qwen3.8 mapping the same question to two boxes on an
+    unreadable, escalated page must not raise. Both areas are kept and the
+    question is flagged uncertain for teacher review.
+    """
+    submission, teacher = _seed(db_session, tmp_path, page_count=1, labels=(LABELS[0],))
+    questions = sorted(
+        db_session.query(Question).filter(Question.assessment_id == submission.assessment_id),
+        key=lambda item: item.question_no,
+    )
+    engine = FakeEngine([_reading([])])
+    vision = FakeVisionProvider(
+        [
+            [
+                VisualPageRegion(
+                    question_label=LABELS[0],
+                    bbox=[40, 60, 960, 380],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.8"),
+                    warnings=[],
+                ),
+                VisualPageRegion(
+                    question_label=LABELS[0],
+                    bbox=[40, 560, 960, 900],
+                    continues_from_previous=False,
+                    continues_to_next=False,
+                    confidence=Decimal("0.7"),
+                    warnings=[],
+                ),
+            ]
+        ]
+    )
+    service = _service(db_session, tmp_path, storage, engine=engine, vision_provider=vision)
+
+    mappings = service.prepare_from_tier1_ocr(
+        submission=submission,
+        teacher=teacher,
+        expected_text_model="qwen3.6-35b-a3b-q4km",
+        expected_vision_model="qwen3.8-27b-q4km",
+        replace_existing=True,
+        maximum_visual_calls=5,
+    )
+
+    assert vision.calls == 1
+    mapped = next(item for item in mappings if item.question_id == questions[0].id)
+    assert mapped.mapping_status == "uncertain"
+    assert mapped.answer_region is not None
+    assert len(mapped.answer_region.segments) == 2
+    assert any(
+        "more than one area on page 1" in warning
+        for warning in (mapped.source_reference or {}).get("warnings", [])
+    )
 
 
 def test_only_the_unreadable_page_goes_to_the_vision_model(
