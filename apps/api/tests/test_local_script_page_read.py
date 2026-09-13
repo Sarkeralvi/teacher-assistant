@@ -120,6 +120,31 @@ def test_supplied_label_source_is_never_overridden() -> None:
     assert block.label_source == "heading"
 
 
+def test_labelled_continuation_block_is_kept_for_teacher_review(tmp_path: Path) -> None:
+    """A redundant label/source pair must not discard the whole page read."""
+    assembly = _service().assemble(
+        pages=[_page(tmp_path, 1)],
+        page_outputs=[
+            _output(
+                _block(
+                    "Q1",
+                    [50, 100, 950, 900],
+                    "continued Q1 work",
+                    continues_from_previous=True,
+                    label_source="continuation",
+                )
+            )
+        ],
+        questions=_questions("Q1"),
+    )
+
+    assert assembly.text_by_question[1] == "continued Q1 work"
+    assert assembly.continuation_by_question[1] is True
+    assert "inferred_question_label_requires_teacher_review" in (
+        assembly.warnings_by_question[1]
+    )
+
+
 def _service() -> LocalScriptPageReadService:
     storage = SimpleNamespace(resolve_relative=lambda path: Path(path))
     return LocalScriptPageReadService(

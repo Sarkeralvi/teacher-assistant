@@ -213,14 +213,19 @@ class VisualPageBlock(BaseModel):
 
         An unlabelled block has exactly one coherent source, so that value is
         imposed rather than trusted. A labelled block that states its source
-        keeps it; one that omits it takes the reading that cannot auto-pass, so
-        the cost of a missing value is a teacher review, not a lost page.
+        keeps it, except that a labelled continuation is downgraded to inferred:
+        the canonical label still identifies ownership, while the contradictory
+        source must remain teacher-review-only rather than discarding the page.
+        A missing source takes the reading that cannot auto-pass, so the cost of
+        uncertain metadata is a teacher review, not a lost page.
         """
         if not isinstance(data, dict):
             return data
         if data.get("question_label") is None:
             if data.get("label_source") != "continuation":
                 data = {**data, "label_source": "continuation"}
+        elif data.get("label_source") == "continuation":
+            data = {**data, "label_source": "inferred"}
         elif data.get("label_source") is None:
             data = {**data, "label_source": "inferred"}
         return data

@@ -1893,3 +1893,12 @@ this diff specifically and are deferred, not silently dropped:
   dumps the raw Pydantic schema into its prompt — the same anti-pattern this diff fixed in
   `read_page`. Reachable by the same AkashML provider at the reference-extraction step. Separate
   task; out of this diff's stated scope.
+
+## TA-BRAIN-006 post-verification correction (2026-09-13)
+
+The first real-script result exposed an additional page-read contract defect:
+`VisualPageBlock` accepted a canonical label with `label_source=continuation`, while
+`LocalScriptPageReadService.assemble()` rejected that combination and discarded the page.
+The schema boundary now downgrades that contradictory source to `inferred`, preserving the
+canonical ownership and `continues_from_previous` state while forcing teacher review. A
+deterministic regression reproduces the original error before the fix and passes afterward.

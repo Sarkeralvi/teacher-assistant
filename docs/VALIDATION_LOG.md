@@ -2852,6 +2852,32 @@ isolated assessment and all task-derived uploads/artifacts were deleted; source 
 source or derived artifact was committed. No commit was made; scoped files are staged pending
 founder approval.
 
+## TA-BRAIN-006 post-verification correction (2026-09-13)
+
+The first real-script result exposed an additional defect in the new page-read path:
+`VisualPageBlock` accepted a canonical `question_label` together with
+`label_source="continuation"`, but `LocalScriptPageReadService.assemble()` rejected that
+combination with `A labelled page block cannot declare continuation source`. This was the
+reported runtime error, not a transport failure.
+
+The schema boundary now normalizes a labelled continuation to `label_source="inferred"`.
+The canonical label still owns the block, while the contradictory metadata remains
+teacher-review-only; `continues_from_previous`, text, and geometry are preserved.
+
+Regression evidence:
+
+- Before fix: `tests/test_local_script_page_read.py -k labelled_continuation` — 1 failed with
+  the exact reported `LocalScriptPageReadError`.
+- After fix: same command — 1 passed.
+- Combined page-read/provider suites — 92 passed.
+- Full backend — 744 passed, 6 skipped, 1 documented unrelated frontend-comment failure,
+  2 warnings.
+- Ruff — only the pre-existing `I001` at `packages/brain/universal_vision.py:1`.
+
+No new provider call was made for this correction; the failure was reproduced deterministically
+at the assembler seam. A fresh real-script retest should be run under the existing founder
+approval before shipping this staged change.
+
 # TA-BRAIN-005 — Generic BRAIN_* overrides no longer leak into local Qwen profiles (2026-09-12)
 
 - Recorded at: 2026-09-12
