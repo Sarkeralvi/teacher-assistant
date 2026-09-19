@@ -1,4 +1,4 @@
-﻿"""Derive which stored source blocks answer each canonical question.
+"""Derive which stored source blocks answer each canonical question.
 
 This step reads only the persisted transcript and the canonical question
 structure. It makes no provider request, so a remap, a corrected question
@@ -567,4 +567,3 @@ def assignment_summary(assignments: list[AnswerEvidenceAssignment]) -> dict[str,
             if counts[state]
         },
     }
-
