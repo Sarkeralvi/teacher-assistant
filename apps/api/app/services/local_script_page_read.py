@@ -36,6 +36,7 @@ from app.services.answer_evidence_assignment import (
     resolve_block_ownership,
 )
 from app.services.brain_execution import hold_brain_execution
+from app.services.evidence_invalidation import EvidenceInvalidationService
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError
 from app.services.local_script_preparation import (
@@ -215,6 +216,15 @@ class LocalScriptPageReadService:
             ],
         )
         assignment_by_question = {item.question_id: item for item in assignments}
+
+        # A re-derived assignment is new evidence. Mark any draft grade that was
+        # produced against the previous version, so a reviewer sees it is out of
+        # date. Nothing is deleted and nothing is re-graded automatically;
+        # _assert_replace_is_safe already refuses to touch a graded mapping.
+        EvidenceInvalidationService(self.db).supersede_stale_suggestions(
+            submission_id=submission.id,
+            reason="the source transcript or the question assignment was re-derived",
+        )
 
         # Delete replaceable draft evidence only after all provider calls and
         # deterministic assembly succeeded, so a failed read cannot erase an

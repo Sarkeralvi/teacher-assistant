@@ -90,9 +90,11 @@ export function CustomControlledGradingRunClient({
           profile.capabilities.includes("visual_reference_extraction"),
       );
       // Prefer a local destination. Taking the first eligible profile made a fresh
-      // grading run default to whichever cloud provider happened to sort first
-      // (Antigravity Gemini), so a teacher who locked without reading the dropdown
-      // would send reference pages off the machine.
+      // grading run default to whichever cloud profile happened to sort first, so a
+      // teacher who locked without reading the dropdown would send reference pages
+      // off the machine. Provider names stay out of this file deliberately: the
+      // static privacy check refuses them, and every name a teacher sees is
+      // rendered from API data at runtime.
       const defaultProfile =
         eligibleProfiles.find((profile) => profile.data_destination === "local") ??
         eligibleProfiles[0];

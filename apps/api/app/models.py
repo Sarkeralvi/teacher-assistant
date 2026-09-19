@@ -1223,6 +1223,11 @@ class ScriptTranscriptBlock(TimestampMixin, Base):
             "question_label_raw is not null or label_source = 'continuation'",
             name="ck_script_transcript_block_unlabelled_is_continuation",
         ),
+        CheckConstraint("revision >= 0", name="ck_script_transcript_block_revision"),
+        CheckConstraint(
+            "edited_text is null or (edited_at is not null and revision > 0)",
+            name="ck_script_transcript_block_edit_is_attributed",
+        ),
         UniqueConstraint(
             "script_page_transcript_id",
             "block_index",
@@ -1246,8 +1251,58 @@ class ScriptTranscriptBlock(TimestampMixin, Base):
     bbox_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     unresolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     unresolved_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # ``text`` stays the verbatim provider output forever. A teacher's
+    # correction lives here, so a model error stays distinguishable from a
+    # human fix and reuse cannot mistake one for the other.
+    edited_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    edited_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     page_transcript: Mapped[ScriptPageTranscript] = relationship(back_populates="blocks")
+    revisions: Mapped[list[ScriptTranscriptBlockRevision]] = relationship(
+        back_populates="block",
+        cascade="all, delete-orphan",
+        order_by="ScriptTranscriptBlockRevision.revision",
+    )
+
+    @property
+    def effective_text(self) -> str:
+        """What a reviewer and the grader should read: the correction if any."""
+
+        return self.edited_text if self.edited_text is not None else self.text
+
+
+class ScriptTranscriptBlockRevision(Base):
+    """One teacher correction to one block, appended and never replaced."""
+
+    __tablename__ = "script_transcript_block_revisions"
+    __table_args__ = (
+        CheckConstraint("revision > 0", name="ck_block_revision_number"),
+        UniqueConstraint(
+            "script_transcript_block_id", "revision", name="uq_block_revision_number"
+        ),
+        Index("ix_block_revisions_block_id", "script_transcript_block_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    script_transcript_block_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcript_blocks.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_text: Mapped[str] = mapped_column(Text, nullable=False)
+    new_text: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    block: Mapped[ScriptTranscriptBlock] = relationship(back_populates="revisions")
 
 
 class AnswerEvidenceAssignment(TimestampMixin, Base):
@@ -1418,7 +1473,12 @@ class GradeSuggestion(Base):
             "marking_policy in ('tough', 'general', 'easy')",
             name="ck_grade_suggestions_marking_policy",
         ),
+        CheckConstraint(
+            "superseded_at is null or superseded_reason is not null",
+            name="ck_grade_suggestions_superseded_has_reason",
+        ),
         Index("ix_grade_suggestions_answer_region_id", "answer_region_id"),
+        Index("ix_grade_suggestions_superseded_at", "superseded_at"),
         UniqueConstraint("grading_job_id", name="uq_grade_suggestions_grading_job_id"),
     )
 
@@ -1446,6 +1506,14 @@ class GradeSuggestion(Base):
     needs_review: Mapped[bool] = mapped_column(nullable=False, default=True)
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_estimate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    # The exact source evidence this draft was graded against. Re-checked at
+    # finalization, so the gate does not rely on an invalidation hook having
+    # been called. Null means "not recorded" for rows that predate this.
+    source_evidence_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    superseded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
