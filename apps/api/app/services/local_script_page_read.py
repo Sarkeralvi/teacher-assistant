@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -27,6 +27,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models import AnswerRegionMapping, AnswerRegionOcrRun, AuditLog, Question, Submission, User
+from app.services.answer_evidence_assignment import (
+    AnswerEvidenceAssignmentService,
+    CanonicalQuestion,
+    assignment_summary,
+)
 from app.services.brain_execution import hold_brain_execution
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError
@@ -93,6 +98,8 @@ class PageReadPreparationResult:
     # Reported rather than inferred so a reuse claim is auditable.
     reused_page_count: int = 0
     script_transcript_id: int | None = None
+    # Counts per distinct evidence state, which ``mapping_status`` cannot carry.
+    evidence_states: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -179,6 +186,24 @@ class LocalScriptPageReadService:
             questions=questions,
         )
 
+        # Derive the separately versioned question assignment from the stored
+        # transcript. This issues no provider request, so re-preparing after a
+        # remap or a rubric change costs nothing here.
+        assignment_service = AnswerEvidenceAssignmentService(self.db)
+        assignments = assignment_service.assign(
+            submission_id=submission.id,
+            transcript=assignment_service.load_transcript(source.transcript_id),
+            questions=[
+                CanonicalQuestion(
+                    question_id=question.id,
+                    question_node_id=nodes[question.id].id,
+                    question_no=question.question_no,
+                )
+                for question in questions
+            ],
+        )
+        assignment_by_question = {item.question_id: item for item in assignments}
+
         # Delete replaceable draft evidence only after all provider calls and
         # deterministic assembly succeeded, so a failed read cannot erase an
         # existing teacher-reviewable draft.
@@ -219,6 +244,7 @@ class LocalScriptPageReadService:
                     assembly.continuation_by_question[question_id] or len(segments) > 1
                 ),
             )
+            assignment = assignment_by_question[question_id]
             source_reference = dict(mapping.source_reference or {})
             source_reference["page_read"] = {
                 "input_page_numbers": sorted(
@@ -230,6 +256,19 @@ class LocalScriptPageReadService:
                 "label_sources": sorted(assembly.label_sources_by_question[question_id]),
                 "hard_blocker_count": len(blockers),
                 "teacher_review_required": True,
+                "script_transcript_id": source.transcript_id,
+                # The distinct evidence state. ``mapping_status`` still carries
+                # only the four legacy values, so an unanswered question and a
+                # failed read remain indistinguishable *there*; they are told
+                # apart here and in ``answer_evidence_assignments``. Narrowing
+                # the legacy status to match would change what a teacher sees
+                # on the existing workflow and is deliberately left as a
+                # separate, founder-visible decision.
+                "evidence_state": assignment.state,
+                "evidence_state_reason": assignment.state_reason,
+                "evidence_assignment_version": assignment.assignment_version,
+                "source_coverage_complete": assignment.coverage_complete,
+                "unassigned_block_count": assignment.unassigned_block_count,
             }
             mapping.source_reference = source_reference
             created.append(mapping)
@@ -274,6 +313,7 @@ class LocalScriptPageReadService:
                     "visual_page_read_call_count": calls_used,
                     "script_transcript_id": source.transcript_id,
                     "reused_page_transcript_count": source.reused_page_count,
+                    "evidence_states": assignment_summary(assignments)["states"],
                     "mapping_count": len(created),
                     "transcription_artifact_count": len(transcription_runs),
                     "pages_with_unassigned_ink": [
@@ -300,6 +340,7 @@ class LocalScriptPageReadService:
             unassigned_pages=assembly.unassigned_pages,
             reused_page_count=source.reused_page_count,
             script_transcript_id=source.transcript_id,
+            evidence_states=assignment_summary(assignments)["states"],
         )
 
     def assemble(

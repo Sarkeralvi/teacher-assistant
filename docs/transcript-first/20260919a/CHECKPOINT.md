@@ -39,6 +39,17 @@ Sanitized. Contains no private paths, script identifiers or credentials.
    `no_answer_found` is refused by a CHECK constraint unless coverage is complete with nothing
    unplaced. Acceptance items 4 (partly), 5, 6, 7 covered.
 
+5. **Slice 3 — wiring.** `LocalScriptPageReadService.prepare` now derives and stores the
+   assignment after assembly, puts the evidence state and its reason on the mapping's
+   `source_reference.page_read`, and reports per-state counts in the audit log and the result.
+   Proven by a test that drives the real `prepare()` against the real database, real local storage
+   and real crop writing, so these are not tested classes nothing calls.
+
+   `answer_region_mappings.mapping_status` is **deliberately unchanged**: narrowing it to match the
+   new state (an `unreadable` or `ambiguous` question becoming `blocked` where it is `uncertain`
+   today) would change what a teacher sees on the existing workflow. That is a founder-visible
+   product decision, not a refactor, and is left for an explicit call.
+
 ## Acceptance checklist status
 
 | # | Item | Status |
@@ -47,7 +58,7 @@ Sanitized. Contains no private paths, script identifiers or credentials.
 | 2 | Unchanged source performs zero vision requests | covered — measured with a counting fake adapter |
 | 3 | Remap / rubric change performs zero vision requests | covered — assignment re-derivation issues no request |
 | 4 | Changed source invalidates dependent evidence | **partial** — the transcript is superseded; dependent `GradeSuggestion` invalidation is not yet wired |
-| 5 | `NO_ANSWER_FOUND` requires complete coverage | covered — service logic plus a database CHECK |
+| 5 | `NO_ANSWER_FOUND` requires complete coverage | covered — service logic plus a database CHECK, reached from `prepare()` |
 | 6 | Cross-page, non-adjacent, out-of-order spans resolve exactly | covered |
 | 7 | Unassigned writing stays visible | covered |
 | 8 | Whole-script transcript review UI | **not started** |
@@ -56,10 +67,10 @@ Sanitized. Contains no private paths, script identifiers or credentials.
 
 ## Next step (smallest useful unit)
 
-Slice 3 — make the assignment layer reachable: have the page-read `prepare()` call
-`AnswerEvidenceAssignmentService.assign()` after assembly, project `state` onto the legacy
-`mapping_status` via `legacy_mapping_status()`, and expose the whole-script transcript and per-
-question evidence state over the API for the review UI (acceptance items 4, 8, 9).
+Slice 4 — expose the whole-script transcript and the per-question evidence state over the API and
+build the review UI for them (acceptance item 8), then wire invalidation of dependent
+`GradeSuggestion` rows when a transcript is superseded (item 4) and reconciliation of an
+interrupted in-flight page read (item 9).
 
 ## Private evidence locations
 

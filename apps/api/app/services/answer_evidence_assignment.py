@@ -121,10 +121,14 @@ def _coverage(transcript: ScriptTranscript) -> tuple[bool, str | None, set[str]]
     read_count = len(transcript.pages)
     if read_count < transcript.page_count:
         missing = transcript.page_count - read_count
+        # A page that was never dispatched is not the same fact as a page
+        # confirmed absent from the upload, so the real 'missing_page' state is
+        # not synthesised here. Both block a blank claim; they say different
+        # things to the teacher about what to do next.
         return (
             False,
             f"{missing} of {transcript.page_count} source pages were never read",
-            states | {"missing_page"},
+            states,
         )
     unread = sorted(state for state in states if state != "succeeded")
     if unread:
@@ -264,15 +268,18 @@ def _state_for(
             PROCESSING_FAILED,
             "at least one source page failed to read, so absence is not established",
         )
-    if unassigned_count:
-        return (
-            AMBIGUOUS,
-            f"{unassigned_count} block(s) of writing could not be placed against any question",
-        )
+    # Incomplete coverage outranks ambiguity: unplaced writing is a question
+    # about material that was read, while an unread page means the material was
+    # never seen at all.
     if not coverage_complete:
         return (
             PROCESSING_FAILED,
             coverage_reason or "source coverage is incomplete",
+        )
+    if unassigned_count:
+        return (
+            AMBIGUOUS,
+            f"{unassigned_count} block(s) of writing could not be placed against any question",
         )
     return (
         NO_ANSWER_FOUND,

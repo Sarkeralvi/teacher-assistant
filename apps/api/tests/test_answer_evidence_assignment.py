@@ -290,7 +290,7 @@ def test_a_failed_page_never_becomes_a_blank_answer(
 def test_a_missing_page_is_distinct_from_a_failed_read(
     db_session: Session, tmp_path: Path
 ) -> None:
-    fixture = _Fixture(db_session, tmp_path, ["Q1"], page_count=2)
+    fixture = _Fixture(db_session, tmp_path, ["Q1", "Q2"], page_count=2)
     fixture.read_page(0, _block("Q1", ""))
     fixture.fail_page(1, state="missing_page", error="source page absent from the upload")
 
@@ -299,18 +299,26 @@ def test_a_missing_page_is_distinct_from_a_failed_read(
     # Q1 does have a block, but it carries no faithful text.
     assert assignments["Q1"].state == UNREADABLE
     assert assignments["Q1"].unresolved_block_count == 1
+    # Q2 has nothing, and a confirmed-absent page says why. That is a different
+    # fact from a read that failed, and it keeps its own state.
+    assert assignments["Q2"].state == MISSING_PAGE
+    assert "missing" in (assignments["Q2"].state_reason or "")
 
 
-def test_a_page_that_was_never_read_blocks_the_blank_claim(
+def test_a_page_that_was_never_read_is_not_reported_as_a_missing_page(
     db_session: Session, tmp_path: Path
 ) -> None:
+    """Stopping early and a page absent from the upload are different facts."""
     fixture = _Fixture(db_session, tmp_path, ["Q1"], page_count=3)
     fixture.read_page(0, _block("Q2x", "writing nobody can place"))
 
     assignments = fixture.assign()
 
-    assert assignments["Q1"].state == MISSING_PAGE
+    assert assignments["Q1"].state == PROCESSING_FAILED
+    assert "never read" in (assignments["Q1"].state_reason or "")
     assert assignments["Q1"].coverage_complete is False
+    # The unknown label is not discarded: it stays counted as unplaced writing.
+    assert assignments["Q1"].unassigned_block_count == 1
 
 
 def test_unreadable_writing_is_not_an_answer(db_session: Session, tmp_path: Path) -> None:
