@@ -29,7 +29,7 @@ Budget: **0 of 200** product-model requests (0 vision / 0 text-mapping / 0 draft
 | 6 | Cross-page, non-adjacent, out-of-order spans resolve exactly | **PASS** | `test_one_answer_spans_nonadjacent_pages_in_reading_order`, `test_a_continuation_crosses_a_page_break_to_its_owner`. |
 | 7 | Unassigned writing stays visible | **PASS** | Returned separately by the evidence API and rendered under its own heading; `test_unplaceable_writing_makes_a_question_ambiguous_not_blank`. |
 | 8 | Whole-script transcript review UI | **PASS** | Five API routes plus `ScriptTranscriptReviewClient`, driven end to end in a browser against the live isolated stack (§"Rehearsal" below). |
-| 9 | Durable dispatch reservations, concurrency, reconciliation | **PASS** | `test_a_page_already_claimed_by_another_worker_is_not_dispatched_twice`, `test_an_expired_claim_becomes_an_unknown_outcome_not_a_free_retry`, `test_a_timeout_is_not_retried_and_demands_an_explicit_reconciliation`. |
+| 9 | Durable dispatch reservations, concurrency, reconciliation | **PASS** | `test_a_page_already_claimed_by_another_worker_is_not_dispatched_twice` (sequential), `test_two_workers_racing_to_claim_the_same_page_do_not_both_dispatch` (two connections, B's snapshot pinned so the insert actually races the unique constraint), `test_an_expired_claim_becomes_an_unknown_outcome_not_a_free_retry`, `test_a_timeout_is_not_retried_and_demands_an_explicit_reconciliation`. |
 | 10 | Teacher-only finalization, ownership, export gates | **PASS** | Finalization re-checks the evidence fingerprint at the irreversible step; `test_the_gate_holds_even_when_nothing_marked_the_draft_superseded`. Ownership covered by `test_another_teacher_cannot_read_or_correct_the_transcript`. Pre-existing grading and export tests all pass. |
 
 ## What changed in this session, and why
@@ -64,7 +64,9 @@ at finalization rather than trusting an invalidation hook to have been called.
 becomes `edited_text` plus an appended revision row. Editing in place would have destroyed both the
 evidence of what the model produced and the reuse guarantee.
 
-### Two defects the browser found that the tests had not
+### Three defects found after the code was written, and how
+
+Two by driving the browser, one by writing the test that the concurrency claim actually needed.
 
 1. `resolve_span_text` returned the model's text, so a teacher's correction was saved and then
    ignored by everything downstream. Now fixed and covered.
@@ -72,6 +74,11 @@ evidence of what the model produced and the reuse guarantee.
    because `unresolved` was a stored flag from the model text. Classification is now derived from
    the text a reviewer actually reads, at derivation time and at read time. Covered by
    `test_resolving_an_unreadable_line_clears_the_unreadable_state`.
+3. `reserve_page` guarded only the commit, but the INSERT is emitted by the flush inside
+   `_replace_page_row`. A genuine unique-constraint race therefore escaped as a raw `IntegrityError`
+   and would have reached the route as a generic 502 rather than "another worker holds this page".
+   The first concurrency test never caught it because both workers shared one session and both took
+   the read-then-refuse branch. Reproduced with two connections and a pinned snapshot, then fixed.
 
 ## Rehearsal: isolated stack, synthetic evidence
 
@@ -144,3 +151,14 @@ The session baseline had one failing backend test and one lint error; both are n
   teacher sees on the existing workflow and remains a founder decision.
 - A page failure still aborts preparation rather than producing partial evidence. Named, not
   defaulted: the durable transcript means no completed page is lost to the abort.
+
+## Follow-ups worth someone's attention
+
+- `test_widened_check_constraints_match_the_migration_that_widened_them` is parametrized only over
+  `ck_ocr_candidate_engine` at revision `0024`. The six CHECK constraints added here are duplicated
+  between their migration and `models.py` and are currently in sync, but that test exists precisely
+  because such a pair drifted before. Extending it to cover the new constraints would close the
+  same gap for them.
+- The teacher-facing states are named and explained in the review UI, but no teacher has read them
+  yet. Whether "Needs a decision" and "Reading failed" mean the right thing to the person marking
+  is a question for review, not for a test.

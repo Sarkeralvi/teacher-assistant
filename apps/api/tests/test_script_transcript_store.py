@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from alembic import command
 from app.core.config import Settings
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
 from app.models import (
     Assessment,
     Course,
@@ -430,6 +430,96 @@ def test_a_page_already_claimed_by_another_worker_is_not_dispatched_twice(
             source_image_sha256=digest,
             holder_id="worker-b",
         )
+
+
+def test_two_workers_racing_to_claim_the_same_page_do_not_both_dispatch(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """The real race: both workers read before either wrote.
+
+    The previous test used one session, so both calls saw the stored claim and
+    took the read-then-refuse branch. This one has each worker on its own
+    connection, which is the only way the unique constraint actually decides
+    the outcome.
+    """
+    submission = _seed_submission(db_session, tmp_path, page_count=1)
+    page_id = submission.pages[0].id
+    page_no = submission.pages[0].page_no
+    digest = hashlib.sha256(Path(submission.pages[0].image_path).read_bytes()).hexdigest()
+
+    first = SessionLocal()
+    # B runs at REPEATABLE READ so its snapshot can be pinned before A writes.
+    # Under READ COMMITTED every statement re-reads, B would simply see A's
+    # committed claim, and the insert path -- the one the unique constraint
+    # actually guards -- would never execute.
+    second_connection = engine.connect().execution_options(isolation_level="REPEATABLE READ")
+    second = Session(bind=second_connection)
+    try:
+        store_a = ScriptTranscriptStore(first)
+        store_b = ScriptTranscriptStore(second)
+        transcript_a = store_a.get_or_create(
+            submission_id=submission.id,
+            provider="mock",
+            model_name="mock-vision-1",
+            prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+            ordered_page_hashes=[digest],
+        )
+        transcript_b = store_b.get_or_create(
+            submission_id=submission.id,
+            provider="mock",
+            model_name="mock-vision-1",
+            prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+            ordered_page_hashes=[digest],
+        )
+        assert transcript_a.id == transcript_b.id
+
+        # Pin B's snapshot before A writes.
+        assert (
+            second.scalars(
+                select(ScriptPageTranscript).where(
+                    ScriptPageTranscript.submission_page_id == page_id
+                )
+            ).first()
+            is None
+        )
+
+        store_a.reserve_page(
+            transcript=transcript_a,
+            submission_page_id=page_id,
+            page_no=page_no,
+            page_order=0,
+            source_image_sha256=digest,
+            holder_id="worker-a",
+        )
+
+        # B still believes the page is unclaimed, so it takes the insert path
+        # and must lose to the unique constraint with a typed error the caller
+        # can act on -- not a raw database exception surfacing as a 502.
+        with pytest.raises(PageAlreadyReservedError):
+            store_b.reserve_page(
+                transcript=transcript_b,
+                submission_page_id=page_id,
+                page_no=page_no,
+                page_order=0,
+                source_image_sha256=digest,
+                holder_id="worker-b",
+            )
+
+        held = SessionLocal()
+        try:
+            rows = held.scalars(
+                select(ScriptPageTranscript).where(
+                    ScriptPageTranscript.submission_page_id == page_id
+                )
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].reserved_by == "worker-a"
+        finally:
+            held.close()
+    finally:
+        first.close()
+        second.close()
+        second_connection.close()
 
 
 def test_an_expired_claim_becomes_an_unknown_outcome_not_a_free_retry(

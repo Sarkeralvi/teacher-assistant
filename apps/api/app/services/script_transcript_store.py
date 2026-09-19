@@ -355,24 +355,33 @@ class ScriptTranscriptStore:
                 )
 
         reservation_id = uuid4().hex
-        stored = self._replace_page_row(
-            transcript=transcript,
-            submission_page_id=submission_page_id,
-            page_no=page_no,
-            page_order=page_order,
-            source_image_sha256=source_image_sha256,
-            state=DISPATCHED,
-            is_blank_page=False,
-            error=None,
-            provider_request_count=0,
-            latency_ms=None,
-            repair_pass=(stored.repair_pass if stored is not None else 0),
-            raw_output_json=None,
-            reservation_id=reservation_id,
-            reserved_at=now,
-            reserved_by=holder_id,
-        )
+        # The INSERT is emitted by the flush inside _replace_page_row, so the
+        # unique-constraint violation surfaces there, not at the commit. Both
+        # have to sit inside this block: with only the commit guarded, a real
+        # race escaped as a raw IntegrityError and reached the route as a
+        # generic 502 instead of "another worker holds this page".
         try:
+            self._replace_page_row(
+                transcript=transcript,
+                submission_page_id=submission_page_id,
+                page_no=page_no,
+                page_order=page_order,
+                source_image_sha256=source_image_sha256,
+                state=DISPATCHED,
+                is_blank_page=False,
+                error=None,
+                provider_request_count=0,
+                latency_ms=None,
+                repair_pass=(stored.repair_pass if stored is not None else 0),
+                # Keep the previous read's payload until a new one replaces it.
+                # Clearing it here would destroy the original output at the
+                # moment a repair pass begins, which is exactly when it is
+                # needed for comparison.
+                raw_output_json=(stored.raw_output_json if stored is not None else None),
+                reservation_id=reservation_id,
+                reserved_at=now,
+                reserved_by=holder_id,
+            )
             self.db.commit()
         except IntegrityError as exc:
             # Another worker inserted the claim between our read and our write.
