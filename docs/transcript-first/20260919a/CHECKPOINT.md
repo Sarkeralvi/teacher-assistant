@@ -7,12 +7,16 @@ Sanitized. Contains no private paths, script identifiers or credentials.
 | Field | Value |
 | --- | --- |
 | Baseline commit | `f08552962f9276dacdbb3ad2c47c38356a2aad9b` |
+| Continuation-session baseline | `a27c074` |
 | Branch | `codex/transcript-first-20260919a` (isolated worktree) |
 | Original checkout | preserved; its four staged files untouched |
 | Product-provider requests used | **0** of 200 (0 vision, 0 text-mapping, 0 draft-grading) |
 | Paid provider spend | **USD 0.00** of 20 |
 | Real scripts touched | **none** |
-| Rows created outside the disposable test database | **none** |
+| Rows created outside disposable databases | **none** |
+
+The full acceptance report for the continuation session, including the isolated rehearsal stack and
+the browser journey, is in [ACCEPTANCE.md](ACCEPTANCE.md).
 
 ## Outcomes so far
 
@@ -54,23 +58,31 @@ Sanitized. Contains no private paths, script identifiers or credentials.
 
 | # | Item | Status |
 | --- | --- | --- |
-| 1 | Page transcript survives process death | covered — durability asserted from a second connection |
-| 2 | Unchanged source performs zero vision requests | covered — measured with a counting fake adapter |
-| 3 | Remap / rubric change performs zero vision requests | covered — assignment re-derivation issues no request |
-| 4 | Changed source invalidates dependent evidence | **partial** — the transcript is superseded; dependent `GradeSuggestion` invalidation is not yet wired |
-| 5 | `NO_ANSWER_FOUND` requires complete coverage | covered — service logic plus a database CHECK, reached from `prepare()` |
-| 6 | Cross-page, non-adjacent, out-of-order spans resolve exactly | covered |
-| 7 | Unassigned writing stays visible | covered |
-| 8 | Whole-script transcript review UI | **not started** |
-| 9 | Budget at dispatch boundary; duplicate dispatch safe | **partial** — budget covered; concurrency/restart reconciliation not yet |
-| 10 | No path finalizes a real grade without a teacher | pre-existing gates unchanged; not re-verified this run |
+| 1 | Page transcript survives process death | **PASS** |
+| 2 | Unchanged source performs zero vision requests | **PASS** |
+| 3 | Remap / rubric change performs zero vision requests | **PASS** |
+| 4 | Changed evidence invalidates dependent readiness and drafts | **PASS** |
+| 5 | `NO_ANSWER_FOUND` requires complete coverage | **PASS** |
+| 6 | Cross-page, non-adjacent, out-of-order spans resolve exactly | **PASS** |
+| 7 | Unassigned writing stays visible | **PASS** |
+| 8 | Whole-script transcript review UI | **PASS** |
+| 9 | Durable dispatch reservations, concurrency, reconciliation | **PASS** |
+| 10 | Teacher-only finalization, ownership, export gates | **PASS** |
 
-## Next step (smallest useful unit)
+All ten are evidenced in [ACCEPTANCE.md](ACCEPTANCE.md).
 
-Slice 4 — expose the whole-script transcript and the per-question evidence state over the API and
-build the review UI for them (acceptance item 8), then wire invalidation of dependent
-`GradeSuggestion` rows when a transcript is superseded (item 4) and reconciliation of an
-interrupted in-flight page read (item 9).
+## Next steps
+
+Engineering acceptance is met. What remains is not engineering:
+
+1. **Real-script authorization.** Both scope fields are still unfilled, so no live rehearsal and no
+   quality measurement is possible. This is the only thing blocking the remaining outcomes.
+2. **A founder decision on the legacy mapping status.** Narrowing
+   `answer_region_mappings.mapping_status` to match the six evidence states would change what a
+   teacher sees on the existing workflow; it is deliberately left alone.
+3. **A founder decision on partial evidence.** A page failure aborts preparation today. The state
+   machine can express partial coverage, so continuing is possible, but it changes teacher-visible
+   behaviour mid-workflow.
 
 ## Private evidence locations
 

@@ -53,6 +53,7 @@ from app.services.evidence_invalidation import EvidenceInvalidationService
 from app.services.script_transcript_store import (
     ScriptTranscriptError,
     ScriptTranscriptStore,
+    classify_block_text,
 )
 
 DbSession = Annotated[Session, Depends(get_db)]
@@ -84,6 +85,10 @@ def _current_transcript(db: Session, submission_id: int) -> ScriptTranscript:
 
 
 def _block_read(block: ScriptTranscriptBlock) -> ScriptTranscriptBlockRead:
+    # Derived from the text a reviewer actually reads rather than read back from
+    # the stored flag, so a resolved line can never still be badged unreadable
+    # beside the correction that resolved it.
+    unresolved, unresolved_reason = classify_block_text(block.effective_text)
     return ScriptTranscriptBlockRead(
         id=block.id,
         block_index=block.block_index,
@@ -101,8 +106,8 @@ def _block_read(block: ScriptTranscriptBlock) -> ScriptTranscriptBlockRead:
         # Auxiliary navigation metadata only. Nothing in the workflow decides
         # question identity from it.
         bbox=(block.bbox_json or {}).get("normalized_bbox"),
-        unresolved=block.unresolved,
-        unresolved_reason=block.unresolved_reason,
+        unresolved=unresolved,
+        unresolved_reason=unresolved_reason,
     )
 
 
@@ -205,6 +210,7 @@ def read_answer_evidence(
             if entry is None:
                 continue
             _page, block = entry
+            unresolved, unresolved_reason = classify_block_text(block.effective_text)
             spans.append(
                 AnswerEvidenceSpanRead(
                     order_index=span.order_index,
@@ -212,8 +218,8 @@ def read_answer_evidence(
                     script_transcript_block_id=block.id,
                     assignment_basis=span.assignment_basis,
                     text=service.resolve_span_text(span),
-                    unresolved=block.unresolved,
-                    unresolved_reason=block.unresolved_reason,
+                    unresolved=unresolved,
+                    unresolved_reason=unresolved_reason,
                 )
             )
         evidence.append(
@@ -286,6 +292,9 @@ def correct_script_transcript_block(
     block.edited_text = payload.edited_text
     block.edited_at = datetime.now(UTC)
     block.edited_by_teacher_id = current_user.id
+    # Reclassify against what a reviewer now reads. A teacher who resolves an
+    # unreadable line must not still see the block flagged unreadable.
+    block.unresolved, block.unresolved_reason = classify_block_text(block.effective_text)
     db.add(
         ScriptTranscriptBlockRevision(
             script_transcript_block_id=block.id,

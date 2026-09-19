@@ -380,6 +380,43 @@ def test_a_correction_keeps_the_model_text_and_records_a_revision(
     assert "the answer to one" not in str(audit.payload_json)
 
 
+def test_resolving_an_unreadable_line_clears_the_unreadable_state(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    """Found in the browser: the correction saved, and nothing downstream moved.
+
+    The block kept the unreadable flag the model's own text had earned, so the
+    question stayed "could not be read" while displaying the correction that
+    had just fixed it.
+    """
+    teacher_id, headers = _register(client)
+    seeded = _Seeded(db_session, teacher_id, tmp_path)
+    seeded.answer_block.text = "Q1: [visible writing unresolved — thinking review required]"
+    seeded.answer_block.unresolved = True
+    seeded.answer_block.unresolved_reason = "unresolved_visible_writing"
+    seeded.assignment.state = "unreadable"
+    seeded.assignment.state_reason = "1 assigned block(s) could not be read faithfully"
+    seeded.assignment.unresolved_block_count = 1
+    db_session.commit()
+
+    corrected = client.patch(
+        f"/script-transcript-blocks/{seeded.answer_block.id}",
+        headers=headers,
+        json={"edited_text": "Q1: the answer a teacher could read", "reason": "resolved"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["unresolved"] is False
+    assert corrected.json()["unresolved_reason"] is None
+
+    rederived = client.post(
+        f"/submissions/{seeded.submission.id}/answer-evidence/rederive", headers=headers
+    )
+    assert rederived.status_code == 200, rederived.text
+    by_label = {item["question_label"]: item for item in rederived.json()["evidence"]}
+    assert by_label["Q1"]["state"] == "answer_present"
+    assert by_label["Q1"]["unresolved_block_count"] == 0
+
+
 def test_rederiving_assignment_makes_no_provider_request(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:

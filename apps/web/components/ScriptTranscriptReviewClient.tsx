@@ -77,7 +77,11 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
     } catch (caught) {
       setTranscript(null);
       setEvidence(null);
-      setError(caught instanceof Error ? caught.message : "Could not load the transcript.");
+      const message = caught instanceof Error ? caught.message : "Could not load the transcript.";
+      // "Nothing has been transcribed yet" is a state, not a failure. Showing
+      // the backend's 404 text here made an ordinary empty script read like
+      // something had gone wrong.
+      setError(message.includes("no source transcript") ? null : message);
     } finally {
       setLoading(false);
     }

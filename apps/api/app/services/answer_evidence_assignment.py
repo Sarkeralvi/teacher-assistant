@@ -30,6 +30,7 @@ from app.models import (
     ScriptTranscript,
     ScriptTranscriptBlock,
 )
+from app.services.script_transcript_store import classify_block_text
 
 ANSWER_PRESENT = "answer_present"
 NO_ANSWER_FOUND = "no_answer_found"
@@ -341,7 +342,11 @@ def derive_assignments(
     derived: list[QuestionEvidence] = []
     for question in questions:
         items = blocks_by_node[question.question_node_id]
-        unresolved = [item for item in items if item.block.unresolved]
+        # Classified from the text a reviewer actually reads, so a teacher who
+        # resolves an unreadable line clears the state on the next derivation.
+        # Trusting the stored flag left a question marked "could not be read"
+        # while showing the correction that had just fixed it.
+        unresolved = [item for item in items if classify_block_text(item.block.effective_text)[0]]
         state, reason = _state_for(
             question=question,
             has_evidence=bool(items),
