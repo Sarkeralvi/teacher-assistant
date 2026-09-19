@@ -534,13 +534,17 @@ class AnswerEvidenceAssignmentService:
         block = span.block
         if block is None:
             raise AnswerEvidenceAssignmentError("An evidence span must resolve to a source block")
+        # The teacher's correction when there is one. A reviewer and a grader
+        # must read the same text, and that text is the corrected one; the
+        # model's verbatim output stays on the block for comparison.
+        text = block.effective_text
         if span.char_start is None:
-            return block.text
-        if span.char_end is None or span.char_end > len(block.text):
+            return text
+        if span.char_end is None or span.char_end > len(text):
             raise AnswerEvidenceAssignmentError(
                 "An evidence span does not resolve inside its source block"
             )
-        return block.text[span.char_start : span.char_end]
+        return text[span.char_start : span.char_end]
 
 
 def legacy_mapping_status(state: str) -> str:

@@ -2051,8 +2051,17 @@ export function AssessmentDetailClient({ assessmentId }: Readonly<{ assessmentId
               <p className="mt-1 text-xs text-slate-500">
                 Pages: {pageCountBySubmissionId.get(submission.id) ?? submission.pages.length} · mapped regions: {(answerRegionsBySubmissionId.get(submission.id) ?? []).length}
               </p>
+              {/* The transcript-first journey starts here: the whole script as
+                  one document, and what each question's answer is based on. */}
+              <Link
+                className="mt-2 inline-block text-sm text-cyan-300 underline"
+                href={`/submissions/${submission.id}/transcript`}
+                data-testid={`open-transcript-${submission.id}`}
+              >
+                Open script transcript and answer evidence
+              </Link>
               <button
-                className="mt-3 rounded border border-red-800 px-3 py-2 text-sm text-red-200 hover:border-red-600"
+                className="mt-3 block rounded border border-red-800 px-3 py-2 text-sm text-red-200 hover:border-red-600"
                 type="button"
                 onClick={() => void handleDeleteSubmission(submission.id)}
               >

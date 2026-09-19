@@ -1781,3 +1781,132 @@ class AssessmentSummaryRead(BaseModel):
     max_possible_score: Decimal | None
     submission_totals: list[SubmissionGradeTotalRead]
     generated_at: datetime
+
+
+# --- Transcript-first review -------------------------------------------------
+# The teacher-facing shape of the durable source transcript and the evidence
+# derived from it. Provider and model names are carried as data so the web app
+# never has to name a provider in its own source.
+
+
+class ScriptTranscriptBlockRead(ORMBase):
+    id: int
+    block_index: int
+    reading_order: int
+    # The verbatim provider output. Never overwritten by a correction.
+    text: str
+    edited_text: str | None = None
+    # What a reviewer and the grader should read: the correction if there is one.
+    effective_text: str
+    revision: int = 0
+    edited_at: datetime | None = None
+    observed_heading_text: str | None = None
+    question_label_raw: str | None = None
+    label_source: str
+    continues_from_previous: bool
+    confidence: Decimal | None = None
+    # Auxiliary navigation geometry. Question identity never depends on it, so
+    # a missing box costs highlighting, not evidence.
+    bbox: list[int] | None = None
+    unresolved: bool = False
+    unresolved_reason: str | None = None
+
+
+class ScriptTranscriptBlockRevisionRead(ORMBase):
+    revision: int
+    previous_text: str
+    new_text: str
+    reason: str | None = None
+    created_at: datetime
+
+
+class ScriptTranscriptBlockUpdate(BaseModel):
+    edited_text: str
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class ScriptTranscriptPageRead(ORMBase):
+    id: int
+    submission_page_id: int
+    page_no: int
+    page_order: int
+    state: str
+    is_blank_page: bool
+    error: str | None = None
+    provider: str
+    model_name: str
+    prompt_version: str
+    provider_request_count: int
+    repair_pass: int
+    reserved_by: str | None = None
+    reserved_at: datetime | None = None
+    reconciled_at: datetime | None = None
+    needs_reconciliation: bool = False
+    blocks: list[ScriptTranscriptBlockRead] = Field(default_factory=list)
+
+
+class ScriptTranscriptRead(ORMBase):
+    id: int
+    submission_id: int
+    status: str
+    provider: str
+    model_name: str
+    prompt_version: str
+    schema_version: str
+    source_manifest_sha256: str
+    page_count: int
+    pages_read: int
+    # The requests this transcript actually cost, summed from the pages rather
+    # than inferred from the page count.
+    provider_request_count: int
+    pages_needing_reconciliation: list[int] = Field(default_factory=list)
+    coverage_complete: bool
+    pages: list[ScriptTranscriptPageRead] = Field(default_factory=list)
+
+
+class ScriptTranscriptReconcileRequest(BaseModel):
+    # Only outcomes a person can actually attest to. Nothing here infers what
+    # the provider did.
+    resolution: Literal["failed", "missing_page"]
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class AnswerEvidenceSpanRead(ORMBase):
+    order_index: int
+    page_no: int
+    script_transcript_block_id: int
+    # Whether a heading was read, or ownership was inherited, and how.
+    assignment_basis: str
+    text: str
+    unresolved: bool = False
+    unresolved_reason: str | None = None
+
+
+class AnswerEvidenceRead(ORMBase):
+    question_id: int
+    question_node_id: int
+    question_label: str | None = None
+    state: Literal[
+        "answer_present",
+        "no_answer_found",
+        "unreadable",
+        "ambiguous",
+        "missing_page",
+        "processing_failed",
+    ]
+    state_reason: str | None = None
+    assignment_version: int
+    coverage_complete: bool
+    unresolved_block_count: int
+    unassigned_block_count: int
+    spans: list[AnswerEvidenceSpanRead] = Field(default_factory=list)
+
+
+class SubmissionAnswerEvidenceRead(BaseModel):
+    submission_id: int
+    script_transcript_id: int
+    summary: dict[str, Any]
+    evidence: list[AnswerEvidenceRead] = Field(default_factory=list)
+    # Writing that belongs to no question stays visible here rather than being
+    # attached to whichever question happened to be nearest.
+    unassigned_blocks: list[ScriptTranscriptBlockRead] = Field(default_factory=list)
