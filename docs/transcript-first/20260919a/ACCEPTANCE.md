@@ -3,7 +3,15 @@
 Sanitized. No private paths, script identifiers, student content or credentials.
 
 Baseline for the continuation session: `a27c074`. Both worktrees preserved; the original checkout
-still holds its four pre-existing staged files, untouched.
+still holds its four pre-existing staged files, untouched, at HEAD `f085529`.
+
+**One disclosure about the original checkout.** A PowerShell command run during this session
+resolved a relative path against the wrong working directory and created a **zero-byte, untracked**
+file at `apps/api/app/services/answer_evidence_assignment.py` in the original checkout. It is
+empty, was never added to git, and cannot affect a build, a test or the index. Removing it was
+refused by the permission system as an irreversible local deletion, and that refusal was not worked
+around. The file is therefore still present and the original checkout is *not* byte-for-byte as it
+was found, even though its tracked state and HEAD are unchanged. It can be removed safely by hand.
 
 ## Outcomes, kept separate
 
