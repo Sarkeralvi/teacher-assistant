@@ -1125,7 +1125,8 @@ class ScriptPageTranscript(TimestampMixin, Base):
     __tablename__ = "script_page_transcripts"
     __table_args__ = (
         CheckConstraint(
-            "state in ('succeeded', 'unreadable', 'missing_page', 'failed')",
+            "state in ('succeeded', 'unreadable', 'missing_page', 'failed', "
+            "'dispatched', 'unknown_outcome')",
             name="ck_script_page_transcript_state",
         ),
         CheckConstraint("page_no > 0", name="ck_script_page_transcript_page_no"),
@@ -1140,8 +1141,12 @@ class ScriptPageTranscript(TimestampMixin, Base):
             name="ck_script_page_transcript_blank_requires_success",
         ),
         CheckConstraint(
-            "state = 'succeeded' or error is not null",
+            "state in ('succeeded', 'dispatched') or error is not null",
             name="ck_script_page_transcript_failure_has_reason",
+        ),
+        CheckConstraint(
+            "state <> 'dispatched' or (reservation_id is not null and reserved_at is not null)",
+            name="ck_script_page_transcript_reservation_is_complete",
         ),
         UniqueConstraint(
             "script_transcript_id",
@@ -1173,6 +1178,17 @@ class ScriptPageTranscript(TimestampMixin, Base):
     raw_output_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The claim taken before the request is dispatched. The unique constraint on
+    # (transcript, page) is what makes this the concurrency control: a second
+    # worker cannot insert a competing claim for the same page.
+    reservation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reserved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reserved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     transcript: Mapped[ScriptTranscript] = relationship(back_populates="pages")
     page: Mapped[SubmissionPage] = relationship()
@@ -1337,6 +1353,11 @@ class AnswerEvidenceSpan(TimestampMixin, Base):
             "char_start is null or (char_start >= 0 and char_end > char_start)",
             name="ck_answer_evidence_span_bounds_ordered",
         ),
+        CheckConstraint(
+            "assignment_basis in "
+            "('explicit_label', 'same_page_reading_order', 'declared_continuation')",
+            name="ck_answer_evidence_span_basis",
+        ),
         UniqueConstraint("assignment_id", "order_index", name="uq_answer_evidence_span_order"),
         Index("ix_answer_evidence_spans_assignment_id", "assignment_id"),
         Index("ix_answer_evidence_spans_block_id", "script_transcript_block_id"),
@@ -1353,6 +1374,12 @@ class AnswerEvidenceSpan(TimestampMixin, Base):
     page_no: Mapped[int] = mapped_column(Integer, nullable=False)
     char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Which branch of the single ownership rule attached this block. An explicit
+    # label is checkable against the page; the other two are inheritances a
+    # teacher may want to look at.
+    assignment_basis: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="explicit_label"
+    )
 
     assignment: Mapped[AnswerEvidenceAssignment] = relationship(back_populates="spans")
     block: Mapped[ScriptTranscriptBlock] = relationship()

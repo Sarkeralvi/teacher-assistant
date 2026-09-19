@@ -1,4 +1,4 @@
-"""Derive which stored source blocks answer each canonical question.
+﻿"""Derive which stored source blocks answer each canonical question.
 
 This step reads only the persisted transcript and the canonical question
 structure. It makes no provider request, so a remap, a corrected question
@@ -96,6 +96,152 @@ class AssignmentDerivation:
     coverage_complete: bool
     unassigned_block_count: int
     coverage_reason: str | None
+    basis_by_block_id: dict[int, str] = field(default_factory=dict)
+    unplaced_reason_by_block_id: dict[int, str] = field(default_factory=dict)
+    # Keyed by (page_no, block_index) so geometry assembly can consume exactly
+    # the same ownership decision without recomputing it.
+    owner_node_by_block_key: dict[tuple[int, int], int] = field(default_factory=dict)
+
+
+EXPLICIT_LABEL = "explicit_label"
+SAME_PAGE_READING_ORDER = "same_page_reading_order"
+DECLARED_CONTINUATION = "declared_continuation"
+
+ASSIGNMENT_BASES = (EXPLICIT_LABEL, SAME_PAGE_READING_ORDER, DECLARED_CONTINUATION)
+
+UNPLACED_NO_PRECEDING_QUESTION = "no_preceding_canonical_question"
+UNPLACED_UNKNOWN_LABEL = "label_matches_no_canonical_question"
+UNPLACED_NO_CONTINUATION_CLAIM = "unlabelled_block_across_a_page_break_without_a_continuation_claim"
+
+
+@dataclass(frozen=True)
+class OwnershipInput:
+    """The only block facts ownership is allowed to depend on.
+
+    Deliberately excludes geometry. A box may order blocks on a page and may
+    highlight one for a teacher, but it never decides which question an answer
+    belongs to.
+    """
+
+    key: tuple[int, int]
+    page_no: int
+    question_label_raw: str | None
+    label_source: str
+    continues_from_previous: bool
+
+
+@dataclass(frozen=True)
+class OwnedBlock:
+    source: OwnershipInput
+    question: CanonicalQuestion
+    basis: str
+
+    @property
+    def question_node_id(self) -> int:
+        return self.question.question_node_id
+
+
+@dataclass(frozen=True)
+class UnplacedBlock:
+    source: OwnershipInput
+    reason: str
+
+
+@dataclass(frozen=True)
+class Ownership:
+    owned: list[OwnedBlock]
+    unplaced: list[UnplacedBlock]
+
+    def node_by_key(self) -> dict[tuple[int, int], int]:
+        return {item.source.key: item.question_node_id for item in self.owned}
+
+    def basis_by_key(self) -> dict[tuple[int, int], str]:
+        return {item.source.key: item.basis for item in self.owned}
+
+    def unplaced_reason_by_key(self) -> dict[tuple[int, int], str]:
+        return {item.source.key: item.reason for item in self.unplaced}
+
+
+def resolve_block_ownership(
+    *,
+    blocks: list[OwnershipInput],
+    questions: list[CanonicalQuestion],
+) -> Ownership:
+    """Decide which canonical question owns each block. One rule, one place.
+
+    Both the evidence-assignment layer and the geometry/text assembly consume
+    this. When they each decided ownership for themselves they could disagree,
+    and a crop would then show evidence the assignment layer considered
+    unplaced.
+
+    An explicit label owns its block outright. An unlabelled block is *not*
+    automatically a continuation:
+
+    * on the same page as the block before it, reading order is directly
+      observed, so it follows the current owner;
+    * across a page break it follows the current owner only when the read
+      actually claims ``continues_from_previous``; otherwise it stays unplaced
+      and visible, and ownership is closed rather than carried on;
+    * with no canonical question before it, it stays unplaced.
+
+    A label matching no canonical question also closes ownership, so following
+    blocks are not silently attached to the question before the unknown one.
+    """
+
+    by_label: dict[str, CanonicalQuestion] = {}
+    for question in questions:
+        key = question.question_no.strip().casefold()
+        if key in by_label:
+            raise AnswerEvidenceAssignmentError(
+                "Canonical question labels must be unique to assign evidence"
+            )
+        by_label[key] = question
+
+    owned: list[OwnedBlock] = []
+    unplaced: list[UnplacedBlock] = []
+    current: CanonicalQuestion | None = None
+    previous_page_no: int | None = None
+
+    for item in blocks:
+        if item.question_label_raw is not None:
+            matched = by_label.get(item.question_label_raw.strip().casefold())
+            if matched is None:
+                unplaced.append(UnplacedBlock(source=item, reason=UNPLACED_UNKNOWN_LABEL))
+                current = None
+                previous_page_no = item.page_no
+                continue
+            current = matched
+            owned.append(
+                OwnedBlock(
+                    source=item,
+                    question=matched,
+                    basis=EXPLICIT_LABEL,
+                )
+            )
+        elif current is None:
+            unplaced.append(UnplacedBlock(source=item, reason=UNPLACED_NO_PRECEDING_QUESTION))
+        elif previous_page_no == item.page_no:
+            owned.append(
+                OwnedBlock(
+                    source=item,
+                    question=current,
+                    basis=SAME_PAGE_READING_ORDER,
+                )
+            )
+        elif item.continues_from_previous:
+            owned.append(
+                OwnedBlock(
+                    source=item,
+                    question=current,
+                    basis=DECLARED_CONTINUATION,
+                )
+            )
+        else:
+            unplaced.append(UnplacedBlock(source=item, reason=UNPLACED_NO_CONTINUATION_CLAIM))
+            current = None
+        previous_page_no = item.page_no
+
+    return Ownership(owned=owned, unplaced=unplaced)
 
 
 @dataclass(frozen=True)
@@ -154,49 +300,42 @@ def derive_assignments(
     question later.
     """
 
-    by_label: dict[str, CanonicalQuestion] = {}
-    for question in questions:
-        key = question.question_no.strip().casefold()
-        if key in by_label:
-            raise AnswerEvidenceAssignmentError(
-                "Canonical question labels must be unique to assign evidence"
-            )
-        by_label[key] = question
-
     coverage_complete, coverage_reason, page_states = _coverage(transcript)
+
+    ordered = _ordered_blocks(transcript)
+    by_key = {(item.page_no, item.block.block_index): item for item in ordered}
+    ownership = resolve_block_ownership(
+        blocks=[
+            OwnershipInput(
+                key=(item.page_no, item.block.block_index),
+                page_no=item.page_no,
+                question_label_raw=item.block.question_label_raw,
+                label_source=item.block.label_source,
+                continues_from_previous=item.block.continues_from_previous,
+            )
+            for item in ordered
+        ],
+        questions=questions,
+    )
 
     blocks_by_node: dict[int, list[_OrderedBlock]] = {
         question.question_node_id: [] for question in questions
     }
+    basis_by_block_id: dict[int, str] = {}
     inferred_nodes: set[int] = set()
-    unassigned: list[_OrderedBlock] = []
-    current: CanonicalQuestion | None = None
-
-    for item in _ordered_blocks(transcript):
-        block = item.block
-        if block.question_label_raw is None:
-            if current is None:
-                # Writing that precedes any canonical label. It stays visible
-                # and unassigned rather than being attached to a neighbour.
-                unassigned.append(item)
-                continue
-            owner = current
-        else:
-            matched = by_label.get(block.question_label_raw.strip().casefold())
-            if matched is None:
-                # An unknown label is not a reason to discard the page; the
-                # block stays visible and unplaced for a teacher to resolve.
-                unassigned.append(item)
-                current = None
-                continue
-            owner = matched
-            current = matched
-        if block.label_source == "inferred":
-            inferred_nodes.add(owner.question_node_id)
-        blocks_by_node[owner.question_node_id].append(item)
+    for owned in ownership.owned:
+        item = by_key[owned.source.key]
+        blocks_by_node[owned.question_node_id].append(item)
+        basis_by_block_id[item.block.id] = owned.basis
+        if item.block.label_source == "inferred":
+            inferred_nodes.add(owned.question_node_id)
 
     # Only writing, not whitespace, counts as material a teacher must place.
-    unassigned_material = [item for item in unassigned if item.block.text.strip()]
+    unassigned_material = [
+        by_key[unplaced.source.key]
+        for unplaced in ownership.unplaced
+        if by_key[unplaced.source.key].block.text.strip()
+    ]
     unassigned_count = len(unassigned_material)
 
     derived: list[QuestionEvidence] = []
@@ -230,6 +369,12 @@ def derive_assignments(
         coverage_complete=coverage_complete,
         unassigned_block_count=unassigned_count,
         coverage_reason=coverage_reason,
+        basis_by_block_id=basis_by_block_id,
+        unplaced_reason_by_block_id={
+            by_key[unplaced.source.key].block.id: unplaced.reason
+            for unplaced in ownership.unplaced
+        },
+        owner_node_by_block_key=ownership.node_by_key(),
     )
 
 
@@ -359,6 +504,10 @@ class AnswerEvidenceAssignmentService:
                         script_transcript_block_id=block_id,
                         order_index=order_index,
                         page_no=page_no,
+                        # Why this block is attached here, so a teacher can see
+                        # the difference between a heading they can check and an
+                        # inheritance the workflow inferred.
+                        assignment_basis=derivation.basis_by_block_id[block_id],
                     )
                 )
             self.db.add(assignment)
@@ -418,3 +567,4 @@ def assignment_summary(assignments: list[AnswerEvidenceAssignment]) -> dict[str,
             if counts[state]
         },
     }
+

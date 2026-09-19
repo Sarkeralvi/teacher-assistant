@@ -5,14 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
 from PIL import Image, ImageDraw
 
 from app.core.config import Settings
-from app.services.local_script_page_read import (
-    LocalScriptPageReadError,
-    LocalScriptPageReadService,
-)
+from app.services.local_script_page_read import LocalScriptPageReadService
 from packages.brain.schemas_qwen38 import VisualPageBlock, VisualPageTranscriptOutput
 
 
@@ -204,8 +200,11 @@ def test_mock_page_read_leading_null_block_is_hard_blocked(tmp_path: Path) -> No
         questions=questions,
     )
 
-    assert "unlabeled block" in assembly.blockers_by_question[1][0]
+    assert "no_preceding_canonical_question" in assembly.blockers_by_question[1][0]
     assert "hard blocked" in assembly.blockers_by_question[1][0]
+    # The labelled block below it is still assembled. One unplaceable block does
+    # not discard the page, or the call that paid to read it.
+    assert assembly.text_by_question[1] == "labelled work"
 
 
 def test_mock_page_read_carries_last_label_across_page_break(tmp_path: Path) -> None:
@@ -253,13 +252,94 @@ def test_mock_page_read_handles_out_of_order_answers_without_forward_carry(
     assert [segment.page_no for segment in assembly.segments_by_question[1]] == [1, 2]
 
 
-def test_mock_page_read_rejects_an_unknown_label(tmp_path: Path) -> None:
-    with pytest.raises(LocalScriptPageReadError, match="unknown finalized question"):
-        _service().assemble(
-            pages=[_page(tmp_path, 1)],
-            page_outputs=[_output(_block("Q99", [50, 100, 950, 800], "unknown"))],
-            questions=_questions("Q1"),
-        )
+def test_an_unknown_label_is_blocked_and_visible_rather_than_discarding_the_page(
+    tmp_path: Path,
+) -> None:
+    """An unknown label used to raise and throw away the page and its call."""
+    assembly = _service().assemble(
+        pages=[_page(tmp_path, 1)],
+        page_outputs=[_output(_block("Q99", [50, 100, 950, 800], "unknown"))],
+        questions=_questions("Q1"),
+    )
+
+    assert "label_matches_no_canonical_question" in assembly.blockers_by_question[1][0]
+    assert assembly.text_by_question[1] == ""
+
+
+def test_an_unlabelled_block_does_not_cross_a_page_break_without_a_continuation_claim(
+    tmp_path: Path,
+) -> None:
+    """The rule that stops writing being handed to whichever question came last.
+
+    Same page, reading order is observed and carries ownership. Across a page
+    break the read must actually claim the continuation.
+    """
+    assembly = _service().assemble(
+        pages=[_page(tmp_path, 1), _page(tmp_path, 2)],
+        page_outputs=[
+            _output(_block("Q1", [50, 100, 950, 900], "first page")),
+            _output(
+                _block(
+                    None,
+                    [50, 80, 950, 700],
+                    "writing that claims nothing",
+                    continues_from_previous=False,
+                )
+            ),
+        ],
+        questions=_questions("Q1"),
+    )
+
+    assert [segment.page_no for segment in assembly.segments_by_question[1]] == [1]
+    assert assembly.text_by_question[1] == "first page"
+    assert any(
+        "unlabelled_block_across_a_page_break_without_a_continuation_claim" in blocker
+        for blocker in assembly.blockers_by_question[1]
+    )
+
+
+def test_an_unlabelled_block_below_its_owner_on_the_same_page_is_attached(
+    tmp_path: Path,
+) -> None:
+    assembly = _service().assemble(
+        pages=[_page(tmp_path, 1)],
+        page_outputs=[
+            _output(
+                _block("Q1", [50, 100, 950, 400], "the opening"),
+                _block(None, [50, 450, 950, 800], "the rest of the same answer"),
+            )
+        ],
+        questions=_questions("Q1"),
+    )
+
+    assert assembly.text_by_question[1] == "the opening\nthe rest of the same answer"
+    assert "block_attached_by_same_page_reading_order_requires_teacher_review" in (
+        assembly.warnings_by_question[1]
+    )
+
+
+def test_an_unknown_label_closes_ownership_for_the_blocks_after_it(
+    tmp_path: Path,
+) -> None:
+    """Otherwise the blocks after an unknown heading fall to the question before it."""
+    assembly = _service().assemble(
+        pages=[_page(tmp_path, 1)],
+        page_outputs=[
+            _output(
+                _block("Q1", [50, 80, 950, 300], "the Q1 answer"),
+                _block("Q99", [50, 350, 950, 600], "an unknown heading"),
+                _block(None, [50, 650, 950, 900], "writing below the unknown heading"),
+            )
+        ],
+        questions=_questions("Q1"),
+    )
+
+    assert assembly.text_by_question[1] == "the Q1 answer"
+    blockers = assembly.blockers_by_question[1]
+    assert any("label_matches_no_canonical_question" in item for item in blockers)
+    # The block under the unknown heading is unplaced too, rather than being
+    # inherited by Q1 across the unknown label.
+    assert any("no_preceding_canonical_question" in item for item in blockers)
 
 
 def test_unassigned_ink_is_a_hard_blocker_not_a_warning(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,9 +42,12 @@ from app.services.local_script_page_read import (
     LocalScriptPageReadService,
 )
 from app.services.script_transcript_store import (
+    PageAlreadyReservedError,
+    PageReconciliationRequiredError,
     ScriptTranscriptError,
     ScriptTranscriptStore,
     classify_block_text,
+    classify_dispatch_failure,
     transcription_settings_fingerprint,
 )
 from packages.brain.schemas_qwen38 import (
@@ -304,12 +308,12 @@ def test_the_budget_is_enforced_on_pages_that_still_need_a_read(
     assert adapter.calls == 0
 
 
-def test_a_failure_on_a_later_page_keeps_the_earlier_pages_and_records_the_reason(
+def test_a_known_failure_on_a_later_page_keeps_the_earlier_pages_and_records_the_reason(
     db_session: Session, tmp_path: Path
 ) -> None:
     submission = _seed_submission(db_session, tmp_path, page_count=3)
     adapter = _CountingAdapter(
-        [_output("Q1"), RuntimeError("provider timed out"), _output("Q2")]
+        [_output("Q1"), RuntimeError("provider rejected the request"), _output("Q2")]
     )
 
     with pytest.raises(LocalScriptPageReadError, match="failed safely"):
@@ -325,7 +329,8 @@ def test_a_failure_on_a_later_page_keeps_the_earlier_pages_and_records_the_reaso
     # blank, so a blank answer cannot be reconstructed from it.
     assert stored[2].state == "failed"
     assert stored[2].is_blank_page is False
-    assert "provider timed out" in (stored[2].error or "")
+    assert "provider rejected the request" in (stored[2].error or "")
+    assert stored[2].reservation_id is None
     assert 3 not in stored
 
     # Restart recovery: a process that dies here still finds page 1 stored.
@@ -339,14 +344,143 @@ def test_a_failure_on_a_later_page_keeps_the_earlier_pages_and_records_the_reaso
     finally:
         other.close()
 
-    # The page already paid for is reused on the retry; only the failed page and
-    # the page never reached are read again.
+    # The page already paid for is reused on the retry; only the known-failed
+    # page and the page never reached are read again.
     retry_adapter = _CountingAdapter([_output("Q2"), _output("Q1")])
     retry = _read(_service(db_session, retry_adapter), submission, retry_adapter)
 
     assert retry_adapter.calls == 2
     assert retry.reused_page_count == 1
     assert retry.calls_used == 2
+
+
+def test_a_timeout_is_not_retried_and_demands_an_explicit_reconciliation(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """A provider that timed out may already have produced and billed output.
+
+    Reading the page again would be a blind resubmission, so the page keeps
+    'unknown_outcome' and nothing automatic touches it.
+    """
+    submission = _seed_submission(db_session, tmp_path, page_count=2)
+    adapter = _CountingAdapter([_output("Q1"), TimeoutError("no response")])
+
+    with pytest.raises(LocalScriptPageReadError, match="outcome is unknown"):
+        _read(_service(db_session, adapter), submission, adapter)
+
+    transcript = db_session.scalars(select(ScriptTranscript)).one()
+    stored = {page.page_no: page for page in transcript.pages}
+    assert stored[2].state == "unknown_outcome"
+    assert stored[2].is_blank_page is False
+
+    # A second attempt refuses rather than redispatching, and spends nothing.
+    blocked_adapter = _CountingAdapter([])
+    with pytest.raises(LocalScriptPageReadError, match="unresolved provider outcome"):
+        _read(_service(db_session, blocked_adapter), submission, blocked_adapter)
+    assert blocked_adapter.calls == 0
+
+    # Only an explicit decision releases it, and it is recorded.
+    store = ScriptTranscriptStore(db_session)
+    store.reconcile_page(
+        transcript=transcript,
+        submission_page_id=stored[2].submission_page_id,
+        resolution="failed",
+        note="teacher confirmed the provider produced nothing",
+    )
+    db_session.refresh(stored[2])
+    assert stored[2].state == "failed"
+    assert stored[2].reconciled_at is not None
+    assert "teacher confirmed" in (stored[2].error or "")
+
+    resumed_adapter = _CountingAdapter([_output("Q2")])
+    resumed = _read(_service(db_session, resumed_adapter), submission, resumed_adapter)
+    assert resumed_adapter.calls == 1
+    assert resumed.reused_page_count == 1
+
+
+def test_a_page_already_claimed_by_another_worker_is_not_dispatched_twice(
+    db_session: Session, tmp_path: Path
+) -> None:
+    submission = _seed_submission(db_session, tmp_path, page_count=1)
+    page = submission.pages[0]
+    digest = hashlib.sha256(Path(page.image_path).read_bytes()).hexdigest()
+    store = ScriptTranscriptStore(db_session)
+    transcript = store.get_or_create(
+        submission_id=submission.id,
+        provider="mock",
+        model_name="mock-vision-1",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        ordered_page_hashes=[digest],
+    )
+    store.reserve_page(
+        transcript=transcript,
+        submission_page_id=page.id,
+        page_no=page.page_no,
+        page_order=0,
+        source_image_sha256=digest,
+        holder_id="worker-a",
+    )
+
+    with pytest.raises(PageAlreadyReservedError, match="already reserved"):
+        store.reserve_page(
+            transcript=transcript,
+            submission_page_id=page.id,
+            page_no=page.page_no,
+            page_order=0,
+            source_image_sha256=digest,
+            holder_id="worker-b",
+        )
+
+
+def test_an_expired_claim_becomes_an_unknown_outcome_not_a_free_retry(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """A worker that died mid-call leaves an outcome nobody observed."""
+    submission = _seed_submission(db_session, tmp_path, page_count=1)
+    page = submission.pages[0]
+    digest = hashlib.sha256(Path(page.image_path).read_bytes()).hexdigest()
+    store = ScriptTranscriptStore(db_session)
+    transcript = store.get_or_create(
+        submission_id=submission.id,
+        provider="mock",
+        model_name="mock-vision-1",
+        prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+        ordered_page_hashes=[digest],
+    )
+    store.reserve_page(
+        transcript=transcript,
+        submission_page_id=page.id,
+        page_no=page.page_no,
+        page_order=0,
+        source_image_sha256=digest,
+        holder_id="worker-that-died",
+    )
+    stored = transcript.pages[0]
+    stored.reserved_at = datetime.now(UTC) - timedelta(hours=2)
+    db_session.commit()
+
+    with pytest.raises(PageReconciliationRequiredError, match="unresolved provider outcome"):
+        store.reserve_page(
+            transcript=transcript,
+            submission_page_id=page.id,
+            page_no=page.page_no,
+            page_order=0,
+            source_image_sha256=digest,
+            holder_id="worker-b",
+        )
+    db_session.refresh(stored)
+    assert stored.state == "unknown_outcome"
+    assert "never reported an outcome" in (stored.error or "")
+
+
+def test_classification_separates_a_known_failure_from_an_unobserved_one() -> None:
+    assert classify_dispatch_failure(ValueError("schema mismatch")) == "failed"
+    assert classify_dispatch_failure(RuntimeError("bad request")) == "failed"
+    assert classify_dispatch_failure(TimeoutError("x")) == "unknown_outcome"
+    assert classify_dispatch_failure(RuntimeError("request timed out")) == "unknown_outcome"
+    assert (
+        classify_dispatch_failure(RuntimeError("connection reset by peer")) == "unknown_outcome"
+    )
 
 
 def test_a_changed_source_page_supersedes_the_previous_transcript(

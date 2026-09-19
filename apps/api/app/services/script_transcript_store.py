@@ -22,9 +22,12 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import ScriptPageTranscript, ScriptTranscript, ScriptTranscriptBlock
@@ -53,8 +56,59 @@ _UNRESOLVED_TEXT_MARKERS = (
 )
 
 
+SUCCEEDED = "succeeded"
+DISPATCHED = "dispatched"
+UNKNOWN_OUTCOME = "unknown_outcome"
+FAILED = "failed"
+UNREADABLE = "unreadable"
+MISSING_PAGE = "missing_page"
+
+# A page whose outcome nobody can determine is never redispatched automatically.
+# It is the one state that requires a person to decide what happened.
+NON_RETRIABLE_STATES = frozenset({UNKNOWN_OUTCOME})
+
+# Substrings that mean "the request may have been received, executed and billed
+# even though we never saw the answer". Matching is on the exception's class
+# name and its message, because adapters wrap provider errors in their own types.
+_AMBIGUOUS_FAILURE_MARKERS = (
+    "timeout",
+    "timed out",
+    "connection reset",
+    "connection aborted",
+    "connection closed",
+    "broken pipe",
+    "incompleteread",
+    "remotedisconnected",
+)
+
+
 class ScriptTranscriptError(RuntimeError):
     """A transcript could not be stored or reused safely."""
+
+
+class PageAlreadyReservedError(ScriptTranscriptError):
+    """Another worker holds the claim on this page; do not dispatch it."""
+
+
+class PageReconciliationRequiredError(ScriptTranscriptError):
+    """A previous call's outcome is unknown and must be resolved by a person."""
+
+
+def classify_dispatch_failure(exc: BaseException) -> str:
+    """Decide whether a failed call's outcome is known or merely unobserved.
+
+    A contract violation or an explicit provider rejection is a known failure
+    and may be read again. A timeout or a dropped connection is not: the
+    provider may have produced and charged for output we never received, so the
+    page keeps ``unknown_outcome`` and is excluded from automatic retry.
+    """
+
+    if isinstance(exc, TimeoutError):
+        return UNKNOWN_OUTCOME
+    haystack = f"{type(exc).__name__} {exc}".casefold()
+    if any(marker in haystack for marker in _AMBIGUOUS_FAILURE_MARKERS):
+        return UNKNOWN_OUTCOME
+    return FAILED
 
 
 @dataclass(frozen=True)
@@ -228,7 +282,7 @@ class ScriptTranscriptStore:
             return PageReuse(page_transcript=None, reusable=False, reason="no_stored_page")
         if stored.source_image_sha256 != source_image_sha256:
             return PageReuse(page_transcript=stored, reusable=False, reason="source_image_changed")
-        if stored.state != "succeeded":
+        if stored.state != SUCCEEDED:
             return PageReuse(
                 page_transcript=stored,
                 reusable=False,
@@ -242,6 +296,138 @@ class ScriptTranscriptStore:
         ):
             return PageReuse(page_transcript=stored, reusable=False, reason="provenance_changed")
         return PageReuse(page_transcript=stored, reusable=True, reason="cached_page_transcript")
+
+    def reserve_page(
+        self,
+        *,
+        transcript: ScriptTranscript,
+        submission_page_id: int,
+        page_no: int,
+        page_order: int,
+        source_image_sha256: str,
+        holder_id: str,
+        reservation_stale_after_seconds: int = 900,
+    ) -> str:
+        """Claim a page before its request is dispatched, and commit the claim.
+
+        The commit is what makes this a reservation rather than an intention: a
+        second worker, a double-clicked button or a restarted job sees the claim
+        instead of paying for the same page again.
+
+        Refuses outright when a previous attempt left the page in
+        ``unknown_outcome``. That is the blind-resubmission case the reservation
+        exists to prevent, and only a person can settle it.
+        """
+
+        stored = self.db.scalars(
+            select(ScriptPageTranscript).where(
+                ScriptPageTranscript.script_transcript_id == transcript.id,
+                ScriptPageTranscript.submission_page_id == submission_page_id,
+            )
+        ).first()
+        now = datetime.now(UTC)
+        if stored is not None:
+            if stored.state in NON_RETRIABLE_STATES:
+                raise PageReconciliationRequiredError(
+                    f"page {page_no} has an unresolved provider outcome and must be "
+                    "reconciled before it can be read again"
+                )
+            if stored.state == DISPATCHED:
+                reserved_at = stored.reserved_at
+                if reserved_at is not None and reserved_at.tzinfo is None:
+                    reserved_at = reserved_at.replace(tzinfo=UTC)
+                age = (now - reserved_at).total_seconds() if reserved_at else None
+                if age is not None and age < reservation_stale_after_seconds:
+                    raise PageAlreadyReservedError(
+                        f"page {page_no} is already reserved by {stored.reserved_by!r}"
+                    )
+                # An expired claim is not evidence that the call failed; it is
+                # evidence that nobody knows. Settle it rather than retrying.
+                stored.state = UNKNOWN_OUTCOME
+                stored.error = (
+                    f"a page read reserved by {stored.reserved_by!r} never reported an "
+                    "outcome; the provider may have produced and billed a result"
+                )
+                self.db.commit()
+                raise PageReconciliationRequiredError(
+                    f"page {page_no} has an unresolved provider outcome and must be "
+                    "reconciled before it can be read again"
+                )
+
+        reservation_id = uuid4().hex
+        stored = self._replace_page_row(
+            transcript=transcript,
+            submission_page_id=submission_page_id,
+            page_no=page_no,
+            page_order=page_order,
+            source_image_sha256=source_image_sha256,
+            state=DISPATCHED,
+            is_blank_page=False,
+            error=None,
+            provider_request_count=0,
+            latency_ms=None,
+            repair_pass=(stored.repair_pass if stored is not None else 0),
+            raw_output_json=None,
+            reservation_id=reservation_id,
+            reserved_at=now,
+            reserved_by=holder_id,
+        )
+        try:
+            self.db.commit()
+        except IntegrityError as exc:
+            # Another worker inserted the claim between our read and our write.
+            self.db.rollback()
+            raise PageAlreadyReservedError(
+                f"page {page_no} was reserved by another worker"
+            ) from exc
+        return reservation_id
+
+    def reconcile_page(
+        self,
+        *,
+        transcript: ScriptTranscript,
+        submission_page_id: int,
+        resolution: str,
+        note: str,
+    ) -> ScriptPageTranscript:
+        """Settle an unknown outcome explicitly. Never called automatically.
+
+        ``resolution='failed'`` records that the call produced nothing usable
+        and makes the page readable again. ``resolution='missing_page'`` records
+        that the source page itself cannot be read. Neither infers anything
+        about what the provider did; both require a person to say so.
+        """
+
+        if resolution not in {FAILED, MISSING_PAGE}:
+            raise ScriptTranscriptError(
+                f"{resolution!r} is not a reconciliation outcome a person can record"
+            )
+        if not note.strip():
+            raise ScriptTranscriptError("a reconciliation must record who decided what")
+        stored = self.db.scalars(
+            select(ScriptPageTranscript).where(
+                ScriptPageTranscript.script_transcript_id == transcript.id,
+                ScriptPageTranscript.submission_page_id == submission_page_id,
+            )
+        ).first()
+        if stored is None:
+            raise ScriptTranscriptError("no stored page read to reconcile")
+        if stored.state not in NON_RETRIABLE_STATES:
+            raise ScriptTranscriptError(
+                f"page {stored.page_no} is in state {stored.state!r} and needs no reconciliation"
+            )
+        stored.state = resolution
+        stored.error = f"{stored.error or 'outcome unknown'} | reconciled: {note.strip()}"
+        stored.reconciled_at = datetime.now(UTC)
+        stored.reservation_id = None
+        stored.reserved_at = None
+        self.db.commit()
+        return stored
+
+    def unresolved_pages(self, transcript: ScriptTranscript) -> list[ScriptPageTranscript]:
+        """Pages whose provider outcome nobody has been able to determine."""
+
+        return [page for page in transcript.pages if page.state in NON_RETRIABLE_STATES]
 
     def record_page_success(
         self,
@@ -319,7 +505,7 @@ class ScriptTranscriptStore:
     ) -> ScriptPageTranscript:
         """Persist a page's terminal non-success state with its reason."""
 
-        if state not in {"unreadable", "missing_page", "failed"}:
+        if state not in {UNREADABLE, MISSING_PAGE, FAILED, UNKNOWN_OUTCOME}:
             raise ScriptTranscriptError(f"{state!r} is not a terminal page failure state")
         if not error.strip():
             raise ScriptTranscriptError("a failed page read must record why it failed")
@@ -355,6 +541,9 @@ class ScriptTranscriptStore:
         latency_ms: int | None,
         repair_pass: int,
         raw_output_json: dict[str, Any] | None,
+        reservation_id: str | None = None,
+        reserved_at: datetime | None = None,
+        reserved_by: str | None = None,
     ) -> ScriptPageTranscript:
         stored = self.db.scalars(
             select(ScriptPageTranscript)
@@ -387,6 +576,14 @@ class ScriptTranscriptStore:
         stored.latency_ms = latency_ms
         stored.repair_pass = repair_pass
         stored.raw_output_json = raw_output_json
+        # A terminal write releases the claim; a reservation write takes one.
+        # Both are set before the flush, because
+        # ``ck_script_page_transcript_reservation_is_complete`` is checked on
+        # the insert, not at the end of the transaction.
+        stored.reservation_id = reservation_id
+        stored.reserved_at = reserved_at
+        if reserved_by is not None:
+            stored.reserved_by = reserved_by
         self.db.flush()
         return stored
 
@@ -405,17 +602,27 @@ class ScriptTranscriptStore:
             raise ScriptTranscriptError(
                 f"page {page_transcript.page_no} did not succeed and has no reusable transcript"
             )
-        blocks = [
-            VisualPageBlock(
-                question_label=block.question_label_raw,
-                bbox=list((block.bbox_json or {}).get("normalized_bbox") or [0, 0, 1, 1]),
-                text=block.text,
-                continues_from_previous=block.continues_from_previous,
-                label_source=block.label_source,
-                confidence=block.confidence if block.confidence is not None else 0,
+        blocks: list[VisualPageBlock] = []
+        for block in sorted(page_transcript.blocks, key=lambda item: item.block_index):
+            bbox = (block.bbox_json or {}).get("normalized_bbox")
+            if not bbox:
+                # Every page now round-trips through this method, so a
+                # substituted placeholder box would flow straight into region
+                # stabilization and crop generation. Fail loudly instead.
+                raise ScriptTranscriptError(
+                    f"stored block {block.id} on page {page_transcript.page_no} "
+                    "has no source geometry"
+                )
+            blocks.append(
+                VisualPageBlock(
+                    question_label=block.question_label_raw,
+                    bbox=list(bbox),
+                    text=block.text,
+                    continues_from_previous=block.continues_from_previous,
+                    label_source=block.label_source,
+                    confidence=block.confidence if block.confidence is not None else 0,
+                )
             )
-            for block in sorted(page_transcript.blocks, key=lambda item: item.block_index)
-        ]
         return VisualPageTranscriptOutput(
             blocks=blocks,
             is_blank_page=page_transcript.is_blank_page,
