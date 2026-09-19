@@ -1234,6 +1234,130 @@ class ScriptTranscriptBlock(TimestampMixin, Base):
     page_transcript: Mapped[ScriptPageTranscript] = relationship(back_populates="blocks")
 
 
+class AnswerEvidenceAssignment(TimestampMixin, Base):
+    """Which source blocks answer one canonical question, and how certain that is.
+
+    Versioned separately from the transcript so the assignment can be re-derived
+    against a newer canonical question structure without touching, or paying to
+    re-read, the source evidence.
+
+    ``state`` keeps the six outcomes distinct. ``answer_region_mappings`` cannot:
+    its CHECK admits only ``mapped|uncertain|blocked|teacher_confirmed``, so a
+    genuinely unanswered question was previously coerced to ``blocked`` and became
+    indistinguishable from a failure. The legacy status stays a projection of
+    this field.
+    """
+
+    __tablename__ = "answer_evidence_assignments"
+    __table_args__ = (
+        CheckConstraint(
+            "state in ('answer_present', 'no_answer_found', 'unreadable', "
+            "'ambiguous', 'missing_page', 'processing_failed')",
+            name="ck_answer_evidence_assignment_state",
+        ),
+        CheckConstraint("assignment_version > 0", name="ck_answer_evidence_assignment_version"),
+        CheckConstraint(
+            "unresolved_block_count >= 0 and unassigned_block_count >= 0",
+            name="ck_answer_evidence_assignment_counts",
+        ),
+        CheckConstraint(
+            "state <> 'no_answer_found' "
+            "or (coverage_complete = true and unassigned_block_count = 0)",
+            name="ck_answer_evidence_no_answer_requires_coverage",
+        ),
+        CheckConstraint(
+            "state = 'answer_present' or state_reason is not null",
+            name="ck_answer_evidence_non_present_has_reason",
+        ),
+        UniqueConstraint(
+            "script_transcript_id",
+            "question_node_id",
+            "assignment_version",
+            name="uq_answer_evidence_assignment_version",
+        ),
+        Index("ix_answer_evidence_assignments_submission_id", "submission_id"),
+        Index("ix_answer_evidence_assignments_transcript_id", "script_transcript_id"),
+        Index(
+            "ux_answer_evidence_assignments_current",
+            "script_transcript_id",
+            "question_node_id",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    script_transcript_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_node_id: Mapped[int] = mapped_column(
+        ForeignKey("question_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    assignment_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    state_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coverage_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unresolved_block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unassigned_block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    transcript: Mapped[ScriptTranscript] = relationship()
+    question: Mapped[Question] = relationship()
+    question_node: Mapped[QuestionNode] = relationship()
+    spans: Mapped[list[AnswerEvidenceSpan]] = relationship(
+        back_populates="assignment",
+        cascade="all, delete-orphan",
+        order_by="AnswerEvidenceSpan.order_index",
+    )
+
+
+class AnswerEvidenceSpan(TimestampMixin, Base):
+    """One ordered reference into the stored source transcript.
+
+    Spans point at blocks; they never copy the text. That is what makes a quote
+    resolvable against the source rather than a second, drifting record of it.
+    Non-adjacent and cross-page segments are just further rows in order.
+    """
+
+    __tablename__ = "answer_evidence_spans"
+    __table_args__ = (
+        CheckConstraint("order_index >= 0", name="ck_answer_evidence_span_order"),
+        CheckConstraint("page_no > 0", name="ck_answer_evidence_span_page_no"),
+        CheckConstraint(
+            "(char_start is null) = (char_end is null)",
+            name="ck_answer_evidence_span_bounds_paired",
+        ),
+        CheckConstraint(
+            "char_start is null or (char_start >= 0 and char_end > char_start)",
+            name="ck_answer_evidence_span_bounds_ordered",
+        ),
+        UniqueConstraint("assignment_id", "order_index", name="uq_answer_evidence_span_order"),
+        Index("ix_answer_evidence_spans_assignment_id", "assignment_id"),
+        Index("ix_answer_evidence_spans_block_id", "script_transcript_block_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assignment_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_evidence_assignments.id", ondelete="CASCADE"), nullable=False
+    )
+    script_transcript_block_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcript_blocks.id", ondelete="CASCADE"), nullable=False
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    assignment: Mapped[AnswerEvidenceAssignment] = relationship(back_populates="spans")
+    block: Mapped[ScriptTranscriptBlock] = relationship()
+
+
 class GradingJob(Base):
     __tablename__ = "grading_jobs"
     __table_args__ = (

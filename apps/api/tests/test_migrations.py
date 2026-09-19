@@ -8,7 +8,7 @@ from sqlalchemy import CheckConstraint
 
 from app.models import Base
 
-EXPECTED_REVISION_ID = "0031_script_transcript"
+EXPECTED_REVISION_ID = "0032_answer_evidence"
 WIDENING_REVISION_ID = "0024_model_lease_page_evidence"
 
 
