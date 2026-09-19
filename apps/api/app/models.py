@@ -1067,6 +1067,173 @@ class AnswerRegionMapping(TimestampMixin, Base):
     answer_region: Mapped[AnswerRegion | None] = relationship(back_populates="mapping_links")
 
 
+class ScriptTranscript(TimestampMixin, Base):
+    """One durable, question-independent read of a complete script.
+
+    Keyed by the submission plus everything that could change what the model
+    would read, so the same source under the same settings is never read twice
+    and a changed model, prompt, schema, preprocessing setting or source page
+    can never silently reuse the previous transcript.
+    """
+
+    __tablename__ = "script_transcripts"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('in_progress', 'complete', 'failed', 'superseded')",
+            name="ck_script_transcript_status",
+        ),
+        CheckConstraint("page_count >= 0", name="ck_script_transcript_page_count"),
+        UniqueConstraint(
+            "submission_id",
+            "settings_fingerprint",
+            "source_manifest_sha256",
+            name="uq_script_transcript_submission_settings",
+        ),
+        Index("ix_script_transcripts_submission_id", "submission_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    settings_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    preprocessing_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
+
+    submission: Mapped[Submission] = relationship()
+    pages: Mapped[list[ScriptPageTranscript]] = relationship(
+        back_populates="transcript",
+        cascade="all, delete-orphan",
+        order_by="ScriptPageTranscript.page_order",
+    )
+
+
+class ScriptPageTranscript(TimestampMixin, Base):
+    """One source page's terminal read state, committed as soon as it succeeds.
+
+    ``state`` is about the *read*, never about a question. A page that did not
+    succeed cannot claim to be blank, which is what stops "no answer found"
+    being reconstructed from a failure downstream.
+    """
+
+    __tablename__ = "script_page_transcripts"
+    __table_args__ = (
+        CheckConstraint(
+            "state in ('succeeded', 'unreadable', 'missing_page', 'failed')",
+            name="ck_script_page_transcript_state",
+        ),
+        CheckConstraint("page_no > 0", name="ck_script_page_transcript_page_no"),
+        CheckConstraint("page_order >= 0", name="ck_script_page_transcript_page_order"),
+        CheckConstraint(
+            "provider_request_count >= 0",
+            name="ck_script_page_transcript_request_count",
+        ),
+        CheckConstraint("repair_pass >= 0", name="ck_script_page_transcript_repair_pass"),
+        CheckConstraint(
+            "state = 'succeeded' or is_blank_page = false",
+            name="ck_script_page_transcript_blank_requires_success",
+        ),
+        CheckConstraint(
+            "state = 'succeeded' or error is not null",
+            name="ck_script_page_transcript_failure_has_reason",
+        ),
+        UniqueConstraint(
+            "script_transcript_id",
+            "submission_page_id",
+            name="uq_script_page_transcript_page",
+        ),
+        Index("ix_script_page_transcripts_transcript_id", "script_transcript_id"),
+        Index("ix_script_page_transcripts_submission_page_id", "submission_page_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    script_transcript_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_page_id: Mapped[int] = mapped_column(
+        ForeignKey("submission_pages.id", ondelete="CASCADE"), nullable=False
+    )
+    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_blank_page: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_request_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    repair_pass: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raw_output_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    transcript: Mapped[ScriptTranscript] = relationship(back_populates="pages")
+    page: Mapped[SubmissionPage] = relationship()
+    blocks: Mapped[list[ScriptTranscriptBlock]] = relationship(
+        back_populates="page_transcript",
+        cascade="all, delete-orphan",
+        order_by="ScriptTranscriptBlock.block_index",
+    )
+
+
+class ScriptTranscriptBlock(TimestampMixin, Base):
+    """One verbatim block of source writing, in reading order.
+
+    ``bbox_json`` is auxiliary navigation geometry. Question identity is
+    derived from ``question_label_raw``/``observed_heading_text`` and reading
+    order, never from a box.
+    """
+
+    __tablename__ = "script_transcript_blocks"
+    __table_args__ = (
+        CheckConstraint(
+            "label_source in ('heading', 'continuation', 'inferred')",
+            name="ck_script_transcript_block_label_source",
+        ),
+        CheckConstraint("block_index >= 0", name="ck_script_transcript_block_index"),
+        CheckConstraint("reading_order >= 0", name="ck_script_transcript_block_reading_order"),
+        CheckConstraint(
+            "unresolved = false or unresolved_reason is not null",
+            name="ck_script_transcript_block_unresolved_has_reason",
+        ),
+        CheckConstraint(
+            "question_label_raw is not null or label_source = 'continuation'",
+            name="ck_script_transcript_block_unlabelled_is_continuation",
+        ),
+        UniqueConstraint(
+            "script_page_transcript_id",
+            "block_index",
+            name="uq_script_transcript_block_index",
+        ),
+        Index("ix_script_transcript_blocks_page_transcript_id", "script_page_transcript_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    script_page_transcript_id: Mapped[int] = mapped_column(
+        ForeignKey("script_page_transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    block_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    reading_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_heading_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    question_label_raw: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    label_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    continues_from_previous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    bbox_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    unresolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unresolved_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    page_transcript: Mapped[ScriptPageTranscript] = relationship(back_populates="blocks")
+
+
 class GradingJob(Base):
     __tablename__ = "grading_jobs"
     __table_args__ = (

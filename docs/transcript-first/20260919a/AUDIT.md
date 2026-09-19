@@ -48,13 +48,33 @@ Working directory `apps/api`, interpreter `E:\teacher-assistant\.venv\Scripts\py
 (the worktree shares `.git`, not `.venv`; the shared interpreter was verified to import
 `fastapi 0.141.1` / `sqlalchemy 2.0.51` on CPython 3.12.10).
 
-| Command | Result |
-| --- | --- |
-| `python -m ruff check .` | exit 1 — one pre-existing `I001` at `packages/brain/universal_vision.py:1`. Out of scope; not fixed. |
-| `python -m pytest -q` | recorded in §6 of the final report once complete. |
+| Working dir | Command | Result |
+| --- | --- | --- |
+| `apps/api` | `python -m ruff check .` | exit 1 — one pre-existing `I001` at `packages/brain/universal_vision.py:1`. Out of scope; not fixed. |
+| `apps/api` | `python -m alembic upgrade head` | exit 0 — reaches `0030_grading_run_brain_profile`. |
+| `apps/api` | `python -m pytest -q` | exit 1 — **1 failed, 744 passed, 6 skipped** in 81.57 s. The one failure is the documented pre-existing `tests/test_frontend_upload_auth_static.py::test_frontend_has_no_direct_codex_or_llm_calls` (a `gemini` mention in `CustomControlledGradingRunClient.tsx`). Out of scope; not fixed. |
+| `apps/web` | `npm run lint` (`tsc --noEmit`) | exit 0. |
+| `apps/web` | `node tests/workflow-ui.test.mjs` | exit 0 — "frontend workflow static checks passed". |
+| `apps/web` | `npm run build` | exit 0. |
+| `apps/web` | `npm run e2e` | **not run.** Playwright end-to-end needs a live API/web stack; this run has made no decision yet to stand one up. Disclosed as an unmeasured check, not a pass. |
 
-`tests/conftest.py:1` pins `DATABASE_URL` to a `*_test` database and refuses to run outside one,
-so the backend suite is already gated onto a disposable target.
+Cross-check on the pytest count: the staged (excluded) delta in the original checkout adds exactly
+four Antigravity regression cases, and its own log records 748 passed. 744 + 4 = 748, so the clean
+baseline is consistent with that record rather than a different environment.
+
+### Database target
+
+`tests/conftest.py:1` pins `DATABASE_URL` to a `*_test` database and refuses to run outside one.
+The repository's pilot stack was **not running** at the start of this run (nothing listening on
+127.0.0.1:5432, no PostgreSQL service, no Docker), so no existing application or data was touched.
+A **separate disposable cluster** was created for this run from the repository's own portable
+PostgreSQL 17.10 binaries: its own data directory outside the repository, port **55432**, database
+`teacher_assistant_test`. Every command above resolved `DATABASE_URL` to that cluster explicitly;
+no default value was accepted. The pilot's own `postgres-data` directory was never opened.
+
+`apps/web/node_modules` was not reinstalled: the worktree's path is a directory junction to the
+existing install at the same unmodified `package-lock.json`, so no download or lockfile change
+occurred.
 
 ## 3. Capability table
 

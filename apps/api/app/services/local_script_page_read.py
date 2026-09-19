@@ -1,9 +1,15 @@
-"""One-call-per-page visual evidence reading and deterministic assembly.
+"""Transcript-first source reading and deterministic question assembly.
 
 This service deliberately lives beside, rather than inside,
 local_script_preparation. The established mapping then transcription path
 remains the default; this class is an explicitly enabled alternative that
 returns both artifacts from a single full-page provider read.
+
+The source read is now durable and reusable. Each page's transcript is
+committed by ``ScriptTranscriptStore`` the moment the provider returns it, and a
+page whose source image and transcription settings are unchanged is served from
+that record without a provider request. Assembly and mapping are pure functions
+of the stored transcript, so a remap or a rubric change costs no vision work.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from app.services.local_script_preparation import (
     _image_content_type,
     _stabilize_visual_page_regions,
 )
+from app.services.script_transcript_store import ScriptTranscriptStore
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
 from packages.brain.capabilities import BrainCapability
@@ -82,6 +89,21 @@ class PageReadPreparationResult:
     transcription_runs_by_question: dict[int, AnswerRegionOcrRun]
     calls_used: int
     unassigned_pages: list[dict[str, Any]]
+    # Pages served from the durable transcript without a provider request.
+    # Reported rather than inferred so a reuse claim is auditable.
+    reused_page_count: int = 0
+    script_transcript_id: int | None = None
+
+
+@dataclass(frozen=True)
+class _SourceRead:
+    """The complete source transcript backing one preparation pass."""
+
+    outputs: list[VisualPageTranscriptOutput]
+    page_hashes: dict[int, str]
+    calls_used: int
+    reused_page_count: int
+    transcript_id: int
 
 
 class LocalScriptPageReadService:
@@ -131,10 +153,6 @@ class LocalScriptPageReadService:
         pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
         if not pages:
             raise LocalScriptPageReadError("The uploaded script has no rendered pages")
-        if len(pages) > maximum_page_read_calls:
-            raise LocalScriptPageReadError(
-                "Script page count exceeds the explicitly authorized page-read call limit"
-            )
         questions, nodes, references = self._mapping_service._load_finalized_references(
             submission
         )
@@ -145,15 +163,19 @@ class LocalScriptPageReadService:
             )
         self._mapping_service._assert_replace_is_safe(existing)
 
-        outputs, page_hashes, calls_used = self._read_pages(
+        source = self._read_pages(
+            submission=submission,
             pages=pages,
             questions=questions,
             references=references,
             policy=policy,
+            maximum_page_read_calls=maximum_page_read_calls,
         )
+        page_hashes = source.page_hashes
+        calls_used = source.calls_used
         assembly = self.assemble(
             pages=pages,
-            page_outputs=outputs,
+            page_outputs=source.outputs,
             questions=questions,
         )
 
@@ -250,6 +272,8 @@ class LocalScriptPageReadService:
                     "provider": policy.provider,
                     "expected_model": expected_model,
                     "visual_page_read_call_count": calls_used,
+                    "script_transcript_id": source.transcript_id,
+                    "reused_page_transcript_count": source.reused_page_count,
                     "mapping_count": len(created),
                     "transcription_artifact_count": len(transcription_runs),
                     "pages_with_unassigned_ink": [
@@ -274,6 +298,8 @@ class LocalScriptPageReadService:
             transcription_runs_by_question=transcription_runs,
             calls_used=calls_used,
             unassigned_pages=assembly.unassigned_pages,
+            reused_page_count=source.reused_page_count,
+            script_transcript_id=source.transcript_id,
         )
 
     def assemble(
@@ -488,18 +514,77 @@ class LocalScriptPageReadService:
     def _read_pages(
         self,
         *,
+        submission: Submission,
         pages: list[Any],
         questions: list[Question],
         references: list[dict[str, Any]],
         policy: BrainPolicy,
-    ) -> tuple[list[VisualPageTranscriptOutput], dict[int, str], int]:
+        maximum_page_read_calls: int,
+    ) -> _SourceRead:
+        """Produce the complete source transcript, reading only what is missing.
+
+        Every page's bytes are hashed before anything is dispatched, so the
+        reuse decision and the call-budget check both happen at the dispatch
+        boundary rather than after a provider has been paid. A page that is
+        already stored under the same source image and the same transcription
+        settings is served from the record and costs no request.
+
+        Nothing here deletes an existing draft mapping. That still happens in
+        ``prepare`` only after the whole source read and assembly succeeded, so
+        a failed read cannot erase reviewable teacher evidence.
+        """
+
         adapter = self._qwen_adapter or policy.adapter
         labels = [question.question_no for question in questions]
         canonical_labels = {label.casefold(): label for label in labels}
-        outputs: list[VisualPageTranscriptOutput] = []
+        store = ScriptTranscriptStore(self.db)
+
         page_hashes: dict[int, str] = {}
+        page_bytes: dict[int, bytes] = {}
+        ordered_hashes: list[str] = []
+        for page in pages:
+            image_path = self.storage.resolve_relative(page.image_path)
+            image_bytes = image_path.read_bytes()
+            digest = hashlib.sha256(image_bytes).hexdigest()
+            page_hashes[int(page.id)] = digest
+            page_bytes[int(page.id)] = image_bytes
+            ordered_hashes.append(digest)
+
+        transcript = store.get_or_create(
+            submission_id=submission.id,
+            provider=policy.provider,
+            model_name=policy.model,
+            prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+            ordered_page_hashes=ordered_hashes,
+        )
+        # A different ordered source manifest means these pages are a different
+        # script version. Older transcripts stay readable but stop being
+        # eligible evidence.
+        store.supersede_stale(
+            submission_id=submission.id,
+            keep_transcript_id=transcript.id,
+        )
+
+        reuse_by_page = {
+            int(page.id): store.reuse_decision(
+                transcript=transcript,
+                submission_page_id=int(page.id),
+                source_image_sha256=page_hashes[int(page.id)],
+            )
+            for page in pages
+        }
+        pages_needing_read = [page for page in pages if not reuse_by_page[int(page.id)].reusable]
+        if len(pages_needing_read) > maximum_page_read_calls:
+            raise LocalScriptPageReadError(
+                "Pages still needing a source read exceed the explicitly authorized "
+                "page-read call limit"
+            )
+
+        outputs: list[VisualPageTranscriptOutput] = []
         open_continuations: list[str] = []
         calls_used = 0
+        reused_page_count = 0
+        reading_order = 0
         holder_id = f"script_page_read:{uuid4().hex}"
 
         try:
@@ -511,28 +596,59 @@ class LocalScriptPageReadService:
                 holder_id=holder_id,
                 phase_manager=self.phase_manager,
             ) as execution:
-                for page in pages:
-                    image_path = self.storage.resolve_relative(page.image_path)
-                    image_bytes = image_path.read_bytes()
-                    page_hashes[int(page.id)] = hashlib.sha256(image_bytes).hexdigest()
-                    try:
-                        execution.heartbeat()
-                        result = adapter.read_page(
-                            image_bytes=image_bytes,
-                            mime_type=_image_content_type(image_path),
-                            question_labels=labels,
-                            question_references=references,
-                            open_continuations=open_continuations,
+                for page_order, page in enumerate(pages):
+                    page_id = int(page.id)
+                    reuse = reuse_by_page[page_id]
+                    if reuse.reusable and reuse.page_transcript is not None:
+                        result = store.load_page_output(reuse.page_transcript)
+                        reused_page_count += 1
+                    else:
+                        image_path = self.storage.resolve_relative(page.image_path)
+                        try:
+                            execution.heartbeat()
+                            result = adapter.read_page(
+                                image_bytes=page_bytes[page_id],
+                                mime_type=_image_content_type(image_path),
+                                question_labels=labels,
+                                question_references=references,
+                                open_continuations=open_continuations,
+                            )
+                            execution.heartbeat()
+                        except Exception as exc:
+                            calls_used += 1
+                            # Record the terminal failure for this page before
+                            # aborting. A failed read must remain
+                            # distinguishable from a blank page, and the pages
+                            # already read must stay paid-for and stored.
+                            store.record_page_failure(
+                                transcript=transcript,
+                                submission_page_id=page_id,
+                                page_no=int(page.page_no),
+                                page_order=page_order,
+                                source_image_sha256=page_hashes[page_id],
+                                state="failed",
+                                error=f"Brain visual page read failed safely: {exc}",
+                            )
+                            store.mark_failed(transcript)
+                            raise LocalScriptPageReadError(
+                                f"Brain visual page read failed safely: {exc}"
+                            ) from exc
+                        if not isinstance(result, VisualPageTranscriptOutput):
+                            result = VisualPageTranscriptOutput.model_validate(result)
+                        calls_used += 1
+                        # Committed here, one page at a time, so an interrupted
+                        # run never repeats a page it has already paid for.
+                        store.record_page_success(
+                            transcript=transcript,
+                            submission_page_id=page_id,
+                            page_no=int(page.page_no),
+                            page_order=page_order,
+                            source_image_sha256=page_hashes[page_id],
+                            output=result,
+                            reading_order_start=reading_order,
                         )
-                        execution.heartbeat()
-                    except Exception as exc:
-                        raise LocalScriptPageReadError(
-                            f"Brain visual page read failed safely: {exc}"
-                        ) from exc
-                    if not isinstance(result, VisualPageTranscriptOutput):
-                        result = VisualPageTranscriptOutput.model_validate(result)
                     outputs.append(result)
-                    calls_used += 1
+                    reading_order += len(result.blocks)
                     open_continuations = self._next_open_continuations(
                         output=result,
                         canonical_labels=canonical_labels,
@@ -540,7 +656,15 @@ class LocalScriptPageReadService:
                     )
         except LocalModelLeaseError as exc:
             raise LocalScriptPageReadError(str(exc)) from exc
-        return outputs, page_hashes, calls_used
+
+        store.mark_complete(transcript)
+        return _SourceRead(
+            outputs=outputs,
+            page_hashes=page_hashes,
+            calls_used=calls_used,
+            reused_page_count=reused_page_count,
+            transcript_id=transcript.id,
+        )
 
     @staticmethod
     def _next_open_continuations(
