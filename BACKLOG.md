@@ -1894,6 +1894,14 @@ this diff specifically and are deferred, not silently dropped:
   `read_page`. Reachable by the same AkashML provider at the reference-extraction step. Separate
   task; out of this diff's stated scope.
 
+## Antigravity expected-model correction (2026-09-13)
+
+- Baseline: `f085529` (clean). User reported `Expected model does not match the configured active brain model` when evaluating with Antigravity CLI.
+- Reproduced at page-read authorization with synthetic settings: profile selection resolves `gemini-3.8-flash-high`, but legacy construction overwrote it with generic `BRAIN_MODEL=Qwen/Qwen3.8-27B`.
+- Fixed `legacy_profile_settings` to retain dedicated Antigravity CLI settings. Expected-model validation remains enforced.
+- Four regression cases failed with the exact error before the fix; focused suite 63 passed afterward. Full backend: 748 passed, 6 skipped, one documented unrelated frontend static-check failure. Changed-file Ruff clean; full Ruff retains the documented `universal_vision.py:1` I001.
+- No real provider calls, private data, runtime changes, or commits. Code verified offline; running API/worker must reload the change before retrying evaluation.
+
 ## TA-BRAIN-006 post-verification correction (2026-09-13)
 
 The first real-script result exposed an additional page-read contract defect:

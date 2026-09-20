@@ -2852,6 +2852,22 @@ isolated assessment and all task-derived uploads/artifacts were deleted; source 
 source or derived artifact was committed. No commit was made; scoped files are staged pending
 founder approval.
 
+## Antigravity expected-model correction (2026-09-13)
+
+- Baseline: `f08552962f9276dacdbb3ad2c47c38356a2aad9b`; clean worktree before implementation.
+- Exact reproduction: `LocalScriptPageReadService._validate_authorization` rejected the model resolved by `brain_policy_for_profile` because legacy construction replaced the dedicated Antigravity model with the generic Qwen model. Same provider identity on both paths; clearing only the generic model removed the discrepancy.
+- Fix: `packages/brain/profiles.py` retains dedicated Antigravity settings in legacy construction. Regression in `tests/test_brain_profiles.py` covers local Qwen or Antigravity active, canonical provider ID and alias, dedicated timeout retention, and rejection of an actually incorrect model. Constructors only; no CLI execution or network call.
+- Commands from `apps/api`:
+  - `..\..\.venv\Scripts\python.exe -m pytest tests/test_brain_profiles.py -k antigravity -q`: before fix, 4 failed with the exact reported error, 3 deselected.
+  - `..\..\.venv\Scripts\python.exe -m pytest tests/test_brain_profiles.py tests/test_local_script_page_read.py tests/test_universal_brain_provider.py tests/test_antigravity_gemini_provider.py -q`: after fix, 63 passed.
+  - `..\..\.venv\Scripts\python.exe -m pytest -q`: 748 passed, 6 skipped, 1 failed, 2 warnings, 82.60 seconds. The failure is the documented `test_frontend_upload_auth_static.py::test_frontend_has_no_direct_codex_or_llm_calls`, detecting the existing Gemini comment in `CustomControlledGradingRunClient.tsx`.
+  - `..\..\.venv\Scripts\python.exe -m ruff check packages/brain/profiles.py tests/test_brain_profiles.py`: passed.
+  - `..\..\.venv\Scripts\python.exe -m ruff check .`: the existing `packages/brain/universal_vision.py:1` I001 only.
+  - `git diff --check`: passed.
+- Safety: zero real provider/model calls, no private student data accessed, no GradeSuggestion/FinalGrade/provider GradingJob created outside isolated tests. No cohort flag, Bulk Supervised implementation, environment configuration, or running-stack changes. No agents or autonomous loop.
+- Runtime limitation: model selection and authorization verified offline, not a live Antigravity evaluation. API/worker reload is still needed; use the supported pilot script.
+- Execution: DIRECT, Codex GPT-6; approval policy `never`, sandbox `danger-full-access` supplied by the host, no policy changes or escalation. No commit made.
+
 ## TA-BRAIN-006 post-verification correction (2026-09-13)
 
 The first real-script result exposed an additional defect in the new page-read path:

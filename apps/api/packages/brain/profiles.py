@@ -119,6 +119,12 @@ def legacy_profile_settings(settings: Settings, profile_id: str) -> Settings:
     """Translate process-wide BRAIN_* overrides for the legacy provider path only."""
 
     normalized = profile_id.strip().lower()
+    # Antigravity uses its dedicated CLI settings in the profile catalog.
+    # Preparation still enters through the legacy provider path: applying
+    # BRAIN_* here substitutes another profile's model and rejects the model
+    # the teacher selected before the CLI can run.
+    if normalized == "antigravity_gemini":
+        return settings
     if normalized in {"mock", "openai_compatible"} or not _generic_profile_selected(settings):
         return settings
     field_prefix = {

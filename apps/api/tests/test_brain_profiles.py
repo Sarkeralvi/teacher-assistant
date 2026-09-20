@@ -1,5 +1,44 @@
+from unittest.mock import MagicMock
+
+import pytest
+
 from app.core.config import Settings
+from app.services.local_script_page_read import (
+    LocalScriptPageReadError,
+    LocalScriptPageReadService,
+)
+from packages.brain.policy import brain_policy_for_profile
 from packages.brain.profiles import legacy_profile_settings
+
+
+@pytest.mark.parametrize("active_provider", ["llama_cpp_qwen38", "antigravity_gemini"])
+@pytest.mark.parametrize("requested_provider", ["antigravity_gemini", "antigravity"])
+def test_antigravity_page_read_uses_selected_profile_model(
+    active_provider: str, requested_provider: str,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        BRAIN_PROVIDER=active_provider,
+        BRAIN_ALLOW_REAL_PROVIDERS=True,
+        BRAIN_MODEL="Qwen/Qwen3.8-27B",
+        BRAIN_TIMEOUT_SECONDS=300,
+        BRAIN_SCRIPT_PREPARATION_ENABLED=True,
+        ANTIGRAVITY_GEMINI_ENABLED=True,
+        ANTIGRAVITY_GEMINI_MODEL="gemini-3.8-flash-high",
+        ANTIGRAVITY_GEMINI_TIMEOUT_SECONDS=120,
+        ANTIGRAVITY_GEMINI_PAGE_READ_ENABLED=True,
+    )
+    selected = brain_policy_for_profile(settings, "antigravity_gemini")
+    service = LocalScriptPageReadService(MagicMock(), settings=settings)
+
+    policy = service._validate_authorization(
+        selected.model, provider=requested_provider,
+    )
+
+    assert policy.model == "gemini-3.8-flash-high"
+    assert policy.adapter.provider.timeout_seconds == 120
+    with pytest.raises(LocalScriptPageReadError, match="Expected model does not match"):
+        service._validate_authorization(settings.brain_model, provider=requested_provider)
 
 
 def test_generic_brain_overrides_do_not_leak_into_local_qwen38() -> None:
