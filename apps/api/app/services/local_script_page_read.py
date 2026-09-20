@@ -1,16 +1,22 @@
-"""One-call-per-page visual evidence reading and deterministic assembly.
+"""Transcript-first source reading and deterministic question assembly.
 
 This service deliberately lives beside, rather than inside,
 local_script_preparation. The established mapping then transcription path
 remains the default; this class is an explicitly enabled alternative that
 returns both artifacts from a single full-page provider read.
+
+The source read is now durable and reusable. Each page's transcript is
+committed by ``ScriptTranscriptStore`` the moment the provider returns it, and a
+page whose source image and transcription settings are unchanged is served from
+that record without a provider request. Assembly and mapping are pure functions
+of the stored transcript, so a remap or a rubric change costs no vision work.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -21,7 +27,16 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models import AnswerRegionMapping, AnswerRegionOcrRun, AuditLog, Question, Submission, User
+from app.services.answer_evidence_assignment import (
+    EXPLICIT_LABEL,
+    AnswerEvidenceAssignmentService,
+    CanonicalQuestion,
+    OwnershipInput,
+    assignment_summary,
+    resolve_block_ownership,
+)
 from app.services.brain_execution import hold_brain_execution
+from app.services.evidence_invalidation import EvidenceInvalidationService
 from app.services.local_ai_phase_manager import LocalAiPhaseManager
 from app.services.local_model_lease_service import LocalModelLeaseError
 from app.services.local_script_preparation import (
@@ -30,6 +45,12 @@ from app.services.local_script_preparation import (
     PreparedSegment,
     _image_content_type,
     _stabilize_visual_page_regions,
+)
+from app.services.script_transcript_store import (
+    UNKNOWN_OUTCOME,
+    ScriptTranscriptError,
+    ScriptTranscriptStore,
+    classify_dispatch_failure,
 )
 from app.services.storage import LocalStorage
 from packages.brain.adapter import BrainAdapter, BrainProviderConfigurationError
@@ -49,6 +70,10 @@ from packages.brain.schemas_qwen38 import (
 
 class LocalScriptPageReadError(LocalScriptPreparationError):
     """A page-read contract or deterministic assembly failed safely."""
+
+
+def _page_no(page: Any) -> int:
+    return int(page.page_no)
 
 
 @dataclass(frozen=True)
@@ -82,6 +107,23 @@ class PageReadPreparationResult:
     transcription_runs_by_question: dict[int, AnswerRegionOcrRun]
     calls_used: int
     unassigned_pages: list[dict[str, Any]]
+    # Pages served from the durable transcript without a provider request.
+    # Reported rather than inferred so a reuse claim is auditable.
+    reused_page_count: int = 0
+    script_transcript_id: int | None = None
+    # Counts per distinct evidence state, which ``mapping_status`` cannot carry.
+    evidence_states: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _SourceRead:
+    """The complete source transcript backing one preparation pass."""
+
+    outputs: list[VisualPageTranscriptOutput]
+    page_hashes: dict[int, str]
+    calls_used: int
+    reused_page_count: int
+    transcript_id: int
 
 
 class LocalScriptPageReadService:
@@ -131,10 +173,6 @@ class LocalScriptPageReadService:
         pages = sorted(submission.pages, key=lambda item: (item.page_no, item.id))
         if not pages:
             raise LocalScriptPageReadError("The uploaded script has no rendered pages")
-        if len(pages) > maximum_page_read_calls:
-            raise LocalScriptPageReadError(
-                "Script page count exceeds the explicitly authorized page-read call limit"
-            )
         questions, nodes, references = self._mapping_service._load_finalized_references(
             submission
         )
@@ -145,16 +183,47 @@ class LocalScriptPageReadService:
             )
         self._mapping_service._assert_replace_is_safe(existing)
 
-        outputs, page_hashes, calls_used = self._read_pages(
+        source = self._read_pages(
+            submission=submission,
             pages=pages,
             questions=questions,
             references=references,
             policy=policy,
+            maximum_page_read_calls=maximum_page_read_calls,
         )
+        page_hashes = source.page_hashes
+        calls_used = source.calls_used
         assembly = self.assemble(
             pages=pages,
-            page_outputs=outputs,
+            page_outputs=source.outputs,
             questions=questions,
+        )
+
+        # Derive the separately versioned question assignment from the stored
+        # transcript. This issues no provider request, so re-preparing after a
+        # remap or a rubric change costs nothing here.
+        assignment_service = AnswerEvidenceAssignmentService(self.db)
+        assignments = assignment_service.assign(
+            submission_id=submission.id,
+            transcript=assignment_service.load_transcript(source.transcript_id),
+            questions=[
+                CanonicalQuestion(
+                    question_id=question.id,
+                    question_node_id=nodes[question.id].id,
+                    question_no=question.question_no,
+                )
+                for question in questions
+            ],
+        )
+        assignment_by_question = {item.question_id: item for item in assignments}
+
+        # A re-derived assignment is new evidence. Mark any draft grade that was
+        # produced against the previous version, so a reviewer sees it is out of
+        # date. Nothing is deleted and nothing is re-graded automatically;
+        # _assert_replace_is_safe already refuses to touch a graded mapping.
+        EvidenceInvalidationService(self.db).supersede_stale_suggestions(
+            submission_id=submission.id,
+            reason="the source transcript or the question assignment was re-derived",
         )
 
         # Delete replaceable draft evidence only after all provider calls and
@@ -197,6 +266,7 @@ class LocalScriptPageReadService:
                     assembly.continuation_by_question[question_id] or len(segments) > 1
                 ),
             )
+            assignment = assignment_by_question[question_id]
             source_reference = dict(mapping.source_reference or {})
             source_reference["page_read"] = {
                 "input_page_numbers": sorted(
@@ -208,6 +278,19 @@ class LocalScriptPageReadService:
                 "label_sources": sorted(assembly.label_sources_by_question[question_id]),
                 "hard_blocker_count": len(blockers),
                 "teacher_review_required": True,
+                "script_transcript_id": source.transcript_id,
+                # The distinct evidence state. ``mapping_status`` still carries
+                # only the four legacy values, so an unanswered question and a
+                # failed read remain indistinguishable *there*; they are told
+                # apart here and in ``answer_evidence_assignments``. Narrowing
+                # the legacy status to match would change what a teacher sees
+                # on the existing workflow and is deliberately left as a
+                # separate, founder-visible decision.
+                "evidence_state": assignment.state,
+                "evidence_state_reason": assignment.state_reason,
+                "evidence_assignment_version": assignment.assignment_version,
+                "source_coverage_complete": assignment.coverage_complete,
+                "unassigned_block_count": assignment.unassigned_block_count,
             }
             mapping.source_reference = source_reference
             created.append(mapping)
@@ -250,6 +333,9 @@ class LocalScriptPageReadService:
                     "provider": policy.provider,
                     "expected_model": expected_model,
                     "visual_page_read_call_count": calls_used,
+                    "script_transcript_id": source.transcript_id,
+                    "reused_page_transcript_count": source.reused_page_count,
+                    "evidence_states": assignment_summary(assignments)["states"],
                     "mapping_count": len(created),
                     "transcription_artifact_count": len(transcription_runs),
                     "pages_with_unassigned_ink": [
@@ -274,6 +360,9 @@ class LocalScriptPageReadService:
             transcription_runs_by_question=transcription_runs,
             calls_used=calls_used,
             unassigned_pages=assembly.unassigned_pages,
+            reused_page_count=source.reused_page_count,
+            script_transcript_id=source.transcript_id,
+            evidence_states=assignment_summary(assignments)["states"],
         )
 
     def assemble(
@@ -314,8 +403,24 @@ class LocalScriptPageReadService:
         assignments_by_page: dict[int, list[_AssignedPageBlock]] = defaultdict(list)
         all_assignments: list[_AssignedPageBlock] = []
         global_blockers: list[str] = []
-        last_question: Question | None = None
 
+        # Ownership is decided once, by the same rule the evidence-assignment
+        # layer uses. This walk used to decide it a second time and could
+        # therefore build a crop for a block the assignment layer treats as
+        # unplaced. The node id is mirrored from the question id here because
+        # assembly works in question ids; the rule itself depends only on
+        # labels, page order and the continuation claim, never on either id or
+        # on geometry.
+        canonical = [
+            CanonicalQuestion(
+                question_id=question.id,
+                question_node_id=question.id,
+                question_no=question.question_no,
+            )
+            for question in questions
+        ]
+        blocks_by_key: dict[tuple[int, int], tuple[Any, VisualPageBlock, int]] = {}
+        ownership_inputs: list[OwnershipInput] = []
         for page, output in zip(ordered_pages, page_outputs, strict=True):
             if output.is_blank_page and output.blocks:
                 raise LocalScriptPageReadError(
@@ -330,54 +435,60 @@ class LocalScriptPageReadService:
                     item[0],
                 ),
             )
-            for source_index, block in ordered_blocks:
-                question: Question | None
-                if block.question_label is None:
-                    if block.label_source != "continuation":
-                        raise LocalScriptPageReadError(
-                            "An unlabeled page block must declare continuation source"
-                        )
-                    question = last_question
-                    if question is None:
-                        global_blockers.append(
-                            f"page {page.page_no} begins with an unlabeled block that has no "
-                            "preceding canonical question; page-read evidence is hard blocked"
-                        )
-                        continue
-                else:
-                    if block.label_source == "continuation":
-                        raise LocalScriptPageReadError(
-                            "A labelled page block cannot declare continuation source"
-                        )
-                    question = question_by_label.get(block.question_label.strip().casefold())
-                    if question is None:
-                        raise LocalScriptPageReadError(
-                            "The brain provider returned an unknown finalized question"
-                        )
-                    last_question = question
-
-                assert question is not None
-                assignment = _AssignedPageBlock(
-                    page=page,
-                    block=block,
-                    question_id=question.id,
-                    source_index=source_index,
+            for block_index, (source_index, block) in enumerate(ordered_blocks):
+                key = (int(page.page_no), block_index)
+                blocks_by_key[key] = (page, block, source_index)
+                ownership_inputs.append(
+                    OwnershipInput(
+                        key=key,
+                        page_no=int(page.page_no),
+                        question_label_raw=block.question_label,
+                        label_source=block.label_source,
+                        continues_from_previous=block.continues_from_previous,
+                    )
                 )
-                assignments_by_page[int(page.id)].append(assignment)
-                all_assignments.append(assignment)
-                page_ids_by_question[question.id].add(int(page.id))
-                label_sources_by_question[question.id].add(block.label_source)
-                if block.label_source == "inferred":
-                    warnings_by_question[question.id].append(
-                        "inferred_question_label_requires_teacher_review"
-                    )
-                if block.continues_from_previous:
-                    continuation_by_question[question.id] = True
-                if not block.text.strip():
-                    blockers_by_question[question.id].append(
-                        f"page {page.page_no} has a visible block with no faithful transcript; "
-                        "page-read evidence is hard blocked"
-                    )
+
+        ownership = resolve_block_ownership(blocks=ownership_inputs, questions=canonical)
+
+        for owned in ownership.owned:
+            page, block, source_index = blocks_by_key[owned.source.key]
+            question_id = owned.question.question_id
+            assignment = _AssignedPageBlock(
+                page=page,
+                block=block,
+                question_id=question_id,
+                source_index=source_index,
+            )
+            assignments_by_page[int(page.id)].append(assignment)
+            all_assignments.append(assignment)
+            page_ids_by_question[question_id].add(int(page.id))
+            label_sources_by_question[question_id].add(block.label_source)
+            if block.label_source == "inferred":
+                warnings_by_question[question_id].append(
+                    "inferred_question_label_requires_teacher_review"
+                )
+            if owned.basis != EXPLICIT_LABEL:
+                warnings_by_question[question_id].append(
+                    f"block_attached_by_{owned.basis}_requires_teacher_review"
+                )
+            if block.continues_from_previous:
+                continuation_by_question[question_id] = True
+            if not block.text.strip():
+                blockers_by_question[question_id].append(
+                    f"page {page.page_no} has a visible block with no faithful transcript; "
+                    "page-read evidence is hard blocked"
+                )
+
+        for unplaced in ownership.unplaced:
+            page, block, _source_index = blocks_by_key[unplaced.source.key]
+            if not block.text.strip():
+                continue
+            # Writing that nobody could place is never silently dropped and
+            # never attached to whichever question happened to come last.
+            global_blockers.append(
+                f"page {page.page_no} has writing that could not be placed "
+                f"({unplaced.reason}); page-read evidence is hard blocked"
+            )
 
         for page in ordered_pages:
             grouped: dict[int, list[_AssignedPageBlock]] = defaultdict(list)
@@ -488,18 +599,88 @@ class LocalScriptPageReadService:
     def _read_pages(
         self,
         *,
+        submission: Submission,
         pages: list[Any],
         questions: list[Question],
         references: list[dict[str, Any]],
         policy: BrainPolicy,
-    ) -> tuple[list[VisualPageTranscriptOutput], dict[int, str], int]:
+        maximum_page_read_calls: int,
+    ) -> _SourceRead:
+        """Produce the complete source transcript, reading only what is missing.
+
+        Every page's bytes are hashed before anything is dispatched, so the
+        reuse decision and the call-budget check both happen at the dispatch
+        boundary rather than after a provider has been paid. A page that is
+        already stored under the same source image and the same transcription
+        settings is served from the record and costs no request.
+
+        Nothing here deletes an existing draft mapping. That still happens in
+        ``prepare`` only after the whole source read and assembly succeeded, so
+        a failed read cannot erase reviewable teacher evidence.
+        """
+
         adapter = self._qwen_adapter or policy.adapter
         labels = [question.question_no for question in questions]
         canonical_labels = {label.casefold(): label for label in labels}
-        outputs: list[VisualPageTranscriptOutput] = []
+        store = ScriptTranscriptStore(self.db)
+
         page_hashes: dict[int, str] = {}
+        page_bytes: dict[int, bytes] = {}
+        ordered_hashes: list[str] = []
+        for page in pages:
+            image_path = self.storage.resolve_relative(page.image_path)
+            image_bytes = image_path.read_bytes()
+            digest = hashlib.sha256(image_bytes).hexdigest()
+            page_hashes[int(page.id)] = digest
+            page_bytes[int(page.id)] = image_bytes
+            ordered_hashes.append(digest)
+
+        transcript = store.get_or_create(
+            submission_id=submission.id,
+            provider=policy.provider,
+            model_name=policy.model,
+            prompt_version=VISUAL_PAGE_READ_PROMPT_VERSION,
+            ordered_page_hashes=ordered_hashes,
+        )
+        # A different ordered source manifest means these pages are a different
+        # script version. Older transcripts stay readable but stop being
+        # eligible evidence.
+        store.supersede_stale(
+            submission_id=submission.id,
+            keep_transcript_id=transcript.id,
+        )
+
+        reuse_by_page = {
+            int(page.id): store.reuse_decision(
+                transcript=transcript,
+                submission_page_id=int(page.id),
+                source_image_sha256=page_hashes[int(page.id)],
+            )
+            for page in pages
+        }
+        # A page whose previous outcome nobody could determine is never silently
+        # read again: the provider may already have produced and billed it.
+        unresolved = store.unresolved_pages(transcript)
+        if unresolved:
+            raise LocalScriptPageReadError(
+                "Source pages "
+                + ", ".join(str(item.page_no) for item in sorted(unresolved, key=_page_no))
+                + " have an unresolved provider outcome. Reconcile them explicitly "
+                "before preparing again; they are not retried automatically."
+            )
+
+        pages_needing_read = [page for page in pages if not reuse_by_page[int(page.id)].reusable]
+        if len(pages_needing_read) > maximum_page_read_calls:
+            raise LocalScriptPageReadError(
+                "Pages still needing a source read exceed the explicitly authorized "
+                "page-read call limit"
+            )
+
+        outputs: list[VisualPageTranscriptOutput] = []
         open_continuations: list[str] = []
         calls_used = 0
+        reused_page_count = 0
+        reading_order = 0
         holder_id = f"script_page_read:{uuid4().hex}"
 
         try:
@@ -511,28 +692,80 @@ class LocalScriptPageReadService:
                 holder_id=holder_id,
                 phase_manager=self.phase_manager,
             ) as execution:
-                for page in pages:
-                    image_path = self.storage.resolve_relative(page.image_path)
-                    image_bytes = image_path.read_bytes()
-                    page_hashes[int(page.id)] = hashlib.sha256(image_bytes).hexdigest()
-                    try:
-                        execution.heartbeat()
-                        result = adapter.read_page(
-                            image_bytes=image_bytes,
-                            mime_type=_image_content_type(image_path),
-                            question_labels=labels,
-                            question_references=references,
-                            open_continuations=open_continuations,
+                for page_order, page in enumerate(pages):
+                    page_id = int(page.id)
+                    reuse = reuse_by_page[page_id]
+                    if reuse.reusable and reuse.page_transcript is not None:
+                        result = store.load_page_output(reuse.page_transcript)
+                        reused_page_count += 1
+                    else:
+                        image_path = self.storage.resolve_relative(page.image_path)
+                        # Claim the page and commit the claim before spending
+                        # anything. A concurrent worker, a double-clicked
+                        # button or a restarted job now sees the claim instead
+                        # of paying for the same page a second time.
+                        try:
+                            store.reserve_page(
+                                transcript=transcript,
+                                submission_page_id=page_id,
+                                page_no=int(page.page_no),
+                                page_order=page_order,
+                                source_image_sha256=page_hashes[page_id],
+                                holder_id=holder_id,
+                            )
+                        except ScriptTranscriptError as exc:
+                            raise LocalScriptPageReadError(str(exc)) from exc
+                        try:
+                            execution.heartbeat()
+                            result = adapter.read_page(
+                                image_bytes=page_bytes[page_id],
+                                mime_type=_image_content_type(image_path),
+                                question_labels=labels,
+                                question_references=references,
+                                open_continuations=open_continuations,
+                            )
+                            execution.heartbeat()
+                        except Exception as exc:
+                            calls_used += 1
+                            # A rejected request is a known failure and may be
+                            # read again. A timeout or a dropped connection is
+                            # not: the provider may have produced and billed
+                            # output nobody saw, so that page keeps
+                            # 'unknown_outcome' and is never retried on its own.
+                            outcome = classify_dispatch_failure(exc)
+                            store.record_page_failure(
+                                transcript=transcript,
+                                submission_page_id=page_id,
+                                page_no=int(page.page_no),
+                                page_order=page_order,
+                                source_image_sha256=page_hashes[page_id],
+                                state=outcome,
+                                error=f"Brain visual page read failed safely: {exc}",
+                            )
+                            store.mark_failed(transcript)
+                            detail = (
+                                "Brain visual page read outcome is unknown and needs "
+                                f"reconciliation: {exc}"
+                                if outcome == UNKNOWN_OUTCOME
+                                else f"Brain visual page read failed safely: {exc}"
+                            )
+                            raise LocalScriptPageReadError(detail) from exc
+                        if not isinstance(result, VisualPageTranscriptOutput):
+                            result = VisualPageTranscriptOutput.model_validate(result)
+                        calls_used += 1
+                        # Committed here, one page at a time, so an interrupted
+                        # run never repeats a page it has already paid for.
+                        store.record_page_success(
+                            transcript=transcript,
+                            submission_page_id=page_id,
+                            page_no=int(page.page_no),
+                            page_order=page_order,
+                            source_image_sha256=page_hashes[page_id],
+                            output=result,
+                            reading_order_start=reading_order,
                         )
-                        execution.heartbeat()
-                    except Exception as exc:
-                        raise LocalScriptPageReadError(
-                            f"Brain visual page read failed safely: {exc}"
-                        ) from exc
-                    if not isinstance(result, VisualPageTranscriptOutput):
-                        result = VisualPageTranscriptOutput.model_validate(result)
                     outputs.append(result)
-                    calls_used += 1
+                    reading_order += len(result.blocks)
                     open_continuations = self._next_open_continuations(
                         output=result,
                         canonical_labels=canonical_labels,
@@ -540,7 +773,30 @@ class LocalScriptPageReadService:
                     )
         except LocalModelLeaseError as exc:
             raise LocalScriptPageReadError(str(exc)) from exc
-        return outputs, page_hashes, calls_used
+
+        store.mark_complete(transcript)
+        # The persisted transcript is the authority, not the provider objects
+        # that happen to still be in memory. Reloading every page through the
+        # store means assembly and assignment read exactly what was stored, so
+        # anything lossy in persistence fails here instead of silently
+        # diverging from what a teacher will later be shown.
+        outputs = [
+            store.load_page_output(
+                store.reuse_decision(
+                    transcript=transcript,
+                    submission_page_id=int(page.id),
+                    source_image_sha256=page_hashes[int(page.id)],
+                ).page_transcript
+            )
+            for page in pages
+        ]
+        return _SourceRead(
+            outputs=outputs,
+            page_hashes=page_hashes,
+            calls_used=calls_used,
+            reused_page_count=reused_page_count,
+            transcript_id=transcript.id,
+        )
 
     @staticmethod
     def _next_open_continuations(

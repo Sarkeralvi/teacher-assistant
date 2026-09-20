@@ -25,6 +25,7 @@ from app.services.answer_region_processing import (
     crop_grading_context_image,
 )
 from app.services.brain_execution import hold_brain_execution
+from app.services.evidence_invalidation import EvidenceInvalidationService
 from app.services.grading_integrity import canonical_json_hash, rubric_snapshot_hash
 from app.services.local_model_lease_service import LocalModelLeaseError
 from app.services.storage import LocalStorage
@@ -843,6 +844,12 @@ class GradingService:
                 needs_review=True,
                 feedback=feedback,
                 cost_estimate=cost_estimate,
+                # Bind the draft to the evidence it was actually graded on, so
+                # a later change to the source, the assignment, the solution or
+                # the rubric cannot leave it looking current.
+                source_evidence_fingerprint=EvidenceInvalidationService(
+                    self.db
+                ).fingerprint_for_region(region),
             )
             job.status = "succeeded"
             job.completed_at = datetime.now(UTC)

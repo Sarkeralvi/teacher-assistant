@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import AnswerRegion, GradingQueueItem, GradingQueueRun
+from app.services.evidence_invalidation import EvidenceInvalidationService
 from app.services.evidence_prep_service import EvidencePrepService
 
 ALLOWED_CONTINUATION_STATUSES = {
@@ -193,6 +194,15 @@ class GradingQueueService:
             ).hexdigest(),
             "full_answer_confirmed": (
                 region.full_answer_confirmed if region is not None else None
+            ),
+            # One field covering the source transcript, the question
+            # assignment, the solution and the active rubric. Without it a
+            # queued item stayed "fresh" after a re-read or a rubric change
+            # whenever the crops happened not to move.
+            "source_evidence_fingerprint": (
+                EvidenceInvalidationService(self.db).fingerprint_for_region(region)
+                if region is not None
+                else None
             ),
         }
 

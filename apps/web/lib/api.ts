@@ -2340,3 +2340,158 @@ export function getAssessmentSummary(assessmentId: number) {
 export function downloadAssessmentFinalGrades(assessmentId: number) {
   return apiDownload(`/assessments/${assessmentId}/export/final-grades.xlsx`);
 }
+
+// --- Transcript-first review -------------------------------------------------
+// Provider and model names arrive as data on these types. They are never
+// written as literals in the web source: the static privacy check refuses them,
+// and a hard-coded name would drift from what the backend actually used.
+
+export type ScriptTranscriptBlock = {
+  id: number;
+  block_index: number;
+  reading_order: number;
+  text: string;
+  edited_text: string | null;
+  effective_text: string;
+  revision: number;
+  edited_at: string | null;
+  observed_heading_text: string | null;
+  question_label_raw: string | null;
+  label_source: string;
+  continues_from_previous: boolean;
+  confidence: string | number | null;
+  bbox: number[] | null;
+  unresolved: boolean;
+  unresolved_reason: string | null;
+};
+
+export type ScriptTranscriptPage = {
+  id: number;
+  submission_page_id: number;
+  page_no: number;
+  page_order: number;
+  state: string;
+  is_blank_page: boolean;
+  error: string | null;
+  provider: string;
+  model_name: string;
+  prompt_version: string;
+  provider_request_count: number;
+  repair_pass: number;
+  reserved_by: string | null;
+  reserved_at: string | null;
+  reconciled_at: string | null;
+  needs_reconciliation: boolean;
+  blocks: ScriptTranscriptBlock[];
+};
+
+export type ScriptTranscript = {
+  id: number;
+  submission_id: number;
+  status: string;
+  provider: string;
+  model_name: string;
+  prompt_version: string;
+  schema_version: string;
+  source_manifest_sha256: string;
+  page_count: number;
+  pages_read: number;
+  provider_request_count: number;
+  pages_needing_reconciliation: number[];
+  coverage_complete: boolean;
+  pages: ScriptTranscriptPage[];
+};
+
+export type AnswerEvidenceState =
+  | "answer_present"
+  | "no_answer_found"
+  | "unreadable"
+  | "ambiguous"
+  | "missing_page"
+  | "processing_failed";
+
+export type AnswerEvidenceSpan = {
+  order_index: number;
+  page_no: number;
+  script_transcript_block_id: number;
+  assignment_basis: string;
+  text: string;
+  unresolved: boolean;
+  unresolved_reason: string | null;
+};
+
+export type AnswerEvidence = {
+  question_id: number;
+  question_node_id: number;
+  question_label: string | null;
+  state: AnswerEvidenceState;
+  state_reason: string | null;
+  assignment_version: number;
+  coverage_complete: boolean;
+  unresolved_block_count: number;
+  unassigned_block_count: number;
+  spans: AnswerEvidenceSpan[];
+};
+
+export type SubmissionAnswerEvidence = {
+  submission_id: number;
+  script_transcript_id: number;
+  summary: {
+    states: Record<AnswerEvidenceState, number>;
+    review_ready: boolean;
+    blocked_states: Partial<Record<AnswerEvidenceState, number>>;
+  };
+  evidence: AnswerEvidence[];
+  unassigned_blocks: ScriptTranscriptBlock[];
+};
+
+export type ScriptTranscriptBlockRevision = {
+  revision: number;
+  previous_text: string;
+  new_text: string;
+  reason: string | null;
+  created_at: string;
+};
+
+export async function fetchScriptTranscript(submissionId: number) {
+  return apiRequest<ScriptTranscript>(`/submissions/${submissionId}/script-transcript`);
+}
+
+export async function fetchAnswerEvidence(submissionId: number) {
+  return apiRequest<SubmissionAnswerEvidence>(`/submissions/${submissionId}/answer-evidence`);
+}
+
+export async function correctTranscriptBlock(
+  blockId: number,
+  body: { edited_text: string; reason?: string | null },
+) {
+  return apiRequest<ScriptTranscriptBlock>(`/script-transcript-blocks/${blockId}`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+export async function fetchTranscriptBlockRevisions(blockId: number) {
+  return apiRequest<ScriptTranscriptBlockRevision[]>(
+    `/script-transcript-blocks/${blockId}/revisions`,
+  );
+}
+
+export async function reconcileTranscriptPage(
+  pageTranscriptId: number,
+  body: { resolution: "failed" | "missing_page"; note: string },
+) {
+  return apiRequest<ScriptTranscriptPage>(
+    `/script-transcript-pages/${pageTranscriptId}/reconcile`,
+    { method: "POST", body },
+  );
+}
+
+// Re-derives question assignment from the stored transcript. Makes no provider
+// request, which is the whole reason the transcript is stored.
+export async function rederiveAnswerEvidence(submissionId: number) {
+  return apiRequest<SubmissionAnswerEvidence>(
+    `/submissions/${submissionId}/answer-evidence/rederive`,
+    { method: "POST" },
+  );
+}

@@ -18,6 +18,7 @@ from app.api.routes.ocr import router as ocr_router
 from app.api.routes.question_imports import router as question_imports_router
 from app.api.routes.questions import router as questions_router
 from app.api.routes.rubrics import router as rubrics_router
+from app.api.routes.script_transcripts import router as script_transcripts_router
 from app.api.routes.submissions import router as submissions_router
 from app.api.routes.users import router as users_router
 from app.core.config import get_settings
@@ -49,6 +50,7 @@ app.include_router(extraction_runs_router)
 app.include_router(rubrics_router)
 app.include_router(submissions_router)
 app.include_router(answer_regions_router)
+app.include_router(script_transcripts_router)
 app.include_router(bulk_evaluations_router)
 app.include_router(ocr_router)
 app.include_router(evidence_prep_router)

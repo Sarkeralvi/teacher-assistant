@@ -2143,6 +2143,28 @@ def _operator_asset_metadata(expected_qwen_model: str) -> OperatorAssetMetadata:
         ) from exc
 
 
+def _application_migration_head() -> str:
+    """Read the expected head from the migrations themselves.
+
+    This was a literal revision id, which is one fact kept in two places: the
+    same pattern left ``scripts/bulk_supervised_live_smoke.py`` pinned to 0026
+    long after the application moved past it. Deriving it keeps the gate exact
+    without needing an edit on every migration, and a missing or ambiguous
+    migration tree fails the gate closed rather than passing it.
+    """
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    api_root = Path(__file__).resolve().parents[2]
+    heads = ScriptDirectory.from_config(Config(str(api_root / "alembic.ini"))).get_heads()
+    if len(heads) != 1:
+        raise LocalCuratedEvaluationError(
+            "The application migration tree does not have exactly one head"
+        )
+    return heads[0]
+
+
 def _database_is_migrated_and_empty(session_factory: Any) -> None:
     from sqlalchemy import func, select, text
 
@@ -2163,8 +2185,11 @@ def _database_is_migrated_and_empty(session_factory: Any) -> None:
             raise LocalCuratedEvaluationError(
                 "Evaluation database is not migrated to the application schema"
             ) from exc
-        if revision != "0030_grading_run_brain_profile":
-            raise LocalCuratedEvaluationError("Evaluation database is not at migration head 0030")
+        expected_head = _application_migration_head()
+        if revision != expected_head:
+            raise LocalCuratedEvaluationError(
+                f"Evaluation database is not at migration head {expected_head}"
+            )
         populated_models = [
             model.__name__
             for model in (

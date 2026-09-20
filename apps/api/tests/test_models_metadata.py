@@ -358,6 +358,11 @@ EXPECTED_COLUMNS = {
         "needs_review",
         "feedback",
         "cost_estimate",
+        # A draft now records which evidence it was graded against, and whether
+        # that evidence has since moved.
+        "source_evidence_fingerprint",
+        "superseded_at",
+        "superseded_reason",
         "created_at",
     },
     "final_grades": {

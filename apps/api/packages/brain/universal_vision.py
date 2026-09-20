@@ -21,7 +21,6 @@ from packages.brain.schemas_qwen38 import (
     VisualTranscriptionOutput,
 )
 
-
 logger = logging.getLogger(__name__)
 
 

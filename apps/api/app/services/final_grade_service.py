@@ -27,6 +27,10 @@ from app.schemas import (
     ReviewQueueSubmission,
     SubmissionGradeTotalRead,
 )
+from app.services.evidence_invalidation import (
+    EvidenceChangedError,
+    EvidenceInvalidationService,
+)
 
 
 class FinalGradeService:
@@ -191,6 +195,20 @@ class FinalGradeService:
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="final_score cannot exceed suggestion max_score",
             )
+        # Re-checked here, at the irreversible step, rather than trusting that
+        # whatever changed the evidence remembered to invalidate the draft.
+        # Rejecting a draft outright stays allowed: refusing to record that a
+        # teacher rejected stale evidence would be the wrong way round.
+        if approval_status != "rejected":
+            try:
+                EvidenceInvalidationService(self.db).assert_suggestion_matches_current_evidence(
+                    suggestion
+                )
+            except EvidenceChangedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
 
         existing = self.db.scalars(
             select(FinalGrade).where(FinalGrade.answer_region_id == region.id)

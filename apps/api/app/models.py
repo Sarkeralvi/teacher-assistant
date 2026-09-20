@@ -1067,6 +1067,379 @@ class AnswerRegionMapping(TimestampMixin, Base):
     answer_region: Mapped[AnswerRegion | None] = relationship(back_populates="mapping_links")
 
 
+class ScriptTranscript(TimestampMixin, Base):
+    """One durable, question-independent read of a complete script.
+
+    Keyed by the submission plus everything that could change what the model
+    would read, so the same source under the same settings is never read twice
+    and a changed model, prompt, schema, preprocessing setting or source page
+    can never silently reuse the previous transcript.
+    """
+
+    __tablename__ = "script_transcripts"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('in_progress', 'complete', 'failed', 'superseded')",
+            name="ck_script_transcript_status",
+        ),
+        CheckConstraint("page_count >= 0", name="ck_script_transcript_page_count"),
+        UniqueConstraint(
+            "submission_id",
+            "settings_fingerprint",
+            "source_manifest_sha256",
+            name="uq_script_transcript_submission_settings",
+        ),
+        Index("ix_script_transcripts_submission_id", "submission_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    settings_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    preprocessing_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
+
+    submission: Mapped[Submission] = relationship()
+    pages: Mapped[list[ScriptPageTranscript]] = relationship(
+        back_populates="transcript",
+        cascade="all, delete-orphan",
+        order_by="ScriptPageTranscript.page_order",
+    )
+
+
+class ScriptPageTranscript(TimestampMixin, Base):
+    """One source page's terminal read state, committed as soon as it succeeds.
+
+    ``state`` is about the *read*, never about a question. A page that did not
+    succeed cannot claim to be blank, which is what stops "no answer found"
+    being reconstructed from a failure downstream.
+    """
+
+    __tablename__ = "script_page_transcripts"
+    __table_args__ = (
+        CheckConstraint(
+            "state in ('succeeded', 'unreadable', 'missing_page', 'failed', "
+            "'dispatched', 'unknown_outcome')",
+            name="ck_script_page_transcript_state",
+        ),
+        CheckConstraint("page_no > 0", name="ck_script_page_transcript_page_no"),
+        CheckConstraint("page_order >= 0", name="ck_script_page_transcript_page_order"),
+        CheckConstraint(
+            "provider_request_count >= 0",
+            name="ck_script_page_transcript_request_count",
+        ),
+        CheckConstraint("repair_pass >= 0", name="ck_script_page_transcript_repair_pass"),
+        CheckConstraint(
+            "state = 'succeeded' or is_blank_page = false",
+            name="ck_script_page_transcript_blank_requires_success",
+        ),
+        CheckConstraint(
+            "state in ('succeeded', 'dispatched') or error is not null",
+            name="ck_script_page_transcript_failure_has_reason",
+        ),
+        CheckConstraint(
+            "state <> 'dispatched' or (reservation_id is not null and reserved_at is not null)",
+            name="ck_script_page_transcript_reservation_is_complete",
+        ),
+        UniqueConstraint(
+            "script_transcript_id",
+            "submission_page_id",
+            name="uq_script_page_transcript_page",
+        ),
+        Index("ix_script_page_transcripts_transcript_id", "script_transcript_id"),
+        Index("ix_script_page_transcripts_submission_page_id", "submission_page_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    script_transcript_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_page_id: Mapped[int] = mapped_column(
+        ForeignKey("submission_pages.id", ondelete="CASCADE"), nullable=False
+    )
+    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_blank_page: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_request_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    repair_pass: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raw_output_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The claim taken before the request is dispatched. The unique constraint on
+    # (transcript, page) is what makes this the concurrency control: a second
+    # worker cannot insert a competing claim for the same page.
+    reservation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reserved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reserved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    transcript: Mapped[ScriptTranscript] = relationship(back_populates="pages")
+    page: Mapped[SubmissionPage] = relationship()
+    blocks: Mapped[list[ScriptTranscriptBlock]] = relationship(
+        back_populates="page_transcript",
+        cascade="all, delete-orphan",
+        order_by="ScriptTranscriptBlock.block_index",
+    )
+
+
+class ScriptTranscriptBlock(TimestampMixin, Base):
+    """One verbatim block of source writing, in reading order.
+
+    ``bbox_json`` is auxiliary navigation geometry. Question identity is
+    derived from ``question_label_raw``/``observed_heading_text`` and reading
+    order, never from a box.
+    """
+
+    __tablename__ = "script_transcript_blocks"
+    __table_args__ = (
+        CheckConstraint(
+            "label_source in ('heading', 'continuation', 'inferred')",
+            name="ck_script_transcript_block_label_source",
+        ),
+        CheckConstraint("block_index >= 0", name="ck_script_transcript_block_index"),
+        CheckConstraint("reading_order >= 0", name="ck_script_transcript_block_reading_order"),
+        CheckConstraint(
+            "unresolved = false or unresolved_reason is not null",
+            name="ck_script_transcript_block_unresolved_has_reason",
+        ),
+        CheckConstraint(
+            "question_label_raw is not null or label_source = 'continuation'",
+            name="ck_script_transcript_block_unlabelled_is_continuation",
+        ),
+        CheckConstraint("revision >= 0", name="ck_script_transcript_block_revision"),
+        CheckConstraint(
+            "edited_text is null or (edited_at is not null and revision > 0)",
+            name="ck_script_transcript_block_edit_is_attributed",
+        ),
+        UniqueConstraint(
+            "script_page_transcript_id",
+            "block_index",
+            name="uq_script_transcript_block_index",
+        ),
+        Index("ix_script_transcript_blocks_page_transcript_id", "script_page_transcript_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    script_page_transcript_id: Mapped[int] = mapped_column(
+        ForeignKey("script_page_transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    block_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    reading_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_heading_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    question_label_raw: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    label_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    continues_from_previous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    bbox_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    unresolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unresolved_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # ``text`` stays the verbatim provider output forever. A teacher's
+    # correction lives here, so a model error stays distinguishable from a
+    # human fix and reuse cannot mistake one for the other.
+    edited_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    edited_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    page_transcript: Mapped[ScriptPageTranscript] = relationship(back_populates="blocks")
+    revisions: Mapped[list[ScriptTranscriptBlockRevision]] = relationship(
+        back_populates="block",
+        cascade="all, delete-orphan",
+        order_by="ScriptTranscriptBlockRevision.revision",
+    )
+
+    @property
+    def effective_text(self) -> str:
+        """What a reviewer and the grader should read: the correction if any."""
+
+        return self.edited_text if self.edited_text is not None else self.text
+
+
+class ScriptTranscriptBlockRevision(Base):
+    """One teacher correction to one block, appended and never replaced."""
+
+    __tablename__ = "script_transcript_block_revisions"
+    __table_args__ = (
+        CheckConstraint("revision > 0", name="ck_block_revision_number"),
+        UniqueConstraint(
+            "script_transcript_block_id", "revision", name="uq_block_revision_number"
+        ),
+        Index("ix_block_revisions_block_id", "script_transcript_block_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    script_transcript_block_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcript_blocks.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_text: Mapped[str] = mapped_column(Text, nullable=False)
+    new_text: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    block: Mapped[ScriptTranscriptBlock] = relationship(back_populates="revisions")
+
+
+class AnswerEvidenceAssignment(TimestampMixin, Base):
+    """Which source blocks answer one canonical question, and how certain that is.
+
+    Versioned separately from the transcript so the assignment can be re-derived
+    against a newer canonical question structure without touching, or paying to
+    re-read, the source evidence.
+
+    ``state`` keeps the six outcomes distinct. ``answer_region_mappings`` cannot:
+    its CHECK admits only ``mapped|uncertain|blocked|teacher_confirmed``, so a
+    genuinely unanswered question was previously coerced to ``blocked`` and became
+    indistinguishable from a failure. The legacy status stays a projection of
+    this field.
+    """
+
+    __tablename__ = "answer_evidence_assignments"
+    __table_args__ = (
+        CheckConstraint(
+            "state in ('answer_present', 'no_answer_found', 'unreadable', "
+            "'ambiguous', 'missing_page', 'processing_failed')",
+            name="ck_answer_evidence_assignment_state",
+        ),
+        CheckConstraint("assignment_version > 0", name="ck_answer_evidence_assignment_version"),
+        CheckConstraint(
+            "unresolved_block_count >= 0 and unassigned_block_count >= 0",
+            name="ck_answer_evidence_assignment_counts",
+        ),
+        CheckConstraint(
+            "state <> 'no_answer_found' "
+            "or (coverage_complete = true and unassigned_block_count = 0)",
+            name="ck_answer_evidence_no_answer_requires_coverage",
+        ),
+        CheckConstraint(
+            "state = 'answer_present' or state_reason is not null",
+            name="ck_answer_evidence_non_present_has_reason",
+        ),
+        UniqueConstraint(
+            "script_transcript_id",
+            "question_node_id",
+            "assignment_version",
+            name="uq_answer_evidence_assignment_version",
+        ),
+        Index("ix_answer_evidence_assignments_submission_id", "submission_id"),
+        Index("ix_answer_evidence_assignments_transcript_id", "script_transcript_id"),
+        Index(
+            "ux_answer_evidence_assignments_current",
+            "script_transcript_id",
+            "question_node_id",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    script_transcript_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_node_id: Mapped[int] = mapped_column(
+        ForeignKey("question_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    assignment_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    state_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    coverage_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unresolved_block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unassigned_block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    transcript: Mapped[ScriptTranscript] = relationship()
+    question: Mapped[Question] = relationship()
+    question_node: Mapped[QuestionNode] = relationship()
+    spans: Mapped[list[AnswerEvidenceSpan]] = relationship(
+        back_populates="assignment",
+        cascade="all, delete-orphan",
+        order_by="AnswerEvidenceSpan.order_index",
+    )
+
+
+class AnswerEvidenceSpan(TimestampMixin, Base):
+    """One ordered reference into the stored source transcript.
+
+    Spans point at blocks; they never copy the text. That is what makes a quote
+    resolvable against the source rather than a second, drifting record of it.
+    Non-adjacent and cross-page segments are just further rows in order.
+    """
+
+    __tablename__ = "answer_evidence_spans"
+    __table_args__ = (
+        CheckConstraint("order_index >= 0", name="ck_answer_evidence_span_order"),
+        CheckConstraint("page_no > 0", name="ck_answer_evidence_span_page_no"),
+        CheckConstraint(
+            "(char_start is null) = (char_end is null)",
+            name="ck_answer_evidence_span_bounds_paired",
+        ),
+        CheckConstraint(
+            "char_start is null or (char_start >= 0 and char_end > char_start)",
+            name="ck_answer_evidence_span_bounds_ordered",
+        ),
+        CheckConstraint(
+            "assignment_basis in "
+            "('explicit_label', 'same_page_reading_order', 'declared_continuation')",
+            name="ck_answer_evidence_span_basis",
+        ),
+        UniqueConstraint("assignment_id", "order_index", name="uq_answer_evidence_span_order"),
+        Index("ix_answer_evidence_spans_assignment_id", "assignment_id"),
+        Index("ix_answer_evidence_spans_block_id", "script_transcript_block_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assignment_id: Mapped[int] = mapped_column(
+        ForeignKey("answer_evidence_assignments.id", ondelete="CASCADE"), nullable=False
+    )
+    script_transcript_block_id: Mapped[int] = mapped_column(
+        ForeignKey("script_transcript_blocks.id", ondelete="CASCADE"), nullable=False
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Which branch of the single ownership rule attached this block. An explicit
+    # label is checkable against the page; the other two are inheritances a
+    # teacher may want to look at.
+    assignment_basis: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="explicit_label"
+    )
+
+    assignment: Mapped[AnswerEvidenceAssignment] = relationship(back_populates="spans")
+    block: Mapped[ScriptTranscriptBlock] = relationship()
+
+
 class GradingJob(Base):
     __tablename__ = "grading_jobs"
     __table_args__ = (
@@ -1100,7 +1473,12 @@ class GradeSuggestion(Base):
             "marking_policy in ('tough', 'general', 'easy')",
             name="ck_grade_suggestions_marking_policy",
         ),
+        CheckConstraint(
+            "superseded_at is null or superseded_reason is not null",
+            name="ck_grade_suggestions_superseded_has_reason",
+        ),
         Index("ix_grade_suggestions_answer_region_id", "answer_region_id"),
+        Index("ix_grade_suggestions_superseded_at", "superseded_at"),
         UniqueConstraint("grading_job_id", name="uq_grade_suggestions_grading_job_id"),
     )
 
@@ -1128,6 +1506,14 @@ class GradeSuggestion(Base):
     needs_review: Mapped[bool] = mapped_column(nullable=False, default=True)
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_estimate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    # The exact source evidence this draft was graded against. Re-checked at
+    # finalization, so the gate does not rely on an invalidation hook having
+    # been called. Null means "not recorded" for rows that predate this.
+    source_evidence_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    superseded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
