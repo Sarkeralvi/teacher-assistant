@@ -310,6 +310,7 @@ EXPECTED_COLUMNS = {
         "run_id",
         "submission_id",
         "question_id",
+        "answer_evidence_assignment_id",
         "mapping_id",
         "answer_region_id",
         "transcription_run_id",
@@ -336,6 +337,7 @@ EXPECTED_COLUMNS = {
     "grading_jobs": {
         "id",
         "answer_region_id",
+        "answer_evidence_assignment_id",
         "status",
         "error",
         "created_at",
@@ -345,6 +347,7 @@ EXPECTED_COLUMNS = {
         "id",
         "grading_job_id",
         "answer_region_id",
+        "answer_evidence_assignment_id",
         "question_id",
         "rubric_id",
         "model_provider",

@@ -215,13 +215,14 @@ class BulkEvaluationRun(TimestampMixin, Base):
     __tablename__ = "bulk_evaluation_runs"
     __table_args__ = (
         CheckConstraint(
-            "status in ('preflighting', 'queued', 'mapping', 'transcribing', 'grading', "
+            "status in ('preflighting', 'queued', 'reading', 'mapping', 'transcribing', 'grading', "
             "'review_ready', 'completed_with_exceptions', 'completed', 'stopping', "
             "'stopped', 'paused', 'failed')",
             name="ck_bulk_evaluation_runs_status",
         ),
         CheckConstraint(
-            "stage in ('ingestion', 'mapping', 'evidence_verification', 'transcription', "
+            "stage in ('ingestion', 'reading', 'mapping', 'evidence_verification', "
+            "'transcription', "
             "'grading', 'review', 'complete')",
             name="ck_bulk_evaluation_runs_stage",
         ),
@@ -242,7 +243,7 @@ class BulkEvaluationRun(TimestampMixin, Base):
             "reference_bundle_sha256",
             unique=True,
             postgresql_where=text(
-                "status in ('preflighting', 'queued', 'mapping', 'transcribing', "
+                "status in ('preflighting', 'queued', 'reading', 'mapping', 'transcribing', "
                 "'grading', 'review_ready', 'stopping', 'paused')"
             ),
         ),
@@ -324,6 +325,9 @@ class BulkEvaluationItem(TimestampMixin, Base):
     )
     question_id: Mapped[int] = mapped_column(
         ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False
+    )
+    answer_evidence_assignment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_evidence_assignments.id", ondelete="SET NULL"), nullable=True
     )
     mapping_id: Mapped[int | None] = mapped_column(
         ForeignKey("answer_region_mappings.id", ondelete="SET NULL"), nullable=True
@@ -1148,6 +1152,16 @@ class ScriptPageTranscript(TimestampMixin, Base):
             "state <> 'dispatched' or (reservation_id is not null and reserved_at is not null)",
             name="ck_script_page_transcript_reservation_is_complete",
         ),
+        CheckConstraint(
+            "teacher_classification is null or "
+            "teacher_classification in ('answer_content', 'non_answer')",
+            name="ck_script_page_transcript_teacher_classification",
+        ),
+        CheckConstraint(
+            "teacher_classification is null or "
+            "(classified_at is not null and classified_by_teacher_id is not null)",
+            name="ck_script_page_transcript_classification_is_attributed",
+        ),
         UniqueConstraint(
             "script_transcript_id",
             "submission_page_id",
@@ -1189,6 +1203,17 @@ class ScriptPageTranscript(TimestampMixin, Base):
     reconciled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # A teacher may identify a successfully read page as cover/instructions or
+    # as answer-bearing. This is separate from ``is_blank_page``: a cover page
+    # contains text, but none of that text is student answer evidence.
+    teacher_classification: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    classification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    classified_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     transcript: Mapped[ScriptTranscript] = relationship(back_populates="pages")
     page: Mapped[SubmissionPage] = relationship()
@@ -1228,6 +1253,16 @@ class ScriptTranscriptBlock(TimestampMixin, Base):
             "edited_text is null or (edited_at is not null and revision > 0)",
             name="ck_script_transcript_block_edit_is_attributed",
         ),
+        CheckConstraint(
+            "assignment_override_revision >= 0",
+            name="ck_script_transcript_block_assignment_override_revision",
+        ),
+        CheckConstraint(
+            "assignment_override_active = false or "
+            "(assignment_edited_at is not null and assignment_edited_by_teacher_id is not null "
+            "and assignment_override_revision > 0)",
+            name="ck_script_transcript_block_assignment_override_is_attributed",
+        ),
         UniqueConstraint(
             "script_page_transcript_id",
             "block_index",
@@ -1260,6 +1295,25 @@ class ScriptTranscriptBlock(TimestampMixin, Base):
     edited_by_teacher_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # Preserve the provider's label and continuation claim above. These fields
+    # carry a teacher's explicit ownership decision and can deliberately hold
+    # a null label to leave writing unassigned.
+    assignment_override_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    teacher_question_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    teacher_continues_from_previous: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    assignment_override_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    assignment_edited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    assignment_edited_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     page_transcript: Mapped[ScriptPageTranscript] = relationship(back_populates="blocks")
     revisions: Mapped[list[ScriptTranscriptBlockRevision]] = relationship(
@@ -1273,6 +1327,18 @@ class ScriptTranscriptBlock(TimestampMixin, Base):
         """What a reviewer and the grader should read: the correction if any."""
 
         return self.edited_text if self.edited_text is not None else self.text
+
+    @property
+    def effective_question_label(self) -> str | None:
+        if self.assignment_override_active:
+            return self.teacher_question_label
+        return self.question_label_raw
+
+    @property
+    def effective_continues_from_previous(self) -> bool:
+        if self.assignment_override_active:
+            return bool(self.teacher_continues_from_previous)
+        return self.continues_from_previous
 
 
 class ScriptTranscriptBlockRevision(Base):
@@ -1455,6 +1521,9 @@ class GradingJob(Base):
     answer_region_id: Mapped[int] = mapped_column(
         ForeignKey("answer_regions.id", ondelete="CASCADE"), nullable=False
     )
+    answer_evidence_assignment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_evidence_assignments.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -1488,6 +1557,9 @@ class GradeSuggestion(Base):
     )
     answer_region_id: Mapped[int] = mapped_column(
         ForeignKey("answer_regions.id", ondelete="CASCADE"), nullable=False
+    )
+    answer_evidence_assignment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("answer_evidence_assignments.id", ondelete="SET NULL"), nullable=True
     )
     question_id: Mapped[int] = mapped_column(
         ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False

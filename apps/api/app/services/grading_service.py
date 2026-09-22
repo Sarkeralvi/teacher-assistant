@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import Settings, get_settings
 from app.models import (
+    AnswerEvidenceAssignment,
     AnswerRegion,
     AnswerRegionMapping,
     AnswerRegionOcrRun,
@@ -20,6 +21,7 @@ from app.models import (
     Rubric,
     Submission,
 )
+from app.services.answer_evidence_assignment import AnswerEvidenceAssignmentService
 from app.services.answer_region_processing import (
     create_composite_grading_context_image,
     crop_grading_context_image,
@@ -137,8 +139,7 @@ class GradingService:
                 else BrainAdapter()
             )
         provider_name = str(
-            getattr(getattr(self.adapter, "provider", None), "provider_name", "mock")
-            or "mock"
+            getattr(getattr(self.adapter, "provider", None), "provider_name", "mock") or "mock"
         )
         self.adapter = normalize_brain_adapter(
             self.adapter,
@@ -186,12 +187,15 @@ class GradingService:
             if question.assessment_id != submission.assessment_id:
                 blockers.append("answer region not linked to correct assessment/question")
         segments = _ordered_segments(region)
-        bulk_mapping_verified = self.db.scalar(
-            select(AnswerRegionMapping.id).where(
-                AnswerRegionMapping.answer_region_id == region.id,
-                AnswerRegionMapping.bulk_policy_verified.is_(True),
+        bulk_mapping_verified = (
+            self.db.scalar(
+                select(AnswerRegionMapping.id).where(
+                    AnswerRegionMapping.answer_region_id == region.id,
+                    AnswerRegionMapping.bulk_policy_verified.is_(True),
+                )
             )
-        ) is not None
+            is not None
+        )
         confirmed_segments = [
             segment for segment in segments if segment.confirmed or bulk_mapping_verified
         ]
@@ -205,8 +209,7 @@ class GradingService:
             _segment_near_page_bottom(segment) for segment in confirmed_segments
         )
         full_answer_confirmed = bool(
-            region.full_answer_confirmed
-            or region.full_answer_verification_source == "bulk_policy"
+            region.full_answer_confirmed or region.full_answer_verification_source == "bulk_policy"
         )
         if not continuation_suspected and page is not None:
             continuation_suspected = _rectangle_near_page_bottom(
@@ -265,9 +268,7 @@ class GradingService:
                 )
                 and final_intent_run is None
             ):
-                blockers.append(
-                    "Qwen3.8 final-intent Thinking transcription must be confirmed"
-                )
+                blockers.append("Qwen3.8 final-intent Thinking transcription must be confirmed")
             elif final_intent_run is None:
                 blockers.append("Qwen3.8 final-intent transcription must be confirmed")
             elif final_intent_run.confirmed_text != region.manual_answer_text:
@@ -349,9 +350,7 @@ class GradingService:
                     final_intent_run.prompt_version if final_intent_run is not None else None
                 ),
                 "thinking_repair_status": (
-                    latest_thinking_repair.status
-                    if latest_thinking_repair is not None
-                    else None
+                    latest_thinking_repair.status if latest_thinking_repair is not None else None
                 ),
                 "segment_count": len(confirmed_segments),
                 "pages_covered": pages_covered,
@@ -454,9 +453,7 @@ class GradingService:
             "errors": errors,
         }
 
-    def create_cohort_grading_jobs(
-        self, assessment_id: int, question_id: int
-    ) -> dict[str, object]:
+    def create_cohort_grading_jobs(self, assessment_id: int, question_id: int) -> dict[str, object]:
         """Question x cohort dispatch: create one queued GradingJob for every
         confirmed-ready answer region of a single question across the whole
         cohort. Readiness is re-checked per region right now (not from a
@@ -513,9 +510,7 @@ class GradingService:
             "refused": refused,
         }
 
-    def cohort_grade_summary(
-        self, assessment_id: int, question_id: int
-    ) -> dict[str, object]:
+    def cohort_grade_summary(self, assessment_id: int, question_id: int) -> dict[str, object]:
         """Read-only cohort consistency view for one question: the latest
         grade suggestion per answer region plus distribution stats and
         outlier flags. Flags are advisory only and never change any score;
@@ -613,12 +608,15 @@ class GradingService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Evidence packet not ready for grading: {', '.join(blockers)}",
             )
-        bulk_mapping_verified = self.db.scalar(
-            select(AnswerRegionMapping.id).where(
-                AnswerRegionMapping.answer_region_id == region.id,
-                AnswerRegionMapping.bulk_policy_verified.is_(True),
+        bulk_mapping_verified = (
+            self.db.scalar(
+                select(AnswerRegionMapping.id).where(
+                    AnswerRegionMapping.answer_region_id == region.id,
+                    AnswerRegionMapping.bulk_policy_verified.is_(True),
+                )
             )
-        ) is not None
+            is not None
+        )
         confirmed_segments = [
             segment
             for segment in _ordered_segments(region)
@@ -632,9 +630,7 @@ class GradingService:
         if not (region.manual_answer_text or "").strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Evidence packet not ready for grading: missing verified answer evidence"
-                ),
+                detail=("Evidence packet not ready for grading: missing verified answer evidence"),
             )
         return confirmed_segments
 
@@ -646,6 +642,39 @@ class GradingService:
         region = self._get_region(answer_region_id)
         self._check_readiness_or_raise(region)
         job = GradingJob(answer_region_id=region.id, status="queued")
+        self.db.add(job)
+        self.db.commit()
+        self.db.refresh(job)
+        return job
+
+    def create_queued_transcript_grading_job(
+        self,
+        *,
+        answer_region_id: int,
+        assignment_id: int,
+    ) -> GradingJob:
+        """Queue grading from durable transcript spans, without requiring a crop."""
+
+        region = self._get_region(answer_region_id)
+        assignment = self.db.get(AnswerEvidenceAssignment, assignment_id)
+        if (
+            assignment is None
+            or not assignment.is_current
+            or assignment.submission_id != region.submission_id
+            or assignment.question_id != region.question_id
+            or assignment.state != "answer_present"
+            or not assignment.coverage_complete
+            or not assignment.spans
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Transcript evidence is not ready for grading",
+            )
+        job = GradingJob(
+            answer_region_id=region.id,
+            answer_evidence_assignment_id=assignment.id,
+            status="queued",
+        )
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
@@ -680,12 +709,18 @@ class GradingService:
                 detail=f"Grading job {job.id} already finished with status '{job.status}'",
             )
         region = self._get_region(job.answer_region_id)
+        transcript_assignment = (
+            self.db.get(AnswerEvidenceAssignment, job.answer_evidence_assignment_id)
+            if job.answer_evidence_assignment_id is not None
+            else None
+        )
         return self._grade_region(
             region,
             marking_policy=marking_policy,
             job=job,
             expected_rubric_id=expected_rubric_id,
             expected_rubric_hash=expected_rubric_hash,
+            transcript_assignment=transcript_assignment,
         )
 
     def _grade_region(
@@ -696,8 +731,24 @@ class GradingService:
         job: GradingJob | None = None,
         expected_rubric_id: int | None = None,
         expected_rubric_hash: str | None = None,
+        transcript_assignment: AnswerEvidenceAssignment | None = None,
     ) -> tuple[GradingJob, GradeSuggestion]:
-        confirmed_segments = self._check_readiness_or_raise(region)
+        if transcript_assignment is None:
+            confirmed_segments = self._check_readiness_or_raise(region)
+        else:
+            if (
+                not transcript_assignment.is_current
+                or transcript_assignment.submission_id != region.submission_id
+                or transcript_assignment.question_id != region.question_id
+                or transcript_assignment.state != "answer_present"
+                or not transcript_assignment.coverage_complete
+                or not transcript_assignment.spans
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Transcript evidence changed before provider execution",
+                )
+            confirmed_segments = []
         settings = get_settings()
         rubric = self._get_active_rubric(region.question_id)
         if expected_rubric_id is not None and rubric.id != expected_rubric_id:
@@ -718,14 +769,31 @@ class GradingService:
             rubric_payload["model_answer"] = region.question.model_answer
         question_text = region.question.question_text
         question_total_marks = Decimal(region.question.total_marks)
-        student_answer_text = region.manual_answer_text
+        if transcript_assignment is None:
+            student_answer_text = region.manual_answer_text
+        else:
+            assignment_service = AnswerEvidenceAssignmentService(self.db)
+            student_answer_text = "\n\n".join(
+                assignment_service.resolve_span_text(span)
+                for span in sorted(
+                    transcript_assignment.spans,
+                    key=lambda item: item.order_index,
+                )
+            ).strip()
+            if not student_answer_text:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Transcript evidence contains no readable answer text",
+                )
         pinned_rubric_id = rubric.id
-        evidence_packet_hash = canonical_json_hash(
-            self.get_grading_evidence_packet(region.id)
+        evidence_fingerprint = EvidenceInvalidationService(self.db).fingerprint_for_region(region)
+        evidence_packet_hash = (
+            canonical_json_hash(self.get_grading_evidence_packet(region.id))
+            if transcript_assignment is None
+            else evidence_fingerprint
         )
         provider_name = str(
-            getattr(getattr(self.adapter, "provider", None), "provider_name", "mock")
-            or "mock"
+            getattr(getattr(self.adapter, "provider", None), "provider_name", "mock") or "mock"
         )
         self.adapter = normalize_brain_adapter(
             self.adapter,
@@ -734,7 +802,21 @@ class GradingService:
         )
 
         # Text-only providers do not need a second student-data artifact.
-        if not self.adapter.image_input_enabled:
+        if transcript_assignment is not None:
+            grading_answer_image_path = "[stored transcript evidence; image input disabled]"
+            grading_context = {
+                "evidence_source": "script_transcript",
+                "answer_evidence_assignment_id": transcript_assignment.id,
+                "assignment_version": transcript_assignment.assignment_version,
+                "page_numbers": [
+                    span.page_no
+                    for span in sorted(
+                        transcript_assignment.spans,
+                        key=lambda item: item.order_index,
+                    )
+                ],
+            }
+        elif not self.adapter.image_input_enabled:
             grading_answer_image_path = "[image input disabled]"
             grading_context: dict[str, object] | None = None
         else:
@@ -759,9 +841,13 @@ class GradingService:
                 holder_kind="grading",
                 holder_id=lease_holder_id,
             ) as execution:
-                if self.adapter.runtime.is_managed_local and (
+                current_evidence_hash = (
                     canonical_json_hash(self.get_grading_evidence_packet(region.id))
-                    != evidence_packet_hash
+                    if transcript_assignment is None
+                    else EvidenceInvalidationService(self.db).fingerprint_for_region(region)
+                )
+                if self.adapter.runtime.is_managed_local and (
+                    current_evidence_hash != evidence_packet_hash
                 ):
                     raise GradingEvidenceChangedError(
                         "Grading evidence changed while the brain provider was starting"
@@ -773,6 +859,7 @@ class GradingService:
                     answer_image_path=grading_answer_image_path,
                     student_answer_text=student_answer_text,
                     marking_policy=marking_policy,
+                    image_input_enabled=transcript_assignment is None,
                 )
                 execution.heartbeat()
             output = adapter_output.model_dump(mode="json")
@@ -808,10 +895,16 @@ class GradingService:
                 confidence = confidence_value
             raw_response = grade_result
             review_flags = list(raw_response.get("review_flags") or [])
-            if grading_context is not None and "grading_crop_padded" not in review_flags:
+            if (
+                grading_context is not None
+                and transcript_assignment is None
+                and "grading_crop_padded" not in review_flags
+            ):
                 review_flags.append("grading_crop_padded")
             if len(confirmed_segments) > 1 and "multi_segment_context" not in review_flags:
                 review_flags.append("multi_segment_context")
+            if transcript_assignment is not None and "transcript_evidence" not in review_flags:
+                review_flags.append("transcript_evidence")
             policy_flag = f"marking_policy:{marking_policy}"
             if policy_flag not in review_flags:
                 review_flags.append(policy_flag)
@@ -831,6 +924,9 @@ class GradingService:
             suggestion = GradeSuggestion(
                 grading_job_id=job.id,
                 answer_region_id=region.id,
+                answer_evidence_assignment_id=(
+                    transcript_assignment.id if transcript_assignment is not None else None
+                ),
                 question_id=region.question_id,
                 rubric_id=pinned_rubric_id,
                 model_provider=model_provider,
@@ -847,9 +943,7 @@ class GradingService:
                 # Bind the draft to the evidence it was actually graded on, so
                 # a later change to the source, the assignment, the solution or
                 # the rubric cannot leave it looking current.
-                source_evidence_fingerprint=EvidenceInvalidationService(
-                    self.db
-                ).fingerprint_for_region(region),
+                source_evidence_fingerprint=evidence_fingerprint,
             )
             job.status = "succeeded"
             job.completed_at = datetime.now(UTC)
@@ -1039,9 +1133,7 @@ class GradingService:
             for mapping in mappings
         )
 
-    def _confirmed_final_intent_run(
-        self, region: AnswerRegion
-    ) -> AnswerRegionOcrRun | None:
+    def _confirmed_final_intent_run(self, region: AnswerRegion) -> AnswerRegionOcrRun | None:
         latest_source = self._latest_final_intent_source_run(region)
         if latest_source is None:
             return None
@@ -1050,9 +1142,7 @@ class GradingService:
             return repair
         return latest_source if latest_source.status == "confirmed" else None
 
-    def _latest_final_intent_source_run(
-        self, region: AnswerRegion
-    ) -> AnswerRegionOcrRun | None:
+    def _latest_final_intent_source_run(self, region: AnswerRegion) -> AnswerRegionOcrRun | None:
         """The transcription this region's grade must be traceable to.
 
         Two profiles can produce it. ``qwen38_verbatim_visual`` is the two-pass
@@ -1084,9 +1174,7 @@ class GradingService:
             .order_by(AnswerRegionOcrRun.id.desc())
         ).first()
 
-    def _latest_thinking_repair(
-        self, region: AnswerRegion
-    ) -> AnswerRegionOcrRun | None:
+    def _latest_thinking_repair(self, region: AnswerRegion) -> AnswerRegionOcrRun | None:
         latest_source = self._latest_final_intent_source_run(region)
         if latest_source is None:
             return None
@@ -1095,9 +1183,7 @@ class GradingService:
             .where(
                 AnswerRegionOcrRun.answer_region_id == region.id,
                 AnswerRegionOcrRun.profile == "qwen38_thinking_repair",
-                AnswerRegionOcrRun.prompt_version.in_(
-                    SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS
-                ),
+                AnswerRegionOcrRun.prompt_version.in_(SUPPORTED_THINKING_REPAIR_PROMPT_VERSIONS),
             )
             .order_by(AnswerRegionOcrRun.id.desc())
         ).all()
@@ -1105,8 +1191,7 @@ class GradingService:
             (
                 repair
                 for repair in repairs
-                if (repair.normalized_result or {}).get("source_run_id")
-                == latest_source.id
+                if (repair.normalized_result or {}).get("source_run_id") == latest_source.id
             ),
             None,
         )

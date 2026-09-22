@@ -59,6 +59,7 @@ class _AgyResponse(BaseModel):
 
     status: str
     response: str = ""
+    structured_output: dict[str, Any] | None = None
     usage: _AgyUsage = Field(default_factory=_AgyUsage)
     error: str | None = None
     denied_actions: list[dict[str, Any]] = Field(default_factory=list)
@@ -233,12 +234,21 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             if response_obj.denied_actions:
                 error = f"{error} (denied actions: {response_obj.denied_actions})"
             raise RuntimeError(f"agy returned status {response_obj.status}: {error}")
-        if not response_obj.response.strip():
-            raise RuntimeError("agy returned an empty response with SUCCESS status")
-        return (
-            _extract_first_json_object(response_obj.response),
-            response_obj.usage.model_dump(),
-        )
+        # The structured field is the canonical result when present. The text
+        # field may contain commentary or a different rendering of that result.
+        # Keep empty objects for downstream schema validation: absence of an
+        # answer envelope never proves that a source page is blank.
+        if response_obj.structured_output:
+            payload = json.dumps(response_obj.structured_output)
+        elif response_obj.response.strip():
+            payload = _extract_first_json_object(response_obj.response)
+        elif response_obj.structured_output is not None:
+            payload = json.dumps(response_obj.structured_output)
+        else:
+            raise RuntimeError(
+                "agy returned SUCCESS with neither a response nor structured output"
+            )
+        return payload, response_obj.usage.model_dump()
 
 
 def _agy_compatible_schema(schema: dict[str, Any]) -> dict[str, Any]:

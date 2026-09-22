@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  classifyTranscriptPage,
   correctTranscriptBlock,
   fetchAnswerEvidence,
   fetchScriptTranscript,
   fetchTranscriptBlockRevisions,
+  overrideTranscriptBlockAssignment,
   reconcileTranscriptPage,
   rederiveAnswerEvidence,
   type AnswerEvidence,
@@ -16,6 +18,7 @@ import {
   type ScriptTranscriptBlockRevision,
   type SubmissionAnswerEvidence,
 } from "../lib/api";
+import { AuthenticatedSubmissionPageImage } from "./AuthenticatedSubmissionPageImage";
 
 // Every state is named for the teacher rather than shown as a raw enum, and
 // each one says what it does NOT mean. "No answer found" is the only state that
@@ -61,6 +64,9 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
   const [draftReason, setDraftReason] = useState("");
   const [revisions, setRevisions] = useState<Record<number, ScriptTranscriptBlockRevision[]>>({});
   const [reconcileNote, setReconcileNote] = useState("");
+  const [assignmentDrafts, setAssignmentDrafts] = useState<
+    Record<number, { label: string; continues: boolean }>
+  >({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -160,6 +166,50 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
       setNotice("Question assignment re-derived from the stored transcript. No page was read again.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not re-derive the assignment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAssignment(block: ScriptTranscriptBlock) {
+    const draft = assignmentDrafts[block.id] ?? {
+      label: block.effective_question_label ?? "",
+      continues: block.effective_continues_from_previous,
+    };
+    setBusy(true);
+    setError(null);
+    try {
+      await overrideTranscriptBlockAssignment(block.id, {
+        question_label: draft.label || null,
+        continues_from_previous: draft.continues,
+      });
+      await rederiveAnswerEvidence(submissionId);
+      setNotice("Evidence ownership updated from the saved transcript. No page was read again.");
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update evidence ownership.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function classifyPage(
+    pageId: number,
+    classification: "answer_content" | "non_answer" | null,
+  ) {
+    setBusy(true);
+    setError(null);
+    try {
+      await classifyTranscriptPage(pageId, { classification });
+      await rederiveAnswerEvidence(submissionId);
+      setNotice(
+        classification === "non_answer"
+          ? "Page kept in the transcript and excluded from answer evidence."
+          : "Page classification updated and evidence re-derived without another model call.",
+      );
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not classify the page.");
     } finally {
       setBusy(false);
     }
@@ -368,7 +418,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
           own text beside yours.
         </p>
         {transcript.pages.map((page) => (
-          <article key={page.id} className="mt-4" data-testid={`page-${page.page_no}`}>
+          <article key={page.id} className="mt-6" data-testid={`page-${page.page_no}`}>
             <h3 className="text-sm font-semibold">
               {`Page ${page.page_no}`}{" "}
               <span className="font-normal text-slate-500">
@@ -380,12 +430,49 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                 {page.error}
               </p>
             ) : null}
-            <ul className="mt-2 space-y-2">
+            {page.state === "succeeded" ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-600">Page role:</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  className={`rounded border px-2 py-1 ${page.teacher_classification === "answer_content" ? "border-emerald-700 bg-emerald-50" : "border-slate-300"}`}
+                  onClick={() => void classifyPage(page.id, "answer_content")}
+                >
+                  Contains answer work
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  className={`rounded border px-2 py-1 ${page.teacher_classification === "non_answer" ? "border-amber-700 bg-amber-50" : "border-slate-300"}`}
+                  onClick={() => void classifyPage(page.id, "non_answer")}
+                  data-testid={`page-non-answer-${page.page_no}`}
+                >
+                  Cover / instructions / non-answer
+                </button>
+                {page.teacher_classification ? (
+                  <button type="button" disabled={busy} className="underline" onClick={() => void classifyPage(page.id, null)}>
+                    Clear decision
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="mt-3 grid gap-4 lg:grid-cols-2">
+              <AuthenticatedSubmissionPageImage
+                pageId={page.submission_page_id}
+                label={`Complete source page ${page.page_no}`}
+              />
+              <ul className="space-y-2">
               {page.blocks.map((block) => (
                 <li key={block.id} className="rounded border border-slate-200 p-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>{block.question_label_raw ?? "no heading read"}</span>
                     <span>· {block.label_source}</span>
+                    {block.assignment_override_active ? (
+                      <span className="font-medium text-indigo-700">
+                        {`· teacher: ${block.effective_question_label ?? "unassigned"}`}
+                      </span>
+                    ) : null}
                     {block.revision > 0 ? (
                       <span data-testid={`block-revision-${block.id}`}>
                         · corrected (v{block.revision})
@@ -462,6 +549,54 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                           </button>
                         ) : null}
                       </div>
+                      <div className="mt-3 grid gap-2 rounded bg-slate-50 p-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                        <label>
+                          Evidence owner
+                          <select
+                            className="mt-1 w-full rounded border border-slate-300 bg-white p-1"
+                            value={(assignmentDrafts[block.id]?.label ?? block.effective_question_label) || ""}
+                            onChange={(event) =>
+                              setAssignmentDrafts((current) => ({
+                                ...current,
+                                [block.id]: {
+                                  label: event.target.value,
+                                  continues: current[block.id]?.continues ?? block.effective_continues_from_previous,
+                                },
+                              }))
+                            }
+                          >
+                            <option value="">Leave unassigned</option>
+                            {evidence?.evidence.map((item) =>
+                              item.question_label ? <option key={item.question_id} value={item.question_label}>{item.question_label}</option> : null,
+                            )}
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={assignmentDrafts[block.id]?.continues ?? block.effective_continues_from_previous}
+                            onChange={(event) =>
+                              setAssignmentDrafts((current) => ({
+                                ...current,
+                                [block.id]: {
+                                  label: current[block.id]?.label ?? block.effective_question_label ?? "",
+                                  continues: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          Continues from previous page
+                        </label>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded border border-slate-400 px-2 py-1"
+                          onClick={() => void saveAssignment(block)}
+                          data-testid={`block-assign-${block.id}`}
+                        >
+                          Save owner
+                        </button>
+                      </div>
                       {revisions[block.id] ? (
                         <ol className="mt-1 space-y-1 text-xs text-slate-600">
                           {revisions[block.id].map((revision) => (
@@ -476,7 +611,8 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                   )}
                 </li>
               ))}
-            </ul>
+              </ul>
+            </div>
           </article>
         ))}
       </section>

@@ -12,12 +12,15 @@ import pytest
 
 from app.core.config import get_settings
 from app.models import (
+    AnswerEvidenceAssignment,
+    AnswerEvidenceSpan,
     AnswerRegion,
     AnswerRegionMapping,
     AnswerRegionOcrRun,
     AnswerRegionSegment,
     BulkEvaluationItem,
     BulkEvaluationRun,
+    ScriptTranscript,
     Submission,
     User,
 )
@@ -686,34 +689,9 @@ def test_page_read_resume_item_reuses_persisted_evidence_without_spending_a_call
     assert resumed is item
     assert item.status == "pending"
     assert item.stage == "read"
-    assert run.status == "mapping"
+    assert run.status == "reading"
     assert run.calls_used == 720
 
-    # Simulate the next worker unit after restart. Existing mappings plus the
-    # confirmed page-read artifact must take the reuse branch rather than call
-    # LocalScriptPageReadService again.
-    submission = Submission(id=62, pages=[])
-    teacher = User(id=1)
-    db.scalar.return_value = submission
-    db.scalars.return_value.all.return_value = [item]
-    db.get.side_effect = lambda model, _id: teacher if model is User else None
-    service._next_read_submission = MagicMock(return_value=62)
-    service._existing_submission_mappings = MagicMock(return_value=[mapping])
-    service._page_read_runs_by_question = MagicMock(return_value={72: transcript})
-    service._overlapping_question_ids = MagicMock(return_value=set())
-    service._accept_or_quarantine_transcription = MagicMock()
-    page_read = MagicMock()
-    monkeypatch.setattr(
-        "app.services.bulk_evaluation_service.LocalScriptPageReadService",
-        page_read,
-    )
-
-    service._process_read(run)
-
-    page_read.assert_not_called()
-    assert run.calls_used == 720
-    assert item.mapping_id == 201
-    assert item.answer_region_id == 101
 
 
 def test_page_read_resume_preserves_teacher_confirmed_thinking_repair() -> None:
@@ -777,15 +755,15 @@ def test_page_read_resume_preserves_teacher_confirmed_thinking_repair() -> None:
     assert run.calls_used == 4
 
 
-def test_resumed_page_read_with_preserved_edits_advances_to_transcription(
+def test_resumed_page_read_uses_stored_assignment_and_skips_crop_transcription(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = MagicMock()
     run = BulkEvaluationRun(
         id=4,
         created_by_teacher_id=1,
-        status="mapping",
-        stage="mapping",
+        status="reading",
+        stage="reading",
         authorized_call_limit=16,
         calls_used=2,
         import_manifest={"visual_evidence_path": "page_read"},
@@ -795,45 +773,56 @@ def test_resumed_page_read_with_preserved_edits_advances_to_transcription(
         run_id=4,
         submission_id=62,
         question_id=72,
+        answer_region_id=101,
         status="pending",
         stage="read",
         exception_codes=[],
         warnings=[],
     )
     region = AnswerRegion(id=101, question_id=72, segments=[])
-    mapping = AnswerRegionMapping(
-        id=201,
+    source_transcript = ScriptTranscript(id=901, source_manifest_sha256="a" * 64)
+    assignment = AnswerEvidenceAssignment(
+        id=777,
+        script_transcript_id=901,
         submission_id=62,
         question_id=72,
-        answer_region_id=101,
-        answer_region=region,
-        confidence=Decimal("0.83"),
-        teacher_confirmed=True,
-        blocker_reason="Qwen marked this mapping uncertain",
-        source_reference={
-            "warnings": ["inferred_question_label_requires_teacher_review"]
-        },
+        question_node_id=82,
+        assignment_version=1,
+        state="answer_present",
+        coverage_complete=True,
+        is_current=True,
     )
-    transcript = AnswerRegionOcrRun(
-        id=555,
-        answer_region_id=101,
-        profile="qwen38_visual_page_read",
-        status="succeeded",
-        draft_text="[visibly crossed] x=3\nx=4",
-        normalized_result={"confidence": "0.95", "requires_thinking_repair": True},
-    )
+    assignment.spans = [
+        AnswerEvidenceSpan(
+            script_transcript_block_id=444,
+            page_no=1,
+            order_index=0,
+            assignment_basis="explicit_label",
+        )
+    ]
     submission = Submission(id=62, pages=[])
     teacher = User(id=1)
     db.scalar.return_value = submission
-    db.scalars.return_value.all.return_value = [item]
-    db.get.side_effect = lambda model, _id: teacher if model is User else None
+    item_rows = MagicMock()
+    item_rows.all.return_value = [item]
+    assignment_rows = MagicMock()
+    assignment_rows.all.return_value = [assignment]
+    db.scalars.side_effect = [item_rows, assignment_rows]
+    db.get.side_effect = lambda model, _id: {
+        User: teacher,
+        ScriptTranscript: source_transcript,
+        AnswerRegion: region,
+    }.get(model)
     service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
     service._next_read_submission = MagicMock(return_value=62)
-    service._existing_submission_mappings = MagicMock(return_value=[mapping])
-    service._page_read_runs_by_question = MagicMock(return_value={72: transcript})
-    service._overlapping_question_ids = MagicMock(return_value=set())
+    service._policy_for_run = MagicMock(return_value=SimpleNamespace(adapter=object()))
     service._accept_or_quarantine_transcription = MagicMock()
+    service._refresh_counts = MagicMock()
     page_read = MagicMock()
+    page_read.return_value.prepare.return_value = SimpleNamespace(
+        calls_used=0,
+        script_transcript_id=901,
+    )
     monkeypatch.setattr(
         "app.services.bulk_evaluation_service.LocalScriptPageReadService",
         page_read,
@@ -841,13 +830,15 @@ def test_resumed_page_read_with_preserved_edits_advances_to_transcription(
 
     service._process_read(run)
 
-    page_read.assert_not_called()
+    page_read.return_value.prepare.assert_called_once()
+    assert page_read.return_value.prepare.call_args.kwargs["persist_legacy_artifacts"] is False
     service._accept_or_quarantine_transcription.assert_not_called()
-    assert item.transcription_run_id == 555
+    assert item.transcription_run_id is None
+    assert item.answer_evidence_assignment_id == 777
     assert item.status == "pending"
-    assert item.stage == "transcription"
+    assert item.stage == "grading"
     assert item.exception_codes == []
-    assert item.warnings == ["thinking_repair_pending"]
+    assert item.warnings == []
 
 
 def test_page_read_with_preserved_edits_is_routed_to_thinking_repair(

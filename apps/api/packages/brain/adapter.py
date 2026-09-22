@@ -323,6 +323,7 @@ class BrainAdapter:
         student_answer_text: str | None = None,
         policy: ModelPolicy | None = None,
         marking_policy: str = "general",
+        image_input_enabled: bool | None = None,
     ) -> GradeSuggestionOutput:
         self.require_capability(BrainCapability.GRADING)
         normalized_marking_policy = marking_policy.strip().lower()
@@ -334,6 +335,7 @@ class BrainAdapter:
         should_send_image = bool(
             self.runtime.is_real
             and self.image_input_enabled
+            and image_input_enabled is not False
             and self.runtime.image_input_mode is not BrainImageInputMode.NONE
         )
         prompt_answer_image_path = (

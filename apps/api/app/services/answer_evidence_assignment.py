@@ -254,7 +254,7 @@ class _OrderedBlock:
 def _ordered_blocks(transcript: ScriptTranscript) -> list[_OrderedBlock]:
     ordered: list[_OrderedBlock] = []
     for page in sorted(transcript.pages, key=lambda item: (item.page_order, item.page_no)):
-        if page.state != "succeeded":
+        if page.state != "succeeded" or page.teacher_classification == "non_answer":
             continue
         for block in sorted(page.blocks, key=lambda item: item.block_index):
             ordered.append(_OrderedBlock(block=block, page_no=page.page_no))
@@ -310,9 +310,9 @@ def derive_assignments(
             OwnershipInput(
                 key=(item.page_no, item.block.block_index),
                 page_no=item.page_no,
-                question_label_raw=item.block.question_label_raw,
+                question_label_raw=item.block.effective_question_label,
                 label_source=item.block.label_source,
-                continues_from_previous=item.block.continues_from_previous,
+                continues_from_previous=item.block.effective_continues_from_previous,
             )
             for item in ordered
         ],

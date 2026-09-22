@@ -1182,7 +1182,9 @@ def run_submission_question_node_mappings(
             )
         try:
             if policy.page_read_enabled:
-                page_read_result = LocalScriptPageReadService(db).prepare(
+                page_read_result = LocalScriptPageReadService(
+                    db, settings=settings, qwen_adapter=policy.adapter,
+                ).prepare(
                     submission=submission,
                     teacher=current_user,
                     expected_model=request.expected_model or "",
@@ -1192,7 +1194,9 @@ def run_submission_question_node_mappings(
                 )
                 mappings = page_read_result.mappings
             else:
-                service = LocalScriptPreparationService(db)
+                service = LocalScriptPreparationService(
+                    db, settings=settings, qwen_adapter=policy.adapter,
+                )
                 mappings = service.prepare(
                     submission=submission,
                     teacher=current_user,

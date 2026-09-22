@@ -268,6 +268,7 @@ BatchEvidencePrepRunStatus = Literal[
 BulkEvaluationStatus = Literal[
     "preflighting",
     "queued",
+    "reading",
     "mapping",
     "transcribing",
     "grading",
@@ -281,6 +282,7 @@ BulkEvaluationStatus = Literal[
 ]
 BulkEvaluationStage = Literal[
     "ingestion",
+    "reading",
     "mapping",
     "evidence_verification",
     "transcription",
@@ -305,6 +307,8 @@ BulkExceptionCode = Literal[
     "provider_contract_failure",
     "provider_unavailable",
     "stale_evidence",
+    "missing_page",
+    "page_read_failed",
 ]
 
 
@@ -325,6 +329,7 @@ class BulkEvaluationItemRead(ORMBase):
     run_id: int
     submission_id: int
     question_id: int
+    answer_evidence_assignment_id: int | None
     mapping_id: int | None
     answer_region_id: int | None
     transcription_run_id: int | None
@@ -1804,6 +1809,12 @@ class ScriptTranscriptBlockRead(ORMBase):
     question_label_raw: str | None = None
     label_source: str
     continues_from_previous: bool
+    assignment_override_active: bool = False
+    teacher_question_label: str | None = None
+    teacher_continues_from_previous: bool | None = None
+    effective_question_label: str | None = None
+    effective_continues_from_previous: bool = False
+    assignment_override_revision: int = 0
     confidence: Decimal | None = None
     # Auxiliary navigation geometry. Question identity never depends on it, so
     # a missing box costs highlighting, not evidence.
@@ -1825,6 +1836,17 @@ class ScriptTranscriptBlockUpdate(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class ScriptTranscriptBlockAssignmentUpdate(BaseModel):
+    question_label: str | None = Field(default=None, max_length=128)
+    continues_from_previous: bool = False
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class ScriptTranscriptPageClassificationUpdate(BaseModel):
+    classification: Literal["answer_content", "non_answer"] | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class ScriptTranscriptPageRead(ORMBase):
     id: int
     submission_page_id: int
@@ -1842,6 +1864,9 @@ class ScriptTranscriptPageRead(ORMBase):
     reserved_at: datetime | None = None
     reconciled_at: datetime | None = None
     needs_reconciliation: bool = False
+    teacher_classification: str | None = None
+    classification_note: str | None = None
+    classified_at: datetime | None = None
     blocks: list[ScriptTranscriptBlockRead] = Field(default_factory=list)
 
 

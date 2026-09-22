@@ -47,6 +47,7 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from app.services.grading_service import GradingService
 
 CLEANUP_MODELS = (
     AuditLog,
@@ -169,7 +170,16 @@ class _Seeded:
                 Rubric(
                     question_id=question.id,
                     version=1,
-                    rubric_json={"total_marks": "5.00", "criteria": []},
+                    rubric_json={
+                        "total_marks": "5.00",
+                        "criteria": [
+                            {
+                                "id": "answer",
+                                "name": "Answer quality",
+                                "max_marks": "5.00",
+                            }
+                        ],
+                    },
                     is_active=True,
                 )
             )
@@ -335,6 +345,98 @@ def test_question_evidence_exposes_state_reason_and_resolvable_spans(
     assert "could not be placed" in by_label["Q2"]["state_reason"]
     assert [item["text"] for item in body["unassigned_blocks"]] == ["writing nobody placed"]
     assert body["summary"]["states"]["answer_present"] == 1
+
+
+def test_teacher_can_move_a_block_then_rederive_without_changing_model_output(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher_id, headers = _register(client)
+    seeded = _Seeded(db_session, teacher_id, tmp_path)
+
+    changed = client.patch(
+        f"/script-transcript-blocks/{seeded.stray_block.id}/assignment",
+        headers=headers,
+        json={"question_label": "Q2", "continues_from_previous": False},
+    )
+    assert changed.status_code == 200, changed.text
+    changed_block = changed.json()
+    assert changed_block["question_label_raw"] is None
+    assert changed_block["effective_question_label"] == "Q2"
+    assert changed_block["assignment_override_active"] is True
+
+    rederived = client.post(
+        f"/submissions/{seeded.submission.id}/answer-evidence/rederive",
+        headers=headers,
+    )
+    assert rederived.status_code == 200, rederived.text
+    by_label = {item["question_label"]: item for item in rederived.json()["evidence"]}
+    assert by_label["Q2"]["state"] == "answer_present"
+    assert by_label["Q2"]["spans"][0]["text"] == "writing nobody placed"
+
+
+def test_teacher_can_mark_cover_page_non_answer_without_deleting_transcript(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher_id, headers = _register(client)
+    seeded = _Seeded(db_session, teacher_id, tmp_path)
+
+    classified = client.patch(
+        f"/script-transcript-pages/{seeded.page_transcript.id}/classification",
+        headers=headers,
+        json={"classification": "non_answer", "note": "cover sheet"},
+    )
+    assert classified.status_code == 200, classified.text
+    assert classified.json()["teacher_classification"] == "non_answer"
+    assert len(classified.json()["blocks"]) == 2
+
+    rederived = client.post(
+        f"/submissions/{seeded.submission.id}/answer-evidence/rederive",
+        headers=headers,
+    )
+    assert rederived.status_code == 200, rederived.text
+    body = rederived.json()
+    assert body["unassigned_blocks"] == []
+    assert {item["state"] for item in body["evidence"]} == {"no_answer_found"}
+
+
+def test_grading_can_use_transcript_assignment_without_a_crop(
+    db_session: Session, tmp_path: Path
+) -> None:
+    teacher = User(
+        name="Teacher",
+        email=f"transcript-grade-{uuid4().hex}@example.com",
+        password_hash="x",
+        role="teacher",
+    )
+    db_session.add(teacher)
+    db_session.flush()
+    seeded = _Seeded(db_session, teacher.id, tmp_path)
+    region = AnswerRegion(
+        submission_id=seeded.submission.id,
+        question_id=seeded.questions[0].id,
+        question_node_id=seeded.nodes[0].id,
+        page_id=seeded.page.id,
+        x=Decimal("0"),
+        y=Decimal("0"),
+        width=Decimal("0"),
+        height=Decimal("0"),
+        image_path=seeded.page.image_path,
+        evidence_status="complete",
+        continuation_check_status="checked_no_continuation",
+    )
+    db_session.add(region)
+    db_session.commit()
+
+    grading = GradingService(db_session, use_configured_adapter=False)
+    job = grading.create_queued_transcript_grading_job(
+        answer_region_id=region.id,
+        assignment_id=seeded.assignment.id,
+    )
+    _job, suggestion = grading.run_queued_job(job.id)
+
+    assert suggestion.answer_evidence_assignment_id == seeded.assignment.id
+    assert suggestion.needs_review is True
+    assert "transcript_evidence" in suggestion.raw_response_json["review_flags"]
 
 
 def test_a_correction_keeps_the_model_text_and_records_a_revision(

@@ -318,6 +318,34 @@ def test_prepare_persists_the_transcript_and_the_evidence_assignment(
     assert audit.payload_json["evidence_states"][ANSWER_PRESENT] == 1
 
 
+def test_transcript_only_prepare_creates_no_mapping_crop_or_region_ocr(
+    db_session: Session,
+    storage: LocalStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    submission = _seed(db_session, storage, ["Q1", "Q2"])
+    adapter = _Adapter([_page_output()])
+
+    result = _service(db_session, storage, adapter, monkeypatch).prepare(
+        submission=submission,
+        teacher=db_session.scalars(select(User)).one(),
+        expected_model="mock-vision-1",
+        replace_existing=False,
+        maximum_page_read_calls=5,
+        persist_legacy_artifacts=False,
+    )
+
+    assert result.script_transcript_id is not None
+    assert result.mappings == []
+    assert result.transcription_runs_by_question == {}
+    assert db_session.scalars(select(AnswerRegionMapping)).all() == []
+    assert db_session.scalars(select(AnswerRegionOcrRun)).all() == []
+    assert db_session.scalars(select(AnswerRegion)).all() == []
+    assert result.evidence_states[ANSWER_PRESENT] == 1
+    assert result.evidence_states[NO_ANSWER_FOUND] == 1
+    assert sum(result.evidence_states.values()) == 2
+
+
 def test_preparing_again_reuses_the_transcript_and_versions_the_assignment(
     db_session: Session,
     storage: LocalStorage,

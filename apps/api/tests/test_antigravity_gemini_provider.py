@@ -238,6 +238,113 @@ def test_malformed_model_payload_fails_strict_validation(tmp_path: Path) -> None
         provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
 
 
+def test_structured_output_is_used_when_the_free_text_response_is_empty(
+    tmp_path: Path,
+) -> None:
+    """A real reference extraction failed exactly this way.
+
+    agy answered SUCCESS with a valid schema-validated payload in
+    ``structured_output`` and an empty ``response``. The provider read only
+    ``response`` and raised "agy returned an empty response with SUCCESS
+    status", discarding a call that had already been made and paid for.
+    """
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "status": "SUCCESS",
+                    "response": "",
+                    "structured_output": _transcription_payload(),
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                }
+            ),
+            stderr="",
+        ),
+    )
+
+    result = provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+
+    assert result.draft_text == "The answer is 42"
+
+
+def test_success_with_neither_response_nor_structured_output_still_fails(
+    tmp_path: Path,
+) -> None:
+    """Both empty is a genuine model failure, and must say so distinctly."""
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "SUCCESS", "response": "   "}),
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="neither a response nor structured output"):
+        provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["The structured result is attached.", json.dumps({"draft_text": "stale text"})],
+)
+def test_structured_output_takes_precedence_over_text(
+    tmp_path: Path, response: str,
+) -> None:
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "status": "SUCCESS",
+                "response": response,
+                "structured_output": _transcription_payload(),
+            }),
+            stderr="",
+        ),
+    )
+    result = provider.transcribe_images(images=[(b"page", "image/png")], label="Q1")
+    assert result.draft_text == "The answer is 42"
+
+
+def test_empty_structured_payload_is_not_a_blank_page(tmp_path: Path) -> None:
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "SUCCESS", "structured_output": {}}),
+            stderr="",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="structured response was not usable"):
+        provider.read_page(
+            image_bytes=b"page", mime_type="image/png", question_labels=["Q1"],
+        )
+
+
+def test_explicit_structured_blank_page_is_accepted(tmp_path: Path) -> None:
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "status": "SUCCESS",
+                "structured_output": {
+                    "blocks": [], "is_blank_page": True, "needs_review": True,
+                },
+            }),
+            stderr="",
+        ),
+    )
+    result = provider.read_page(
+        image_bytes=b"page", mime_type="image/png", question_labels=["Q1"],
+    )
+    assert result.is_blank_page is True
+    assert result.blocks == []
+
+
 def test_trailing_agy_artifact_does_not_weaken_payload_validation(tmp_path: Path) -> None:
     wrapper = _agy_success(_transcription_payload())
     outer = json.loads(wrapper.stdout)

@@ -139,6 +139,7 @@ export type GradingRunMode =
 export type BulkEvaluationStatus =
   | "preflighting"
   | "queued"
+  | "reading"
   | "mapping"
   | "transcribing"
   | "grading"
@@ -155,6 +156,7 @@ export type BulkEvaluationItem = {
   run_id: number;
   submission_id: number;
   question_id: number;
+  answer_evidence_assignment_id: number | null;
   mapping_id: number | null;
   answer_region_id: number | null;
   transcription_run_id: number | null;
@@ -2359,6 +2361,12 @@ export type ScriptTranscriptBlock = {
   question_label_raw: string | null;
   label_source: string;
   continues_from_previous: boolean;
+  assignment_override_active: boolean;
+  teacher_question_label: string | null;
+  teacher_continues_from_previous: boolean | null;
+  effective_question_label: string | null;
+  effective_continues_from_previous: boolean;
+  assignment_override_revision: number;
   confidence: string | number | null;
   bbox: number[] | null;
   unresolved: boolean;
@@ -2382,6 +2390,9 @@ export type ScriptTranscriptPage = {
   reserved_at: string | null;
   reconciled_at: string | null;
   needs_reconciliation: boolean;
+  teacher_classification: "answer_content" | "non_answer" | null;
+  classification_note: string | null;
+  classified_at: string | null;
   blocks: ScriptTranscriptBlock[];
 };
 
@@ -2469,6 +2480,29 @@ export async function correctTranscriptBlock(
     method: "PATCH",
     body,
   });
+}
+
+export async function overrideTranscriptBlockAssignment(
+  blockId: number,
+  body: { question_label: string | null; continues_from_previous: boolean; reason?: string | null },
+) {
+  return apiRequest<ScriptTranscriptBlock>(`/script-transcript-blocks/${blockId}/assignment`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+export async function classifyTranscriptPage(
+  pageTranscriptId: number,
+  body: {
+    classification: "answer_content" | "non_answer" | null;
+    note?: string | null;
+  },
+) {
+  return apiRequest<ScriptTranscriptPage>(
+    `/script-transcript-pages/${pageTranscriptId}/classification`,
+    { method: "PATCH", body },
+  );
 }
 
 export async function fetchTranscriptBlockRevisions(blockId: number) {

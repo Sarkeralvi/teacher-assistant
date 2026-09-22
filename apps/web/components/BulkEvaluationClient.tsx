@@ -27,11 +27,7 @@ const REQUIRED_BULK_CAPABILITY = "grading";
 
 function profileEligibleForBulk(profile: BrainProfile): boolean {
   if (!profile.capabilities.includes(REQUIRED_BULK_CAPABILITY)) return false;
-  if (profile.capabilities.includes("visual_page_read")) return true;
-  return (
-    profile.capabilities.includes("visual_mapping") &&
-    profile.capabilities.includes("visual_transcription")
-  );
+  return profile.capabilities.includes("visual_page_read");
 }
 
 const buttonClass =
@@ -43,6 +39,7 @@ const inputClass =
 const activeStatuses = new Set([
   "preflighting",
   "queued",
+  "reading",
   "mapping",
   "transcribing",
   "grading",

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings, get_settings
 from app.models import (
+    AnswerEvidenceAssignment,
     AnswerRegion,
     AnswerRegionMapping,
     AnswerRegionOcrRun,
@@ -32,10 +33,12 @@ from app.models import (
     GradingRun,
     Question,
     Rubric,
+    ScriptTranscript,
     Submission,
     SubmissionPage,
     User,
 )
+from app.services.answer_evidence_assignment import AnswerEvidenceAssignmentService
 from app.services.brain_execution import hold_brain_execution
 from app.services.final_grade_service import FinalGradeService
 from app.services.grading_service import GradingService, rubric_snapshot_hash
@@ -66,8 +69,7 @@ from packages.ocr.coverage import measure_uncovered_ink
 
 BULK_POLICY_VERSION = "bulk-supervised-brain-v2"
 _UNCERTAIN_PROVIDER_WARNING = (
-    "Provider work stopped without a safely persisted result; "
-    "explicit item retry required"
+    "Provider work stopped without a safely persisted result; explicit item retry required"
 )
 _SUPPORTED = {".pdf", ".png", ".jpg", ".jpeg"}
 _KNOWN_METADATA = {".ds_store", "thumbs.db"}
@@ -77,6 +79,7 @@ _MAX_COMPRESSION_RATIO = 100
 _ACTIVE_RUN_STATUSES = {
     "preflighting",
     "queued",
+    "reading",
     "mapping",
     "transcribing",
     "grading",
@@ -221,9 +224,7 @@ class BulkEvaluationService:
                                 submission_id=submission.id,
                                 question_id=question.id,
                                 status="pending",
-                                stage=(
-                                    "read" if policy.page_read_enabled else "mapping"
-                                ),
+                                stage="read",
                                 exception_codes=[],
                                 warnings=[],
                             )
@@ -232,13 +233,9 @@ class BulkEvaluationService:
                 run.total_pages = total_pages
                 run.total_items = len(submissions) * len(questions)
                 run.status = "queued"
-                run.stage = "mapping"
+                run.stage = "reading"
                 run.import_manifest = {
-                    "visual_evidence_path": (
-                        "page_read"
-                        if policy.page_read_enabled
-                        else "mapping_transcription"
-                    ),
+                    "visual_evidence_path": "page_read",
                     "units": manifest_payload,
                     "submission_ids": [submission.id for submission in submissions],
                 }
@@ -261,9 +258,7 @@ class BulkEvaluationService:
                             "page_count": total_pages,
                             "item_count": run.total_items,
                             "authorized_call_limit": maximum_provider_calls,
-                            "local_only": (
-                                policy.location is BrainExecutionLocation.LOCAL
-                            ),
+                            "local_only": (policy.location is BrainExecutionLocation.LOCAL),
                             "provider_location": policy.location.value,
                             "draft_only": True,
                         },
@@ -317,29 +312,19 @@ class BulkEvaluationService:
                     requested_provider=configured_visual_provider(settings),
                 )
             )
-            use_page_read = policy.page_read_enabled
+            if not policy.page_read_enabled:
+                raise BulkEvaluationError(
+                    "Bulk evaluation requires whole-page transcription. Enable page reading "
+                    "for this profile or choose a provider that supports it; "
+                    "mapping-first processing is no longer available for new runs."
+                )
             feature_enabled = bool(
                 policy.bulk_evaluation_enabled
                 and policy.script_preparation_enabled
                 and policy.grading_enabled
-                and (
-                    policy.page_read_enabled
-                    if use_page_read
-                    else (
-                        policy.visual_preparation_enabled
-                        and policy.transcription_enabled
-                    )
-                )
+                and policy.page_read_enabled
             )
-            capabilities = (
-                (BrainCapability.VISUAL_PAGE_READ, BrainCapability.GRADING)
-                if use_page_read
-                else (
-                    BrainCapability.VISUAL_MAPPING,
-                    BrainCapability.VISUAL_TRANSCRIPTION,
-                    BrainCapability.GRADING,
-                )
-            )
+            capabilities = (BrainCapability.VISUAL_PAGE_READ, BrainCapability.GRADING)
             for capability in capabilities:
                 policy.validate_request(
                     requested_provider=provider or "active",
@@ -510,10 +495,7 @@ class BulkEvaluationService:
                     "single PDF, or put their pages in the folder as numbered images."
                 )
             ordered = tuple(
-                info
-                for _, info in sorted(
-                    members, key=lambda item: _natural_key(item[0].name)
-                )
+                info for _, info in sorted(members, key=lambda item: _natural_key(item[0].name))
             )
             sources[folder] = ("pdf" if pdfs else "images", ordered)
 
@@ -728,7 +710,15 @@ class BulkEvaluationService:
         return self.get_run(run.id)
 
     def resume(self, run: BulkEvaluationRun, *, teacher_id: int) -> BulkEvaluationRun:
-        active = {"preflighting", "queued", "mapping", "transcribing", "grading", "stopping"}
+        active = {
+            "preflighting",
+            "queued",
+            "reading",
+            "mapping",
+            "transcribing",
+            "grading",
+            "stopping",
+        }
         stale_before = datetime.now(UTC) - timedelta(
             seconds=self.settings.cohort_dispatch_heartbeat_timeout_seconds
         )
@@ -835,9 +825,7 @@ class BulkEvaluationService:
         )
 
     @staticmethod
-    def _sync_final_grade_links(
-        db: Session, items: list[BulkEvaluationItem]
-    ) -> None:
+    def _sync_final_grade_links(db: Session, items: list[BulkEvaluationItem]) -> None:
         region_ids = {item.answer_region_id for item in items if item.answer_region_id is not None}
         suggestion_ids = {
             item.grade_suggestion_id for item in items if item.grade_suggestion_id is not None
@@ -873,9 +861,7 @@ class BulkEvaluationService:
                 item.final_grade_id = final_grade.id
 
     @classmethod
-    def _reviewable_items(
-        cls, db: Session, run: BulkEvaluationRun
-    ) -> list[BulkEvaluationItem]:
+    def _reviewable_items(cls, db: Session, run: BulkEvaluationRun) -> list[BulkEvaluationItem]:
         items = list(
             db.scalars(
                 select(BulkEvaluationItem)
@@ -933,9 +919,7 @@ class BulkEvaluationService:
         approved_count = 0
         already_approved = 0
         final_service = FinalGradeService(self.db)
-        items_by_suggestion = {
-            int(item.grade_suggestion_id): item for item in eligible_items
-        }
+        items_by_suggestion = {int(item.grade_suggestion_id): item for item in eligible_items}
         for suggestion_id in sorted(eligible_ids):
             item = items_by_suggestion[suggestion_id]
             locked_region = self.db.scalar(
@@ -1031,9 +1015,7 @@ class BulkEvaluationService:
         expected_questions = len({question.id for _, _, question in rows})
         for item, submission, question in rows:
             final_grade = (
-                self.db.get(FinalGrade, item.final_grade_id)
-                if item.final_grade_id
-                else None
+                self.db.get(FinalGrade, item.final_grade_id) if item.final_grade_id else None
             )
             approved = bool(final_grade and final_grade.approval_status == "approved")
             approved_sheet.append(
@@ -1240,7 +1222,7 @@ class BulkEvaluationService:
         return result
 
     def _process_read(self, run: BulkEvaluationRun) -> None:
-        """Run the opt-in one-call-per-page mapping/transcription path."""
+        """Read each page once, then hand stored transcript assignments to grading."""
 
         if not self._uses_page_read(run):
             raise BulkEvaluationError(
@@ -1269,100 +1251,161 @@ class BulkEvaluationService:
         )
         if not items:
             return
-        run.status = "mapping"
-        run.stage = "mapping"
+        run.status = "reading"
+        run.stage = "reading"
 
-        mappings = self._existing_submission_mappings(submission.id)
-        transcription_runs: dict[int, AnswerRegionOcrRun] = {}
-        if mappings:
-            transcription_runs = self._page_read_runs_by_question(mappings)
-            expected_question_ids = {item.question_id for item in items}
-            if not expected_question_ids.issubset(transcription_runs):
-                raise BulkEvaluationError(
-                    "Existing answer mappings are not reusable page-read evidence"
-                )
-            self._audit_run(
-                run,
-                "bulk_evaluation_page_read_reused",
-                None,
-                {
-                    "submission_id": submission.id,
-                    "item_count": len(items),
-                    "mapping_count": len(mappings),
-                },
-                actor_type="worker",
-            )
-        else:
-            remaining = run.authorized_call_limit - run.calls_used
-            if len(submission.pages) > remaining:
-                self._pause(run, "Provider-call budget is insufficient for the next script")
-                return
-            started = datetime.now(UTC)
-            for item in items:
-                item.status = "running"
-                item.started_at = started
-            self.db.commit()
-            result = LocalScriptPageReadService(
-                self.db,
-                settings=self.settings,
-                storage=self.storage,
-            ).prepare(
-                submission=submission,
-                teacher=teacher,
-                expected_model=run.model_name,
-                replace_existing=False,
-                maximum_page_read_calls=remaining,
-                provider=run.provider,
-            )
-            mappings = result.mappings
-            transcription_runs = result.transcription_runs_by_question
-            self._consume_calls(run, result.calls_used)
-
-        mapping_by_question = {mapping.question_id: mapping for mapping in mappings}
-        overlap_questions = self._overlapping_question_ids(mappings)
+        remaining = run.authorized_call_limit - run.calls_used
+        started = datetime.now(UTC)
         for item in items:
-            mapping = mapping_by_question.get(item.question_id)
-            codes = self._mapping_exception_codes(mapping, overlap_questions)
-            item.mapping_id = mapping.id if mapping else None
-            item.answer_region_id = mapping.answer_region_id if mapping else None
-            item.mapping_confidence = mapping.confidence if mapping else None
-            if codes:
-                item.status = "exception"
-                item.stage = "read"
-                item.exception_codes = codes
-                item.warnings = self._mapping_warnings(mapping)
-                item.completed_at = datetime.now(UTC)
-                continue
-            assert mapping is not None and mapping.answer_region is not None
-            mapping.bulk_policy_verified = True
-            mapping.bulk_verification_run_id = run.id
-            item.source_snapshot_sha256 = self._mapping_snapshot_hash(mapping)
-            transcript = transcription_runs.get(item.question_id)
-            if transcript is None:
+            item.status = "running"
+            item.started_at = started
+        self.db.commit()
+        result = LocalScriptPageReadService(
+            self.db,
+            settings=self.settings,
+            storage=self.storage,
+            qwen_adapter=self._policy_for_run(run).adapter,
+        ).prepare(
+            submission=submission,
+            teacher=teacher,
+            expected_model=run.model_name,
+            replace_existing=False,
+            maximum_page_read_calls=remaining,
+            provider=run.provider,
+            persist_legacy_artifacts=False,
+        )
+        self._consume_calls(run, result.calls_used)
+        if result.script_transcript_id is None:
+            raise BulkEvaluationError("Page reading did not persist a script transcript")
+        transcript = self.db.get(ScriptTranscript, result.script_transcript_id)
+        if transcript is None:
+            raise BulkEvaluationError("Persisted script transcript is unavailable")
+
+        assignments = list(
+            self.db.scalars(
+                select(AnswerEvidenceAssignment).where(
+                    AnswerEvidenceAssignment.script_transcript_id == transcript.id,
+                    AnswerEvidenceAssignment.is_current.is_(True),
+                )
+            ).all()
+        )
+        assignment_by_question = {assignment.question_id: assignment for assignment in assignments}
+        for item in items:
+            assignment = assignment_by_question.get(item.question_id)
+            if assignment is None:
                 self._quarantine(
                     item,
-                    "missing_transcription",
-                    "Page-read transcription artifact is unavailable",
+                    "provider_contract_failure",
+                    "No current transcript evidence assignment exists for this question",
                 )
                 item.stage = "read"
                 continue
-            item.transcription_run_id = transcript.id
-            if self._transcript_needs_repair(transcript):
-                item.status = "pending"
-                item.stage = "transcription"
-                item.exception_codes = []
-                item.warnings = ["thinking_repair_pending"]
-                item.completed_at = None
+            item.answer_evidence_assignment_id = assignment.id
+            item.mapping_id = None
+            item.mapping_confidence = None
+            if assignment.state != "answer_present":
+                code_by_state = {
+                    "no_answer_found": "missing_answer",
+                    "unreadable": "unreadable_handwriting",
+                    "ambiguous": "unassigned_ink",
+                    "missing_page": "missing_page",
+                    "processing_failed": "page_read_failed",
+                }
+                self._quarantine(
+                    item,
+                    code_by_state.get(assignment.state, "provider_contract_failure"),
+                    assignment.state_reason or f"Transcript evidence state: {assignment.state}",
+                )
+                item.stage = "read"
                 continue
-            self._accept_or_quarantine_transcription(
-                run,
-                item,
-                mapping.answer_region,
-                transcript,
+            region = (
+                self.db.get(AnswerRegion, item.answer_region_id)
+                if item.answer_region_id is not None
+                else None
             )
+            if region is None:
+                region = self._create_transcript_compatibility_region(
+                    submission=submission,
+                    assignment=assignment,
+                    run=run,
+                )
+            item.answer_region_id = region.id
+            item.source_snapshot_sha256 = self._assignment_snapshot_hash(
+                transcript=transcript,
+                assignment=assignment,
+            )
+            item.evidence_snapshot_sha256 = item.source_snapshot_sha256
+            item.verification_source = "bulk_policy"
+            item.status = "pending"
+            item.stage = "grading"
+            item.exception_codes = []
+            item.warnings = []
+            item.completed_at = None
         run.heartbeat_at = datetime.now(UTC)
         self._refresh_counts(run)
         self.db.commit()
+
+    def _create_transcript_compatibility_region(
+        self,
+        *,
+        submission: Submission,
+        assignment: AnswerEvidenceAssignment,
+        run: BulkEvaluationRun,
+    ) -> AnswerRegion:
+        """Anchor existing grade tables without making a crop part of evidence."""
+
+        page = min(submission.pages, key=lambda item: (item.page_no, item.id))
+        assignment_service = AnswerEvidenceAssignmentService(self.db)
+        answer_text = "\n\n".join(
+            assignment_service.resolve_span_text(span)
+            for span in sorted(assignment.spans, key=lambda item: item.order_index)
+        ).strip()
+        region = AnswerRegion(
+            submission_id=submission.id,
+            question_id=assignment.question_id,
+            question_node_id=assignment.question_node_id,
+            page_id=page.id,
+            x=Decimal("0"),
+            y=Decimal("0"),
+            width=Decimal("0"),
+            height=Decimal("0"),
+            image_path=page.image_path,
+            manual_answer_text=answer_text,
+            full_answer_confirmed=True,
+            full_answer_verification_source="bulk_policy",
+            bulk_verification_run_id=run.id,
+            evidence_status="complete",
+            continuation_check_status="checked_no_continuation",
+        )
+        self.db.add(region)
+        self.db.flush()
+        return region
+
+    @staticmethod
+    def _assignment_snapshot_hash(
+        *,
+        transcript: ScriptTranscript,
+        assignment: AnswerEvidenceAssignment,
+    ) -> str:
+        payload = {
+            "script_transcript_id": transcript.id,
+            "source_manifest_sha256": transcript.source_manifest_sha256,
+            "answer_evidence_assignment_id": assignment.id,
+            "assignment_version": assignment.assignment_version,
+            "state": assignment.state,
+            "spans": [
+                {
+                    "block_id": span.script_transcript_block_id,
+                    "page_no": span.page_no,
+                    "order_index": span.order_index,
+                    "basis": span.assignment_basis,
+                }
+                for span in sorted(assignment.spans, key=lambda item: item.order_index)
+            ],
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
 
     def _process_mapping(self, run: BulkEvaluationRun) -> None:
         submission_id = self._next_mapping_submission(run)
@@ -1580,9 +1623,7 @@ class BulkEvaluationService:
             # blank check sends it, so spending the call to be told "is_blank"
             # buys nothing. The curated protocol already requires blanks be
             # refused before dispatch rather than transcribed.
-            self._quarantine(
-                item, "probable_blank", "Probable blank answer needs teacher review"
-            )
+            self._quarantine(item, "probable_blank", "Probable blank answer needs teacher review")
             run.heartbeat_at = datetime.now(UTC)
             self._refresh_counts(run)
             self.db.commit()
@@ -1642,9 +1683,7 @@ class BulkEvaluationService:
                 self.db.commit()
                 return
             if self._formula_dense(transcript_run.draft_text or ""):
-                if not self._verify_formula_transcription(
-                    run, item, region, transcript_run
-                ):
+                if not self._verify_formula_transcription(run, item, region, transcript_run):
                     self._quarantine(
                         item,
                         "verification_disagreement",
@@ -1698,9 +1737,7 @@ class BulkEvaluationService:
             auxiliary_hash = policy.auxiliary_model_asset_sha256
         else:
             model_hash = (
-                self.settings.brain_model_sha256
-                or self.settings.local_qwen38_model_sha256
-                or None
+                self.settings.brain_model_sha256 or self.settings.local_qwen38_model_sha256 or None
             )
             auxiliary_hash = (
                 self.settings.brain_aux_model_sha256
@@ -1715,10 +1752,8 @@ class BulkEvaluationService:
                 AnswerRegionOcrRun.status == "confirmed",
                 AnswerRegionOcrRun.source_image_sha256 == source_hash,
                 AnswerRegionOcrRun.prompt_version == FINAL_INTENT_PROMPT_VERSION,
-                AnswerRegionOcrRun.model_asset_sha256
-                == model_hash,
-                AnswerRegionOcrRun.mmproj_asset_sha256
-                == auxiliary_hash,
+                AnswerRegionOcrRun.model_asset_sha256 == model_hash,
+                AnswerRegionOcrRun.mmproj_asset_sha256 == auxiliary_hash,
             )
             .order_by(AnswerRegionOcrRun.id.desc())
             .limit(1)
@@ -1934,7 +1969,13 @@ class BulkEvaluationService:
             self.db.commit()
             return
         rubric_hash = rubric_snapshot_hash(region.question, rubric)
-        job = grading.create_queued_grading_job(region.id)
+        if item.answer_evidence_assignment_id is not None:
+            job = grading.create_queued_transcript_grading_job(
+                answer_region_id=region.id,
+                assignment_id=item.answer_evidence_assignment_id,
+            )
+        else:
+            job = grading.create_queued_grading_job(region.id)
         item.grading_job_id = job.id
         self.db.commit()
         job, suggestion = grading.run_queued_job(
@@ -2062,13 +2103,11 @@ class BulkEvaluationService:
                     continue
                 overlap_width = max(
                     0.0,
-                    min(left[2] + left[4], right[2] + right[4])
-                    - max(left[2], right[2]),
+                    min(left[2] + left[4], right[2] + right[4]) - max(left[2], right[2]),
                 )
                 overlap_height = max(
                     0.0,
-                    min(left[3] + left[5], right[3] + right[5])
-                    - max(left[3], right[3]),
+                    min(left[3] + left[5], right[3] + right[5]) - max(left[3], right[3]),
                 )
                 overlap = overlap_width * overlap_height
                 smaller = min(left[4] * left[5], right[4] * right[5])
@@ -2188,23 +2227,18 @@ class BulkEvaluationService:
             ).all()
         )
         run.processed_items = sum(
-            item.status in {"exception", "uncertain", "graded", "approved"}
-            for item in items
+            item.status in {"exception", "uncertain", "graded", "approved"} for item in items
         )
         run.clean_item_count = sum(item.status in {"graded", "approved"} for item in items)
         run.exception_count = sum(item.status in {"exception", "uncertain"} for item in items)
         run.approved_count = sum(item.status == "approved" for item in items)
 
     def _status_for_pending_stage(self, run: BulkEvaluationRun) -> str:
-        stages = {
-            item.stage
-            for item in run.items
-            if item.status in {"pending", "running"}
-        }
+        stages = {item.stage for item in run.items if item.status in {"pending", "running"}}
         if "mapping" in stages:
             return "mapping"
         if "read" in stages:
-            return "mapping"
+            return "reading"
         if "transcription" in stages:
             return "transcribing"
         if "grading" in stages:

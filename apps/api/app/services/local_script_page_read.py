@@ -166,6 +166,7 @@ class LocalScriptPageReadService:
         replace_existing: bool,
         maximum_page_read_calls: int,
         provider: str | None = None,
+        persist_legacy_artifacts: bool = True,
     ) -> PageReadPreparationResult:
         """Create review-only mappings and transcripts from one read per page."""
 
@@ -177,11 +178,12 @@ class LocalScriptPageReadService:
             submission
         )
         existing = self._mapping_service._load_existing(submission.id)
-        if existing and not replace_existing:
+        if persist_legacy_artifacts and existing and not replace_existing:
             raise LocalScriptPageReadError(
                 "Draft mappings already exist; explicitly replace them to prepare again"
             )
-        self._mapping_service._assert_replace_is_safe(existing)
+        if persist_legacy_artifacts:
+            self._mapping_service._assert_replace_is_safe(existing)
 
         source = self._read_pages(
             submission=submission,
@@ -193,12 +195,6 @@ class LocalScriptPageReadService:
         )
         page_hashes = source.page_hashes
         calls_used = source.calls_used
-        assembly = self.assemble(
-            pages=pages,
-            page_outputs=source.outputs,
-            questions=questions,
-        )
-
         # Derive the separately versioned question assignment from the stored
         # transcript. This issues no provider request, so re-preparing after a
         # remap or a rubric change costs nothing here.
@@ -224,6 +220,46 @@ class LocalScriptPageReadService:
         EvidenceInvalidationService(self.db).supersede_stale_suggestions(
             submission_id=submission.id,
             reason="the source transcript or the question assignment was re-derived",
+        )
+
+        if not persist_legacy_artifacts:
+            states = assignment_summary(assignments)["states"]
+            self.db.add(
+                AuditLog(
+                    actor_type="teacher",
+                    actor_id=teacher.id,
+                    event_type="submission_script_transcript_prepared",
+                    entity_type="submission",
+                    entity_id=submission.id,
+                    payload_json={
+                        "assessment_id": submission.assessment_id,
+                        "provider": policy.provider,
+                        "expected_model": expected_model,
+                        "visual_page_read_call_count": calls_used,
+                        "script_transcript_id": source.transcript_id,
+                        "reused_page_transcript_count": source.reused_page_count,
+                        "evidence_states": states,
+                        "legacy_mapping_count": 0,
+                        "legacy_transcription_artifact_count": 0,
+                        "teacher_review_required": True,
+                    },
+                )
+            )
+            self.db.commit()
+            return PageReadPreparationResult(
+                mappings=[],
+                transcription_runs_by_question={},
+                calls_used=calls_used,
+                unassigned_pages=[],
+                reused_page_count=source.reused_page_count,
+                script_transcript_id=source.transcript_id,
+                evidence_states=states,
+            )
+
+        assembly = self.assemble(
+            pages=pages,
+            page_outputs=source.outputs,
+            questions=questions,
         )
 
         # Delete replaceable draft evidence only after all provider calls and

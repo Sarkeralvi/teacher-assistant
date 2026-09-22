@@ -907,8 +907,9 @@ class _FakePageReadService:
 
     calls: list[dict[str, object]] = []
 
-    def __init__(self, _db: object) -> None:
-        pass
+    def __init__(self, _db: object, *, settings: Settings, qwen_adapter: object) -> None:
+        assert settings is not None
+        assert qwen_adapter is not None
 
     def prepare(self, **kwargs: object) -> _FakePageReadResult:
         _FakePageReadService.calls.append(kwargs)
@@ -920,8 +921,9 @@ class _FakeMappingService:
 
     calls: list[dict[str, object]] = []
 
-    def __init__(self, _db: object) -> None:
-        pass
+    def __init__(self, _db: object, *, settings: Settings, qwen_adapter: object) -> None:
+        assert settings is not None
+        assert qwen_adapter is not None
 
     def prepare(self, **kwargs: object) -> list[object]:
         _FakeMappingService.calls.append(kwargs)

@@ -35,9 +35,11 @@ from app.models import (
 from app.schemas import (
     AnswerEvidenceRead,
     AnswerEvidenceSpanRead,
+    ScriptTranscriptBlockAssignmentUpdate,
     ScriptTranscriptBlockRead,
     ScriptTranscriptBlockRevisionRead,
     ScriptTranscriptBlockUpdate,
+    ScriptTranscriptPageClassificationUpdate,
     ScriptTranscriptPageRead,
     ScriptTranscriptRead,
     ScriptTranscriptReconcileRequest,
@@ -102,6 +104,12 @@ def _block_read(block: ScriptTranscriptBlock) -> ScriptTranscriptBlockRead:
         question_label_raw=block.question_label_raw,
         label_source=block.label_source,
         continues_from_previous=block.continues_from_previous,
+        assignment_override_active=block.assignment_override_active,
+        teacher_question_label=block.teacher_question_label,
+        teacher_continues_from_previous=block.teacher_continues_from_previous,
+        effective_question_label=block.effective_question_label,
+        effective_continues_from_previous=block.effective_continues_from_previous,
+        assignment_override_revision=block.assignment_override_revision,
         confidence=block.confidence,
         # Auxiliary navigation metadata only. Nothing in the workflow decides
         # question identity from it.
@@ -129,6 +137,9 @@ def _page_read(page: ScriptPageTranscript) -> ScriptTranscriptPageRead:
         reserved_at=page.reserved_at,
         reconciled_at=page.reconciled_at,
         needs_reconciliation=page.state == "unknown_outcome",
+        teacher_classification=page.teacher_classification,
+        classification_note=page.classification_note,
+        classified_at=page.classified_at,
         blocks=[
             _block_read(block)
             for block in sorted(page.blocks, key=lambda item: item.block_index)
@@ -243,7 +254,11 @@ def read_answer_evidence(
         _block_read(block)
         for page in sorted(transcript.pages, key=lambda item: item.page_order)
         for block in sorted(page.blocks, key=lambda item: item.block_index)
-        if block.id not in assigned_block_ids and block.effective_text.strip()
+        if (
+            page.teacher_classification != "non_answer"
+            and block.id not in assigned_block_ids
+            and block.effective_text.strip()
+        )
     ]
     return SubmissionAnswerEvidenceRead(
         submission_id=submission_id,
@@ -333,6 +348,134 @@ def correct_script_transcript_block(
     db.commit()
     db.refresh(block)
     return _block_read(block)
+
+
+@router.patch(
+    "/script-transcript-blocks/{block_id}/assignment",
+    response_model=ScriptTranscriptBlockRead,
+)
+def override_script_transcript_block_assignment(
+    block_id: int,
+    payload: ScriptTranscriptBlockAssignmentUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ScriptTranscriptBlockRead:
+    """Record a teacher ownership decision without changing the model read."""
+
+    block = db.get(ScriptTranscriptBlock, block_id)
+    page = db.get(ScriptPageTranscript, block.script_page_transcript_id) if block else None
+    transcript = db.get(ScriptTranscript, page.script_transcript_id) if page else None
+    if block is None or page is None or transcript is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Transcript block not found"
+        )
+    get_owned_submission_or_404(transcript.submission_id, db, current_user)
+
+    question_label = payload.question_label.strip() if payload.question_label else None
+    if question_label is not None:
+        service = AnswerEvidenceAssignmentService(db)
+        canonical_by_label: dict[str, str] = {}
+        for assignment in service.current_assignments(transcript.id):
+            question = db.get(Question, assignment.question_id)
+            if question is not None:
+                canonical_by_label[question.question_no.strip().casefold()] = question.question_no
+        canonical = canonical_by_label.get(question_label.casefold())
+        if canonical is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Choose a canonical question shown in this script's evidence review",
+            )
+        question_label = canonical
+
+    block.assignment_override_active = True
+    block.teacher_question_label = question_label
+    block.teacher_continues_from_previous = payload.continues_from_previous
+    block.assignment_override_revision += 1
+    block.assignment_edited_at = datetime.now(UTC)
+    block.assignment_edited_by_teacher_id = current_user.id
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="script_transcript_block_assignment_overridden",
+            entity_type="script_transcript_block",
+            entity_id=block.id,
+            payload_json={
+                "script_transcript_id": transcript.id,
+                "submission_id": transcript.submission_id,
+                "page_no": page.page_no,
+                "question_label": question_label,
+                "continues_from_previous": payload.continues_from_previous,
+                "revision": block.assignment_override_revision,
+                "reason": payload.reason,
+            },
+        )
+    )
+    db.flush()
+    EvidenceInvalidationService(db).supersede_stale_suggestions(
+        submission_id=transcript.submission_id,
+        reason="the teacher changed transcript evidence ownership",
+    )
+    db.commit()
+    db.refresh(block)
+    return _block_read(block)
+
+
+@router.patch(
+    "/script-transcript-pages/{page_transcript_id}/classification",
+    response_model=ScriptTranscriptPageRead,
+)
+def classify_script_transcript_page(
+    page_transcript_id: int,
+    payload: ScriptTranscriptPageClassificationUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ScriptTranscriptPageRead:
+    """Classify a read page as answer-bearing or non-answer material."""
+
+    page = db.get(ScriptPageTranscript, page_transcript_id)
+    transcript = db.get(ScriptTranscript, page.script_transcript_id) if page else None
+    if page is None or transcript is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Page transcript not found"
+        )
+    get_owned_submission_or_404(transcript.submission_id, db, current_user)
+    if page.state != "succeeded":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only a successfully read page can be classified",
+        )
+
+    page.teacher_classification = payload.classification
+    page.classification_note = payload.note if payload.classification is not None else None
+    page.classified_at = datetime.now(UTC) if payload.classification is not None else None
+    page.classified_by_teacher_id = (
+        current_user.id if payload.classification is not None else None
+    )
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="script_page_transcript_classified",
+            entity_type="script_page_transcript",
+            entity_id=page.id,
+            payload_json={
+                "script_transcript_id": transcript.id,
+                "submission_id": transcript.submission_id,
+                "page_no": page.page_no,
+                "classification": payload.classification,
+                "note": payload.note,
+            },
+        )
+    )
+    db.flush()
+    EvidenceInvalidationService(db).supersede_stale_suggestions(
+        submission_id=transcript.submission_id,
+        reason="the teacher changed a transcript page classification",
+    )
+    db.commit()
+    db.refresh(page)
+    return _page_read(page)
 
 
 @router.get(
@@ -439,11 +582,12 @@ def rederive_answer_evidence(
     it costs nothing and reads no page again.
     """
 
-    get_owned_submission_or_404(submission_id, db, current_user)
+    submission = get_owned_submission_or_404(submission_id, db, current_user)
     transcript = _current_transcript(db, submission_id)
     nodes = db.scalars(
         select(QuestionNode)
         .join(Question, Question.assessment_id == QuestionNode.assessment_id)
+        .where(QuestionNode.assessment_id == submission.assessment_id)
         .where(QuestionNode.teacher_confirmed.is_(True))
         .where(QuestionNode.node_type.in_(["question", "subquestion"]))
     ).unique().all()

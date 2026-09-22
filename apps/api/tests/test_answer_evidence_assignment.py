@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -104,6 +105,7 @@ class _Fixture:
         )
         db.add(teacher)
         db.flush()
+        self.teacher = teacher
         course = Course(teacher_id=teacher.id, code=f"C{uuid4().hex[:6]}", title="Course")
         db.add(course)
         db.flush()
@@ -349,6 +351,45 @@ def test_unplaceable_writing_makes_a_question_ambiguous_not_blank(
     assert assignments["Q2"].state == AMBIGUOUS
     assert assignments["Q2"].unassigned_block_count == 1
     assert "could not be placed" in (assignments["Q2"].state_reason or "")
+
+
+def test_teacher_assignment_override_moves_a_block_without_overwriting_model_label(
+    db_session: Session, tmp_path: Path
+) -> None:
+    fixture = _Fixture(db_session, tmp_path, ["Q1", "Q2"], page_count=1)
+    page = fixture.read_page(0, _block("Q1", "actually answers question two"))
+    block = page.blocks[0]
+    block.assignment_override_active = True
+    block.teacher_question_label = "Q2"
+    block.teacher_continues_from_previous = False
+    block.assignment_override_revision = 1
+    block.assignment_edited_at = datetime.now(UTC)
+    block.assignment_edited_by_teacher_id = fixture.teacher.id
+    db_session.commit()
+
+    assignments = fixture.assign()
+
+    assert block.question_label_raw == "Q1"
+    assert assignments["Q1"].state == NO_ANSWER_FOUND
+    assert assignments["Q2"].state == ANSWER_PRESENT
+    assert assignments["Q2"].spans[0].script_transcript_block_id == block.id
+
+
+def test_teacher_non_answer_page_keeps_text_but_excludes_it_from_evidence(
+    db_session: Session, tmp_path: Path
+) -> None:
+    fixture = _Fixture(db_session, tmp_path, ["Q1"], page_count=1)
+    page = fixture.read_page(0, _block(None, "University cover sheet"))
+    page.teacher_classification = "non_answer"
+    page.classified_at = datetime.now(UTC)
+    page.classified_by_teacher_id = fixture.teacher.id
+    db_session.commit()
+
+    assignments = fixture.assign()
+
+    assert page.blocks[0].text == "University cover sheet"
+    assert assignments["Q1"].state == NO_ANSWER_FOUND
+    assert assignments["Q1"].unassigned_block_count == 0
 
 
 def test_an_inferred_label_is_ambiguous_rather_than_a_confirmed_answer(
