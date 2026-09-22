@@ -238,6 +238,58 @@ def test_claude_grading_output_is_forced_to_teacher_review(tmp_path: Path) -> No
     assert "claude_cli_provider" in result.review_flags
 
 
+def test_claude_transcript_grading_uses_no_image_or_read_tool(tmp_path: Path) -> None:
+    payload = {
+        "score": 1,
+        "max_score": 2,
+        "confidence": 0.7,
+        "rubric_breakdown": [
+            {
+                "criterion_id": "work",
+                "criterion": "Shows working",
+                "criterion_status": "partially_met",
+                "max_marks": 2,
+                "awarded_marks": 1,
+                "reason": "Partial working is present.",
+                "evidence": "x = 42",
+                "confidence": 0.7,
+            }
+        ],
+        "detected_answer_summary": "Partial answer",
+        "review_flags": [],
+    }
+
+    def runner(command: list[str], **kwargs: object) -> SimpleNamespace:
+        workspace = Path(str(kwargs["cwd"]))
+        assert list(workspace.iterdir()) == []
+        assert command[command.index("--tools") + 1] == ""
+        assert command[command.index("--allowedTools") + 1] == ""
+        assert "Read" in command[command.index("--disallowedTools") + 1]
+        assert "Use no tools" in str(kwargs["input"])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": payload}),
+            stderr="",
+        )
+
+    provider = ClaudeCliProvider(
+        workdir=str(tmp_path),
+        which=lambda _command: "claude.cmd",
+        runner=runner,
+    )
+    result = provider.grade(
+        question_text="Solve x.",
+        question_total_marks=Decimal("2"),
+        rubric_json={},
+        answer_image_path="[stored transcript evidence; image input disabled]",
+        prompt_version="test-v1",
+        student_answer_text="x = 42",
+        messages=[{"role": "user", "content": "Grade the transcript."}],
+    )
+
+    assert result.score == Decimal("1")
+
+
 def test_claude_transcription_reconciles_redundant_editing_flags(tmp_path: Path) -> None:
     payload = {
         "draft_text": "visible answer",

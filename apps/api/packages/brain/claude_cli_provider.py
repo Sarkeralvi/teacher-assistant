@@ -144,8 +144,9 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
     ) -> GradeSuggestionOutput:
         del question_text, question_total_marks, rubric_json, student_answer_text
         del task_name, model_policy, image_data_url, marking_policy
+        text_only = _image_input_is_disabled(answer_image_path)
         image_path = Path(answer_image_path)
-        if not image_path.is_file():
+        if not text_only and not image_path.is_file():
             raise ClaudeCliProviderError("Claude CLI grading image does not exist")
         prompt = "\n\n".join(
             str(message.get("content", "")) for message in (messages or [])
@@ -153,7 +154,11 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
         prompt += "\nReturn only the requested grade-suggestion JSON object."
         completion = self._run_structured(
             prompt=prompt,
-            images=[(image_path.read_bytes(), _mime_type_for_path(image_path))],
+            images=(
+                []
+                if text_only
+                else [(image_path.read_bytes(), _mime_type_for_path(image_path))]
+            ),
             response_model=_ClaudeGradeSuggestionDraft,
         )
         return finalize_cli_grade_output(
@@ -190,13 +195,22 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
                 if response_model is not None
                 else {"type": "object"}
             )
-            image_instruction = ", ".join(path.name for path in image_paths)
-            isolated_prompt = (
-                f"Use the Read tool to view these images in order: {image_instruction}. "
-                "Use no other tool and use only their visible contents.\n\n"
-                + prompt
+            if image_paths:
+                image_instruction = ", ".join(path.name for path in image_paths)
+                isolated_prompt = (
+                    f"Use the Read tool to view these images in order: {image_instruction}. "
+                    "Use no other tool and use only their visible contents.\n\n"
+                    + prompt
+                )
+            else:
+                isolated_prompt = (
+                    "Use no tools and use only the evidence in this prompt.\n\n" + prompt
+                )
+            command = self._build_command(
+                schema,
+                resolved_command=resolved_command,
+                allow_read=bool(image_paths),
             )
-            command = self._build_command(schema, resolved_command=resolved_command)
             try:
                 result = self._runner(
                     command,
@@ -238,7 +252,11 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
         )
 
     def _build_command(
-        self, schema: dict[str, Any], *, resolved_command: str | None = None
+        self,
+        schema: dict[str, Any],
+        *,
+        resolved_command: str | None = None,
+        allow_read: bool = True,
     ) -> list[str]:
         return [
             resolved_command or self.command,
@@ -255,11 +273,11 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
             "--mcp-config",
             '{"mcpServers":{}}',
             "--tools",
-            "Read",
+            "Read" if allow_read else "",
             "--allowedTools",
-            "Read",
+            "Read" if allow_read else "",
             "--disallowedTools",
-            _DENIED_TOOLS,
+            _DENIED_TOOLS if allow_read else f"{_DENIED_TOOLS},Read",
             "--permission-mode",
             "dontAsk",
             "--permission-prompts",
@@ -267,6 +285,10 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
             "--no-session-persistence",
             "--disable-slash-commands",
         ]
+
+
+def _image_input_is_disabled(answer_image_path: str) -> bool:
+    return answer_image_path.startswith("[") and "image input disabled" in answer_image_path
 
 
 def _parse_claude_json(text: str) -> dict[str, Any]:

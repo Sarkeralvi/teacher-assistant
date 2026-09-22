@@ -183,6 +183,33 @@ def test_grading_output_is_forced_to_teacher_review(tmp_path: Path) -> None:
     assert "antigravity_cli_provider" in result.review_flags
 
 
+def test_antigravity_transcript_grading_uses_no_image_or_view_tool(
+    tmp_path: Path,
+) -> None:
+    def runner(command: list[str], **kwargs: object) -> SimpleNamespace:
+        workspace = Path(str(kwargs["cwd"]))
+        assert list(workspace.iterdir()) == []
+        assert "view_file" not in command[2]
+        assert "Use no tools" in command[2]
+        return _agy_success(_grade_payload())
+
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=runner,
+    )
+    result = provider.grade(
+        question_text="Solve x.",
+        question_total_marks=Decimal("2"),
+        rubric_json={},
+        answer_image_path="[stored transcript evidence; image input disabled]",
+        prompt_version="test-v1",
+        student_answer_text="x = 42",
+        messages=[{"role": "user", "content": "Grade the transcript."}],
+    )
+
+    assert result.score == Decimal("1")
+
+
 def test_workspace_is_removed_after_timeout(tmp_path: Path) -> None:
     workspaces: list[Path] = []
 

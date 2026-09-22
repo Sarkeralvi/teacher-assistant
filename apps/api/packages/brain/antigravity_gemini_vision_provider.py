@@ -161,18 +161,23 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
     ) -> GradeSuggestionOutput:
         del question_text, question_total_marks, rubric_json, student_answer_text
         del task_name, model_policy, image_data_url, marking_policy
+        text_only = _image_input_is_disabled(answer_image_path)
         image_path = Path(answer_image_path)
-        if not image_path.is_file():
+        if not text_only and not image_path.is_file():
             raise RuntimeError("Antigravity grading image does not exist")
         prompt = "\n\n".join(
             str(message.get("content", "")) for message in (messages or [])
         )
         prompt += "\nReturn only the requested grade-suggestion JSON object."
-        completion = self._complete_structured_vision(
-            prompt=prompt,
-            images=[(image_path.read_bytes(), _mime_type_for_path(image_path))],
-            response_model=None,
-            schema_name="grade_suggestion",
+        completion = (
+            self._complete_structured_text(prompt=prompt)
+            if text_only
+            else self._complete_structured_vision(
+                prompt=prompt,
+                images=[(image_path.read_bytes(), _mime_type_for_path(image_path))],
+                response_model=None,
+                schema_name="grade_suggestion",
+            )
         )
         return finalize_cli_grade_output(
             completion.payload,
@@ -183,6 +188,35 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             prompt_tokens=completion.prompt_tokens,
             completion_tokens=completion.completion_tokens,
             provider_flag="antigravity_cli_provider",
+        )
+
+    def _complete_structured_text(self, *, prompt: str) -> UniversalVisionCompletion:
+        started = time.perf_counter()
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="ta-antigravity-text-", dir=self.temp_dir
+        ) as tmp_dir:
+            response_text, usage = self._call_agy_structured(
+                "Use no tools and use only the evidence in this prompt.\n\n" + prompt,
+                {"type": "object"},
+                cwd=Path(tmp_dir),
+            )
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Gemini structured response was not usable: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("Gemini structured response must be a JSON object")
+        payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in _AGY_PAYLOAD_ARTIFACT_FIELDS
+        }
+        return UniversalVisionCompletion(
+            payload=payload,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            prompt_tokens=usage.get("input_tokens"),
+            completion_tokens=usage.get("output_tokens"),
         )
 
     def _view_files_prompt(self, image_paths: list[Path], body: str) -> str:
@@ -262,6 +296,10 @@ def _agy_compatible_schema(schema: dict[str, Any]) -> dict[str, Any]:
         return value
 
     return clean(schema)
+
+
+def _image_input_is_disabled(answer_image_path: str) -> bool:
+    return answer_image_path.startswith("[") and "image input disabled" in answer_image_path
 
 
 def _extract_first_json_object(text: str) -> str:
