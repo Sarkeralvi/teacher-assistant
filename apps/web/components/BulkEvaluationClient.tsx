@@ -79,6 +79,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
     for (const item of exceptions) {
       if (!item.exception_codes.some((code) => [
         "unassigned_ink",
+        "unassigned_transcript_block",
         "inferred_question_label",
         "unreadable_handwriting",
         "evidence_review_required",

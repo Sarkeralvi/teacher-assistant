@@ -67,6 +67,7 @@ from packages.brain.policy import (
     configured_visual_provider,
 )
 from packages.brain.schemas_qwen38 import FINAL_INTENT_PROMPT_VERSION
+from packages.brain.transcript_assignment import FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION
 from packages.ocr.coverage import measure_uncovered_ink
 
 BULK_POLICY_VERSION = "bulk-supervised-brain-v2"
@@ -785,12 +786,24 @@ class BulkEvaluationService:
                 if assignment is not None
                 else None
             )
+            assignment_result = (
+                transcript.assignment_result_json if transcript is not None else None
+            )
+            needs_complete_transcript_analysis = (
+                transcript is not None
+                and (
+                    transcript.assignment_status != "complete"
+                    or not isinstance(assignment_result, dict)
+                    or assignment_result.get("contract_version")
+                    != FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION
+                )
+            )
             if (
                 assignment is not None
                 and transcript is not None
                 and assignment.is_current
                 and assignment.state in {"ambiguous", "unreadable"}
-                and transcript.assignment_status != "complete"
+                and needs_complete_transcript_analysis
             ):
                 # One click retries the document-understanding stage for the
                 # manuscript, not fourteen separate question rows. Saved page
@@ -811,6 +824,7 @@ class BulkEvaluationService:
                 item.status = "pending"
                 run.status = "reading"
                 run.stage = "reading"
+                run.error = None
                 run.completed_at = None
                 run.stop_requested = False
                 self._audit_run(
@@ -1422,11 +1436,21 @@ class BulkEvaluationService:
                     assignment.state, "provider_contract_failure"
                 )
                 if assignment.state == "ambiguous":
-                    exception_code = (
-                        "unassigned_ink"
-                        if assignment.unassigned_block_count
-                        else "inferred_question_label"
-                    )
+                    if assignment.unassigned_block_count:
+                        exhaustive_result = (
+                            transcript is not None
+                            and transcript.assignment_status == "complete"
+                            and isinstance(transcript.assignment_result_json, dict)
+                            and transcript.assignment_result_json.get("contract_version")
+                            == FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION
+                        )
+                        exception_code = (
+                            "unassigned_transcript_block"
+                            if exhaustive_result
+                            else "unassigned_ink"
+                        )
+                    else:
+                        exception_code = "inferred_question_label"
                 self._quarantine(
                     item,
                     exception_code,

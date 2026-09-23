@@ -28,6 +28,7 @@ from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 from packages.brain.transcript_assignment import (
     FullTranscriptAssignmentOutput,
     build_full_transcript_assignment_prompt,
+    normalize_full_transcript_assignment,
     validate_full_transcript_assignment,
 )
 from packages.brain.universal_vision import (
@@ -201,6 +202,7 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
             response_model=FullTranscriptAssignmentOutput,
         )
         payload = FullTranscriptAssignmentOutput.model_validate(completion.payload)
+        payload = normalize_full_transcript_assignment(payload, pages=pages)
         validate_full_transcript_assignment(payload, pages=pages, questions=questions)
         return payload.model_dump(mode="json")
 

@@ -300,6 +300,7 @@ def derive_assignments(
     transcript: ScriptTranscript,
     questions: list[CanonicalQuestion],
     model_owner_by_block_id: dict[int, int] | None = None,
+    model_ignored_block_ids: set[int] | None = None,
 ) -> AssignmentDerivation:
     """Assign stored blocks to canonical questions, deterministically.
 
@@ -349,6 +350,8 @@ def derive_assignments(
         unplaced_by_key.pop(key, None)
         node_id = model_owner_by_block_id.get(item.block.id)
         if node_id is None:
+            if item.block.id in (model_ignored_block_ids or set()):
+                continue
             unplaced_by_key[key] = UnplacedBlock(
                 source=source,
                 reason=UNPLACED_FULL_TRANSCRIPT,
@@ -532,6 +535,7 @@ class AnswerEvidenceAssignmentService:
         model_owner_by_block_id: dict[int, int] | None = (
             {} if transcript.assignment_status == "complete" else None
         )
+        model_ignored_block_ids: set[int] = set()
         for assignment in self.current_assignments(transcript.id):
             for span in assignment.spans:
                 if (
@@ -541,10 +545,26 @@ class AnswerEvidenceAssignmentService:
                     model_owner_by_block_id[span.script_transcript_block_id] = (
                         assignment.question_node_id
                     )
+        if model_owner_by_block_id is not None and isinstance(
+            transcript.assignment_result_json, dict
+        ):
+            blocks_by_key = {
+                (page.page_no, block.block_index + 1): block.id
+                for page in transcript.pages
+                for block in page.blocks
+            }
+            for reference in transcript.assignment_result_json.get(
+                "non_answer_block_references", []
+            ):
+                for order in reference.get("block_orders", []):
+                    block_id = blocks_by_key.get((reference.get("page_no"), order))
+                    if block_id is not None:
+                        model_ignored_block_ids.add(block_id)
         derivation = derive_assignments(
             transcript=transcript,
             questions=questions,
             model_owner_by_block_id=model_owner_by_block_id,
+            model_ignored_block_ids=model_ignored_block_ids,
         )
         return self._persist_derivation(
             submission_id=submission_id,
@@ -581,6 +601,7 @@ class AnswerEvidenceAssignmentService:
             if block.effective_text.strip()
         }
         owner_by_block_id: dict[int, int] = {}
+        ignored_block_ids: set[int] = set()
         for mapping in output.mappings:
             question = by_identity[(mapping.question_id, mapping.question_no.strip())]
             for reference in mapping.block_references:
@@ -595,10 +616,19 @@ class AnswerEvidenceAssignmentService:
                             "Complete-script assignment claimed one block more than once"
                         )
                     owner_by_block_id[block.id] = question.question_node_id
+        for reference in output.non_answer_block_references:
+            for block_order in reference.block_orders:
+                block = blocks_by_key.get((reference.page_no, block_order))
+                if block is None:
+                    raise AnswerEvidenceAssignmentError(
+                        "Complete-script assignment referenced an unknown non-answer block"
+                    )
+                ignored_block_ids.add(block.id)
         derivation = derive_assignments(
             transcript=transcript,
             questions=questions,
             model_owner_by_block_id=owner_by_block_id,
+            model_ignored_block_ids=ignored_block_ids,
         )
         return self._persist_derivation(
             submission_id=submission_id,

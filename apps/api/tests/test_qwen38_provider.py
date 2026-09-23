@@ -320,12 +320,16 @@ def test_qwen38_assigns_the_complete_saved_transcript_without_images() -> None:
                 "question_id": 41,
                 "question_no": "1(a)(i)",
                 "status": "mapped",
-                "block_references": [{"page_no": 1, "block_orders": [1, 2]}],
+                "block_references": [{"page_no": 1, "block_orders": [1]}],
                 "confidence": "0.88",
                 "warnings": [],
                 "needs_review": True,
             }
         ],
+        "unassigned_block_references": [{"page_no": 1, "block_orders": [3]}],
+        # The model is not trusted to make this semantic exclusion: block 2
+        # contains answer prose and must be moved back to unassigned.
+        "non_answer_block_references": [{"page_no": 1, "block_orders": [2]}],
         "warnings": [],
     }
     provider, client = provider_with(
@@ -342,6 +346,7 @@ def test_qwen38_assigns_the_complete_saved_transcript_without_images() -> None:
                 "blocks": [
                     {"order": 1, "text": "(i) setup"},
                     {"order": 2, "text": "continued work"},
+                    {"order": 3, "text": "Answer no: 01"},
                 ],
             }
         ],
@@ -353,9 +358,16 @@ def test_qwen38_assigns_the_complete_saved_transcript_without_images() -> None:
             }
         ],
     )
+    assert result["unassigned_block_references"] == [
+        {"page_no": 1, "block_orders": [2]}
+    ]
+    assert result["non_answer_block_references"] == [
+        {"page_no": 1, "block_orders": [3]}
+    ]
+    assert "reclassified by the application" in result["warnings"][0]
 
     assert BrainCapability.OCR_ANSWER_MAPPING in provider.capabilities
-    assert result == payload
+    assert result["mappings"] == payload["mappings"]
     request = client.requests[0]
     assert all(
         not isinstance(content, list)

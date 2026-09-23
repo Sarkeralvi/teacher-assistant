@@ -450,6 +450,14 @@ def test_complete_saved_transcript_is_assigned_globally_when_page_labels_are_mis
                 label_source="heading",
                 confidence=Decimal("0.90"),
             ),
+            VisualPageBlock(
+                question_label=None,
+                bbox=[100, 580, 900, 640],
+                text="Answer no: 01",
+                continues_from_previous=False,
+                label_source="continuation",
+                confidence=Decimal("0.90"),
+            ),
         ],
         is_blank_page=False,
     )
@@ -476,6 +484,8 @@ def test_complete_saved_transcript_is_assigned_globally_when_page_labels_are_mis
                     "needs_review": True,
                 },
             ],
+            "unassigned_block_references": [{"page_no": 1, "block_orders": [3]}],
+            "non_answer_block_references": [{"page_no": 1, "block_orders": [4]}],
             "warnings": [],
         },
     )

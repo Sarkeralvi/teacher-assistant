@@ -146,6 +146,8 @@ def test_codex_assigns_saved_transcript_as_a_text_only_structured_call(
                 "needs_review": True,
             }
         ],
+        "unassigned_block_references": [],
+        "non_answer_block_references": [],
         "warnings": [],
     }
     preflight_modes: list[bool] = []

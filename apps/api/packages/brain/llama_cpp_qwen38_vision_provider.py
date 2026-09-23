@@ -74,6 +74,7 @@ from packages.brain.schemas_qwen38 import (
 from packages.brain.transcript_assignment import (
     FullTranscriptAssignmentOutput,
     build_full_transcript_assignment_prompt,
+    normalize_full_transcript_assignment,
     validate_full_transcript_assignment,
 )
 
@@ -873,6 +874,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
             enable_thinking=False,
         )
         assert isinstance(payload, FullTranscriptAssignmentOutput)
+        payload = normalize_full_transcript_assignment(payload, pages=pages)
         validate_full_transcript_assignment(payload, pages=pages, questions=questions)
         return payload.model_dump(mode="json")
 

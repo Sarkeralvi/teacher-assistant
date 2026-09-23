@@ -298,6 +298,7 @@ BulkExceptionCode = Literal[
     "incomplete_region",
     "possible_continuation",
     "unassigned_ink",
+    "unassigned_transcript_block",
     "missing_answer",
     "probable_blank",
     "cross_question_overlap",

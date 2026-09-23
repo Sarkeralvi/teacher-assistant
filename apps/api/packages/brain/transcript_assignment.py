@@ -8,19 +8,26 @@ finalized question.  It cannot alter text, create geometry, or grade work.
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION = "full-transcript-assignment-v1"
+FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION = "full-transcript-assignment-v4"
+
+_STRUCTURAL_HEADING_RE = re.compile(
+    r"^(?:answer\s*(?:no|number)\s*[:.#-]?\s*)?"
+    r"(?:\d+)?(?:\s*\([a-z0-9ivx]+\))+[.:]?$|^answer\s*(?:no|number)\s*[:.#-]?\s*\d+[.:]?$",
+    re.IGNORECASE,
+)
 
 
 class TranscriptBlockReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     page_no: int = Field(ge=1)
-    block_orders: list[int] = Field(min_length=1, max_length=200)
+    block_orders: list[int] = Field(max_length=200)
 
     @model_validator(mode="after")
     def block_orders_are_unique(self) -> TranscriptBlockReference:
@@ -54,7 +61,12 @@ class TranscriptQuestionAssignment(BaseModel):
 class FullTranscriptAssignmentOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    contract_version: Literal["full-transcript-assignment-v4"] = (
+        FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION
+    )
     mappings: list[TranscriptQuestionAssignment] = Field(min_length=1, max_length=200)
+    unassigned_block_references: list[TranscriptBlockReference] = Field(max_length=200)
+    non_answer_block_references: list[TranscriptBlockReference] = Field(max_length=200)
     warnings: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -102,10 +114,14 @@ def build_full_transcript_assignment_prompt(
         raise ValueError("The saved transcript contains no writing to assign")
 
     schema_example = (
-        '{"mappings":[{"question_id":1,"question_no":"1(a)",'
+        '{"contract_version":"full-transcript-assignment-v4",'
+        '"mappings":[{"question_id":1,"question_no":"1(a)",'
         '"status":"mapped|uncertain|not_found",'
         '"block_references":[{"page_no":1,"block_orders":[1,2]}],'
-        '"confidence":0.0,"warnings":[],"needs_review":true}],"warnings":[]}'
+        '"confidence":0.0,"warnings":[],"needs_review":true}],'
+        '"unassigned_block_references":[{"page_no":1,"block_orders":[3]}],'
+        '"non_answer_block_references":[{"page_no":1,"block_orders":[4]}],'
+        '"warnings":[]}'
     )
     return (
         "Assign the SAVED COMPLETE-SCRIPT TRANSCRIPT below to the finalized questions. "
@@ -115,9 +131,14 @@ def build_full_transcript_assignment_prompt(
         "reading order, hierarchical numbering such as (a)/(i), continuation across pages, "
         "and question subject matter when a student omitted or abbreviated a heading. Wrong, "
         "partial, crossed-out, and irrelevant work still belongs to its physical question. "
-        "Each block may belong to at most one question. Return every finalized question exactly "
-        "once. Use uncertain when a boundary has more than one plausible owner. Use not_found "
-        "only when no supplied block answers that question. Every mapping must keep "
+        "Classify every supplied block exactly once: assign it to one question or put genuinely "
+        "ambiguous material in unassigned_block_references. Always return an empty "
+        "non_answer_block_references list; the application classifies standalone headings. "
+        "Include all setup, working, wrong work, crossed-out "
+        "work, and continuations that physically belong to an answer; do not select only the "
+        "best or final lines. Return every finalized question exactly once. Use "
+        "uncertain when a boundary has more than one plausible owner. Use not_found only when "
+        "no supplied block answers that question. Every mapping must keep "
         "needs_review=true. Return exactly this JSON shape with no extra keys: "
         f"{schema_example}\n\nFINALIZED QUESTIONS\n"
         + json.dumps(references, ensure_ascii=False, separators=(",", ":"))
@@ -158,3 +179,105 @@ def validate_full_transcript_assignment(
                 if key in claimed:
                     raise ValueError("Transcript assignment claimed one block more than once")
                 claimed.add(key)
+    for reference in output.unassigned_block_references:
+        for order in reference.block_orders:
+            key = (reference.page_no, order)
+            if key not in valid_blocks:
+                raise ValueError("Transcript assignment referenced an unknown unassigned block")
+            if key in claimed:
+                raise ValueError("Transcript assignment classified one block more than once")
+            claimed.add(key)
+    for reference in output.non_answer_block_references:
+        for order in reference.block_orders:
+            key = (reference.page_no, order)
+            if key not in valid_blocks:
+                raise ValueError("Transcript assignment referenced an unknown non-answer block")
+            if key in claimed:
+                raise ValueError("Transcript assignment classified one block more than once")
+            claimed.add(key)
+    if claimed != valid_blocks:
+        raise ValueError("Transcript assignment did not classify every saved block")
+
+
+def normalize_full_transcript_assignment(
+    output: FullTranscriptAssignmentOutput,
+    *,
+    pages: list[dict[str, Any]],
+) -> FullTranscriptAssignmentOutput:
+    """Remove empty references and fail closed on provider omissions.
+
+    A model may emit an empty grouping object or forget a block. Empty objects
+    carry no decision and are discarded. Omitted real blocks become explicitly
+    unassigned; they are never guessed into a question or silently ignored.
+    """
+
+    normalized = output.model_copy(deep=True)
+    for mapping in normalized.mappings:
+        mapping.block_references = [
+            reference for reference in mapping.block_references if reference.block_orders
+        ]
+    normalized.unassigned_block_references = [
+        reference
+        for reference in normalized.unassigned_block_references
+        if reference.block_orders
+    ]
+    provider_non_answer = {
+        (reference.page_no, order)
+        for reference in normalized.non_answer_block_references
+        for order in reference.block_orders
+    }
+    normalized.non_answer_block_references = []
+    block_text_by_key = {
+        (int(page.get("page") or page.get("page_no") or 0), int(block.get("order") or 0)): str(
+            block.get("text") or ""
+        ).strip()
+        for page in pages
+        for block in (page.get("blocks") or [])
+        if int(block.get("order") or 0) > 0 and str(block.get("text") or "").strip()
+    }
+    valid_blocks = set(block_text_by_key)
+    classified = {
+        (reference.page_no, order)
+        for mapping in normalized.mappings
+        for reference in mapping.block_references
+        for order in reference.block_orders
+    }
+    provider_unassigned = {
+        (reference.page_no, order)
+        for reference in normalized.unassigned_block_references
+        for order in reference.block_orders
+    }
+    classified.update(provider_unassigned)
+    missing = set(valid_blocks - classified - provider_non_answer)
+    candidate_unassigned = provider_unassigned | provider_non_answer | missing
+    structural = {
+        key
+        for key in candidate_unassigned
+        if key in block_text_by_key
+        and "\n" not in block_text_by_key[key]
+        and len(block_text_by_key[key]) <= 40
+        and _STRUCTURAL_HEADING_RE.fullmatch(block_text_by_key[key]) is not None
+    }
+
+    def grouped_references(keys: set[tuple[int, int]]) -> list[TranscriptBlockReference]:
+        by_page: dict[int, list[int]] = {}
+        for page_no, order in sorted(keys):
+            by_page.setdefault(page_no, []).append(order)
+        return [
+            TranscriptBlockReference(page_no=page_no, block_orders=orders)
+            for page_no, orders in by_page.items()
+        ]
+
+    normalized.unassigned_block_references = grouped_references(
+        candidate_unassigned - structural
+    )
+    normalized.non_answer_block_references = grouped_references(structural)
+    if missing:
+        normalized.warnings.append(
+            f"Provider omitted {len(missing)} saved block(s); treated as unassigned"
+        )
+    if provider_non_answer:
+        normalized.warnings.append(
+            "Provider non-answer claims were reclassified by the application"
+        )
+    return FullTranscriptAssignmentOutput.model_validate(normalized.model_dump(mode="json"))

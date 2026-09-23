@@ -48,6 +48,8 @@ def _transcript_assignment_payload() -> dict[str, object]:
                 "needs_review": True,
             }
         ],
+        "unassigned_block_references": [],
+        "non_answer_block_references": [],
         "warnings": [],
     }
 

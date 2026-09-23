@@ -85,6 +85,8 @@ def test_antigravity_assigns_saved_transcript_without_file_tools(tmp_path: Path)
                 "needs_review": True,
             }
         ],
+        "unassigned_block_references": [],
+        "non_answer_block_references": [],
         "warnings": [],
     }
 

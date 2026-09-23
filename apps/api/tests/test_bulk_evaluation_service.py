@@ -834,7 +834,11 @@ def test_page_read_resume_reanalyzes_one_saved_transcript_for_all_sibling_items(
     transcript = ScriptTranscript(
         id=901,
         source_manifest_sha256="a" * 64,
-        assignment_status="not_started",
+        assignment_status="complete",
+        assignment_fingerprint="b" * 64,
+        # Legacy v1 results were complete but did not prove exhaustive block
+        # classification, so they get exactly one upgrade analysis.
+        assignment_result_json={"mappings": [], "warnings": []},
     )
     db.get.side_effect = lambda model, object_id: {
         (AnswerEvidenceAssignment, 700): assignment,
