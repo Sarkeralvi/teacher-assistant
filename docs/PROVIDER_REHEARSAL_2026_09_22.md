@@ -28,7 +28,7 @@ under ignored `.local-ai/rehearsal/` storage and are not committed.
 | Antigravity Gemini CLI (`gemini-3.8-flash-high`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 15 clean; zero provider failures | 40/60 | 0 |
 | Local Qwen 3.8 Vision (`qwen3.8-27b-q4km`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 12 clean and 3 verification disagreements; zero provider failures after parser repair and retry | 38/60 | 0 |
 | Codex CLI (`gpt-5.5`) | 23/23 pages; 15/15 reviewed assignments; 14 drafts because Question 9 is confirmed blank; 11 clean, 3 verification disagreements, 1 missing-answer exception; zero provider failures after text-only boundary repair and retry | 37/54 | 0 |
-| OpenAI-compatible API (`Qwen/Qwen3.8-27B`, Akash configuration) | **NOT RUN end to end.** A comparable full run needs about 37 calls; only 17 remain under the approved global ceiling. | 0 | 0 |
+| OpenAI-compatible API (`Qwen/Qwen3.8-27B`, Akash configuration) | **NOT RUN end to end.** Offline profile resolution is ready and advertises `visual_page_read`, `visual_transcription`, and `grading`; a comparable full run needs about 37 calls, while only 17 remain under the approved global ceiling. | 0 | 0 |
 | OpenAI API / Gemini API | Not eligible in the active configuration: provider-specific keys and image input are disabled. | 0 | 0 |
 | Legacy local Qwen 3.6 | Not eligible for this workflow because it has no visual page-read capability. | 0 | 0 |
 | Mock | Excluded from real-provider claims. | 0 | 0 |
@@ -118,8 +118,12 @@ full Akash rehearsal, so no partial run was presented as end-to-end evidence.
 
 ## Remaining bounded work
 
-One full Akash/OpenAI-compatible rehearsal remains. It requires an explicit
+One full Akash/OpenAI-compatible rehearsal remains. A no-call preflight resolved
+the configured cloud endpoint, exact `Qwen/Qwen3.8-27B` model, 600-second
+timeout, JSON-object structured output, required visual capabilities, and
+credential readiness without exposing a secret. It requires an explicit
 increase of at least 20 requests beyond the current 200-call ceiling (37 expected
-calls versus 17 remaining). Until that is authorized and completed, the honest
+calls versus 17 remaining); increasing the ceiling to 225 would also leave five
+retry calls. Until that is authorized and completed, the honest
 all-configured-provider verdict is **PARTIAL**, with four real provider passes and
 Akash unverified end to end.
