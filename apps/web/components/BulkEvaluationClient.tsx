@@ -278,8 +278,9 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         </p>
         <h1 className="mt-2 text-3xl font-semibold">Upload once. Review exceptions first.</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-          The configured brain maps, transcribes, and creates draft scores sequentially. Unreadable,
-          incomplete, or contradictory evidence is quarantined and never silently graded.
+          The configured brain reads each complete page into a saved transcript, assigns transcript
+          blocks to questions, and creates draft scores sequentially. Unreadable, incomplete,
+          ambiguous, or contradictory evidence is quarantined and never silently graded.
         </p>
       </header>
 
@@ -385,7 +386,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
               <div className="space-y-3">{exceptions.map((item) => (
                 <article key={item.item_id} className="grid gap-3 rounded-lg border border-amber-800/70 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
                   <div><p className="font-semibold">{item.student_identifier ?? `Submission ${item.submission_id}`} · {item.question_label}</p><p className="mt-1 text-sm text-amber-200">{item.exception_codes.join(", ")}</p></div>
-                  <div className="flex gap-2"><Link className={secondaryButtonClass} href={`/assessments/${assessmentId}?submission=${item.submission_id}&answerRegion=${item.answer_region_id ?? ""}`}>Inspect manuscript</Link><button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeBulkEvaluationItem(activeRun.id, item.item_id).then(refresh).catch((caught) => setError(errorMessage(caught)))}>Resume item</button></div>
+                  <div className="flex gap-2"><Link className={secondaryButtonClass} href={`/submissions/${item.submission_id}/transcript`}>Review page transcript</Link><button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeBulkEvaluationItem(activeRun.id, item.item_id).then(refresh).catch((caught) => setError(errorMessage(caught)))}>Resume item</button></div>
                 </article>
               ))}</div>
             )}

@@ -309,6 +309,7 @@ BulkExceptionCode = Literal[
     "stale_evidence",
     "missing_page",
     "page_read_failed",
+    "evidence_review_required",
 ]
 
 
@@ -1886,6 +1887,9 @@ class ScriptTranscriptRead(ORMBase):
     provider_request_count: int
     pages_needing_reconciliation: list[int] = Field(default_factory=list)
     coverage_complete: bool
+    reviewed_at: datetime | None = None
+    reviewed_by_teacher_id: int | None = None
+    review_is_current: bool = False
     pages: list[ScriptTranscriptPageRead] = Field(default_factory=list)
 
 

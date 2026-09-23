@@ -69,6 +69,56 @@ def _salvage_list_field(
     return salvaged
 
 
+def repair_page_read_geometry(
+    parsed: Any, response_model: type[BaseModel], exc: ValidationError
+) -> dict[str, Any] | None:
+    """Preserve transcript text when only model-authored block geometry is invalid.
+
+    Geometry helps a teacher inspect a block, but it is not the saved answer
+    evidence. A cloud provider returned useful verbatim text with one reversed
+    bbox during a real bulk run. Replacing only that bbox with the whole-page
+    inspection box keeps the text visible and forces the block into review by
+    lowering confidence and marking labelled ownership as inferred.
+    """
+
+    if response_model is not VisualPageTranscriptOutput:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("blocks"), list):
+        return None
+    bad_indices: set[int] = set()
+    for error in exc.errors():
+        loc = error["loc"]
+        if len(loc) < 2 or loc[0] != "blocks" or not isinstance(loc[1], int):
+            return None
+        if "bbox" not in str(error.get("msg", "")).casefold() and (
+            len(loc) < 3 or loc[2] != "bbox"
+        ):
+            return None
+        bad_indices.add(loc[1])
+    if not bad_indices:
+        return None
+    repaired = dict(parsed)
+    blocks = [dict(item) if isinstance(item, dict) else item for item in parsed["blocks"]]
+    for index in bad_indices:
+        if index >= len(blocks) or not isinstance(blocks[index], dict):
+            return None
+        blocks[index]["bbox"] = [0, 0, 1000, 1000]
+        try:
+            blocks[index]["confidence"] = min(float(blocks[index]["confidence"]), 0.49)
+        except (KeyError, TypeError, ValueError):
+            blocks[index]["confidence"] = 0.0
+        if blocks[index].get("question_label") is not None:
+            blocks[index]["label_source"] = "inferred"
+    repaired["blocks"] = blocks
+    repaired["needs_review"] = True
+    logger.warning(
+        "universal_vision: replaced invalid geometry for %d transcript block(s); "
+        "text preserved for teacher review",
+        len(bad_indices),
+    )
+    return repaired
+
+
 class _VisualTranscriptionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

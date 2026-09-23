@@ -44,7 +44,14 @@ from typing import Any, Literal
 
 import httpx
 from PIL import Image, ImageDraw
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.llama_cpp_qwen_provider import (
@@ -242,6 +249,20 @@ class _Qwen38GradePayload(BaseModel):
     major_errors: list[str]
     feedback_to_student: str = Field(min_length=1)
     review_flags: list[str] = Field(min_length=1)
+
+    @field_validator("detected_answer_summary", mode="before")
+    @classmethod
+    def normalize_structured_answer_summary(cls, value: Any) -> Any:
+        """Preserve a structured summary as deterministic review text.
+
+        Qwen sometimes represents several detected answer facts as a JSON
+        object even though the contract requests a string.  The object is
+        still descriptive text, so serialize it without weakening validation
+        for missing, blank, or unrelated malformed fields.
+        """
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return value
 
     @model_validator(mode="after")
     def reconcile(self) -> _Qwen38GradePayload:

@@ -387,7 +387,13 @@ def test_codex_cli_workspace_is_removed_after_simulated_failure(tmp_path: Path) 
     assert all(not workspace.exists() for workspace in workspaces)
 
 
-def test_codex_cli_image_enabled_without_image_path_omits_image_flag() -> None:
+@pytest.mark.parametrize(
+    "answer_image_path",
+    ["", "[stored transcript evidence; image input disabled]"],
+)
+def test_codex_cli_image_enabled_without_image_path_omits_image_flag(
+    answer_image_path: str,
+) -> None:
     calls: list[list[str]] = []
 
     def runner(cmd: list[str], **kwargs: object) -> FakeCompletedProcess:
@@ -407,7 +413,7 @@ def test_codex_cli_image_enabled_without_image_path_omits_image_flag() -> None:
         question_text="Explain.",
         question_total_marks=Decimal("10.00"),
         rubric_json=rubric_payload(),
-        answer_image_path="",
+        answer_image_path=answer_image_path,
         prompt_version="ignored",
         messages=messages(image_input_enabled=True),
     )

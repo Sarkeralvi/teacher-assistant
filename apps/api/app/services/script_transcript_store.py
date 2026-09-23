@@ -370,7 +370,11 @@ class ScriptTranscriptStore:
                 state=DISPATCHED,
                 is_blank_page=False,
                 error=None,
-                provider_request_count=0,
+                # Preserve earlier known attempts while the replacement call
+                # is in flight. The terminal write adds this new attempt.
+                provider_request_count=(
+                    stored.provider_request_count if stored is not None else 0
+                ),
                 latency_ms=None,
                 repair_pass=(stored.repair_pass if stored is not None else 0),
                 # Keep the previous read's payload until a new one replaces it.
@@ -459,6 +463,16 @@ class ScriptTranscriptStore:
         already paid for.
         """
 
+        previous = self.db.scalars(
+            select(ScriptPageTranscript).where(
+                ScriptPageTranscript.script_transcript_id == transcript.id,
+                ScriptPageTranscript.submission_page_id == submission_page_id,
+            )
+        ).first()
+        cumulative_request_count = (
+            (previous.provider_request_count if previous is not None else 0)
+            + provider_request_count
+        )
         stored = self._replace_page_row(
             transcript=transcript,
             submission_page_id=submission_page_id,
@@ -468,7 +482,7 @@ class ScriptTranscriptStore:
             state="succeeded",
             is_blank_page=output.is_blank_page,
             error=None,
-            provider_request_count=provider_request_count,
+            provider_request_count=cumulative_request_count,
             latency_ms=latency_ms,
             repair_pass=repair_pass,
             raw_output_json=output.model_dump(mode="json"),
@@ -518,6 +532,16 @@ class ScriptTranscriptStore:
             raise ScriptTranscriptError(f"{state!r} is not a terminal page failure state")
         if not error.strip():
             raise ScriptTranscriptError("a failed page read must record why it failed")
+        previous = self.db.scalars(
+            select(ScriptPageTranscript).where(
+                ScriptPageTranscript.script_transcript_id == transcript.id,
+                ScriptPageTranscript.submission_page_id == submission_page_id,
+            )
+        ).first()
+        cumulative_request_count = (
+            (previous.provider_request_count if previous is not None else 0)
+            + provider_request_count
+        )
         stored = self._replace_page_row(
             transcript=transcript,
             submission_page_id=submission_page_id,
@@ -527,7 +551,7 @@ class ScriptTranscriptStore:
             state=state,
             is_blank_page=False,
             error=error,
-            provider_request_count=provider_request_count,
+            provider_request_count=cumulative_request_count,
             latency_ms=None,
             repair_pass=repair_pass,
             raw_output_json=None,

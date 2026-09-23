@@ -57,6 +57,10 @@ from app.services.script_transcript_store import (
     ScriptTranscriptStore,
     classify_block_text,
 )
+from app.services.transcript_review import (
+    current_review_snapshot,
+    transcript_review_is_current,
+)
 
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -182,8 +186,82 @@ def read_script_transcript(
             len(pages) == transcript.page_count
             and all(page.state == "succeeded" for page in pages)
         ),
+        reviewed_at=transcript.reviewed_at,
+        reviewed_by_teacher_id=transcript.reviewed_by_teacher_id,
+        review_is_current=transcript_review_is_current(db, transcript),
         pages=[_page_read(page) for page in pages],
     )
+
+
+@router.post(
+    "/submissions/{submission_id}/script-transcript/confirm-review",
+    response_model=ScriptTranscriptRead,
+)
+def confirm_script_transcript_review(
+    submission_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ScriptTranscriptRead:
+    """Confirm the exact transcript, page classifications, and assignments shown."""
+
+    get_owned_submission_or_404(submission_id, db, current_user)
+    transcript = _current_transcript(db, submission_id)
+    pages = sorted(transcript.pages, key=lambda item: (item.page_order, item.page_no))
+    if len(pages) != transcript.page_count or any(
+        page.state != "succeeded" for page in pages
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Every source page must have a successful, reviewable transcript",
+        )
+    assignments = AnswerEvidenceAssignmentService(db).current_assignments(transcript.id)
+    if not assignments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Re-derive question evidence before confirming this transcript",
+        )
+    unclassified_pages = [
+        page.page_no for page in pages if page.teacher_classification is None
+    ]
+    if unclassified_pages:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Classify every page as answer work or non-answer before confirming; "
+                f"pending pages: {', '.join(str(page_no) for page_no in unclassified_pages)}"
+            ),
+        )
+    summary = assignment_summary(assignments)
+    if summary["blocked_states"] or any(
+        assignment.unassigned_block_count for assignment in assignments
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Resolve unreadable, ambiguous, missing, failed, or unassigned evidence "
+                "before confirming this transcript"
+            ),
+        )
+    transcript.review_snapshot_sha256 = current_review_snapshot(db, transcript)
+    transcript.reviewed_at = datetime.now(UTC)
+    transcript.reviewed_by_teacher_id = current_user.id
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="script_transcript_review_confirmed",
+            entity_type="script_transcript",
+            entity_id=transcript.id,
+            payload_json={
+                "submission_id": submission_id,
+                "review_snapshot_sha256": transcript.review_snapshot_sha256,
+                "page_count": len(pages),
+                "assignment_count": len(assignments),
+            },
+        )
+    )
+    db.commit()
+    return read_script_transcript(submission_id, db, current_user)
 
 
 @router.get(
@@ -564,6 +642,66 @@ def reconcile_script_transcript_page(
     db.commit()
     db.refresh(updated)
     return _page_read(updated)
+
+
+@router.post(
+    "/submissions/{submission_id}/answer-evidence/confirm-current-ownership",
+    response_model=SubmissionAnswerEvidenceRead,
+)
+def confirm_current_answer_evidence_ownership(
+    submission_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> SubmissionAnswerEvidenceRead:
+    """Record that the teacher accepts every currently displayed assigned span.
+
+    This is deliberately separate from final transcript confirmation. It turns
+    inferred model ownership into attributed teacher decisions, then re-derives
+    the evidence from the unchanged transcript without another provider call.
+    """
+
+    get_owned_submission_or_404(submission_id, db, current_user)
+    transcript = _current_transcript(db, submission_id)
+    assignments = AnswerEvidenceAssignmentService(db).current_assignments(transcript.id)
+    if not assignments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This script has no current question evidence to confirm",
+        )
+    changed_block_ids: set[int] = set()
+    now = datetime.now(UTC)
+    for assignment in assignments:
+        question = db.get(Question, assignment.question_id)
+        if question is None:
+            continue
+        for span in assignment.spans:
+            block = db.get(ScriptTranscriptBlock, span.script_transcript_block_id)
+            if block is None:
+                continue
+            continues_from_previous = block.effective_continues_from_previous
+            block.assignment_override_active = True
+            block.teacher_question_label = question.question_no
+            block.teacher_continues_from_previous = continues_from_previous
+            block.assignment_override_revision += 1
+            block.assignment_edited_at = now
+            block.assignment_edited_by_teacher_id = current_user.id
+            changed_block_ids.add(block.id)
+    db.add(
+        AuditLog(
+            actor_type="teacher",
+            actor_id=current_user.id,
+            event_type="answer_evidence_current_ownership_confirmed",
+            entity_type="script_transcript",
+            entity_id=transcript.id,
+            payload_json={
+                "submission_id": submission_id,
+                "assigned_block_count": len(changed_block_ids),
+                "provider_request_count": 0,
+            },
+        )
+    )
+    db.commit()
+    return rederive_answer_evidence(submission_id, db, current_user)
 
 
 @router.post(

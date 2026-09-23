@@ -25,6 +25,7 @@ from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 from packages.brain.universal_vision import (
     UniversalVisionCompletion,
     UniversalVisionProviderMixin,
+    repair_page_read_geometry,
 )
 
 PROVIDER_NAME = "antigravity_gemini"
@@ -32,6 +33,8 @@ DEFAULT_MODEL = "gemini-3.8-flash-high"
 _TEMP_DIR_NAME = Path(".local-ai") / "antigravity-temp"
 _MAX_OUTPUT_BYTES = 1_000_000
 _AGY_PAYLOAD_ARTIFACT_FIELDS = frozenset({"toolAction", "toolSummary"})
+_WINDOWS_CLEANUP_RETRY_SECONDS = 0.1
+_WINDOWS_CLEANUP_MAX_ATTEMPTS = 50
 
 
 class _CompletedProcessLike(Protocol):
@@ -136,7 +139,12 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             try:
                 payload = response_model.model_validate(payload).model_dump(mode="json")
             except ValidationError as exc:
-                raise RuntimeError(f"Gemini structured response was not usable: {exc}") from exc
+                repaired = repair_page_read_geometry(payload, response_model, exc)
+                if repaired is None:
+                    raise RuntimeError(
+                        f"Gemini structured response was not usable: {exc}"
+                    ) from exc
+                payload = response_model.model_validate(repaired).model_dump(mode="json")
         return UniversalVisionCompletion(
             payload=payload,
             latency_ms=int((time.perf_counter() - started) * 1000),
@@ -352,4 +360,14 @@ class _TempImageContext:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self._workspace is not None:
-            self._workspace.cleanup()
+            for attempt in range(_WINDOWS_CLEANUP_MAX_ATTEMPTS):
+                try:
+                    self._workspace.cleanup()
+                    return
+                except PermissionError:
+                    if attempt == _WINDOWS_CLEANUP_MAX_ATTEMPTS - 1:
+                        raise
+                    # agy can exit before its Windows sandbox helper releases
+                    # the workspace handle. Do not turn a valid provider result
+                    # into a failure for that short-lived file lock.
+                    time.sleep(_WINDOWS_CLEANUP_RETRY_SECONDS)

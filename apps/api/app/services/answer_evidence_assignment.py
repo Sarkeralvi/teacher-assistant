@@ -328,7 +328,10 @@ def derive_assignments(
         item = by_key[owned.source.key]
         blocks_by_node[owned.question_node_id].append(item)
         basis_by_block_id[item.block.id] = owned.basis
-        if item.block.label_source == "inferred":
+        if (
+            item.block.label_source == "inferred"
+            and not item.block.assignment_override_active
+        ):
             inferred_nodes.add(owned.question_node_id)
 
     # Only writing, not whitespace, counts as material a teacher must place.

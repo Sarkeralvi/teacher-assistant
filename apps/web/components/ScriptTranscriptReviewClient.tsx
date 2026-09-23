@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   classifyTranscriptPage,
+  confirmCurrentEvidenceOwnership,
+  confirmTranscriptReview,
   correctTranscriptBlock,
   fetchAnswerEvidence,
   fetchScriptTranscript,
@@ -215,6 +217,48 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
     }
   }
 
+  async function confirmReview() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const confirmed = await confirmTranscriptReview(submissionId);
+      setTranscript(confirmed);
+      setNotice(
+        "Transcript and question evidence confirmed. Draft grading may now use this exact reviewed version.",
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not confirm the transcript review.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmCurrentOwnership() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      setEvidence(await confirmCurrentEvidenceOwnership(submissionId));
+      setNotice(
+        "Current evidence owners recorded as teacher decisions and re-derived without another page read.",
+      );
+      await load();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not confirm the current evidence owners.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) {
     return <p className="text-sm text-slate-600">Loading the script transcript…</p>;
   }
@@ -278,6 +322,27 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
             be reported as unanswered.
           </p>
         ) : null}
+        <div className="mt-4 rounded border border-slate-300 bg-slate-50 p-3">
+          <p className="text-sm font-medium" data-testid="transcript-review-status">
+            {transcript.review_is_current
+              ? "Teacher review is current"
+              : "Teacher review required before draft grading"}
+          </p>
+          <p className="mt-1 text-xs text-slate-600">
+            Confirm only after checking each full page beside its transcript, classifying every
+            page, and resolving ambiguous or unreadable evidence. Any later edit makes this
+            confirmation stale.
+          </p>
+          <button
+            type="button"
+            className="mt-2 rounded bg-slate-800 px-3 py-1 text-sm text-white disabled:opacity-50"
+            disabled={busy || transcript.review_is_current}
+            onClick={() => void confirmReview()}
+            data-testid="confirm-transcript-review"
+          >
+            Confirm transcript and evidence for draft grading
+          </button>
+        </div>
       </section>
 
       {needsReconciliation ? (
@@ -330,15 +395,26 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
       <section className="rounded border border-slate-200 p-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Question evidence</h2>
-          <button
-            type="button"
-            className="rounded border border-slate-400 px-3 py-1 text-sm disabled:opacity-50"
-            disabled={busy || !evidence}
-            onClick={() => void rederive()}
-            data-testid="rederive-evidence"
-          >
-            Re-derive from transcript (no page is read again)
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded border border-slate-400 px-3 py-1 text-sm disabled:opacity-50"
+              disabled={busy || !evidence}
+              onClick={() => void confirmCurrentOwnership()}
+              data-testid="confirm-current-ownership"
+            >
+              Confirm displayed evidence owners
+            </button>
+            <button
+              type="button"
+              className="rounded border border-slate-400 px-3 py-1 text-sm disabled:opacity-50"
+              disabled={busy || !evidence}
+              onClick={() => void rederive()}
+              data-testid="rederive-evidence"
+            >
+              Re-derive from transcript (no page is read again)
+            </button>
+          </div>
         </div>
         {evidence ? (
           <ul className="mt-4 space-y-4" data-testid="evidence-list">

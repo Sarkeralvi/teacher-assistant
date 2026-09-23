@@ -26,7 +26,7 @@ def test_bulk_page_read_receives_selected_adapter(monkeypatch):
     db = MagicMock()
     submission = SimpleNamespace(id=11, pages=[object()])
     item = SimpleNamespace(status="pending")
-    db.scalar.return_value = submission
+    db.scalar.side_effect = [submission, 0]
     db.get.return_value = SimpleNamespace(id=1)
     db.scalars.return_value.all.return_value = [item]
     service = bulk.BulkEvaluationService(
@@ -44,6 +44,7 @@ def test_bulk_page_read_receives_selected_adapter(monkeypatch):
     monkeypatch.setattr(bulk, "LocalScriptPageReadService", factory)
     run = SimpleNamespace(
         id=1, created_by_teacher_id=1, authorized_call_limit=10, calls_used=0,
+        provider="claude_cli", model_name="sonnet",
         import_manifest={"visual_evidence_path": "page_read"},
     )
     with pytest.raises(RuntimeError, match="verified selected adapter"):

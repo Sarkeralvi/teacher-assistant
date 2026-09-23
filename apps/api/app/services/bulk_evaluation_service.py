@@ -16,7 +16,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 from openpyxl import Workbook
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings, get_settings
@@ -33,6 +33,7 @@ from app.models import (
     GradingRun,
     Question,
     Rubric,
+    ScriptPageTranscript,
     ScriptTranscript,
     Submission,
     SubmissionPage,
@@ -56,6 +57,7 @@ from app.services.qwen38_visual_transcription_service import (
 )
 from app.services.storage import LocalStorage
 from app.services.submission_processing import extract_page_images
+from app.services.transcript_review import transcript_review_is_current
 from packages.brain.adapter import BrainProviderConfigurationError, sanitize_provider_error
 from packages.brain.capabilities import BrainCapability, BrainExecutionLocation
 from packages.brain.policy import (
@@ -675,6 +677,7 @@ class BulkEvaluationService:
             self.db.rollback()
             current = self.db.get(BulkEvaluationRun, run_id)
             if current is not None:
+                self._sync_failed_page_read_calls(current)
                 self._mark_running_uncertain(
                     current,
                     _UNCERTAIN_PROVIDER_WARNING,
@@ -685,6 +688,7 @@ class BulkEvaluationService:
             self.db.rollback()
             current = self.db.get(BulkEvaluationRun, run_id)
             if current is not None:
+                self._sync_failed_page_read_calls(current)
                 self._mark_running_uncertain(
                     current,
                     _UNCERTAIN_PROVIDER_WARNING,
@@ -737,6 +741,8 @@ class BulkEvaluationService:
             raise BulkEvaluationError(
                 "Increase authorization in a new run; call limit is exhausted"
             )
+        if run.stage == "reading":
+            self._resume_known_page_read_failure(run)
         run.stop_requested = False
         run.error = None
         run.status = self._status_for_pending_stage(run)
@@ -753,7 +759,61 @@ class BulkEvaluationService:
             raise BulkEvaluationError("Only an exception or uncertain item can be resumed")
         mapping = self.db.get(AnswerRegionMapping, item.mapping_id) if item.mapping_id else None
         region = self.db.get(AnswerRegion, item.answer_region_id) if item.answer_region_id else None
-        if self._uses_page_read(run):
+        if self._uses_page_read(run) and item.answer_evidence_assignment_id is not None:
+            assignment = self.db.get(
+                AnswerEvidenceAssignment, item.answer_evidence_assignment_id
+            )
+            assignment_changed = False
+            if assignment is None or not assignment.is_current:
+                assignment = self.db.scalar(
+                    select(AnswerEvidenceAssignment)
+                    .where(
+                        AnswerEvidenceAssignment.submission_id == item.submission_id,
+                        AnswerEvidenceAssignment.question_id == item.question_id,
+                        AnswerEvidenceAssignment.is_current.is_(True),
+                    )
+                    .order_by(AnswerEvidenceAssignment.id.desc())
+                    .limit(1)
+                )
+                assignment_changed = assignment is not None
+            transcript = (
+                self.db.get(ScriptTranscript, assignment.script_transcript_id)
+                if assignment is not None
+                else None
+            )
+            if (
+                assignment is None
+                or transcript is None
+                or not assignment.is_current
+                or assignment.state != "answer_present"
+                or not transcript_review_is_current(self.db, transcript)
+            ):
+                raise BulkEvaluationError(
+                    "Review and confirm the current transcript evidence before resuming grading"
+                )
+            item.answer_evidence_assignment_id = assignment.id
+            submission = self.db.scalar(
+                select(Submission)
+                .options(selectinload(Submission.pages))
+                .where(Submission.id == item.submission_id)
+            )
+            if submission is None:
+                raise BulkEvaluationError("The submission is unavailable")
+            if region is None or assignment_changed:
+                region = self._create_transcript_compatibility_region(
+                    submission=submission,
+                    assignment=assignment,
+                    run=run,
+                )
+                item.answer_region_id = region.id
+            item.source_snapshot_sha256 = self._assignment_snapshot_hash(
+                transcript=transcript,
+                assignment=assignment,
+            )
+            item.evidence_snapshot_sha256 = item.source_snapshot_sha256
+            item.verification_source = "teacher"
+            item.stage = "grading"
+        elif self._uses_page_read(run):
             linked_transcription = (
                 self.db.get(AnswerRegionOcrRun, item.transcription_run_id)
                 if item.transcription_run_id
@@ -792,6 +852,7 @@ class BulkEvaluationService:
         item.exception_codes = []
         item.warnings = []
         item.completed_at = None
+        run.stop_requested = False
         self._audit_run(
             run,
             "bulk_evaluation_item_resumed",
@@ -1253,6 +1314,7 @@ class BulkEvaluationService:
             return
         run.status = "reading"
         run.stage = "reading"
+        self._record_page_read_call_baseline(run, submission.id)
 
         remaining = run.authorized_call_limit - run.calls_used
         started = datetime.now(UTC)
@@ -1289,6 +1351,7 @@ class BulkEvaluationService:
                 )
             ).all()
         )
+        review_is_current = transcript_review_is_current(self.db, transcript)
         assignment_by_question = {assignment.question_id: assignment for assignment in assignments}
         for item in items:
             assignment = assignment_by_question.get(item.question_id)
@@ -1318,6 +1381,15 @@ class BulkEvaluationService:
                 )
                 item.stage = "read"
                 continue
+            if not review_is_current:
+                self._quarantine(
+                    item,
+                    "evidence_review_required",
+                    "A teacher must confirm the current transcript and question evidence "
+                    "before draft grading",
+                )
+                item.stage = "read"
+                continue
             region = (
                 self.db.get(AnswerRegion, item.answer_region_id)
                 if item.answer_region_id is not None
@@ -1335,7 +1407,7 @@ class BulkEvaluationService:
                 assignment=assignment,
             )
             item.evidence_snapshot_sha256 = item.source_snapshot_sha256
-            item.verification_source = "bulk_policy"
+            item.verification_source = "teacher"
             item.status = "pending"
             item.stage = "grading"
             item.exception_codes = []
@@ -1344,6 +1416,89 @@ class BulkEvaluationService:
         run.heartbeat_at = datetime.now(UTC)
         self._refresh_counts(run)
         self.db.commit()
+
+    def _record_page_read_call_baseline(
+        self, run: BulkEvaluationRun, submission_id: int
+    ) -> None:
+        manifest = dict(run.import_manifest or {})
+        baselines = dict(manifest.get("page_read_call_baselines") or {})
+        key = str(submission_id)
+        if key in baselines:
+            return
+        baselines[key] = self._page_read_request_count(run, submission_id)
+        manifest["page_read_call_baselines"] = baselines
+        run.import_manifest = manifest
+        self.db.commit()
+
+    def _page_read_request_count(
+        self, run: BulkEvaluationRun, submission_id: int
+    ) -> int:
+        return int(
+            self.db.scalar(
+                select(func.coalesce(func.sum(ScriptPageTranscript.provider_request_count), 0))
+                .join(
+                    ScriptTranscript,
+                    ScriptTranscript.id == ScriptPageTranscript.script_transcript_id,
+                )
+                .where(
+                    ScriptTranscript.submission_id == submission_id,
+                    ScriptTranscript.provider == run.provider,
+                    ScriptTranscript.model_name == run.model_name,
+                )
+            )
+            or 0
+        )
+
+    def _sync_failed_page_read_calls(self, run: BulkEvaluationRun) -> None:
+        if run.stage != "reading":
+            return
+        manifest = dict(run.import_manifest or {})
+        baselines = dict(manifest.get("page_read_call_baselines") or {})
+        submission_ids = {
+            item.submission_id for item in run.items if item.stage == "read"
+        }
+        read_calls = sum(
+            max(
+                0,
+                self._page_read_request_count(run, submission_id)
+                - int(baselines.get(str(submission_id), 0)),
+            )
+            for submission_id in submission_ids
+        )
+        run.calls_used = max(run.calls_used, read_calls)
+
+    def _resume_known_page_read_failure(self, run: BulkEvaluationRun) -> None:
+        read_items = [item for item in run.items if item.stage == "read"]
+        if not read_items:
+            return
+        submission_ids = {item.submission_id for item in read_items}
+        states = set(
+            self.db.scalars(
+                select(ScriptPageTranscript.state)
+                .join(
+                    ScriptTranscript,
+                    ScriptTranscript.id == ScriptPageTranscript.script_transcript_id,
+                )
+                .where(
+                    ScriptTranscript.submission_id.in_(submission_ids),
+                    ScriptTranscript.provider == run.provider,
+                    ScriptTranscript.model_name == run.model_name,
+                )
+            ).all()
+        )
+        if states & {"dispatched", "unknown_outcome"}:
+            raise BulkEvaluationError(
+                "A page-read outcome is unknown and must be reconciled before resuming"
+            )
+        if "failed" not in states:
+            return
+        for item in read_items:
+            if item.status != "uncertain":
+                continue
+            item.status = "pending"
+            item.exception_codes = []
+            item.warnings = []
+            item.completed_at = None
 
     def _create_transcript_compatibility_region(
         self,
@@ -1945,6 +2100,30 @@ class BulkEvaluationService:
         item = self._next_grading_item(run)
         if item is None:
             return
+        if item.answer_evidence_assignment_id is not None:
+            assignment = self.db.get(
+                AnswerEvidenceAssignment, item.answer_evidence_assignment_id
+            )
+            transcript = (
+                self.db.get(ScriptTranscript, assignment.script_transcript_id)
+                if assignment is not None
+                else None
+            )
+            if (
+                assignment is None
+                or transcript is None
+                or not assignment.is_current
+                or assignment.state != "answer_present"
+                or not transcript_review_is_current(self.db, transcript)
+            ):
+                self._quarantine(
+                    item,
+                    "evidence_review_required",
+                    "The transcript evidence is unreviewed, stale, or no longer grading-ready",
+                )
+                item.stage = "read"
+                self.db.commit()
+                return
         region = self.db.get(AnswerRegion, item.answer_region_id)
         if region is None:
             self._quarantine(item, "stale_evidence", "Answer evidence disappeared before grading")

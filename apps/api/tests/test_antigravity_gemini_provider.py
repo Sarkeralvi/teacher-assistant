@@ -14,6 +14,7 @@ from packages.brain.adapter import BrainAdapter
 from packages.brain.antigravity_gemini_vision_provider import (
     PROVIDER_NAME,
     AntigravityGeminiVisionProvider,
+    _TempImageContext,
 )
 from packages.brain.capabilities import BrainCapability
 
@@ -372,6 +373,39 @@ def test_explicit_structured_blank_page_is_accepted(tmp_path: Path) -> None:
     assert result.blocks == []
 
 
+def test_antigravity_page_read_preserves_text_when_only_bbox_is_invalid(
+    tmp_path: Path,
+) -> None:
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=lambda *_args, **_kwargs: _agy_success(
+            {
+                "blocks": [
+                    {
+                        "question_label": "Q1",
+                        "bbox": [900, 100, 100, 300],
+                        "text": "x = 42",
+                        "continues_from_previous": False,
+                        "label_source": "heading",
+                        "confidence": 0.9,
+                    }
+                ],
+                "is_blank_page": False,
+                "needs_review": True,
+            }
+        ),
+    )
+
+    result = provider.read_page(
+        image_bytes=b"page", mime_type="image/png", question_labels=["Q1"]
+    )
+
+    assert result.blocks[0].text == "x = 42"
+    assert result.blocks[0].bbox == [0, 0, 1000, 1000]
+    assert result.blocks[0].label_source == "inferred"
+    assert result.blocks[0].confidence == Decimal("0.49")
+
+
 def test_trailing_agy_artifact_does_not_weaken_payload_validation(tmp_path: Path) -> None:
     wrapper = _agy_success(_transcription_payload())
     outer = json.loads(wrapper.stdout)
@@ -422,3 +456,28 @@ def test_current_agy_envelope_metadata_does_not_replace_strict_payload_validatio
 
     assert result.draft_text == "The answer is 42"
     assert result.prompt_tokens == 100
+
+
+def test_temp_workspace_cleanup_retries_transient_windows_file_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_attempts = 0
+
+    def cleanup() -> None:
+        nonlocal cleanup_attempts
+        cleanup_attempts += 1
+        if cleanup_attempts < 3:
+            raise PermissionError(32, "file is in use")
+
+    context = _TempImageContext(Path("unused"), [])
+    context._workspace = SimpleNamespace(cleanup=cleanup)  # type: ignore[assignment]
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "packages.brain.antigravity_gemini_vision_provider.time.sleep",
+        sleeps.append,
+    )
+
+    context.__exit__(None, None, None)
+
+    assert cleanup_attempts == 3
+    assert sleeps == [0.1, 0.1]

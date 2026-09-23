@@ -2410,6 +2410,9 @@ export type ScriptTranscript = {
   provider_request_count: number;
   pages_needing_reconciliation: number[];
   coverage_complete: boolean;
+  reviewed_at: string | null;
+  reviewed_by_teacher_id: number | null;
+  review_is_current: boolean;
   pages: ScriptTranscriptPage[];
 };
 
@@ -2468,8 +2471,22 @@ export async function fetchScriptTranscript(submissionId: number) {
   return apiRequest<ScriptTranscript>(`/submissions/${submissionId}/script-transcript`);
 }
 
+export async function confirmTranscriptReview(submissionId: number) {
+  return apiRequest<ScriptTranscript>(
+    `/submissions/${submissionId}/script-transcript/confirm-review`,
+    { method: "POST" },
+  );
+}
+
 export async function fetchAnswerEvidence(submissionId: number) {
   return apiRequest<SubmissionAnswerEvidence>(`/submissions/${submissionId}/answer-evidence`);
+}
+
+export async function confirmCurrentEvidenceOwnership(submissionId: number) {
+  return apiRequest<SubmissionAnswerEvidence>(
+    `/submissions/${submissionId}/answer-evidence/confirm-current-ownership`,
+    { method: "POST" },
+  );
 }
 
 export async function correctTranscriptBlock(

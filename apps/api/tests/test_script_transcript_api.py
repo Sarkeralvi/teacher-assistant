@@ -543,6 +543,93 @@ def test_rederiving_assignment_makes_no_provider_request(
     assert versions == [1, 1, 2, 2]
 
 
+def test_teacher_review_gate_is_versioned_and_becomes_stale_after_an_edit(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher_id, headers = _register(client)
+    seeded = _Seeded(db_session, teacher_id, tmp_path)
+
+    blocked = client.post(
+        f"/submissions/{seeded.submission.id}/script-transcript/confirm-review",
+        headers=headers,
+    )
+    assert blocked.status_code == 409
+    assert "Classify every page" in blocked.json()["detail"]
+
+    classified = client.patch(
+        f"/script-transcript-pages/{seeded.page_transcript.id}/classification",
+        headers=headers,
+        json={"classification": "answer_content"},
+    )
+    assert classified.status_code == 200, classified.text
+    assigned = client.patch(
+        f"/script-transcript-blocks/{seeded.stray_block.id}/assignment",
+        headers=headers,
+        json={
+            "question_label": "Q1",
+            "continues_from_previous": False,
+            "reason": "teacher reviewed the full page",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    rederived = client.post(
+        f"/submissions/{seeded.submission.id}/answer-evidence/rederive",
+        headers=headers,
+    )
+    assert rederived.status_code == 200, rederived.text
+
+    confirmed = client.post(
+        f"/submissions/{seeded.submission.id}/script-transcript/confirm-review",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["review_is_current"] is True
+    assert confirmed.json()["reviewed_by_teacher_id"] == teacher_id
+
+    corrected = client.patch(
+        f"/script-transcript-blocks/{seeded.answer_block.id}",
+        headers=headers,
+        json={"edited_text": "teacher-corrected answer", "reason": "review correction"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    after_edit = client.get(
+        f"/submissions/{seeded.submission.id}/script-transcript", headers=headers
+    )
+    assert after_edit.status_code == 200
+    assert after_edit.json()["review_is_current"] is False
+
+
+def test_teacher_can_confirm_displayed_inferred_ownership_without_a_provider_call(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher_id, headers = _register(client)
+    seeded = _Seeded(db_session, teacher_id, tmp_path)
+    seeded.answer_block.label_source = "inferred"
+    seeded.assignment.state = "ambiguous"
+    seeded.assignment.state_reason = (
+        "the question label was inferred rather than read, so ownership is unconfirmed"
+    )
+    db_session.commit()
+
+    confirmed = client.post(
+        f"/submissions/{seeded.submission.id}/answer-evidence/confirm-current-ownership",
+        headers=headers,
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    q1 = next(item for item in confirmed.json()["evidence"] if item["question_label"] == "Q1")
+    assert q1["state"] == "answer_present"
+    db_session.refresh(seeded.answer_block)
+    assert seeded.answer_block.assignment_override_active is True
+    assert seeded.answer_block.teacher_question_label == "Q1"
+    audit = db_session.scalars(
+        select(AuditLog).where(
+            AuditLog.event_type == "answer_evidence_current_ownership_confirmed"
+        )
+    ).one()
+    assert audit.payload_json["provider_request_count"] == 0
+
+
 def test_an_unknown_outcome_is_settled_only_by_an_explicit_decision(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:

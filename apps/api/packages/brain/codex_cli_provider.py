@@ -235,7 +235,14 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
         marking_policy: str = "general",
     ) -> GradeSuggestionOutput:
         del prompt_version, task_name, model_policy
-        use_image_input = self.image_input_enabled and bool(answer_image_path)
+        use_image_input = (
+            self.image_input_enabled
+            and bool(answer_image_path)
+            and not (
+                answer_image_path.startswith("[")
+                and "image input disabled" in answer_image_path
+            )
+        )
         if image_data_url:
             # Codex CLI provider never consumes base64/data URLs. Vision must
             # use a supported CLI image flag, not prompt text or persisted raw data.

@@ -1795,6 +1795,63 @@ def test_qwen38_grading_rejects_changed_rubric_contract() -> None:
     assert "Return exactly one JSON object" in client.requests[0]["messages"][0]["content"]
 
 
+def test_qwen38_grading_preserves_structured_detected_answer_summary() -> None:
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "score": 1,
+                            "max_score": 2,
+                            "confidence": 0.7,
+                            "needs_review": True,
+                            "rubric_breakdown": [
+                                {
+                                    "criterion_id": "c1",
+                                    "criterion": "step",
+                                    "criterion_status": "partially_met",
+                                    "max_marks": 2,
+                                    "awarded_marks": 1,
+                                    "reason": "shown",
+                                    "evidence": "x = 4",
+                                    "confidence": 0.7,
+                                }
+                            ],
+                            "detected_answer_summary": {
+                                "working": "x = 4",
+                                "conclusion": "partial",
+                            },
+                            "major_errors": [],
+                            "feedback_to_student": "Review working.",
+                            "review_flags": ["teacher_review_required"],
+                        }
+                    )
+                }
+            }
+        ],
+        "usage": {},
+    }
+    provider, _client = provider_with(completion)
+
+    result = provider.grade(
+        question_text="Solve x.",
+        question_total_marks=Decimal("2"),
+        rubric_json={"criteria": [{"id": "c1", "max_marks": "2"}]},
+        answer_image_path="[image input disabled]",
+        student_answer_text="x = 4",
+        prompt_version="test",
+        messages=[
+            {"role": "system", "content": "grade safely"},
+            {"role": "user", "content": "fresh"},
+        ],
+    )
+
+    assert result.detected_answer_summary == (
+        '{"conclusion": "partial", "working": "x = 4"}'
+    )
+
+
 def test_every_call_sends_a_repetition_penalty() -> None:
     """Regression: greedy decoding looped until the token cap on a real page.
 

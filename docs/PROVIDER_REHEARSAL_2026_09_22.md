@@ -1,128 +1,125 @@
-# Provider rehearsal checkpoint — 2026-09-22
+# Provider rehearsal report — 2026-09-23
 
-## Scope and result
+## Scope and claim boundary
 
-User requested an end-to-end real-script rehearsal with every brain provider.
-The active bounded scope is one existing 23-page submission and its confirmed
-references, private copies, sequential providers, at most 200 model requests and
-USD 20 additional paid usage, draft-only grading after teacher evidence review.
-No automatic finalization or teacher confirmation is authorized.
+The approved rehearsal used one anonymized 23-page real script, the finalized
+15-question reference bundle, private isolated databases/storage, sequential
+providers, a hard ceiling of 200 model requests, and draft-only grading after
+teacher evidence review. No grade approval or finalization was authorized.
 
-This is **not yet an all-provider end-to-end PASS**. Local Qwen completed the
-real source-read stage. The product path has since been rebuilt so a new bulk
-run reads pages into the durable transcript, derives evidence assignments, and
-grades those assignments without requiring mapping crops or a second OCR pass.
-Cloud runs remain blocked by the privacy and credential prerequisites below.
+The application now follows the transcript-first path in bulk evaluation:
 
-Baseline: `7237be0abd6e2a80c0a7cbe60817842fd5ae68e5`.
-Implementation branch: `codex/provider-rehearsal-20260921`.
-The main checkout and the previous worktree's uncommitted fix remain untouched.
+1. read each complete page once into a durable page transcript;
+2. derive question evidence from transcript blocks;
+3. require a teacher to inspect full pages, classify every page, correct text,
+   confirm evidence ownership, and confirm the exact transcript snapshot;
+4. grade only the saved, teacher-confirmed text; and
+5. leave every result as a review-required draft.
 
-## Provider matrix
+The active implementation branch is `rescue/paddle-qwen36-hybrid`. Private
+images, transcripts, provider responses, databases, and review artifacts remain
+under ignored `.local-ai/rehearsal/` storage and are not committed.
 
-| Profile | Configured model | Real result |
-|---|---|---|
-| llama_cpp_qwen38 | qwen3.8-27b-q4km | All 23 page reads persisted; prepare and transcript-review routes HTTP 200. Teacher review/coverage unresolved; no grade created. |
-| antigravity_gemini | gemini-3.8-flash-high | Offline parser fix verified; real cloud rehearsal awaits source privacy confirmation. |
-| codex_cli | gpt-5.5 | Offline profile-handoff regression fixed; real cloud rehearsal awaits source privacy confirmation. |
-| claude_cli | sonnet | Offline profile-handoff regression fixed; real cloud rehearsal awaits source privacy confirmation. |
-| openai_compatible | Qwen/Qwen3.8-27B | Configured; real cloud rehearsal awaits source privacy confirmation and bounded pricing verification. |
-| openai | gpt-4o-mini | Missing provider-specific API key; image capability also disabled in current configuration. |
-| gemini | gemini-2.0-flash | Missing provider-specific API key; image capability also disabled in current configuration. |
-| llama_cpp_qwen | qwen3.6-35b-a3b-q4km | Disabled legacy profile; lacks visual page-read capability. Cannot claim this transcript-first path works with it. |
-| mock | mock-grader-v1 | Excluded from real-provider claims. |
+## Real provider results
 
-CLI installation/configuration readiness does not establish successful live
-authentication, model availability, or inference. Model aliases are the observed
-configuration, not verified claims about vendor offerings.
+| Provider profile | Actual UI + worker result | Calls | Final grades |
+|---|---|---:|---:|
+| Claude Code CLI (`sonnet`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 5 clean and 10 verification disagreements; zero provider failures after retry | 45/60 | 0 |
+| Antigravity Gemini CLI (`gemini-3.8-flash-high`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 15 clean; zero provider failures | 40/60 | 0 |
+| Local Qwen 3.8 Vision (`qwen3.8-27b-q4km`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 12 clean and 3 verification disagreements; zero provider failures after parser repair and retry | 38/60 | 0 |
+| Codex CLI (`gpt-5.5`) | 23/23 pages; 15/15 reviewed assignments; 14 drafts because Question 9 is confirmed blank; 11 clean, 3 verification disagreements, 1 missing-answer exception; zero provider failures after text-only boundary repair and retry | 37/54 | 0 |
+| OpenAI-compatible API (`Qwen/Qwen3.8-27B`, Akash configuration) | **NOT RUN end to end.** A comparable full run needs about 37 calls; only 17 remain under the approved global ceiling. | 0 | 0 |
+| OpenAI API / Gemini API | Not eligible in the active configuration: provider-specific keys and image input are disabled. | 0 | 0 |
+| Legacy local Qwen 3.6 | Not eligible for this workflow because it has no visual page-read capability. | 0 | 0 |
+| Mock | Excluded from real-provider claims. | 0 | 0 |
 
-## Fixes
+The global request accounting is **183/200**: 23 calls from the earlier retained
+local-Qwen source-read evidence plus 45 Claude, 40 Antigravity, 38 current local
+Qwen, and 37 Codex calls. The remaining allowance is insufficient for a truthful
+full Akash rehearsal, so no partial run was presented as end-to-end evidence.
 
-1. Antigravity now reads populated `structured_output`, falling back to legacy
-   response text. Empty structured metadata with valid legacy text still works.
-   A missing or invalid payload cannot be treated as a blank source page.
-2. The mapping HTTP route now passes its selected profile adapter into both
-   preparation services. Previously it validated the profile but discarded the
-   adapter during construction, allowing legacy configuration reconstruction to
-   lose the chosen model/profile.
-3. Regression tests cover the adapter handoff, structured-output precedence,
-   missing output, strict validation, and explicit blank-page output.
-4. New bulk runs require `visual_page_read`; mapping-only profiles are rejected
-   before dispatch. Bulk items now move `read -> grading` from the saved
-   `AnswerEvidenceAssignment`. Transcript-only preparation creates no legacy
-   mapping, crop region, or region OCR rows.
-5. Transcript grading disables image input even for image-capable graders and
-   sends the stored assigned text. Existing grade/final-grade foreign keys use
-   a zero-geometry compatibility anchor; that row is not grading evidence.
-6. Review now shows each complete protected source page beside its transcript.
-   A teacher can correct text, move a block to a canonical question, resolve a
-   cross-page continuation, or classify a page as answer content/non-answer.
-   Provider output remains unchanged beside every teacher override.
-7. Cover/non-answer pages remain stored but are excluded from assignment.
-   Unassigned writing stays visible; no-answer, unreadable, ambiguous,
-   missing-page and page-read-failed outcomes remain distinct.
+## Teacher review performed on the real script
 
-## Verification
+- Page 1 was inspected and classified as non-answer cover content. Pages 2–23
+  were classified as answer content.
+- Every displayed evidence owner was confirmed in the product UI.
+- Provider-specific transcription defects were corrected while preserving the
+  original provider text and revision history.
+- Local Qwen pages 6–7 were moved from Question 2 to Question 3 after inspection.
+- Ambiguous crossed writing on Questions 5, 7, and 10 was resolved against the
+  complete page images where it occurred.
+- Question 9 in the Codex transcript remained `no_answer`; it was not converted
+  into a fabricated answer or an empty draft.
+- Restart/cache durability was exercised. Resuming used the current teacher
+  assignment snapshot and did not read pages again.
 
-- Backend `python -m ruff check .`: PASS after the final unused-test cleanup.
-- Backend `python -m pytest -q`: **823 passed, 6 skipped**;
-  2 existing deprecation warnings. Disposable test database only.
-- `git diff --check`: PASS (Windows newline conversion notices only).
-- Real local run: actual FastAPI route through TestClient, real PostgreSQL,
-  real storage, real local model and model lease. **Not** a live browser/worker
-  end-to-end demonstration.
-- Local provider requests: **23**, all returned and persisted.
-- Re-prepare with a one-call ceiling and dispatch instrumented to fail if
-  invoked: HTTP 200, total request count still **23**.
-- Source files: hashes of all **26** copied files still match originals.
-- Real GradeSuggestion/FinalGrade records in the rehearsal database: **0/0**.
-- Paid cloud usage: **0 requests / USD 0**.
+## Product changes made during the rehearsal
 
-All real content, raw provider responses, page images, private manifests,
-transcripts and the HTML review stay in ignored `.local-ai/rehearsal/`.
-The test XML and private call ledger are there too. Do not commit that directory.
+1. Added a persisted transcript-review snapshot and reviewer attribution. Draft
+   grading is blocked until the current transcript, page roles, and evidence
+   assignments are teacher-confirmed. Any later text, role, or ownership edit
+   makes the confirmation stale.
+2. Added API and UI controls to classify pages, correct transcript text, move
+   blocks between questions, confirm displayed owners, re-derive assignments
+   without a provider call, and confirm the reviewed snapshot.
+3. Bulk resume now relinks a superseded item to the current evidence assignment,
+   records `verification_source=teacher`, clears stale stop state, and refuses
+   grading when the review snapshot is stale.
+4. Page-read request accounting is cumulative across failures and resumes.
+   Unknown outcomes must be reconciled; known failed pages can be retried without
+   rereading successful pages.
+5. Invalid model-authored block geometry is repaired to a whole-page inspection
+   box while keeping the transcript in mandatory review. This prevented useful
+   text from being discarded because of a malformed bounding box; geometry is
+   not used as grading evidence.
+6. Antigravity structured output handling, retry-safe Windows temporary cleanup,
+   and explicit blank/failure distinctions were hardened.
+7. Claude accepts transcript-only grading even when the profile also supports
+   images.
+8. Local Qwen safely serializes a structured `detected_answer_summary` object as
+   deterministic review text while retaining strict validation of every other
+   grade field.
+9. Codex now recognizes the transcript-only sentinel even when its profile has
+   vision enabled, so it cannot try to open a compatibility image path during
+   transcript grading.
+10. The UI wording now describes full-page transcription, evidence assignment,
+    teacher confirmation, and draft grading rather than region mapping first.
 
-## Earlier observed blocker and product resolution
+## Failure evidence that led to fixes
 
-Local Qwen returned no answer blocks for page 1. The independent coverage check
-found ink on that page and blocked all 15 legacy mappings. Assignment states:
-13 ambiguous, 1 unreadable, 1 no-answer-found. These state labels are model-derived
-draft evidence, not teacher-validated conclusions.
+- Antigravity returned valid output but a child process temporarily held its
+  workspace on Windows; bounded cleanup retries now handle that condition.
+- An interrupted Antigravity page was stored as `unknown_outcome` and required
+  explicit reconciliation before resume.
+- Qwen returned an object for `detected_answer_summary`; the original strict
+  string schema safely rejected it, and the narrow normalization now preserves
+  the object as sorted JSON review text.
+- Codex transcript grading initially tried to stage the compatibility image path
+  and paused with `Codex CLI image input file does not exist`. The fixed provider
+  omits `--image` for the transcript-only sentinel. The same run resumed and
+  ended with zero provider-contract failures.
 
-The private review established that page 1 contains no student answer writing,
-but it does contain direct student identifiers and institution branding. The
-new review control can classify it as non-answer without deleting its text or
-pretending it was blank. No readiness or teacher-review gate was bypassed.
+## Validation
 
-That review decision does not make the original page safe to send to a cloud
-vision provider. A cloud visual rehearsal still requires an anonymized source
-artifact or a product-level redaction gate that is proven to remove identifiers
-from the actual image payload. Grading from the saved transcript is text-only,
-but creating a provider-specific cloud transcript would still upload page images.
+- Backend: `python -m pytest tests -q` from `apps/api` — **834 passed,
+  6 skipped**, with two existing deprecation warnings.
+- Backend: `python -m ruff check apps/api` — PASS.
+- Frontend: `npm run lint` — PASS.
+- Frontend: `npm run build` — PASS.
+- `git diff --check` — PASS (line-ending notices only).
+- The real database assertions above were read directly from the four isolated
+  rehearsal databases after the visible UI states showed `review_ready`.
+- The normal pilot was rebuilt and restarted from this checkout. PostgreSQL,
+  Redis/RQ, API, worker, and frontend all report ready; API `/health` returned
+  `status=ok`, frontend `/` returned HTTP 200, and the production database is at
+  migration `0039_transcript_review_gate`.
+- `COHORT_MODEL_GRADING_ENABLED` remains `false`; local models remain on-demand
+  and stopped after deployment.
 
-## Runtime notes
+## Remaining bounded work
 
-The machine rebooted between turns. No bugcheck was found in the last two days;
-the interrupted earlier full-suite outcome was unavailable and was rerun.
-The supported pilot launcher restored the normal app on ports 3000/8000.
-
-Local-model startup initially failed because Windows PowerShell inherited a
-module search path without its built-in modules (`Get-FileHash` unavailable).
-Adding `$PSHOME/Modules` to that launch process's `PSModulePath` resolved it.
-No global environment setting changed. Observed VRAM stayed below 11,000 MiB.
-
-## Resume
-
-1. Read the private budget ledger; do not rerun the successful 23-page read.
-2. Obtain the pending source-anonymization and page-1 evidence decisions.
-3. Resolve coverage through a reviewed, auditable product path; do not fabricate
-   a confirmation or replace missing evidence with blank output.
-4. Continue the configured cloud providers only after privacy prerequisites,
-   provider authentication, and an enforceable cost bound are established.
-5. OpenAI/Gemini API require local credential configuration. Never paste keys
-   into a task or log. The prior handoff reported exposed keys; rotation remains
-   an owner follow-up and has not been verified here.
-6. Obtain teacher confirmation of each relevant evidence version before its
-   one authorized draft grade. Keep finalization/export approval separate.
-7. Do not mark the request complete until every requested provider has a real
-   result or the user explicitly accepts identified unavailable profiles.
+One full Akash/OpenAI-compatible rehearsal remains. It requires an explicit
+increase of at least 20 requests beyond the current 200-call ceiling (37 expected
+calls versus 17 remaining). Until that is authorized and completed, the honest
+all-configured-provider verdict is **PARTIAL**, with four real provider passes and
+Akash unverified end to end.

@@ -693,6 +693,87 @@ def test_page_read_resume_item_reuses_persisted_evidence_without_spending_a_call
     assert run.calls_used == 720
 
 
+def test_page_read_resume_relinks_to_the_current_reviewed_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=4,
+        created_by_teacher_id=1,
+        status="completed_with_exceptions",
+        stage="reading",
+        authorized_call_limit=60,
+        calls_used=24,
+        stop_requested=True,
+        provider="claude_cli",
+        model_name="sonnet",
+        import_manifest={"visual_evidence_path": "page_read"},
+    )
+    item = BulkEvaluationItem(
+        id=21,
+        run_id=4,
+        submission_id=62,
+        question_id=72,
+        answer_region_id=101,
+        answer_evidence_assignment_id=700,
+        status="exception",
+        stage="read",
+        exception_codes=["evidence_review_required"],
+        warnings=["review required"],
+    )
+    run.items = [item]
+    stale = AnswerEvidenceAssignment(
+        id=700,
+        script_transcript_id=900,
+        submission_id=62,
+        question_id=72,
+        question_node_id=82,
+        assignment_version=1,
+        state="answer_present",
+        coverage_complete=True,
+        is_current=False,
+    )
+    current = AnswerEvidenceAssignment(
+        id=777,
+        script_transcript_id=901,
+        submission_id=62,
+        question_id=72,
+        question_node_id=82,
+        assignment_version=2,
+        state="answer_present",
+        coverage_complete=True,
+        is_current=True,
+    )
+    transcript = ScriptTranscript(id=901, source_manifest_sha256="a" * 64)
+    submission = Submission(id=62, pages=[])
+    replacement = AnswerRegion(id=202, question_id=72, segments=[])
+    db.get.side_effect = lambda model, object_id: {
+        (AnswerEvidenceAssignment, 700): stale,
+        (ScriptTranscript, 901): transcript,
+        (AnswerRegion, 101): AnswerRegion(id=101, question_id=72, segments=[]),
+    }.get((model, object_id))
+    db.scalar.side_effect = [current, submission]
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.transcript_review_is_current",
+        lambda *_args: True,
+    )
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._create_transcript_compatibility_region = MagicMock(return_value=replacement)
+    service._assignment_snapshot_hash = MagicMock(return_value="b" * 64)
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+
+    resumed = service.resume_item(run, item, teacher_id=1)
+
+    assert resumed.answer_evidence_assignment_id == 777
+    assert resumed.answer_region_id == 202
+    assert resumed.stage == "grading"
+    assert resumed.status == "pending"
+    assert resumed.verification_source == "teacher"
+    assert run.calls_used == 24
+    assert run.stop_requested is False
+
+
 
 def test_page_read_resume_preserves_teacher_confirmed_thinking_repair() -> None:
     db = MagicMock()
@@ -755,8 +836,10 @@ def test_page_read_resume_preserves_teacher_confirmed_thinking_repair() -> None:
     assert run.calls_used == 4
 
 
-def test_resumed_page_read_uses_stored_assignment_and_skips_crop_transcription(
+@pytest.mark.parametrize("review_current", [False, True])
+def test_page_read_requires_current_teacher_review_before_draft_grading(
     monkeypatch: pytest.MonkeyPatch,
+    review_current: bool,
 ) -> None:
     db = MagicMock()
     run = BulkEvaluationRun(
@@ -766,6 +849,8 @@ def test_resumed_page_read_uses_stored_assignment_and_skips_crop_transcription(
         stage="reading",
         authorized_call_limit=16,
         calls_used=2,
+        provider="claude_cli",
+        model_name="sonnet",
         import_manifest={"visual_evidence_path": "page_read"},
     )
     item = BulkEvaluationItem(
@@ -802,7 +887,7 @@ def test_resumed_page_read_uses_stored_assignment_and_skips_crop_transcription(
     ]
     submission = Submission(id=62, pages=[])
     teacher = User(id=1)
-    db.scalar.return_value = submission
+    db.scalar.side_effect = [submission, 0]
     item_rows = MagicMock()
     item_rows.all.return_value = [item]
     assignment_rows = MagicMock()
@@ -827,6 +912,10 @@ def test_resumed_page_read_uses_stored_assignment_and_skips_crop_transcription(
         "app.services.bulk_evaluation_service.LocalScriptPageReadService",
         page_read,
     )
+    monkeypatch.setattr(
+        "app.services.bulk_evaluation_service.transcript_review_is_current",
+        lambda *_args: review_current,
+    )
 
     service._process_read(run)
 
@@ -835,10 +924,17 @@ def test_resumed_page_read_uses_stored_assignment_and_skips_crop_transcription(
     service._accept_or_quarantine_transcription.assert_not_called()
     assert item.transcription_run_id is None
     assert item.answer_evidence_assignment_id == 777
-    assert item.status == "pending"
-    assert item.stage == "grading"
-    assert item.exception_codes == []
-    assert item.warnings == []
+    if review_current:
+        assert item.status == "pending"
+        assert item.stage == "grading"
+        assert item.exception_codes == []
+        assert item.warnings == []
+        assert item.verification_source == "teacher"
+    else:
+        assert item.status == "exception"
+        assert item.stage == "read"
+        assert item.exception_codes == ["evidence_review_required"]
+        assert "teacher must confirm" in item.warnings[0].lower()
 
 
 def test_page_read_with_preserved_edits_is_routed_to_thinking_repair(

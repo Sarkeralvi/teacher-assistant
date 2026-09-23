@@ -26,6 +26,7 @@ from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
 from packages.brain.universal_vision import (
     UniversalVisionCompletion,
     UniversalVisionProviderMixin,
+    repair_page_read_geometry,
 )
 
 _MAX_OUTPUT_BYTES = 1_000_000
@@ -243,9 +244,12 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
             try:
                 payload = response_model.model_validate(payload).model_dump(mode="json")
             except ValidationError as exc:
-                raise ClaudeCliProviderError(
-                    f"Claude CLI structured response was not usable: {exc}"
-                ) from exc
+                repaired = repair_page_read_geometry(payload, response_model, exc)
+                if repaired is None:
+                    raise ClaudeCliProviderError(
+                        f"Claude CLI structured response was not usable: {exc}"
+                    ) from exc
+                payload = response_model.model_validate(repaired).model_dump(mode="json")
         return UniversalVisionCompletion(
             payload=payload,
             latency_ms=int((time.perf_counter() - started) * 1000),

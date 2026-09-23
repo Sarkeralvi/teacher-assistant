@@ -1087,6 +1087,11 @@ class ScriptTranscript(TimestampMixin, Base):
             name="ck_script_transcript_status",
         ),
         CheckConstraint("page_count >= 0", name="ck_script_transcript_page_count"),
+        CheckConstraint(
+            "reviewed_at is null or "
+            "(reviewed_by_teacher_id is not null and review_snapshot_sha256 is not null)",
+            name="ck_script_transcript_review_is_attributed",
+        ),
         UniqueConstraint(
             "submission_id",
             "settings_fingerprint",
@@ -1109,6 +1114,11 @@ class ScriptTranscript(TimestampMixin, Base):
     source_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    review_snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     submission: Mapped[Submission] = relationship()
     pages: Mapped[list[ScriptPageTranscript]] = relationship(

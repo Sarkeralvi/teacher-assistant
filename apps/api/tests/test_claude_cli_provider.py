@@ -329,3 +329,40 @@ def test_claude_transcription_reconciles_redundant_editing_flags(tmp_path: Path)
 
     assert result.replacement_detected is True
     assert result.cancellation_detected is False
+
+
+def test_claude_page_read_preserves_text_when_only_bbox_is_invalid(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "blocks": [
+            {
+                "question_label": "Q1",
+                "bbox": [900, 100, 100, 300],
+                "text": "x = 42",
+                "continues_from_previous": False,
+                "label_source": "heading",
+                "confidence": 0.9,
+            }
+        ],
+        "is_blank_page": False,
+        "needs_review": True,
+    }
+    provider = ClaudeCliProvider(
+        workdir=str(tmp_path),
+        which=lambda _command: "claude.cmd",
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": payload}),
+            stderr="",
+        ),
+    )
+
+    result = provider.read_page(
+        image_bytes=b"page", mime_type="image/png", question_labels=["Q1"]
+    )
+
+    assert result.blocks[0].text == "x = 42"
+    assert result.blocks[0].bbox == [0, 0, 1000, 1000]
+    assert result.blocks[0].label_source == "inferred"
+    assert result.blocks[0].confidence == Decimal("0.49")
