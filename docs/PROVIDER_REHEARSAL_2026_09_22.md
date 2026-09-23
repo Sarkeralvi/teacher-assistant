@@ -5,7 +5,10 @@
 The approved rehearsal used one anonymized 23-page real script, the finalized
 15-question reference bundle, private isolated databases/storage, sequential
 providers, a hard ceiling of 200 model requests, and draft-only grading after
-teacher evidence review. No grade approval or finalization was authorized.
+teacher evidence review. No grade approval or finalization was authorized. On
+2026-09-23 the founder explicitly removed the Akash ML path from this run's
+completion scope; the completion verdict therefore covers Claude Code,
+Antigravity, local Qwen 3.8 Vision, and Codex CLI.
 
 The application now follows the transcript-first path in bulk evaluation:
 
@@ -28,15 +31,15 @@ under ignored `.local-ai/rehearsal/` storage and are not committed.
 | Antigravity Gemini CLI (`gemini-3.8-flash-high`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 15 clean; zero provider failures | 40/60 | 0 |
 | Local Qwen 3.8 Vision (`qwen3.8-27b-q4km`) | 23/23 pages; 15/15 reviewed assignments; 15 drafts; 12 clean and 3 verification disagreements; zero provider failures after parser repair and retry | 38/60 | 0 |
 | Codex CLI (`gpt-5.5`) | 23/23 pages; 15/15 reviewed assignments; 14 drafts because Question 9 is confirmed blank; 11 clean, 3 verification disagreements, 1 missing-answer exception; zero provider failures after text-only boundary repair and retry | 37/54 | 0 |
-| OpenAI-compatible API (`Qwen/Qwen3.8-27B`, Akash configuration) | **NOT RUN end to end.** Offline profile resolution is ready and advertises `visual_page_read`, `visual_transcription`, and `grading`; a comparable full run needs about 37 calls, while only 17 remain under the approved global ceiling. | 0 | 0 |
+| OpenAI-compatible API (`Qwen/Qwen3.8-27B`, Akash configuration) | Excluded from this run at the founder's direction; no end-to-end claim is made. | 0 | 0 |
 | OpenAI API / Gemini API | Not eligible in the active configuration: provider-specific keys and image input are disabled. | 0 | 0 |
 | Legacy local Qwen 3.6 | Not eligible for this workflow because it has no visual page-read capability. | 0 | 0 |
 | Mock | Excluded from real-provider claims. | 0 | 0 |
 
 The global request accounting is **183/200**: 23 calls from the earlier retained
 local-Qwen source-read evidence plus 45 Claude, 40 Antigravity, 38 current local
-Qwen, and 37 Codex calls. The remaining allowance is insufficient for a truthful
-full Akash rehearsal, so no partial run was presented as end-to-end evidence.
+Qwen, and 37 Codex calls. All four providers in the revised scope completed the
+full UI-and-worker rehearsal; no Akash run is included in that claim.
 
 ## Teacher review performed on the real script
 
@@ -116,21 +119,10 @@ full Akash rehearsal, so no partial run was presented as end-to-end evidence.
 - `COHORT_MODEL_GRADING_ENABLED` remains `false`; local models remain on-demand
   and stopped after deployment.
 
-## Remaining bounded work
+## Completion verdict
 
-One full Akash/OpenAI-compatible rehearsal remains. A no-call preflight resolved
-the configured cloud endpoint, exact `Qwen/Qwen3.8-27B` model, 600-second
-timeout, JSON-object structured output, required visual capabilities, and
-credential readiness without exposing a secret. Akash's authenticated model
-catalog confirms `text` and `image` input, `text` output, and structured-output
-support. The [official model catalog](https://akashml.com/docs/platform/models)
-lists current rates of $0.25 per million input tokens and $2.20 per
-million output tokens. Even the deliberately conservative bound of charging
-the model's full 262,144-token input and 131,072-token output limits on all 42
-available calls under a 225-call global ceiling is below $15, so the existing
-USD 20 cost ceiling remains sufficient. It requires an explicit
-increase of at least 20 requests beyond the current 200-call ceiling (37 expected
-calls versus 17 remaining); increasing the ceiling to 225 would also leave five
-retry calls. Until that is authorized and completed, the honest
-all-configured-provider verdict is **PARTIAL**, with four real provider passes and
-Akash unverified end to end.
+The revised four-provider scope is **PASS**. Claude Code, Antigravity, local Qwen
+3.8 Vision, and Codex CLI each completed the real-script transcript-first flow
+through the actual bulk UI and worker, including teacher evidence review, cache
+reuse after restart, and draft grading. Akash ML is outside this run's scope and
+remains unverified end to end; this report makes no Akash functionality claim.
