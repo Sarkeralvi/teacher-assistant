@@ -774,6 +774,86 @@ def test_page_read_resume_relinks_to_the_current_reviewed_assignment(
     assert run.stop_requested is False
 
 
+def test_page_read_resume_reanalyzes_one_saved_transcript_for_all_sibling_items() -> None:
+    db = MagicMock()
+    run = BulkEvaluationRun(
+        id=5,
+        created_by_teacher_id=1,
+        status="completed_with_exceptions",
+        stage="review",
+        authorized_call_limit=20,
+        calls_used=3,
+        provider="llama_cpp_qwen38",
+        model_name="qwen3.8-27b-q4km",
+        import_manifest={"visual_evidence_path": "page_read"},
+    )
+    first = BulkEvaluationItem(
+        id=21,
+        run_id=5,
+        submission_id=62,
+        question_id=72,
+        answer_evidence_assignment_id=700,
+        status="exception",
+        stage="read",
+        exception_codes=["unassigned_ink"],
+        warnings=["unassigned"],
+    )
+    second = BulkEvaluationItem(
+        id=22,
+        run_id=5,
+        submission_id=62,
+        question_id=73,
+        status="exception",
+        stage="read",
+        exception_codes=["unassigned_ink"],
+        warnings=["unassigned"],
+    )
+    other_submission = BulkEvaluationItem(
+        id=23,
+        run_id=5,
+        submission_id=63,
+        question_id=72,
+        status="exception",
+        stage="read",
+        exception_codes=["unassigned_ink"],
+        warnings=[],
+    )
+    run.items = [first, second, other_submission]
+    assignment = AnswerEvidenceAssignment(
+        id=700,
+        script_transcript_id=901,
+        submission_id=62,
+        question_id=72,
+        question_node_id=82,
+        assignment_version=1,
+        state="ambiguous",
+        coverage_complete=True,
+        unassigned_block_count=9,
+        is_current=True,
+    )
+    transcript = ScriptTranscript(
+        id=901,
+        source_manifest_sha256="a" * 64,
+        assignment_status="not_started",
+    )
+    db.get.side_effect = lambda model, object_id: {
+        (AnswerEvidenceAssignment, 700): assignment,
+        (ScriptTranscript, 901): transcript,
+    }.get((model, object_id))
+    service = BulkEvaluationService(db, settings=get_settings(), storage=MagicMock())
+    service._refresh_counts = MagicMock()
+    service._audit_run = MagicMock()
+
+    resumed = service.resume_item(run, first, teacher_id=1)
+
+    assert resumed.stage == "read"
+    assert first.status == second.status == "pending"
+    assert first.exception_codes == second.exception_codes == []
+    assert other_submission.status == "exception"
+    assert run.status == run.stage == "reading"
+    assert run.calls_used == 3
+
+
 
 def test_page_read_resume_preserves_teacher_confirmed_thinking_repair() -> None:
     db = MagicMock()
@@ -887,7 +967,7 @@ def test_page_read_requires_current_teacher_review_before_draft_grading(
     ]
     submission = Submission(id=62, pages=[])
     teacher = User(id=1)
-    db.scalar.side_effect = [submission, 0]
+    db.scalar.side_effect = [submission, 0, 0]
     item_rows = MagicMock()
     item_rows.all.return_value = [item]
     assignment_rows = MagicMock()

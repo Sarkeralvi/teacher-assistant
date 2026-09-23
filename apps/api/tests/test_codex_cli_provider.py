@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from packages.brain.adapter import BrainAdapter
+from packages.brain.capabilities import BrainCapability
 from packages.brain.codex_cli_provider import (
     CodexCliProvider,
     CodexCliProviderError,
@@ -122,6 +123,64 @@ def make_provider(
         which=fake_which,
         runner=runner or default_runner,
     )
+
+
+def test_codex_assigns_saved_transcript_as_a_text_only_structured_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexCliProvider(
+        workdir=str(tmp_path),
+        image_input_enabled=True,
+        which=lambda _command: "codex.exe",
+    )
+    payload = {
+        "mappings": [
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "status": "mapped",
+                "block_references": [{"page_no": 1, "block_orders": [1]}],
+                "confidence": 0.9,
+                "warnings": [],
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+    preflight_modes: list[bool] = []
+    monkeypatch.setattr(
+        provider,
+        "_preflight",
+        lambda *, require_image_input, cwd: preflight_modes.append(require_image_input),
+    )
+    monkeypatch.setattr(
+        provider,
+        "_build_structured_command",
+        lambda **_kwargs: ["codex", "exec"],
+    )
+
+    def run_structured(**kwargs: object) -> dict[str, object]:
+        assert "SAVED COMPLETE-SCRIPT TRANSCRIPT" in str(kwargs["prompt"])
+        assert "Use no tools" in str(kwargs["prompt"])
+        return payload
+
+    monkeypatch.setattr(provider, "_run_structured_vision_command", run_structured)
+
+    result = provider.map_submission_answers_from_ocr_pages(
+        pages=[{"page_no": 1, "blocks": [{"order": 1, "text": "(i) work"}]}],
+        questions=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "question_text": "Find the value.",
+            }
+        ],
+    )
+
+    assert BrainCapability.OCR_ANSWER_MAPPING in provider.capabilities
+    assert preflight_modes == [False]
+    assert result["mappings"][0]["block_references"][0]["block_orders"] == [1]
 
 
 def test_codex_cli_provider_builds_safe_exec_command_with_output_last_message() -> None:

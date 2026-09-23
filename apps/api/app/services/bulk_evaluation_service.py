@@ -326,7 +326,11 @@ class BulkEvaluationService:
                 and policy.grading_enabled
                 and policy.page_read_enabled
             )
-            capabilities = (BrainCapability.VISUAL_PAGE_READ, BrainCapability.GRADING)
+            capabilities = (
+                BrainCapability.VISUAL_PAGE_READ,
+                BrainCapability.OCR_ANSWER_MAPPING,
+                BrainCapability.GRADING,
+            )
             for capability in capabilities:
                 policy.validate_request(
                     requested_provider=provider or "active",
@@ -781,6 +785,47 @@ class BulkEvaluationService:
                 if assignment is not None
                 else None
             )
+            if (
+                assignment is not None
+                and transcript is not None
+                and assignment.is_current
+                and assignment.state in {"ambiguous", "unreadable"}
+                and transcript.assignment_status != "complete"
+            ):
+                # One click retries the document-understanding stage for the
+                # manuscript, not fourteen separate question rows. Saved page
+                # reads are reused; the worker spends at most one text call.
+                siblings = [
+                    sibling
+                    for sibling in run.items
+                    if sibling.submission_id == item.submission_id
+                    and sibling.status in {"exception", "uncertain"}
+                    and sibling.stage == "read"
+                ]
+                for sibling in siblings:
+                    sibling.status = "pending"
+                    sibling.exception_codes = []
+                    sibling.warnings = []
+                    sibling.completed_at = None
+                item.stage = "read"
+                item.status = "pending"
+                run.status = "reading"
+                run.stage = "reading"
+                run.completed_at = None
+                run.stop_requested = False
+                self._audit_run(
+                    run,
+                    "bulk_evaluation_transcript_assignment_resumed",
+                    teacher_id,
+                    {
+                        "submission_id": item.submission_id,
+                        "item_count": len(siblings),
+                    },
+                )
+                self._refresh_counts(run)
+                self.db.commit()
+                self.db.refresh(item)
+                return item
             if (
                 assignment is None
                 or transcript is None
@@ -1370,13 +1415,21 @@ class BulkEvaluationService:
                 code_by_state = {
                     "no_answer_found": "missing_answer",
                     "unreadable": "unreadable_handwriting",
-                    "ambiguous": "unassigned_ink",
                     "missing_page": "missing_page",
                     "processing_failed": "page_read_failed",
                 }
+                exception_code = code_by_state.get(
+                    assignment.state, "provider_contract_failure"
+                )
+                if assignment.state == "ambiguous":
+                    exception_code = (
+                        "unassigned_ink"
+                        if assignment.unassigned_block_count
+                        else "inferred_question_label"
+                    )
                 self._quarantine(
                     item,
-                    code_by_state.get(assignment.state, "provider_contract_failure"),
+                    exception_code,
                     assignment.state_reason or f"Transcript evidence state: {assignment.state}",
                 )
                 item.stage = "read"
@@ -1433,7 +1486,7 @@ class BulkEvaluationService:
     def _page_read_request_count(
         self, run: BulkEvaluationRun, submission_id: int
     ) -> int:
-        return int(
+        page_calls = int(
             self.db.scalar(
                 select(func.coalesce(func.sum(ScriptPageTranscript.provider_request_count), 0))
                 .join(
@@ -1448,6 +1501,21 @@ class BulkEvaluationService:
             )
             or 0
         )
+        assignment_calls = int(
+            self.db.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ScriptTranscript.assignment_provider_request_count), 0
+                    )
+                ).where(
+                    ScriptTranscript.submission_id == submission_id,
+                    ScriptTranscript.provider == run.provider,
+                    ScriptTranscript.model_name == run.model_name,
+                )
+            )
+            or 0
+        )
+        return page_calls + assignment_calls
 
     def _sync_failed_page_read_calls(self, run: BulkEvaluationRun) -> None:
         if run.stage != "reading":

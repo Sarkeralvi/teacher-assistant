@@ -50,6 +50,7 @@ const BASIS_LABEL: Record<string, string> = {
   explicit_label: "heading read on the page",
   same_page_reading_order: "follows the answer above it on the same page",
   declared_continuation: "marked as continuing from the previous page",
+  full_transcript_model: "assigned from the complete saved transcript; confirm before grading",
 };
 
 type Props = { submissionId: number };

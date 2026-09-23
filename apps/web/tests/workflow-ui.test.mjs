@@ -307,6 +307,9 @@ for (const marker of [
   "getBrainProfiles()",
   "profileEligibleForBulk",
   "selectedProfile.data_destination",
+  "Analyze saved transcript once",
+  "Review full transcript",
+  "full-script evidence",
 ]) {
   if (!bulk.includes(marker)) {
     throw new Error(`Bulk profile selection UI missing marker: ${marker}`);

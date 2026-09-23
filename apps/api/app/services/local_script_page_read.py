@@ -15,6 +15,7 @@ of the stored transcript, so a remap or a rubric change costs no vision work.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,7 +27,14 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.models import AnswerRegionMapping, AnswerRegionOcrRun, AuditLog, Question, Submission, User
+from app.models import (
+    AnswerRegionMapping,
+    AnswerRegionOcrRun,
+    AuditLog,
+    Question,
+    Submission,
+    User,
+)
 from app.services.answer_evidence_assignment import (
     EXPLICIT_LABEL,
     AnswerEvidenceAssignmentService,
@@ -65,6 +73,11 @@ from packages.brain.schemas_qwen38 import (
     VisualPageBlock,
     VisualPageRegion,
     VisualPageTranscriptOutput,
+)
+from packages.brain.transcript_assignment import (
+    FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION,
+    FullTranscriptAssignmentOutput,
+    validate_full_transcript_assignment,
 )
 
 
@@ -124,6 +137,7 @@ class _SourceRead:
     calls_used: int
     reused_page_count: int
     transcript_id: int
+    assignment_result: dict[str, Any] | None = None
 
 
 class LocalScriptPageReadService:
@@ -195,21 +209,32 @@ class LocalScriptPageReadService:
         )
         page_hashes = source.page_hashes
         calls_used = source.calls_used
-        # Derive the separately versioned question assignment from the stored
-        # transcript. This issues no provider request, so re-preparing after a
-        # remap or a rubric change costs nothing here.
+        # Page transcription and document understanding are separate. The
+        # provider reads each page once, then one text-only pass assigns the
+        # complete saved transcript to the finalized questions.
         assignment_service = AnswerEvidenceAssignmentService(self.db)
-        assignments = assignment_service.assign(
-            submission_id=submission.id,
-            transcript=assignment_service.load_transcript(source.transcript_id),
-            questions=[
-                CanonicalQuestion(
-                    question_id=question.id,
-                    question_node_id=nodes[question.id].id,
-                    question_no=question.question_no,
-                )
-                for question in questions
-            ],
+        transcript = assignment_service.load_transcript(source.transcript_id)
+        canonical_questions = [
+            CanonicalQuestion(
+                question_id=question.id,
+                question_node_id=nodes[question.id].id,
+                question_no=question.question_no,
+            )
+            for question in questions
+        ]
+        assignments = (
+            assignment_service.assign_from_full_transcript_mapping(
+                submission_id=submission.id,
+                transcript=transcript,
+                questions=canonical_questions,
+                mapping_result=source.assignment_result,
+            )
+            if source.assignment_result is not None
+            else assignment_service.assign(
+                submission_id=submission.id,
+                transcript=transcript,
+                questions=canonical_questions,
+            )
         )
         assignment_by_question = {item.question_id: item for item in assignments}
 
@@ -718,6 +743,19 @@ class LocalScriptPageReadService:
         reused_page_count = 0
         reading_order = 0
         holder_id = f"script_page_read:{uuid4().hex}"
+        assignment_result: dict[str, Any] | None = None
+        assignment_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "prompt_version": FULL_TRANSCRIPT_ASSIGNMENT_PROMPT_VERSION,
+                    "source_manifest_sha256": transcript.source_manifest_sha256,
+                    "questions": references,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
 
         try:
             with hold_brain_execution(
@@ -807,6 +845,88 @@ class LocalScriptPageReadService:
                         canonical_labels=canonical_labels,
                         previous=open_continuations,
                     )
+                transcript_pages = [
+                    {
+                        "page_no": int(page.page_no),
+                        "blocks": [
+                            {"order": index + 1, "text": block.text}
+                            for index, block in enumerate(output.blocks)
+                            if block.text.strip()
+                        ],
+                    }
+                    for page, output in zip(pages, outputs, strict=True)
+                ]
+                has_writing = any(page["blocks"] for page in transcript_pages)
+                needs_global_assignment = any(
+                    block.question_label is None or block.label_source == "inferred"
+                    for output in outputs
+                    for block in output.blocks
+                    if block.text.strip()
+                )
+                if has_writing and needs_global_assignment:
+                    if (
+                        transcript.assignment_status == "complete"
+                        and transcript.assignment_fingerprint == assignment_fingerprint
+                        and transcript.assignment_result_json is not None
+                    ):
+                        assignment_result = dict(transcript.assignment_result_json)
+                    else:
+                        if (
+                            transcript.assignment_fingerprint == assignment_fingerprint
+                            and transcript.assignment_status in {"in_progress", "unknown_outcome"}
+                        ):
+                            if transcript.assignment_status == "in_progress":
+                                transcript.assignment_status = "unknown_outcome"
+                                transcript.assignment_error = (
+                                    "The complete-script assignment was dispatched but its "
+                                    "outcome was never recorded"
+                                )
+                                self.db.commit()
+                            raise LocalScriptPageReadError(
+                                "The complete-script assignment has an unresolved provider "
+                                "outcome and will not be repeated automatically"
+                            )
+                        if calls_used >= maximum_page_read_calls:
+                            raise LocalScriptPageReadError(
+                                "The complete-script assignment exceeds the explicitly "
+                                "authorized provider-call limit"
+                            )
+                        transcript.assignment_status = "in_progress"
+                        transcript.assignment_fingerprint = assignment_fingerprint
+                        transcript.assignment_result_json = None
+                        transcript.assignment_error = None
+                        self.db.commit()
+                        try:
+                            execution.heartbeat()
+                            raw_assignment = adapter.map_submission_answers_from_ocr_pages(
+                                pages=transcript_pages,
+                                questions=references,
+                            )
+                            execution.heartbeat()
+                            assignment = FullTranscriptAssignmentOutput.model_validate(
+                                raw_assignment
+                            )
+                            validate_full_transcript_assignment(
+                                assignment,
+                                pages=transcript_pages,
+                                questions=references,
+                            )
+                        except Exception as exc:
+                            calls_used += 1
+                            transcript.assignment_provider_request_count += 1
+                            transcript.assignment_status = classify_dispatch_failure(exc)
+                            transcript.assignment_error = (
+                                f"Complete-script assignment failed safely: {exc}"
+                            )
+                            self.db.commit()
+                            raise LocalScriptPageReadError(transcript.assignment_error) from exc
+                        calls_used += 1
+                        transcript.assignment_provider_request_count += 1
+                        transcript.assignment_status = "complete"
+                        transcript.assignment_result_json = assignment.model_dump(mode="json")
+                        transcript.assignment_error = None
+                        self.db.commit()
+                        assignment_result = dict(transcript.assignment_result_json)
         except LocalModelLeaseError as exc:
             raise LocalScriptPageReadError(str(exc)) from exc
 
@@ -832,6 +952,7 @@ class LocalScriptPageReadService:
             calls_used=calls_used,
             reused_page_count=reused_page_count,
             transcript_id=transcript.id,
+            assignment_result=assignment_result,
         )
 
     @staticmethod

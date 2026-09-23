@@ -71,6 +71,11 @@ from packages.brain.schemas_qwen38 import (
     VisualPageTranscriptOutput,
     VisualTranscriptionOutput,
 )
+from packages.brain.transcript_assignment import (
+    FullTranscriptAssignmentOutput,
+    build_full_transcript_assignment_prompt,
+    validate_full_transcript_assignment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -753,6 +758,7 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
     capabilities = frozenset(
         {
             BrainCapability.GRADING,
+            BrainCapability.OCR_ANSWER_MAPPING,
             BrainCapability.VISUAL_REFERENCE_EXTRACTION,
             BrainCapability.VISUAL_MAPPING,
             BrainCapability.VISUAL_PAGE_READ,
@@ -848,6 +854,27 @@ class LlamaCppQwen38VisionProvider(BrainProvider):
                 f"llama_cpp_qwen38_vision: model alias '{EXPECTED_ALIAS}' not found in "
                 f"/v1/models. Available: {model_ids}"
             )
+
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Assign the complete saved transcript in one text-only model call."""
+
+        prompt = build_full_transcript_assignment_prompt(pages=pages, questions=questions)
+        payload, _usage = self._structured_completion(
+            messages=[{"role": "user", "content": prompt}],
+            response_model=FullTranscriptAssignmentOutput,
+            schema_name="full_transcript_assignment",
+            max_tokens=min(4096, max(1800, 320 * len(questions))),
+            temperature=0.0,
+            enable_thinking=False,
+        )
+        assert isinstance(payload, FullTranscriptAssignmentOutput)
+        validate_full_transcript_assignment(payload, pages=pages, questions=questions)
+        return payload.model_dump(mode="json")
 
     # ── Structured completion helper ───────────────────────────────────────
 

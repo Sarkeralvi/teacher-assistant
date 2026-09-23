@@ -1088,6 +1088,20 @@ class ScriptTranscript(TimestampMixin, Base):
         ),
         CheckConstraint("page_count >= 0", name="ck_script_transcript_page_count"),
         CheckConstraint(
+            "assignment_status in "
+            "('not_started', 'in_progress', 'complete', 'failed', 'unknown_outcome')",
+            name="ck_script_transcript_assignment_status",
+        ),
+        CheckConstraint(
+            "assignment_provider_request_count >= 0",
+            name="ck_script_transcript_assignment_request_count",
+        ),
+        CheckConstraint(
+            "assignment_status <> 'complete' or "
+            "(assignment_fingerprint is not null and assignment_result_json is not null)",
+            name="ck_script_transcript_assignment_complete",
+        ),
+        CheckConstraint(
             "reviewed_at is null or "
             "(reviewed_by_teacher_id is not null and review_snapshot_sha256 is not null)",
             name="ck_script_transcript_review_is_attributed",
@@ -1114,6 +1128,15 @@ class ScriptTranscript(TimestampMixin, Base):
     source_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
+    assignment_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_started"
+    )
+    assignment_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    assignment_result_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    assignment_provider_request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    assignment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by_teacher_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -1486,7 +1509,8 @@ class AnswerEvidenceSpan(TimestampMixin, Base):
         ),
         CheckConstraint(
             "assignment_basis in "
-            "('explicit_label', 'same_page_reading_order', 'declared_continuation')",
+            "('explicit_label', 'same_page_reading_order', 'declared_continuation', "
+            "'full_transcript_model')",
             name="ck_answer_evidence_span_basis",
         ),
         UniqueConstraint("assignment_id", "order_index", name="uq_answer_evidence_span_order"),

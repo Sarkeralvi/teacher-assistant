@@ -35,6 +35,55 @@ def _mapping_payload() -> dict[str, object]:
     }
 
 
+def _transcript_assignment_payload() -> dict[str, object]:
+    return {
+        "mappings": [
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "status": "mapped",
+                "block_references": [{"page_no": 1, "block_orders": [1]}],
+                "confidence": 0.9,
+                "warnings": [],
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+
+
+def test_claude_assigns_saved_transcript_in_text_only_restricted_mode(
+    tmp_path: Path,
+) -> None:
+    def runner(command: list[str], **kwargs: object) -> SimpleNamespace:
+        workspace = Path(str(kwargs["cwd"]))
+        assert list(workspace.iterdir()) == []
+        assert command[command.index("--tools") + 1] == ""
+        assert "Use no tools" in str(kwargs["input"])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"structured_output": _transcript_assignment_payload()}),
+            stderr="",
+        )
+
+    provider = ClaudeCliProvider(
+        workdir=str(tmp_path), which=lambda _command: "claude.cmd", runner=runner
+    )
+    result = provider.map_submission_answers_from_ocr_pages(
+        pages=[{"page_no": 1, "blocks": [{"order": 1, "text": "(i) work"}]}],
+        questions=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "question_text": "Find the value.",
+            }
+        ],
+    )
+
+    assert BrainCapability.OCR_ANSWER_MAPPING in provider.capabilities
+    assert result["mappings"][0]["block_references"][0]["block_orders"] == [1]
+
+
 def test_claude_mapping_runs_through_adapter_in_restricted_workspace(
     tmp_path: Path,
 ) -> None:

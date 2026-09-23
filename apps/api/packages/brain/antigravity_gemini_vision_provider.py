@@ -22,6 +22,11 @@ from packages.brain.capabilities import (
 )
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.transcript_assignment import (
+    FullTranscriptAssignmentOutput,
+    build_full_transcript_assignment_prompt,
+    validate_full_transcript_assignment,
+)
 from packages.brain.universal_vision import (
     UniversalVisionCompletion,
     UniversalVisionProviderMixin,
@@ -78,6 +83,7 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
     capabilities = frozenset(
         {
             BrainCapability.GRADING,
+            BrainCapability.OCR_ANSWER_MAPPING,
             BrainCapability.QUESTION_PDF_EXTRACTION,
             BrainCapability.RUBRIC_PDF_EXTRACTION,
             BrainCapability.VISUAL_REFERENCE_EXTRACTION,
@@ -152,6 +158,21 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             completion_tokens=usage.get("output_tokens"),
         )
 
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        prompt = build_full_transcript_assignment_prompt(pages=pages, questions=questions)
+        completion = self._complete_structured_text(
+            prompt=prompt,
+            response_model=FullTranscriptAssignmentOutput,
+        )
+        payload = FullTranscriptAssignmentOutput.model_validate(completion.payload)
+        validate_full_transcript_assignment(payload, pages=pages, questions=questions)
+        return payload.model_dump(mode="json")
+
     def grade(
         self,
         *,
@@ -198,7 +219,12 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             provider_flag="antigravity_cli_provider",
         )
 
-    def _complete_structured_text(self, *, prompt: str) -> UniversalVisionCompletion:
+    def _complete_structured_text(
+        self,
+        *,
+        prompt: str,
+        response_model: type[BaseModel] | None = None,
+    ) -> UniversalVisionCompletion:
         started = time.perf_counter()
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -206,7 +232,11 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
         ) as tmp_dir:
             response_text, usage = self._call_agy_structured(
                 "Use no tools and use only the evidence in this prompt.\n\n" + prompt,
-                {"type": "object"},
+                _agy_compatible_schema(
+                    response_model.model_json_schema()
+                    if response_model is not None
+                    else {"type": "object"}
+                ),
                 cwd=Path(tmp_dir),
             )
         try:
@@ -220,6 +250,13 @@ class AntigravityGeminiVisionProvider(UniversalVisionProviderMixin, BrainProvide
             for key, value in payload.items()
             if key not in _AGY_PAYLOAD_ARTIFACT_FIELDS
         }
+        if response_model is not None:
+            try:
+                payload = response_model.model_validate(payload).model_dump(mode="json")
+            except ValidationError as exc:
+                raise RuntimeError(
+                    f"Gemini structured response was not usable: {exc}"
+                ) from exc
         return UniversalVisionCompletion(
             payload=payload,
             latency_ms=int((time.perf_counter() - started) * 1000),

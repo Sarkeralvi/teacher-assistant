@@ -26,7 +26,7 @@ def test_bulk_page_read_receives_selected_adapter(monkeypatch):
     db = MagicMock()
     submission = SimpleNamespace(id=11, pages=[object()])
     item = SimpleNamespace(status="pending")
-    db.scalar.side_effect = [submission, 0]
+    db.scalar.side_effect = [submission, 0, 0]
     db.get.return_value = SimpleNamespace(id=1)
     db.scalars.return_value.all.return_value = [item]
     service = bulk.BulkEvaluationService(

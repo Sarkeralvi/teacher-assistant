@@ -50,7 +50,12 @@ from app.models import (
     SubmissionPage,
     User,
 )
-from app.services.answer_evidence_assignment import ANSWER_PRESENT, NO_ANSWER_FOUND
+from app.services.answer_evidence_assignment import (
+    ANSWER_PRESENT,
+    NO_ANSWER_FOUND,
+    AnswerEvidenceAssignmentService,
+    CanonicalQuestion,
+)
 from app.services.local_script_page_read import LocalScriptPageReadService
 from app.services.storage import LocalStorage
 from packages.brain.schemas_qwen38 import VisualPageBlock, VisualPageTranscriptOutput
@@ -109,15 +114,28 @@ def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LocalSt
 
 
 class _Adapter:
-    def __init__(self, outputs: list[VisualPageTranscriptOutput]) -> None:
+    def __init__(
+        self,
+        outputs: list[VisualPageTranscriptOutput],
+        *,
+        mapping_output: dict[str, Any] | None = None,
+    ) -> None:
         self._outputs = outputs
         self.calls = 0
+        self.mapping_output = mapping_output
+        self.mapping_calls = 0
         self.runtime = SimpleNamespace(managed_local_phase=None)
 
     def read_page(self, **_kwargs: Any) -> VisualPageTranscriptOutput:
         result = self._outputs[self.calls]
         self.calls += 1
         return result
+
+    def map_submission_answers_from_ocr_pages(self, **_kwargs: Any) -> dict[str, Any]:
+        self.mapping_calls += 1
+        if self.mapping_output is None:
+            raise AssertionError("whole-transcript assignment was not expected")
+        return self.mapping_output
 
 
 def _seed(db: Session, storage: LocalStorage, labels: list[str]) -> Submission:
@@ -388,3 +406,146 @@ def test_preparing_again_reuses_the_transcript_and_versions_the_assignment(
     ).all()
     assert [row.assignment_version for row in versions] == [1, 2, 1, 2]
     assert sum(1 for row in versions if row.is_current) == 2
+
+
+def test_complete_saved_transcript_is_assigned_globally_when_page_labels_are_missing(
+    db_session: Session,
+    storage: LocalStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for real run 5: every page was read, but all packets became
+    ``unassigned_ink`` because the second stage only carried page labels forward.
+
+    The full saved transcript must be interpreted once as a document. The model
+    selects immutable page/block identifiers; it cannot rewrite transcript text.
+    """
+
+    submission = _seed(db_session, storage, ["Q1", "Q2"])
+    seeded_questions = db_session.scalars(
+        select(Question).order_by(Question.question_no)
+    ).all()
+    page_output = VisualPageTranscriptOutput(
+        blocks=[
+            VisualPageBlock(
+                question_label=None,
+                bbox=[100, 140, 900, 260],
+                text="(i) first answer work",
+                continues_from_previous=False,
+                label_source="continuation",
+                confidence=Decimal("0.90"),
+            ),
+            VisualPageBlock(
+                question_label=None,
+                bbox=[100, 300, 900, 430],
+                text="(ii) second answer work",
+                continues_from_previous=False,
+                label_source="continuation",
+                confidence=Decimal("0.90"),
+            ),
+            VisualPageBlock(
+                question_label="Q1",
+                bbox=[100, 460, 900, 560],
+                text="unclaimed margin note",
+                continues_from_previous=False,
+                label_source="heading",
+                confidence=Decimal("0.90"),
+            ),
+        ],
+        is_blank_page=False,
+    )
+    adapter = _Adapter(
+        [page_output],
+        mapping_output={
+            "mappings": [
+                {
+                    "question_id": seeded_questions[0].id,
+                    "question_no": "Q1",
+                    "status": "mapped",
+                    "block_references": [{"page_no": 1, "block_orders": [1]}],
+                    "confidence": "0.95",
+                    "warnings": [],
+                    "needs_review": True,
+                },
+                {
+                    "question_id": seeded_questions[1].id,
+                    "question_no": "Q2",
+                    "status": "mapped",
+                    "block_references": [{"page_no": 1, "block_orders": [2]}],
+                    "confidence": "0.95",
+                    "warnings": [],
+                    "needs_review": True,
+                },
+            ],
+            "warnings": [],
+        },
+    )
+
+    result = _service(db_session, storage, adapter, monkeypatch).prepare(
+        submission=submission,
+        teacher=db_session.scalars(select(User)).one(),
+        expected_model="mock-vision-1",
+        replace_existing=False,
+        maximum_page_read_calls=5,
+        persist_legacy_artifacts=False,
+    )
+
+    transcript = db_session.get(ScriptTranscript, result.script_transcript_id)
+    assert transcript is not None
+    assignments = db_session.scalars(
+        select(AnswerEvidenceAssignment)
+        .where(
+            AnswerEvidenceAssignment.script_transcript_id == transcript.id,
+            AnswerEvidenceAssignment.is_current.is_(True),
+        )
+        .order_by(AnswerEvidenceAssignment.question_id)
+    ).all()
+
+    assert adapter.calls == 1
+    assert adapter.mapping_calls == 1
+    assert result.calls_used == 2
+    assert [len(item.spans) for item in assignments] == [1, 1]
+    assert {span.assignment_basis for item in assignments for span in item.spans} == {
+        "full_transcript_model"
+    }
+    # Even an explicit page-local label cannot survive as hidden fallback when
+    # the authoritative full-transcript pass leaves that block unclaimed.
+    assert all(item.unassigned_block_count == 1 for item in assignments)
+    # Model-selected ownership is useful but remains explicitly review-gated.
+    assert all(item.state == "ambiguous" for item in assignments)
+
+    cached_adapter = _Adapter([])
+    cached = _service(db_session, storage, cached_adapter, monkeypatch).prepare(
+        submission=submission,
+        teacher=db_session.scalars(select(User)).one(),
+        expected_model="mock-vision-1",
+        replace_existing=False,
+        maximum_page_read_calls=5,
+        persist_legacy_artifacts=False,
+    )
+    assert cached.calls_used == 0
+    assert cached.reused_page_count == 1
+    assert cached_adapter.calls == 0
+    assert cached_adapter.mapping_calls == 0
+
+    nodes = {
+        node.question_number: node
+        for node in db_session.scalars(select(QuestionNode)).all()
+    }
+    rederived = AnswerEvidenceAssignmentService(db_session).assign(
+        submission_id=submission.id,
+        transcript=AnswerEvidenceAssignmentService(db_session).load_transcript(
+            result.script_transcript_id
+        ),
+        questions=[
+            CanonicalQuestion(
+                question_id=question.id,
+                question_node_id=nodes[question.question_no].id,
+                question_no=question.question_no,
+            )
+            for question in seeded_questions
+        ],
+    )
+    assert [len(item.spans) for item in rederived] == [1, 1]
+    assert {span.assignment_basis for item in rederived for span in item.spans} == {
+        "full_transcript_model"
+    }

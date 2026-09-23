@@ -25,6 +25,11 @@ from packages.brain.prompt_registry import (
 )
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.transcript_assignment import (
+    FullTranscriptAssignmentOutput,
+    build_full_transcript_assignment_prompt,
+    validate_full_transcript_assignment,
+)
 from packages.brain.universal_vision import (
     UniversalVisionCompletion,
     UniversalVisionProviderMixin,
@@ -69,7 +74,9 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
             BrainCapability.TRANSCRIPTION_REPAIR,
         }
     )
-    capabilities = frozenset({BrainCapability.GRADING, *_VISION_CAPABILITIES})
+    capabilities = frozenset(
+        {BrainCapability.GRADING, BrainCapability.OCR_ANSWER_MAPPING, *_VISION_CAPABILITIES}
+    )
 
     def __init__(
         self,
@@ -93,7 +100,7 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
         self.output_last_message = output_last_message
         self.image_input_enabled = image_input_enabled
         self.capabilities = frozenset(
-            {BrainCapability.GRADING}
+            {BrainCapability.GRADING, BrainCapability.OCR_ANSWER_MAPPING}
             | (set(self._VISION_CAPABILITIES) if image_input_enabled else set())
         )
         self.workdir = workdir or "/home/newton/teacher-assistant"
@@ -179,6 +186,66 @@ class CodexCliProvider(UniversalVisionProviderMixin, BrainProvider):
                         ) from exc
         return UniversalVisionCompletion(
             payload=payload,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        prompt = build_full_transcript_assignment_prompt(pages=pages, questions=questions)
+        completion = self._complete_structured_text(
+            prompt=prompt,
+            response_model=FullTranscriptAssignmentOutput,
+        )
+        payload = FullTranscriptAssignmentOutput.model_validate(completion.payload)
+        validate_full_transcript_assignment(payload, pages=pages, questions=questions)
+        return payload.model_dump(mode="json")
+
+    def _complete_structured_text(
+        self,
+        *,
+        prompt: str,
+        response_model: type[BaseModel],
+    ) -> UniversalVisionCompletion:
+        configured_parent = Path(self.workdir)
+        workspace_parent = str(configured_parent) if configured_parent.is_dir() else None
+        started = time.perf_counter()
+        deadline = started + self.timeout_seconds
+        with tempfile.TemporaryDirectory(
+            prefix="ta-codex-cli-", dir=workspace_parent
+        ) as tmp_dir:
+            workspace = Path(tmp_dir)
+            self._preflight(require_image_input=False, cwd=workspace)
+            output_file = workspace / "last-message.json"
+            schema_file = workspace / "output-schema.json"
+            schema_file.write_text(
+                json.dumps(_codex_strict_schema(response_model.model_json_schema())),
+                encoding="utf-8",
+            )
+            command = self._build_structured_command(
+                output_file=output_file,
+                schema_file=schema_file,
+                image_paths=[],
+                cwd=workspace,
+            )
+            payload = self._run_structured_vision_command(
+                command=command,
+                cwd=workspace,
+                output_file=output_file,
+                prompt="Use no tools and only the supplied transcript.\n\n" + prompt,
+                deadline=deadline,
+            )
+            try:
+                validated = response_model.model_validate(payload)
+            except ValidationError as exc:
+                raise CodexCliProviderError(
+                    f"Codex CLI transcript assignment was not usable: {exc}"
+                ) from exc
+        return UniversalVisionCompletion(
+            payload=validated.model_dump(mode="json"),
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
 

@@ -23,6 +23,11 @@ from packages.brain.capabilities import (
 )
 from packages.brain.provider_base import BrainProvider
 from packages.brain.schemas import GradeSuggestionOutput, ModelPolicy
+from packages.brain.transcript_assignment import (
+    FullTranscriptAssignmentOutput,
+    build_full_transcript_assignment_prompt,
+    validate_full_transcript_assignment,
+)
 from packages.brain.universal_vision import (
     UniversalVisionCompletion,
     UniversalVisionProviderMixin,
@@ -87,6 +92,7 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
     capabilities = frozenset(
         {
             BrainCapability.GRADING,
+            BrainCapability.OCR_ANSWER_MAPPING,
             BrainCapability.QUESTION_PDF_EXTRACTION,
             BrainCapability.RUBRIC_PDF_EXTRACTION,
             BrainCapability.VISUAL_REFERENCE_EXTRACTION,
@@ -127,6 +133,22 @@ class ClaudeCliProvider(UniversalVisionProviderMixin, BrainProvider):
         if not images:
             raise ValueError("Claude CLI vision calls require at least one image")
         return self._run_structured(prompt=prompt, images=images, response_model=response_model)
+
+    def map_submission_answers_from_ocr_pages(
+        self,
+        *,
+        pages: list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        prompt = build_full_transcript_assignment_prompt(pages=pages, questions=questions)
+        completion = self._run_structured(
+            prompt=prompt,
+            images=[],
+            response_model=FullTranscriptAssignmentOutput,
+        )
+        payload = FullTranscriptAssignmentOutput.model_validate(completion.payload)
+        validate_full_transcript_assignment(payload, pages=pages, questions=questions)
+        return payload.model_dump(mode="json")
 
     def grade(
         self,

@@ -313,6 +313,59 @@ def test_qwen38_model_check_refuses_an_invalid_api_key() -> None:
         provider.verify_available_model()
 
 
+def test_qwen38_assigns_the_complete_saved_transcript_without_images() -> None:
+    payload = {
+        "mappings": [
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "status": "mapped",
+                "block_references": [{"page_no": 1, "block_orders": [1, 2]}],
+                "confidence": "0.88",
+                "warnings": [],
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+    provider, client = provider_with(
+        {
+            "choices": [{"message": {"content": json.dumps(payload)}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+        }
+    )
+
+    result = provider.map_submission_answers_from_ocr_pages(
+        pages=[
+            {
+                "page_no": 1,
+                "blocks": [
+                    {"order": 1, "text": "(i) setup"},
+                    {"order": 2, "text": "continued work"},
+                ],
+            }
+        ],
+        questions=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "question_text": "Find the conditional probability.",
+            }
+        ],
+    )
+
+    assert BrainCapability.OCR_ANSWER_MAPPING in provider.capabilities
+    assert result == payload
+    request = client.requests[0]
+    assert all(
+        not isinstance(content, list)
+        for message in request["messages"]
+        if (content := message["content"])
+    )
+    assert "SAVED COMPLETE-SCRIPT TRANSCRIPT" in request["messages"][-1]["content"]
+    assert request["chat_template_kwargs"]["enable_thinking"] is False
+
+
 def test_visual_transcription_disables_thinking_and_requires_png_magic() -> None:
     completion = {
         "choices": [

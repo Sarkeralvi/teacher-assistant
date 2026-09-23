@@ -27,7 +27,7 @@ const REQUIRED_BULK_CAPABILITY = "grading";
 
 function profileEligibleForBulk(profile: BrainProfile): boolean {
   if (!profile.capabilities.includes(REQUIRED_BULK_CAPABILITY)) return false;
-  return profile.capabilities.includes("visual_page_read");
+  return profile.capabilities.includes("visual_page_read") && profile.capabilities.includes("ocr_answer_mapping");
 }
 
 const buttonClass =
@@ -74,6 +74,24 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const [error, setError] = useState<string | null>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const activeRun = runs.find((run) => run.id === activeRunId) ?? runs[0] ?? null;
+  const transcriptExceptionGroups = useMemo(() => {
+    const grouped = new Map<number, BulkEvaluationException[]>();
+    for (const item of exceptions) {
+      if (!item.exception_codes.some((code) => [
+        "unassigned_ink",
+        "inferred_question_label",
+        "unreadable_handwriting",
+        "evidence_review_required",
+      ].includes(code))) continue;
+      grouped.set(item.submission_id, [...(grouped.get(item.submission_id) ?? []), item]);
+    }
+    return [...grouped.values()];
+  }, [exceptions]);
+  const groupedTranscriptItemIds = useMemo(
+    () => new Set(transcriptExceptionGroups.flatMap((group) => group.map((item) => item.item_id))),
+    [transcriptExceptionGroups],
+  );
+  const otherExceptions = exceptions.filter((item) => !groupedTranscriptItemIds.has(item.item_id));
 
   useEffect(() => {
     // A rejected request here used to only ever show at the top of the page,
@@ -383,7 +401,26 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
           <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
             <div><h2 className="text-xl font-semibold">3. Exceptions requiring attention</h2><p className="text-sm text-slate-400">Granular images and transcripts stay hidden until you inspect a manuscript.</p></div>
             {exceptions.length === 0 ? <p className="rounded-lg border border-emerald-800 bg-emerald-950/20 p-4 text-sm text-emerald-200">No unresolved exceptions.</p> : (
-              <div className="space-y-3">{exceptions.map((item) => (
+              <div className="space-y-3">
+                {transcriptExceptionGroups.map((group) => {
+                  const first = group[0];
+                  const needsAnalysis = group.some((item) => item.exception_codes.includes("unassigned_ink"));
+                  return (
+                    <article key={`transcript-${first.submission_id}`} className="grid gap-3 rounded-lg border border-amber-800/70 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
+                      <div>
+                        <p className="font-semibold">{first.student_identifier ?? `Submission ${first.submission_id}`} · full-script evidence</p>
+                        <p className="mt-1 text-sm text-amber-200">
+                          {group.map((item) => item.question_label).join(", ")} · {needsAnalysis ? "saved transcript needs one whole-document assignment pass" : "question ownership needs teacher review"}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Link className={secondaryButtonClass} href={`/submissions/${first.submission_id}/transcript`}>Review full transcript</Link>
+                        {needsAnalysis ? <button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeBulkEvaluationItem(activeRun.id, first.item_id).then(refresh).catch((caught) => setError(errorMessage(caught)))}>Analyze saved transcript once</button> : null}
+                      </div>
+                    </article>
+                  );
+                })}
+                {otherExceptions.map((item) => (
                 <article key={item.item_id} className="grid gap-3 rounded-lg border border-amber-800/70 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
                   <div><p className="font-semibold">{item.student_identifier ?? `Submission ${item.submission_id}`} · {item.question_label}</p><p className="mt-1 text-sm text-amber-200">{item.exception_codes.join(", ")}</p></div>
                   <div className="flex gap-2"><Link className={secondaryButtonClass} href={`/submissions/${item.submission_id}/transcript`}>Review page transcript</Link><button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeBulkEvaluationItem(activeRun.id, item.item_id).then(refresh).catch((caught) => setError(errorMessage(caught)))}>Resume item</button></div>

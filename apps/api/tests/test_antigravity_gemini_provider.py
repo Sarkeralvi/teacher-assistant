@@ -72,6 +72,47 @@ def _grade_payload() -> dict[str, object]:
     }
 
 
+def test_antigravity_assigns_saved_transcript_without_file_tools(tmp_path: Path) -> None:
+    payload = {
+        "mappings": [
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "status": "mapped",
+                "block_references": [{"page_no": 1, "block_orders": [1]}],
+                "confidence": 0.9,
+                "warnings": [],
+                "needs_review": True,
+            }
+        ],
+        "warnings": [],
+    }
+
+    def runner(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        prompt = command[command.index("-p") + 1]
+        assert "Use no tools" in prompt
+        assert "SAVED COMPLETE-SCRIPT TRANSCRIPT" in prompt
+        return _agy_success(payload)
+
+    provider = AntigravityGeminiVisionProvider(
+        repository_root=tmp_path,
+        runner=runner,
+    )
+    result = provider.map_submission_answers_from_ocr_pages(
+        pages=[{"page_no": 1, "blocks": [{"order": 1, "text": "(i) work"}]}],
+        questions=[
+            {
+                "question_id": 41,
+                "question_no": "1(a)(i)",
+                "question_text": "Find the value.",
+            }
+        ],
+    )
+
+    assert BrainCapability.OCR_ANSWER_MAPPING in provider.capabilities
+    assert result["mappings"][0]["block_references"][0]["block_orders"] == [1]
+
+
 def test_provider_exposes_canonical_visual_contract(tmp_path: Path) -> None:
     provider = AntigravityGeminiVisionProvider(repository_root=tmp_path)
     adapter = BrainAdapter(provider)

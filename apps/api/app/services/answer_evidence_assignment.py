@@ -31,6 +31,7 @@ from app.models import (
     ScriptTranscriptBlock,
 )
 from app.services.script_transcript_store import classify_block_text
+from packages.brain.transcript_assignment import FullTranscriptAssignmentOutput
 
 ANSWER_PRESENT = "answer_present"
 NO_ANSWER_FOUND = "no_answer_found"
@@ -107,12 +108,19 @@ class AssignmentDerivation:
 EXPLICIT_LABEL = "explicit_label"
 SAME_PAGE_READING_ORDER = "same_page_reading_order"
 DECLARED_CONTINUATION = "declared_continuation"
+FULL_TRANSCRIPT_MODEL = "full_transcript_model"
 
-ASSIGNMENT_BASES = (EXPLICIT_LABEL, SAME_PAGE_READING_ORDER, DECLARED_CONTINUATION)
+ASSIGNMENT_BASES = (
+    EXPLICIT_LABEL,
+    SAME_PAGE_READING_ORDER,
+    DECLARED_CONTINUATION,
+    FULL_TRANSCRIPT_MODEL,
+)
 
 UNPLACED_NO_PRECEDING_QUESTION = "no_preceding_canonical_question"
 UNPLACED_UNKNOWN_LABEL = "label_matches_no_canonical_question"
 UNPLACED_NO_CONTINUATION_CLAIM = "unlabelled_block_across_a_page_break_without_a_continuation_claim"
+UNPLACED_FULL_TRANSCRIPT = "full_transcript_model_did_not_claim_block"
 
 
 @dataclass(frozen=True)
@@ -291,6 +299,7 @@ def derive_assignments(
     *,
     transcript: ScriptTranscript,
     questions: list[CanonicalQuestion],
+    model_owner_by_block_id: dict[int, int] | None = None,
 ) -> AssignmentDerivation:
     """Assign stored blocks to canonical questions, deterministically.
 
@@ -318,6 +327,56 @@ def derive_assignments(
         ],
         questions=questions,
     )
+    # A complete-script text pass has context that no isolated page can have.
+    # When present, it is authoritative for every non-teacher-overridden block:
+    # an unclaimed block stays visibly unassigned instead of silently inheriting
+    # the old page-local guess. It selects existing immutable blocks only.
+    question_by_node = {question.question_node_id: question for question in questions}
+    owned_by_key = {item.source.key: item for item in ownership.owned}
+    unplaced_by_key = {item.source.key: item for item in ownership.unplaced}
+    for item in ordered:
+        if model_owner_by_block_id is None or item.block.assignment_override_active:
+            continue
+        key = (item.page_no, item.block.block_index)
+        source = OwnershipInput(
+            key=key,
+            page_no=item.page_no,
+            question_label_raw=item.block.effective_question_label,
+            label_source=item.block.label_source,
+            continues_from_previous=item.block.effective_continues_from_previous,
+        )
+        owned_by_key.pop(key, None)
+        unplaced_by_key.pop(key, None)
+        node_id = model_owner_by_block_id.get(item.block.id)
+        if node_id is None:
+            unplaced_by_key[key] = UnplacedBlock(
+                source=source,
+                reason=UNPLACED_FULL_TRANSCRIPT,
+            )
+            continue
+        question = question_by_node.get(node_id)
+        if question is None:
+            raise AnswerEvidenceAssignmentError(
+                "A complete-script assignment referenced an unknown canonical question"
+            )
+        owned_by_key[key] = OwnedBlock(
+            source=source,
+            question=question,
+            basis=FULL_TRANSCRIPT_MODEL,
+        )
+        unplaced_by_key.pop(key, None)
+    ownership = Ownership(
+        owned=[
+            owned_by_key[(item.page_no, item.block.block_index)]
+            for item in ordered
+            if (item.page_no, item.block.block_index) in owned_by_key
+        ],
+        unplaced=[
+            unplaced_by_key[(item.page_no, item.block.block_index)]
+            for item in ordered
+            if (item.page_no, item.block.block_index) in unplaced_by_key
+        ],
+    )
 
     blocks_by_node: dict[int, list[_OrderedBlock]] = {
         question.question_node_id: [] for question in questions
@@ -328,9 +387,8 @@ def derive_assignments(
         item = by_key[owned.source.key]
         blocks_by_node[owned.question_node_id].append(item)
         basis_by_block_id[item.block.id] = owned.basis
-        if (
-            item.block.label_source == "inferred"
-            and not item.block.assignment_override_active
+        if not item.block.assignment_override_active and (
+            item.block.label_source == "inferred" or owned.basis == FULL_TRANSCRIPT_MODEL
         ):
             inferred_nodes.add(owned.question_node_id)
 
@@ -338,7 +396,7 @@ def derive_assignments(
     unassigned_material = [
         by_key[unplaced.source.key]
         for unplaced in ownership.unplaced
-        if by_key[unplaced.source.key].block.text.strip()
+        if by_key[unplaced.source.key].block.effective_text.strip()
     ]
     unassigned_count = len(unassigned_material)
 
@@ -469,7 +527,92 @@ class AnswerEvidenceAssignmentService:
         teacher already looked at stays readable after a re-derivation.
         """
 
-        derivation = derive_assignments(transcript=transcript, questions=questions)
+        # Preserve a previous complete-script model decision across text
+        # corrections and page classification. A teacher override still wins.
+        model_owner_by_block_id: dict[int, int] | None = (
+            {} if transcript.assignment_status == "complete" else None
+        )
+        for assignment in self.current_assignments(transcript.id):
+            for span in assignment.spans:
+                if (
+                    model_owner_by_block_id is not None
+                    and span.assignment_basis == FULL_TRANSCRIPT_MODEL
+                ):
+                    model_owner_by_block_id[span.script_transcript_block_id] = (
+                        assignment.question_node_id
+                    )
+        derivation = derive_assignments(
+            transcript=transcript,
+            questions=questions,
+            model_owner_by_block_id=model_owner_by_block_id,
+        )
+        return self._persist_derivation(
+            submission_id=submission_id,
+            transcript=transcript,
+            derivation=derivation,
+        )
+
+    def assign_from_full_transcript_mapping(
+        self,
+        *,
+        submission_id: int,
+        transcript: ScriptTranscript,
+        questions: list[CanonicalQuestion],
+        mapping_result: dict[str, Any],
+    ) -> list[AnswerEvidenceAssignment]:
+        """Persist provider-selected owners for immutable saved transcript blocks."""
+
+        output = FullTranscriptAssignmentOutput.model_validate(mapping_result)
+        by_identity = {
+            (question.question_id, question.question_no.strip()): question
+            for question in questions
+        }
+        actual = {
+            (mapping.question_id, mapping.question_no.strip()) for mapping in output.mappings
+        }
+        if actual != set(by_identity):
+            raise AnswerEvidenceAssignmentError(
+                "Complete-script assignment changed or omitted canonical questions"
+            )
+        blocks_by_key = {
+            (page.page_no, block.block_index + 1): block
+            for page in transcript.pages
+            for block in page.blocks
+            if block.effective_text.strip()
+        }
+        owner_by_block_id: dict[int, int] = {}
+        for mapping in output.mappings:
+            question = by_identity[(mapping.question_id, mapping.question_no.strip())]
+            for reference in mapping.block_references:
+                for block_order in reference.block_orders:
+                    block = blocks_by_key.get((reference.page_no, block_order))
+                    if block is None:
+                        raise AnswerEvidenceAssignmentError(
+                            "Complete-script assignment referenced an unknown transcript block"
+                        )
+                    if block.id in owner_by_block_id:
+                        raise AnswerEvidenceAssignmentError(
+                            "Complete-script assignment claimed one block more than once"
+                        )
+                    owner_by_block_id[block.id] = question.question_node_id
+        derivation = derive_assignments(
+            transcript=transcript,
+            questions=questions,
+            model_owner_by_block_id=owner_by_block_id,
+        )
+        return self._persist_derivation(
+            submission_id=submission_id,
+            transcript=transcript,
+            derivation=derivation,
+        )
+
+    def _persist_derivation(
+        self,
+        *,
+        submission_id: int,
+        transcript: ScriptTranscript,
+        derivation: AssignmentDerivation,
+    ) -> list[AnswerEvidenceAssignment]:
         blocks = {
             block.id: (page.page_no, block)
             for page in transcript.pages
