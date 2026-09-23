@@ -121,7 +121,14 @@ full Akash rehearsal, so no partial run was presented as end-to-end evidence.
 One full Akash/OpenAI-compatible rehearsal remains. A no-call preflight resolved
 the configured cloud endpoint, exact `Qwen/Qwen3.8-27B` model, 600-second
 timeout, JSON-object structured output, required visual capabilities, and
-credential readiness without exposing a secret. It requires an explicit
+credential readiness without exposing a secret. Akash's authenticated model
+catalog confirms `text` and `image` input, `text` output, and structured-output
+support. The [official model catalog](https://akashml.com/docs/platform/models)
+lists current rates of $0.25 per million input tokens and $2.20 per
+million output tokens. Even the deliberately conservative bound of charging
+the model's full 262,144-token input and 131,072-token output limits on all 42
+available calls under a 225-call global ceiling is below $15, so the existing
+USD 20 cost ceiling remains sufficient. It requires an explicit
 increase of at least 20 requests beyond the current 200-call ceiling (37 expected
 calls versus 17 remaining); increasing the ceiling to 225 would also leave five
 retry calls. Until that is authorized and completed, the honest
