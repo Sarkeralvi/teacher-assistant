@@ -35,6 +35,10 @@ for (const [name, value] of [
 }
 
 const api = readFileSync(join(root, "lib/api.ts"), "utf8");
+const transcriptReview = readFileSync(
+  join(root, "components/ScriptTranscriptReviewClient.tsx"),
+  "utf8",
+);
 for (const symbol of [
   "getCurrentUser",
   "login",
@@ -76,6 +80,17 @@ for (const symbol of [
 for (const marker of ["token: getStoredAuthToken()", "authErrorMessage", "Could not reach backend"]) {
   if (!api.includes(marker)) {
     throw new Error(`API client missing auth/error marker: ${marker}`);
+  }
+}
+
+for (const marker of [
+  'data-testid="source-review-progress"',
+  "Decision required for page",
+  "✓ Answer work selected",
+  "will remain quarantined",
+]) {
+  if (!transcriptReview.includes(marker)) {
+    throw new Error(`Transcript review UI missing visible workflow marker: ${marker}`);
   }
 }
 

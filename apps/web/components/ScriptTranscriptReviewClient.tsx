@@ -261,14 +261,14 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
   }
 
   if (loading) {
-    return <p className="text-sm text-slate-600">Loading the script transcript…</p>;
+    return <p className="text-sm text-slate-300">Loading the script transcript…</p>;
   }
 
   if (!transcript) {
     return (
-      <section className="rounded border border-slate-200 p-4">
+      <section className="rounded border border-slate-700 p-4">
         <h2 className="text-lg font-semibold">Script transcript</h2>
-        <p className="mt-2 text-sm text-slate-600">
+        <p className="mt-2 text-sm text-slate-300">
           {error ?? "This script has not been transcribed yet."}
         </p>
       </section>
@@ -288,7 +288,6 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
       && !needsReconciliation
       && evidence
       && unclassifiedPages.length === 0
-      && blockedEvidence.length === 0
       && unassignedBlockCount === 0,
   );
   const nextAction = (() => {
@@ -304,30 +303,24 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
     if (!evidence) {
       return "Re-derive question evidence from the saved transcript before confirmation.";
     }
-    if (unassignedBlockCount > 0 || blockedEvidence.length > 0) {
-      const parts = [];
-      if (unassignedBlockCount > 0) {
-        parts.push(`${unassignedBlockCount} unassigned writing block${unassignedBlockCount === 1 ? "" : "s"}`);
-      }
-      if (blockedEvidence.length > 0) {
-        parts.push(
-          `${blockedEvidence.length} blocked question${blockedEvidence.length === 1 ? "" : "s"}: ${blockedEvidence.map((item) => item.question_label ?? "unlabelled").join(", ")}`,
-        );
-      }
-      return `Resolve ${parts.join(" and ")} below. Correct only what the page image supports.`;
+    if (unassignedBlockCount > 0) {
+      return `Assign ${unassignedBlockCount} writing block${unassignedBlockCount === 1 ? "" : "s"} below. Correct text only when the page image supports it.`;
+    }
+    if (blockedEvidence.length > 0) {
+      return `${blockedEvidence.length} unreadable or ambiguous question${blockedEvidence.length === 1 ? "" : "s"} will remain quarantined. Confirm now to let answer-ready questions proceed to draft grading.`;
     }
     return "All checks passed. Confirm this exact transcript snapshot to unlock draft grading.";
   })();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-slate-100">
       {error ? (
-        <p role="alert" className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+        <p role="alert" className="rounded border border-red-800 bg-red-950/30 p-3 text-sm text-red-200">
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p className="rounded border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
+        <p className="rounded border border-emerald-700 bg-emerald-950/30 p-3 text-sm text-emerald-200">
           {notice}
         </p>
       ) : null}
@@ -335,6 +328,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
       <section
         className="rounded-xl border-2 border-cyan-700 bg-cyan-950 p-5 text-cyan-50"
         data-testid="grading-unlock-guide"
+        id="transcript-review-guide"
       >
         <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Current workflow</p>
         <h2 className="mt-1 text-xl font-semibold">Finish these checks to unlock draft grading</h2>
@@ -346,11 +340,11 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
             Classify every page as answer work or non-answer material.
             {unclassifiedPages.length > 0 ? ` Pending: page ${unclassifiedPages.join(", ")}.` : ""}
           </ReviewStep>
-          <ReviewStep complete={Boolean(evidence) && unassignedBlockCount === 0 && blockedEvidence.length === 0} number={3}>
-            Resolve unassigned, ambiguous, or unreadable evidence against the page image.
+          <ReviewStep complete={Boolean(evidence) && unassignedBlockCount === 0} number={3}>
+            Assign every visible writing block to a question. Correct text only when the page image supports it.
             {unassignedBlockCount > 0 ? ` ${unassignedBlockCount} block(s) remain unassigned.` : ""}
             {blockedEvidence.length > 0
-              ? ` Blocked: ${blockedEvidence.map((item) => item.question_label ?? "unlabelled").join(", ")}.`
+              ? ` These questions will remain safely quarantined if still unreadable: ${blockedEvidence.map((item) => item.question_label ?? "unlabelled").join(", ")}.`
               : ""}
           </ReviewStep>
           <ReviewStep complete={transcript.review_is_current} number={4}>
@@ -367,7 +361,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                   Go to page classification
                 </a>
               ) : null}
-              {unclassifiedPages.length === 0 && (!evidence || unassignedBlockCount > 0 || blockedEvidence.length > 0) ? (
+              {unclassifiedPages.length === 0 && (!evidence || unassignedBlockCount > 0) ? (
                 <a className="rounded border border-cyan-500 px-3 py-2 text-sm font-semibold" href="#question-evidence-review">
                   Go to evidence problems
                 </a>
@@ -394,46 +388,46 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         </div>
       </section>
 
-      <section className="rounded border border-slate-200 p-4" data-testid="transcript-provenance">
+      <section className="rounded border border-slate-700 p-4" data-testid="transcript-provenance">
         <h2 className="text-lg font-semibold">Script transcript</h2>
         <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
           <div>
-            <dt className="text-slate-500">Pages read</dt>
+            <dt className="text-slate-400">Pages read</dt>
             <dd data-testid="pages-read">
               {transcript.pages_read} of {transcript.page_count}
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">Requests actually made</dt>
+            <dt className="text-slate-400">Requests actually made</dt>
             {/* Measured, not inferred from the page count: a reused page costs nothing. */}
             <dd data-testid="provider-request-count">{transcript.provider_request_count}</dd>
           </div>
           <div>
-            <dt className="text-slate-500">Read by</dt>
+            <dt className="text-slate-400">Read by</dt>
             <dd data-testid="transcript-model">
               {transcript.provider} · {transcript.model_name}
             </dd>
           </div>
           <div>
-            <dt className="text-slate-500">Coverage</dt>
+            <dt className="text-slate-400">Coverage</dt>
             <dd data-testid="coverage-complete">
               {transcript.coverage_complete ? "Every page read" : "Incomplete"}
             </dd>
           </div>
         </dl>
         {!transcript.coverage_complete ? (
-          <p className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="mt-3 rounded border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-200">
             Not every page was read successfully. While that is true, no question on this script can
             be reported as unanswered.
           </p>
         ) : null}
-        <div className="mt-4 rounded border border-slate-300 bg-slate-50 p-3">
+        <div className="mt-4 rounded border border-slate-600 bg-slate-900 p-3">
           <p className="text-sm font-medium" data-testid="transcript-review-status">
             {transcript.review_is_current
               ? "Teacher review is current"
               : "Teacher review required before draft grading"}
           </p>
-          <p className="mt-1 text-xs text-slate-600">
+          <p className="mt-1 text-xs text-slate-300">
             Confirm only after checking each full page beside its transcript, classifying every
             page, and resolving ambiguous or unreadable evidence. Any later edit makes this
             confirmation stale.
@@ -443,17 +437,17 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
 
       {needsReconciliation ? (
         <section
-          className="rounded border border-amber-400 bg-amber-50 p-4"
+          className="rounded border border-amber-600 bg-amber-950/30 p-4"
           data-testid="reconciliation-panel"
         >
-          <h2 className="text-lg font-semibold text-amber-900">Unresolved read outcome</h2>
-          <p className="mt-2 text-sm text-amber-900">
+          <h2 className="text-lg font-semibold text-amber-200">Unresolved read outcome</h2>
+          <p className="mt-2 text-sm text-amber-200">
             {`Page ${transcript.pages_needing_reconciliation.join(", ")} was sent but never reported back. It may already have been produced and charged for, so nothing will read it again automatically. Check what happened, then record it.`}
           </p>
           <label className="mt-3 block text-sm">
             What did you check?
             <textarea
-              className="mt-1 w-full rounded border border-amber-300 p-2"
+              className="mt-1 w-full rounded border border-amber-700 p-2"
               value={reconcileNote}
               onChange={(event) => setReconcileNote(event.target.value)}
               data-testid="reconcile-note"
@@ -475,7 +469,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                   </button>
                   <button
                     type="button"
-                    className="rounded border border-amber-700 px-3 py-1 text-sm text-amber-900 disabled:opacity-50"
+                    className="rounded border border-amber-700 px-3 py-1 text-sm text-amber-200 disabled:opacity-50"
                     disabled={busy}
                     onClick={() => void reconcile(page.id, "missing_page")}
                     data-testid={`reconcile-missing-${page.page_no}`}
@@ -488,13 +482,13 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         </section>
       ) : null}
 
-      <section className="scroll-mt-4 rounded border border-slate-200 p-4" id="question-evidence-review">
+      <section className="scroll-mt-4 rounded border border-slate-700 p-4" id="question-evidence-review">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Question evidence</h2>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="rounded border border-slate-400 px-3 py-1 text-sm disabled:opacity-50"
+              className="rounded border border-slate-500 px-3 py-1 text-sm disabled:opacity-50"
               disabled={busy || !evidence}
               onClick={() => void confirmCurrentOwnership()}
               data-testid="confirm-current-ownership"
@@ -503,7 +497,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
             </button>
             <button
               type="button"
-              className="rounded border border-slate-400 px-3 py-1 text-sm disabled:opacity-50"
+              className="rounded border border-slate-500 px-3 py-1 text-sm disabled:opacity-50"
               disabled={busy || !evidence}
               onClick={() => void rederive()}
               data-testid="rederive-evidence"
@@ -517,35 +511,35 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
             {evidence.evidence.map((item: AnswerEvidence) => (
               <li
                 key={item.question_id}
-                className="rounded border border-slate-200 p-3"
+                className="rounded border border-slate-700 p-3"
                 data-testid={`evidence-${item.question_label ?? item.question_id}`}
               >
                 <div className="flex flex-wrap items-baseline gap-2">
                   <span className="font-medium">{item.question_label ?? "Unlabelled"}</span>
                   <span
-                    className="rounded bg-slate-100 px-2 py-0.5 text-xs"
+                    className="rounded bg-slate-800 px-2 py-0.5 text-xs"
                     data-testid={`evidence-state-${item.question_label ?? item.question_id}`}
                   >
                     {STATE_LABEL[item.state]}
                   </span>
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-slate-400">
                     assignment v{item.assignment_version}
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-slate-600">{STATE_HELP[item.state]}</p>
+                <p className="mt-1 text-xs text-slate-300">{STATE_HELP[item.state]}</p>
                 {item.state_reason ? (
-                  <p className="mt-1 text-xs text-slate-700">{item.state_reason}</p>
+                  <p className="mt-1 text-xs text-slate-200">{item.state_reason}</p>
                 ) : null}
                 {item.spans.length > 0 ? (
                   <ol className="mt-2 space-y-1 text-sm">
                     {item.spans.map((span) => (
-                      <li key={span.order_index} className="rounded bg-slate-50 p-2">
-                        <span className="text-xs text-slate-500">
+                      <li key={span.order_index} className="rounded bg-slate-900 p-2">
+                        <span className="text-xs text-slate-400">
                           {`page ${span.page_no} · ${BASIS_LABEL[span.assignment_basis] ?? span.assignment_basis}`}
                         </span>
                         <p className="whitespace-pre-wrap">{span.text}</p>
                         {span.unresolved ? (
-                          <p className="text-xs text-amber-800">
+                          <p className="text-xs text-amber-200">
                             {`Unresolved: ${span.unresolved_reason ?? "needs review"}`}
                           </p>
                         ) : null}
@@ -553,23 +547,23 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                     ))}
                   </ol>
                 ) : (
-                  <p className="mt-2 text-sm text-slate-500">No evidence attached.</p>
+                  <p className="mt-2 text-sm text-slate-400">No evidence attached.</p>
                 )}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-slate-600">
+          <p className="mt-3 text-sm text-slate-300">
             No question assignment has been derived from this transcript yet.
           </p>
         )}
 
         {evidence && evidence.unassigned_blocks.length > 0 ? (
-          <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-3" data-testid="unassigned-blocks">
-            <h3 className="text-sm font-semibold text-amber-900">
+          <div className="mt-4 rounded border border-amber-700 bg-amber-950/30 p-3" data-testid="unassigned-blocks">
+            <h3 className="text-sm font-semibold text-amber-200">
               Writing that belongs to no question
             </h3>
-            <p className="text-xs text-amber-900">
+            <p className="text-xs text-amber-200">
               Left visible on purpose rather than attached to whichever question was nearest.
             </p>
             <ul className="mt-2 space-y-1 text-sm">
@@ -583,50 +577,70 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         ) : null}
       </section>
 
-      <section className="scroll-mt-4 rounded border border-slate-200 p-4" id="source-page-review">
+      <section className="scroll-mt-4 rounded-xl border border-slate-700 bg-slate-900/40 p-4" id="source-page-review">
         <h2 className="text-lg font-semibold">Source pages</h2>
-        <p className="text-xs text-slate-600">
+        <p className="text-xs text-slate-300">
           The transcript as it was read, page by page. Correcting a line here keeps the model&apos;s
           own text beside yours.
         </p>
+        <div className="sticky top-3 z-20 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-700 bg-slate-950/95 p-3 shadow-xl" data-testid="source-review-progress">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Source-page review</p>
+            <p className="text-sm font-medium">
+              {unclassifiedPages.length > 0
+                ? `Decision required for page${unclassifiedPages.length === 1 ? "" : "s"} ${unclassifiedPages.join(", ")}`
+                : "Every page has a role."}
+            </p>
+          </div>
+          <a className="rounded border border-cyan-500 px-3 py-2 text-xs font-semibold text-cyan-100" href="#transcript-review-guide">
+            Back to checklist
+          </a>
+        </div>
         {transcript.pages.map((page) => (
-          <article key={page.id} className="mt-6" data-testid={`page-${page.page_no}`}>
-            <h3 className="text-sm font-semibold">
-              {`Page ${page.page_no}`}{" "}
-              <span className="font-normal text-slate-500">
-                {`· ${page.state}${page.is_blank_page ? " · blank" : ""} · ${page.provider_request_count} request(s)`}
-              </span>
-            </h3>
+          <article key={page.id} className="mt-6 rounded-xl border border-slate-700 bg-slate-950/50 p-4" data-testid={`page-${page.page_no}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-base font-semibold">
+                {`Page ${page.page_no}`}{" "}
+                <span className="font-normal text-slate-400">
+                  {`· ${page.state}${page.is_blank_page ? " · blank" : ""} · ${page.provider_request_count} request(s)`}
+                </span>
+              </h3>
+              {page.state === "succeeded" && page.teacher_classification === null ? (
+                <span className="rounded-full bg-amber-400 px-3 py-1 text-xs font-bold text-slate-950">Decision required</span>
+              ) : null}
+            </div>
             {page.error ? (
-              <p className="mt-1 text-xs text-red-800" data-testid={`page-error-${page.page_no}`}>
+              <p className="mt-1 text-xs text-red-200" data-testid={`page-error-${page.page_no}`}>
                 {page.error}
               </p>
             ) : null}
             {page.state === "succeeded" ? (
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-slate-600">Page role:</span>
+              <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900 p-3">
+                <p className="mb-2 text-sm font-semibold">What kind of page is this?</p>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
                 <button
                   type="button"
                   disabled={busy}
-                  className={`rounded border px-2 py-1 ${page.teacher_classification === "answer_content" ? "border-emerald-700 bg-emerald-50" : "border-slate-300"}`}
+                  className={`min-h-10 rounded border px-3 py-2 font-semibold ${page.teacher_classification === "answer_content" ? "border-emerald-400 bg-emerald-950 text-emerald-200 ring-1 ring-emerald-400" : "border-slate-500 bg-slate-950 text-slate-200"}`}
                   onClick={() => void classifyPage(page.id, "answer_content")}
                 >
-                  Contains answer work
+                  {page.teacher_classification === "answer_content" ? "✓ Answer work selected" : "Contains answer work"}
                 </button>
                 <button
                   type="button"
                   disabled={busy}
-                  className={`rounded border px-2 py-1 ${page.teacher_classification === "non_answer" ? "border-amber-700 bg-amber-50" : "border-slate-300"}`}
+                  className={`min-h-10 rounded border px-3 py-2 font-semibold ${page.teacher_classification === "non_answer" ? "border-amber-600 bg-amber-950 text-amber-200 ring-1 ring-amber-400" : "border-slate-500 bg-slate-950 text-slate-200"}`}
                   onClick={() => void classifyPage(page.id, "non_answer")}
                   data-testid={`page-non-answer-${page.page_no}`}
                 >
-                  Cover / instructions / non-answer
+                  {page.teacher_classification === "non_answer" ? "✓ Non-answer page selected" : "Cover / instructions / non-answer"}
                 </button>
                 {page.teacher_classification ? (
                   <button type="button" disabled={busy} className="underline" onClick={() => void classifyPage(page.id, null)}>
                     Clear decision
                   </button>
                 ) : null}
+                </div>
               </div>
             ) : null}
             <div className="mt-3 grid gap-4 lg:grid-cols-2">
@@ -636,12 +650,12 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
               />
               <ul className="space-y-2">
               {page.blocks.map((block) => (
-                <li key={block.id} className="rounded border border-slate-200 p-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <li key={block.id} className={`rounded-lg border p-3 ${block.effective_question_label ? "border-slate-700 bg-slate-900/60" : "border-amber-500 bg-amber-950/30"}`}>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
                     <span>{block.question_label_raw ?? "no heading read"}</span>
                     <span>· {block.label_source}</span>
                     {block.assignment_override_active ? (
-                      <span className="font-medium text-indigo-700">
+                      <span className="font-medium text-indigo-300">
                         {`· teacher: ${block.effective_question_label ?? "unassigned"}`}
                       </span>
                     ) : null}
@@ -651,19 +665,19 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                       </span>
                     ) : null}
                     {block.unresolved ? (
-                      <span className="text-amber-800">· {block.unresolved_reason}</span>
+                      <span className="text-amber-200">· {block.unresolved_reason}</span>
                     ) : null}
                   </div>
                   {editingBlockId === block.id ? (
                     <div className="mt-2 space-y-2">
                       <textarea
-                        className="w-full rounded border border-slate-300 p-2 text-sm"
+                        className="w-full rounded border border-slate-600 p-2 text-sm"
                         value={draftText}
                         onChange={(event) => setDraftText(event.target.value)}
                         data-testid={`block-editor-${block.id}`}
                       />
                       <input
-                        className="w-full rounded border border-slate-300 p-2 text-sm"
+                        className="w-full rounded border border-slate-600 p-2 text-sm"
                         placeholder="Why are you changing it? (optional)"
                         value={draftReason}
                         onChange={(event) => setDraftReason(event.target.value)}
@@ -681,7 +695,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                         </button>
                         <button
                           type="button"
-                          className="rounded border border-slate-400 px-3 py-1 text-sm"
+                          className="rounded border border-slate-500 px-3 py-1 text-sm"
                           onClick={() => setEditingBlockId(null)}
                         >
                           Cancel
@@ -692,7 +706,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                     <>
                       <p className="mt-1 whitespace-pre-wrap text-sm">{block.effective_text}</p>
                       {block.edited_text !== null ? (
-                        <details className="mt-1 text-xs text-slate-600">
+                        <details className="mt-1 text-xs text-slate-300">
                           <summary>What the model read</summary>
                           <p className="whitespace-pre-wrap">{block.text}</p>
                         </details>
@@ -721,11 +735,11 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                           </button>
                         ) : null}
                       </div>
-                      <div className="mt-3 grid gap-2 rounded bg-slate-50 p-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                      <div className="mt-3 grid gap-3 rounded-lg border border-slate-700 bg-slate-950 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
                         <label>
-                          Evidence owner
+                          <span className="font-semibold text-slate-200">Evidence owner</span>
                           <select
-                            className="mt-1 w-full rounded border border-slate-300 bg-white p-1"
+                            className="mt-1 min-h-10 w-full rounded border border-slate-600 bg-slate-950 px-2 py-1 text-slate-100"
                             value={(assignmentDrafts[block.id]?.label ?? block.effective_question_label) || ""}
                             onChange={(event) =>
                               setAssignmentDrafts((current) => ({
@@ -743,7 +757,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                             )}
                           </select>
                         </label>
-                        <label className="flex items-center gap-1">
+                        <label className="flex min-h-10 items-center gap-2 text-slate-200">
                           <input
                             type="checkbox"
                             checked={assignmentDrafts[block.id]?.continues ?? block.effective_continues_from_previous}
@@ -762,7 +776,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                         <button
                           type="button"
                           disabled={busy}
-                          className="rounded border border-slate-400 px-2 py-1"
+                          className="min-h-10 rounded bg-cyan-400 px-3 py-2 font-semibold text-slate-950 disabled:opacity-50"
                           onClick={() => void saveAssignment(block)}
                           data-testid={`block-assign-${block.id}`}
                         >
@@ -770,7 +784,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                         </button>
                       </div>
                       {revisions[block.id] ? (
-                        <ol className="mt-1 space-y-1 text-xs text-slate-600">
+                        <ol className="mt-1 space-y-1 text-xs text-slate-300">
                           {revisions[block.id].map((revision) => (
                             <li key={revision.revision}>
                               {`v${revision.revision}: ${revision.previous_text} → ${revision.new_text}`}
@@ -789,7 +803,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         ))}
       </section>
 
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-slate-400">
         Nothing on this page grades, approves or exports anything. Every draft grade stays a draft
         until a teacher approves it, and a draft made from evidence that has since changed cannot be
         approved at all.

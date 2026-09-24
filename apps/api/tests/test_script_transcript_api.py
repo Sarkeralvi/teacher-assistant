@@ -10,6 +10,7 @@ another teacher being refused all of it.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -541,6 +542,34 @@ def test_rederiving_assignment_makes_no_provider_request(
     ).all()
     # Previous versions are kept, not overwritten.
     assert versions == [1, 1, 2, 2]
+
+
+def test_teacher_can_confirm_review_while_unreadable_question_stays_quarantined(
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    teacher_id, headers = _register(client)
+    seeded = _Seeded(db_session, teacher_id, tmp_path)
+    seeded.page_transcript.teacher_classification = "answer_content"
+    seeded.page_transcript.classified_at = datetime.now(UTC)
+    seeded.page_transcript.classified_by_teacher_id = teacher_id
+    seeded.assignment.state = "unreadable"
+    seeded.assignment.state_reason = "visible writing could not be read faithfully"
+    seeded.assignment.unresolved_block_count = 1
+    seeded.assignment.unassigned_block_count = 0
+    seeded.blank_assignment.state = "no_answer_found"
+    seeded.blank_assignment.state_reason = "no visible answer was found"
+    seeded.blank_assignment.unassigned_block_count = 0
+    db_session.commit()
+
+    confirmed = client.post(
+        f"/submissions/{seeded.submission.id}/script-transcript/confirm-review",
+        headers=headers,
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["review_is_current"] is True
+    db_session.refresh(seeded.assignment)
+    assert seeded.assignment.state == "unreadable"
 
 
 def test_teacher_review_gate_is_versioned_and_becomes_stale_after_an_edit(

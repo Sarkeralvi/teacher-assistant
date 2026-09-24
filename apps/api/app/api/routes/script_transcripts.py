@@ -232,14 +232,12 @@ def confirm_script_transcript_review(
             ),
         )
     summary = assignment_summary(assignments)
-    if summary["blocked_states"] or any(
-        assignment.unassigned_block_count for assignment in assignments
-    ):
+    if any(assignment.unassigned_block_count for assignment in assignments):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Resolve unreadable, ambiguous, missing, failed, or unassigned evidence "
-                "before confirming this transcript"
+                "Assign every visible writing block to a question before confirming this "
+                "transcript; unreadable questions may remain quarantined"
             ),
         )
     transcript.review_snapshot_sha256 = current_review_snapshot(db, transcript)
@@ -257,6 +255,7 @@ def confirm_script_transcript_review(
                 "review_snapshot_sha256": transcript.review_snapshot_sha256,
                 "page_count": len(pages),
                 "assignment_count": len(assignments),
+                "blocked_states": summary["blocked_states"],
             },
         )
     )
