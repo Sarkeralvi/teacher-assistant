@@ -362,8 +362,13 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
                 </a>
               ) : null}
               {unclassifiedPages.length === 0 && (!evidence || unassignedBlockCount > 0) ? (
-                <a className="rounded border border-cyan-500 px-3 py-2 text-sm font-semibold" href="#question-evidence-review">
-                  Go to evidence problems
+                <a
+                  className="rounded border border-cyan-500 px-3 py-2 text-sm font-semibold"
+                  href={unassignedBlockCount > 0 && evidence
+                    ? `#transcript-block-${evidence.unassigned_blocks[0].id}`
+                    : "#question-evidence-review"}
+                >
+                  {unassignedBlockCount > 0 ? "Go to unassigned block" : "Go to evidence problems"}
                 </a>
               ) : null}
               <button
@@ -568,8 +573,14 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
             </p>
             <ul className="mt-2 space-y-1 text-sm">
               {evidence.unassigned_blocks.map((block) => (
-                <li key={block.id} className="whitespace-pre-wrap">
-                  {block.effective_text}
+                <li key={block.id} className="rounded border border-amber-700 bg-slate-950/60 p-3">
+                  <p className="whitespace-pre-wrap">{block.effective_text}</p>
+                  <a
+                    className="mt-2 inline-flex rounded border border-amber-500 px-3 py-2 text-xs font-semibold text-amber-100"
+                    href={`#transcript-block-${block.id}`}
+                  >
+                    Assign this block in its source page
+                  </a>
                 </li>
               ))}
             </ul>
@@ -650,7 +661,11 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
               />
               <ul className="space-y-2">
               {page.blocks.map((block) => (
-                <li key={block.id} className={`rounded-lg border p-3 ${block.effective_question_label ? "border-slate-700 bg-slate-900/60" : "border-amber-500 bg-amber-950/30"}`}>
+                <li
+                  key={block.id}
+                  id={`transcript-block-${block.id}`}
+                  className={`scroll-mt-28 rounded-lg border p-3 ${block.effective_question_label ? "border-slate-700 bg-slate-900/60" : "border-amber-500 bg-amber-950/30 ring-2 ring-amber-500"}`}
+                >
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
                     <span>{block.question_label_raw ?? "no heading read"}</span>
                     <span>· {block.label_source}</span>

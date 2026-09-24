@@ -88,6 +88,8 @@ for (const marker of [
   "Decision required for page",
   "✓ Answer work selected",
   "will remain quarantined",
+  "Go to unassigned block",
+  "Assign this block in its source page",
 ]) {
   if (!transcriptReview.includes(marker)) {
     throw new Error(`Transcript review UI missing visible workflow marker: ${marker}`);
