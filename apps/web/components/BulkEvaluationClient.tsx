@@ -7,6 +7,7 @@ import {
   approveCleanBulkEvaluation,
   createBulkEvaluationRun,
   downloadBulkEvaluationResults,
+  fetchScriptTranscript,
   getBrainProfiles,
   getBrainStatus,
   listAssessmentGradingRuns,
@@ -60,6 +61,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const [runs, setRuns] = useState<BulkEvaluationRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [exceptions, setExceptions] = useState<BulkEvaluationException[]>([]);
+  const [transcriptReviewBySubmission, setTranscriptReviewBySubmission] = useState<Record<number, boolean>>({});
   const [gradingRuns, setGradingRuns] = useState<GradingRun[]>([]);
   const [localAi, setLocalAi] = useState<LocalAiStatus | null>(null);
   const [profiles, setProfiles] = useState<BrainProfile[]>([]);
@@ -126,7 +128,30 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         eligible[0];
       return defaultProfile?.id ?? "";
     });
-    setExceptions(selected ? await listBulkEvaluationExceptions(selected.id) : []);
+    const exceptionRows = selected ? await listBulkEvaluationExceptions(selected.id) : [];
+    setExceptions(exceptionRows);
+    const transcriptSubmissionIds = [...new Set(
+      exceptionRows
+        .filter((item) => item.exception_codes.some((code) => [
+          "unassigned_ink",
+          "unassigned_transcript_block",
+          "inferred_question_label",
+          "unreadable_handwriting",
+          "evidence_review_required",
+        ].includes(code)))
+        .map((item) => item.submission_id),
+    )];
+    const transcriptReviewEntries = await Promise.all(
+      transcriptSubmissionIds.map(async (submissionId) => {
+        try {
+          const transcript = await fetchScriptTranscript(submissionId);
+          return [submissionId, transcript.review_is_current] as const;
+        } catch {
+          return [submissionId, false] as const;
+        }
+      }),
+    );
+    setTranscriptReviewBySubmission(Object.fromEntries(transcriptReviewEntries));
   }, [activeRunId, assessmentId]);
 
   useEffect(() => {
@@ -420,6 +445,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
                 {transcriptExceptionGroups.map((group) => {
                   const first = group[0];
                   const needsAnalysis = group.some((item) => item.exception_codes.includes("unassigned_ink"));
+                  const transcriptReviewCurrent = transcriptReviewBySubmission[first.submission_id] === true;
                   return (
                     <article key={`transcript-${first.submission_id}`} className="grid gap-3 rounded-lg border border-amber-800/70 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
                       <div>
@@ -429,9 +455,16 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Link className={secondaryButtonClass} href={`/submissions/${first.submission_id}/transcript`}>Review full transcript</Link>
+                        <Link className={secondaryButtonClass} href={`/submissions/${first.submission_id}/transcript`}>
+                          {transcriptReviewCurrent ? "Review confirmed transcript" : "1. Review and confirm transcript"}
+                        </Link>
                         {needsAnalysis ? <button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeItem(first.item_id)}>Analyze saved transcript once</button> : null}
-                        {!needsAnalysis ? group.map((item) => (
+                        {!needsAnalysis && !transcriptReviewCurrent ? (
+                          <button className={secondaryButtonClass} disabled type="button">
+                            2. Complete transcript review first
+                          </button>
+                        ) : null}
+                        {!needsAnalysis && transcriptReviewCurrent ? group.map((item) => (
                           <button
                             className={secondaryButtonClass}
                             disabled={busy}
@@ -439,7 +472,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
                             type="button"
                             onClick={() => void resumeItem(item.item_id)}
                           >
-                            Resume {item.question_label} grading
+                            2. Resume {item.question_label} grading
                           </button>
                         )) : null}
                       </div>

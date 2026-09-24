@@ -308,7 +308,8 @@ for (const marker of [
   "profileEligibleForBulk",
   "selectedProfile.data_destination",
   "Analyze saved transcript once",
-  "Review full transcript",
+  "Review and confirm transcript",
+  "Complete transcript review first",
   "Resume {item.question_label} grading",
   "full-script evidence",
 ]) {
