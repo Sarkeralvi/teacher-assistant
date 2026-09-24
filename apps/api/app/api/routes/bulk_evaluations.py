@@ -16,6 +16,7 @@ from app.models import (
     BulkEvaluationRun,
     GradingRun,
     Question,
+    ScriptTranscript,
     Submission,
     User,
 )
@@ -27,6 +28,7 @@ from app.schemas import (
     BulkEvaluationRunRead,
 )
 from app.services.bulk_evaluation_service import BulkEvaluationError, BulkEvaluationService
+from app.services.transcript_review import transcript_review_is_current
 from app.worker.jobs import run_bulk_evaluation_next_job
 from app.worker.rq_app import get_default_queue
 from packages.brain.adapter import BrainProviderConfigurationError
@@ -205,6 +207,24 @@ def list_bulk_evaluation_exceptions(
         )
         .order_by(Submission.student_identifier, Question.id)
     ).all()
+    submission_ids = {submission.id for _, submission, _ in rows}
+    transcripts_by_submission: dict[int, ScriptTranscript] = {}
+    transcript_review_by_submission: dict[int, bool] = {}
+    if submission_ids:
+        transcripts = db.scalars(
+            select(ScriptTranscript)
+            .where(
+                ScriptTranscript.submission_id.in_(submission_ids),
+                ScriptTranscript.status != "superseded",
+            )
+            .order_by(ScriptTranscript.id.desc())
+        ).all()
+        for transcript in transcripts:
+            transcripts_by_submission.setdefault(transcript.submission_id, transcript)
+        transcript_review_by_submission = {
+            submission_id: transcript_review_is_current(db, transcript)
+            for submission_id, transcript in transcripts_by_submission.items()
+        }
     return [
         BulkEvaluationExceptionRead(
             item_id=item.id,
@@ -216,6 +236,9 @@ def list_bulk_evaluation_exceptions(
             stage=item.stage,
             exception_codes=item.exception_codes,
             warnings=item.warnings,
+            transcript_review_is_current=transcript_review_by_submission.get(
+                submission.id, False
+            ),
         )
         for item, submission, question in rows
     ]

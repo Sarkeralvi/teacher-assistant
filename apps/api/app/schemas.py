@@ -402,6 +402,7 @@ class BulkEvaluationExceptionRead(BaseModel):
     stage: str
     exception_codes: list[BulkExceptionCode]
     warnings: list[str]
+    transcript_review_is_current: bool = False
 
 
 class BulkEvaluationApprovalRequest(BaseModel):

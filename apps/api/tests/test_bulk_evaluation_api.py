@@ -290,6 +290,12 @@ def test_bulk_create_enqueues_only_its_own_run_and_hides_it_from_other_teachers(
     assert owner_response.json()["items"][0]["exception_codes"] == [
         "inferred_question_label"
     ]
+    exception_response = client.get(
+        f"/bulk-evaluation-runs/{run_id}/exceptions",
+        headers=_headers(str(teacher["token"])),
+    )
+    assert exception_response.status_code == 200
+    assert exception_response.json()[0]["transcript_review_is_current"] is False
 
 
 def test_bulk_enqueue_failure_pauses_only_the_newly_created_run(

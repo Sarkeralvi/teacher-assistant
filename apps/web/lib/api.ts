@@ -220,6 +220,7 @@ export type BulkEvaluationException = {
   stage: string;
   exception_codes: string[];
   warnings: string[];
+  transcript_review_is_current: boolean;
 };
 
 export type BulkEvaluationApprovalResponse = {
