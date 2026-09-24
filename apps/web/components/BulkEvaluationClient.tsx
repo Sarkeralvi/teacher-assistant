@@ -250,6 +250,20 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
     }
   }
 
+  async function resumeItem(itemId: number) {
+    if (!activeRun) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await resumeBulkEvaluationItem(activeRun.id, itemId);
+      await refresh();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function approveClean() {
     if (!activeRun?.review_snapshot_sha256 || cleanSuggestionIds.length === 0) return;
     setBusy(true);
@@ -416,7 +430,18 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Link className={secondaryButtonClass} href={`/submissions/${first.submission_id}/transcript`}>Review full transcript</Link>
-                        {needsAnalysis ? <button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeBulkEvaluationItem(activeRun.id, first.item_id).then(refresh).catch((caught) => setError(errorMessage(caught)))}>Analyze saved transcript once</button> : null}
+                        {needsAnalysis ? <button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeItem(first.item_id)}>Analyze saved transcript once</button> : null}
+                        {!needsAnalysis ? group.map((item) => (
+                          <button
+                            className={secondaryButtonClass}
+                            disabled={busy}
+                            key={item.item_id}
+                            type="button"
+                            onClick={() => void resumeItem(item.item_id)}
+                          >
+                            Resume {item.question_label} grading
+                          </button>
+                        )) : null}
                       </div>
                     </article>
                   );
@@ -424,7 +449,7 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
                 {otherExceptions.map((item) => (
                 <article key={item.item_id} className="grid gap-3 rounded-lg border border-amber-800/70 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
                   <div><p className="font-semibold">{item.student_identifier ?? `Submission ${item.submission_id}`} · {item.question_label}</p><p className="mt-1 text-sm text-amber-200">{item.exception_codes.join(", ")}</p></div>
-                  <div className="flex gap-2"><Link className={secondaryButtonClass} href={`/submissions/${item.submission_id}/transcript`}>Review page transcript</Link><button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeBulkEvaluationItem(activeRun.id, item.item_id).then(refresh).catch((caught) => setError(errorMessage(caught)))}>Resume item</button></div>
+                  <div className="flex gap-2"><Link className={secondaryButtonClass} href={`/submissions/${item.submission_id}/transcript`}>Review page transcript</Link><button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void resumeItem(item.item_id)}>Resume item</button></div>
                 </article>
               ))}</div>
             )}

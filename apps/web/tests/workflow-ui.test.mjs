@@ -309,6 +309,7 @@ for (const marker of [
   "selectedProfile.data_destination",
   "Analyze saved transcript once",
   "Review full transcript",
+  "Resume {item.question_label} grading",
   "full-script evidence",
 ]) {
   if (!bulk.includes(marker)) {
