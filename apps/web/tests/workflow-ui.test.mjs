@@ -90,6 +90,8 @@ for (const marker of [
   "will remain quarantined",
   "Go to unassigned block",
   "Assign this block in its source page",
+  'data-testid="return-to-bulk-evaluation"',
+  "`/assessments/${transcript.assessment_id}/bulk-evaluation`",
 ]) {
   if (!transcriptReview.includes(marker)) {
     throw new Error(`Transcript review UI missing visible workflow marker: ${marker}`);

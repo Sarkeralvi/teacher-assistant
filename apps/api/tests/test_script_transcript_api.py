@@ -309,6 +309,7 @@ def test_the_whole_script_is_readable_as_one_document_with_its_provenance(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "complete"
+    assert body["assessment_id"] == seeded.submission.assessment_id
     assert body["coverage_complete"] is True
     # The real request count, summed from the pages.
     assert body["provider_request_count"] == 1

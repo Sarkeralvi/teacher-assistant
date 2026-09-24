@@ -2400,6 +2400,7 @@ export type ScriptTranscriptPage = {
 export type ScriptTranscript = {
   id: number;
   submission_id: number;
+  assessment_id: number;
   status: string;
   provider: string;
   model_name: string;

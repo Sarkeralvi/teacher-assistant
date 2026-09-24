@@ -1876,6 +1876,7 @@ class ScriptTranscriptPageRead(ORMBase):
 class ScriptTranscriptRead(ORMBase):
     id: int
     submission_id: int
+    assessment_id: int
     status: str
     provider: str
     model_name: str

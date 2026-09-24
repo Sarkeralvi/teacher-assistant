@@ -162,12 +162,13 @@ def read_script_transcript(
 ) -> ScriptTranscriptRead:
     """The whole script as one reviewable document, with its provenance."""
 
-    get_owned_submission_or_404(submission_id, db, current_user)
+    submission = get_owned_submission_or_404(submission_id, db, current_user)
     transcript = _current_transcript(db, submission_id)
     pages = sorted(transcript.pages, key=lambda item: (item.page_order, item.page_no))
     return ScriptTranscriptRead(
         id=transcript.id,
         submission_id=transcript.submission_id,
+        assessment_id=submission.assessment_id,
         status=transcript.status,
         provider=transcript.provider,
         model_name=transcript.model_name,

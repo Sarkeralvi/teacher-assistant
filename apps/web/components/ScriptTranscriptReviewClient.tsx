@@ -382,13 +382,13 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
               </button>
             </div>
           ) : (
-            <button
-              type="button"
+            <a
               className="mt-3 rounded bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
-              onClick={() => window.history.back()}
+              href={`/assessments/${transcript.assessment_id}/bulk-evaluation`}
+              data-testid="return-to-bulk-evaluation"
             >
               Return to bulk evaluation
-            </button>
+            </a>
           )}
         </div>
       </section>
