@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   classifyTranscriptPage,
@@ -276,6 +276,48 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
   }
 
   const needsReconciliation = transcript.pages_needing_reconciliation.length > 0;
+  const unclassifiedPages = transcript.pages
+    .filter((page) => page.state === "succeeded" && page.teacher_classification === null)
+    .map((page) => page.page_no);
+  const blockedEvidence = evidence?.evidence.filter((item) =>
+    ["unreadable", "ambiguous", "missing_page", "processing_failed"].includes(item.state),
+  ) ?? [];
+  const unassignedBlockCount = evidence?.unassigned_blocks.length ?? 0;
+  const reviewReady = Boolean(
+    transcript.coverage_complete
+      && !needsReconciliation
+      && evidence
+      && unclassifiedPages.length === 0
+      && blockedEvidence.length === 0
+      && unassignedBlockCount === 0,
+  );
+  const nextAction = (() => {
+    if (transcript.review_is_current) {
+      return "Review complete. Return to the bulk evaluation and resume grading for each answer-ready question.";
+    }
+    if (!transcript.coverage_complete || needsReconciliation) {
+      return "Resolve the incomplete or unknown page read before reviewing answer ownership.";
+    }
+    if (unclassifiedPages.length > 0) {
+      return `Classify page${unclassifiedPages.length === 1 ? "" : "s"} ${unclassifiedPages.join(", ")} below.`;
+    }
+    if (!evidence) {
+      return "Re-derive question evidence from the saved transcript before confirmation.";
+    }
+    if (unassignedBlockCount > 0 || blockedEvidence.length > 0) {
+      const parts = [];
+      if (unassignedBlockCount > 0) {
+        parts.push(`${unassignedBlockCount} unassigned writing block${unassignedBlockCount === 1 ? "" : "s"}`);
+      }
+      if (blockedEvidence.length > 0) {
+        parts.push(
+          `${blockedEvidence.length} blocked question${blockedEvidence.length === 1 ? "" : "s"}: ${blockedEvidence.map((item) => item.question_label ?? "unlabelled").join(", ")}`,
+        );
+      }
+      return `Resolve ${parts.join(" and ")} below. Correct only what the page image supports.`;
+    }
+    return "All checks passed. Confirm this exact transcript snapshot to unlock draft grading.";
+  })();
 
   return (
     <div className="space-y-6">
@@ -289,6 +331,68 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
           {notice}
         </p>
       ) : null}
+
+      <section
+        className="rounded-xl border-2 border-cyan-700 bg-cyan-950 p-5 text-cyan-50"
+        data-testid="grading-unlock-guide"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Current workflow</p>
+        <h2 className="mt-1 text-xl font-semibold">Finish these checks to unlock draft grading</h2>
+        <ol className="mt-4 grid gap-2 text-sm">
+          <ReviewStep complete={transcript.coverage_complete && !needsReconciliation} number={1}>
+            Every source page was read successfully.
+          </ReviewStep>
+          <ReviewStep complete={unclassifiedPages.length === 0} number={2}>
+            Classify every page as answer work or non-answer material.
+            {unclassifiedPages.length > 0 ? ` Pending: page ${unclassifiedPages.join(", ")}.` : ""}
+          </ReviewStep>
+          <ReviewStep complete={Boolean(evidence) && unassignedBlockCount === 0 && blockedEvidence.length === 0} number={3}>
+            Resolve unassigned, ambiguous, or unreadable evidence against the page image.
+            {unassignedBlockCount > 0 ? ` ${unassignedBlockCount} block(s) remain unassigned.` : ""}
+            {blockedEvidence.length > 0
+              ? ` Blocked: ${blockedEvidence.map((item) => item.question_label ?? "unlabelled").join(", ")}.`
+              : ""}
+          </ReviewStep>
+          <ReviewStep complete={transcript.review_is_current} number={4}>
+            Confirm the exact transcript snapshot below. This unlocks draft grading; it does not approve a grade.
+          </ReviewStep>
+        </ol>
+        <div className="mt-4 rounded-lg border border-cyan-700 bg-slate-950/60 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Next action</p>
+          <p className="mt-1 text-sm" data-testid="transcript-next-action">{nextAction}</p>
+          {!transcript.review_is_current ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {unclassifiedPages.length > 0 ? (
+                <a className="rounded border border-cyan-500 px-3 py-2 text-sm font-semibold" href="#source-page-review">
+                  Go to page classification
+                </a>
+              ) : null}
+              {unclassifiedPages.length === 0 && (!evidence || unassignedBlockCount > 0 || blockedEvidence.length > 0) ? (
+                <a className="rounded border border-cyan-500 px-3 py-2 text-sm font-semibold" href="#question-evidence-review">
+                  Go to evidence problems
+                </a>
+              ) : null}
+              <button
+                type="button"
+                className="rounded bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={busy || !reviewReady}
+                onClick={() => void confirmReview()}
+                data-testid="confirm-transcript-review"
+              >
+                Confirm transcript and unlock draft grading
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="mt-3 rounded bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
+              onClick={() => window.history.back()}
+            >
+              Return to bulk evaluation
+            </button>
+          )}
+        </div>
+      </section>
 
       <section className="rounded border border-slate-200 p-4" data-testid="transcript-provenance">
         <h2 className="text-lg font-semibold">Script transcript</h2>
@@ -334,15 +438,6 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
             page, and resolving ambiguous or unreadable evidence. Any later edit makes this
             confirmation stale.
           </p>
-          <button
-            type="button"
-            className="mt-2 rounded bg-slate-800 px-3 py-1 text-sm text-white disabled:opacity-50"
-            disabled={busy || transcript.review_is_current}
-            onClick={() => void confirmReview()}
-            data-testid="confirm-transcript-review"
-          >
-            Confirm transcript and evidence for draft grading
-          </button>
         </div>
       </section>
 
@@ -393,7 +488,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         </section>
       ) : null}
 
-      <section className="rounded border border-slate-200 p-4">
+      <section className="scroll-mt-4 rounded border border-slate-200 p-4" id="question-evidence-review">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Question evidence</h2>
           <div className="flex flex-wrap gap-2">
@@ -488,7 +583,7 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         ) : null}
       </section>
 
-      <section className="rounded border border-slate-200 p-4">
+      <section className="scroll-mt-4 rounded border border-slate-200 p-4" id="source-page-review">
         <h2 className="text-lg font-semibold">Source pages</h2>
         <p className="text-xs text-slate-600">
           The transcript as it was read, page by page. Correcting a line here keeps the model&apos;s
@@ -703,5 +798,23 @@ export default function ScriptTranscriptReviewClient({ submissionId }: Props) {
         {blocksById.size}
       </span>
     </div>
+  );
+}
+
+function ReviewStep({
+  complete,
+  number,
+  children,
+}: Readonly<{ complete: boolean; number: number; children: ReactNode }>) {
+  return (
+    <li className="flex gap-3 rounded-lg bg-slate-950/50 p-3">
+      <span
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${complete ? "bg-emerald-400 text-slate-950" : "bg-amber-300 text-slate-950"}`}
+        aria-label={complete ? `Step ${number} complete` : `Step ${number} pending`}
+      >
+        {complete ? "✓" : number}
+      </span>
+      <span>{children}</span>
+    </li>
   );
 }
