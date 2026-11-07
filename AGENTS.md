@@ -2,6 +2,22 @@
 
 This repository is the TAAgent project implementing the Answer Evidence Extraction Machine (AEEM): a teacher-controlled evidence preparation and grading-assistance workflow.
 
+## 2026-11-07 operating change (v2)
+
+The founder approved the v2 plan and `docs/decisions/2026-11-07-claude-api.md`. Where
+the rules below conflict with these points, these points win:
+
+- The Anthropic API (Claude) is the production model provider. App calls started by
+  a teacher action are authorized by that action; agent-initiated paid calls
+  (evals, walkthroughs) still need a cost estimate and the founder's explicit OK.
+- Agent-driven development loops (Claude Code with subagents) are allowed inside the
+  approved phase gates: tests first, full checks, independent review, founder demo,
+  founder-approved commit. Dependency installs named in the approved plan are
+  allowed.
+- Development happens on branch `v2/claude`; `v1-local-qwen-final` is the rollback
+  tag.
+- Every product safety principle below is unchanged.
+
 ## Core product principles
 
 - Evidence first, grading last: confirm question, solution/model answer, rubric, canonical grading unit, page order, answer-region extraction, continuation state, and packet readiness before any grading-quality claim.

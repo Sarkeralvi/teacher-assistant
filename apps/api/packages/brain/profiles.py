@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
 from app.core.config import Settings
+from packages.brain.anthropic_provider import (
+    VALID_EFFORTS,
+    AnthropicApiProvider,
+    AnthropicPricing,
+)
 from packages.brain.antigravity_gemini_vision_provider import (
     AntigravityGeminiVisionProvider,
 )
@@ -462,6 +467,77 @@ def _build_claude_cli(
     )
 
 
+def parse_anthropic_task_effort(value: str) -> dict[str, str]:
+    """Parse ``task=effort`` pairs such as ``grading=high,visual_page_read=low``."""
+
+    efforts: dict[str, str] = {}
+    for raw_pair in (value or "").split(","):
+        pair = raw_pair.strip()
+        if not pair:
+            continue
+        task, separator, effort = pair.partition("=")
+        task = task.strip()
+        effort = effort.strip().lower()
+        if not separator or not task or effort not in VALID_EFFORTS:
+            raise BrainProviderConfigurationError(
+                "ANTHROPIC_TASK_EFFORT entries must look like task=effort with effort one of "
+                + ", ".join(VALID_EFFORTS)
+            )
+        efforts[task] = effort
+    return efforts
+
+
+def _anthropic_configuration(settings: Settings) -> BrainProviderProfileConfiguration:
+    return BrainProviderProfileConfiguration(
+        profile_id="anthropic",
+        display_name="Claude (Anthropic API)",
+        vendor="Anthropic",
+        transport=BrainTransport.HTTP,
+        model=settings.anthropic_model,
+        endpoint="https://api.anthropic.com",
+        capabilities=AnthropicApiProvider.capabilities,
+        destination=BrainExecutionLocation.CLOUD,
+        timeout_seconds=settings.anthropic_timeout_seconds,
+        structured_output_mode="json_schema",
+        secret_reference="ANTHROPIC_API_KEY",
+        enabled=settings.brain_allow_real_providers and settings.anthropic_enabled,
+    )
+
+
+def _build_anthropic(
+    settings: Settings,
+    configuration: BrainProviderProfileConfiguration,
+    provider_constructor: ProviderConstructor,
+) -> ProviderBuildResult:
+    if not settings.anthropic_enabled:
+        raise BrainProviderConfigurationError(
+            "ANTHROPIC_ENABLED must be true for BRAIN_PROVIDER=anthropic"
+        )
+    if not settings.anthropic_api_key:
+        raise BrainProviderConfigurationError(
+            "ANTHROPIC_API_KEY is required for the anthropic profile"
+        )
+    provider = provider_constructor(
+        api_key=settings.anthropic_api_key,
+        model_name=configuration.model,
+        timeout_seconds=configuration.timeout_seconds,
+        call_deadline_seconds=settings.anthropic_call_deadline_seconds,
+        max_retries=settings.anthropic_max_retries,
+        max_output_tokens=settings.anthropic_max_output_tokens,
+        task_effort=parse_anthropic_task_effort(settings.anthropic_task_effort),
+        refusal_fallback_enabled=settings.anthropic_refusal_fallback_enabled,
+        pricing=AnthropicPricing(
+            input_per_mtok=settings.anthropic_input_usd_per_mtok,
+            output_per_mtok=settings.anthropic_output_usd_per_mtok,
+            cache_write_per_mtok=settings.anthropic_cache_write_usd_per_mtok,
+            cache_read_per_mtok=settings.anthropic_cache_read_usd_per_mtok,
+        ),
+    )
+    # Grading stays text-only: drafts are graded from saved transcript text, never
+    # from a second copy of the student image.
+    return ProviderBuildResult(provider, image_input_enabled=False)
+
+
 def _qwen_configuration(settings: Settings) -> BrainProviderProfileConfiguration:
     return BrainProviderProfileConfiguration(
         profile_id="llama_cpp_qwen",
@@ -627,6 +703,13 @@ BUILTIN_BRAIN_PROFILES: tuple[BrainProviderProfileDefinition, ...] = (
         _codex_configuration,
         _build_codex_cli,
         CodexCliProvider,
+    ),
+    BrainProviderProfileDefinition(
+        "anthropic",
+        ("claude", "claude_api", "anthropic_api"),
+        _anthropic_configuration,
+        _build_anthropic,
+        AnthropicApiProvider,
     ),
     BrainProviderProfileDefinition(
         "claude_cli",

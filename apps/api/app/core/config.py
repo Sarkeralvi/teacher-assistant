@@ -244,6 +244,54 @@ class Settings(BaseSettings):
         default=300.0, alias="CLAUDE_CLI_TIMEOUT_SECONDS", gt=0
     )
     claude_cli_workdir: str = Field(default="", alias="CLAUDE_CLI_WORKDIR")
+    # Claude through the Anthropic API: the v2 production model provider
+    # (docs/decisions/2026-11-07-claude-api.md). Off until the founder enables it;
+    # keys come only from the process environment or the gitignored local file.
+    anthropic_enabled: bool = Field(default=False, alias="ANTHROPIC_ENABLED")
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    # Separate dev-evals workspace key so eval spend never draws on the app key.
+    anthropic_eval_api_key: str = Field(default="", alias="ANTHROPIC_EVAL_API_KEY")
+    anthropic_model: str = Field(default="claude-opus-5-5", alias="ANTHROPIC_MODEL")
+    # Per SDK attempt. Requests stream, so this bounds silence on the wire rather
+    # than total generation time.
+    anthropic_timeout_seconds: float = Field(
+        default=120.0, alias="ANTHROPIC_TIMEOUT_SECONDS", gt=0, le=1200
+    )
+    # Wall-clock limit for one call including its stream. The provider refuses
+    # settings whose worst case would outlive a worker job (3600 s).
+    anthropic_call_deadline_seconds: float = Field(
+        default=900.0, alias="ANTHROPIC_CALL_DEADLINE_SECONDS", gt=0, le=3300
+    )
+    # Transient transport retries (429/5xx/network). Moves to the job layer, and
+    # this goes to 0, when durable parallel jobs land (v2 Phase 3).
+    anthropic_max_retries: int = Field(default=2, alias="ANTHROPIC_MAX_RETRIES", ge=0, le=5)
+    anthropic_max_output_tokens: int = Field(
+        default=32000, alias="ANTHROPIC_MAX_OUTPUT_TOKENS", ge=1024, le=128000
+    )
+    # Student script PDF pages are rendered at this resolution before reading.
+    # 144 matches v1; about 220 keeps an A4 page under Claude's 2576 px limit.
+    script_page_render_dpi: int = Field(
+        default=144, alias="SCRIPT_PAGE_RENDER_DPI", ge=72, le=300
+    )
+    # Optional per-task effort overrides, e.g. "grading=high,visual_page_read=low".
+    anthropic_task_effort: str = Field(default="", alias="ANTHROPIC_TASK_EFFORT")
+    anthropic_refusal_fallback_enabled: bool = Field(
+        default=True, alias="ANTHROPIC_REFUSAL_FALLBACK_ENABLED"
+    )
+    # USD per million tokens, used for cost estimates and budget accounting.
+    # Defaults are Claude Opus 5.5 list prices; update them if the model changes.
+    anthropic_input_usd_per_mtok: Decimal = Field(
+        default=Decimal("4.00"), alias="ANTHROPIC_INPUT_USD_PER_MTOK", ge=0
+    )
+    anthropic_output_usd_per_mtok: Decimal = Field(
+        default=Decimal("20.00"), alias="ANTHROPIC_OUTPUT_USD_PER_MTOK", ge=0
+    )
+    anthropic_cache_write_usd_per_mtok: Decimal = Field(
+        default=Decimal("5.00"), alias="ANTHROPIC_CACHE_WRITE_USD_PER_MTOK", ge=0
+    )
+    anthropic_cache_read_usd_per_mtok: Decimal = Field(
+        default=Decimal("0.20"), alias="ANTHROPIC_CACHE_READ_USD_PER_MTOK", ge=0
+    )
     question_import_provider: str = Field(default="mock", alias="QUESTION_IMPORT_PROVIDER")
     codex_question_extraction_enabled: bool = Field(
         default=False, alias="CODEX_QUESTION_EXTRACTION_ENABLED"

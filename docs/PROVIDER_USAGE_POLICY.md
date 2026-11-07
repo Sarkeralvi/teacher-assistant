@@ -1,5 +1,29 @@
 # Provider Usage Policy
 
+## 2026-11-07 founder decision (supersedes the sections below where they conflict)
+
+See `docs/decisions/2026-11-07-claude-api.md`.
+
+- The Anthropic API (Claude, default `claude-opus-5-5`) is the sole production
+  provider. Full scanned pages, including the cover/identity page, are sent.
+- A teacher action in the app that starts reading or grading is the authorization
+  for the calls it makes. Each run stays bounded by its call/cost budget and by the
+  teacher's cloud data-boundary confirmation.
+- An agent (development, evals, walkthroughs) still needs a cost estimate and the
+  founder's explicit OK before any paid call.
+- Transient transport failures (429, 529, 5xx, network, timeout) may be retried
+  automatically by one layer only. Refusals, truncations, schema violations and
+  unexpected serving models are never retried automatically and never become a
+  silent mark.
+- No fallback to another vendor and no fallback to mock. Anthropic's server-side
+  refusal fallback is allowed for grading only, and every draft it serves is
+  flagged for review.
+- The loopback-only local exception below is retired with the local models.
+- Unchanged: draft-only suggestions, no auto-finalize, no auto-approve,
+  approved-only export, `COHORT_MODEL_GRADING_ENABLED=false`.
+
+## Original policy (pre-2026-11-07)
+
 Provider/model usage is prohibited by default. This policy applies to local Qwen3.6/Qwen3.8, Codex CLI, OpenAI, and any other AI/model provider used for grading, mapping, OCR, extraction, or feedback.
 
 ## Default rule

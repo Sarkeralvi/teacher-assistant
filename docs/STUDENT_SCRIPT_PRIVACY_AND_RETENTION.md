@@ -4,7 +4,14 @@ This document defines the privacy and retention guardrails required before any e
 
 ## Status
 
-Real student scripts are not approved for current Custom Controlled V0 demos. Founder demos must use synthetic/demo data only.
+**2026-11-07 founder decision** (`docs/decisions/2026-11-07-claude-api.md`): real
+student scripts from the founder's own exams are approved for processing by the
+Anthropic API (`claude-opus-5-5`), with full pages including the cover/identity
+page. That satisfies "founder approves the exact provider and model" below and
+deliberately relaxes "provider prompt/context excludes unnecessary identifiers"
+for those exams. External teachers remain blocked under the rules below.
+
+Before 2026-11-07: real student scripts were not approved for Custom Controlled V0 demos, and founder demos used synthetic/demo data only.
 
 ## Data classes
 

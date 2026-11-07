@@ -384,6 +384,8 @@ def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LocalSt
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     root = tmp_path / "storage"
     values: dict[str, Any] = {
+        # Named explicitly: a configured provider is never substituted silently.
+        "BRAIN_PROVIDER": "llama_cpp_qwen38",
         "BRAIN_ALLOW_REAL_PROVIDERS": True,
         "LOCAL_OCR_ENABLED": True,
         "LOCAL_PADDLE_OCR_ENABLED": True,

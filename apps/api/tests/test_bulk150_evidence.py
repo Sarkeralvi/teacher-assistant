@@ -433,13 +433,16 @@ def _force_grade(
     """
 
     def transform(output: GradeSuggestionOutput) -> GradeSuggestionOutput:
+        # Keep the grader's own verbatim quote: a real model cites the text it was
+        # given, and the adapter's grade contract removes credit that quotes nothing.
+        quoted = output.rubric_breakdown[0].evidence if output.rubric_breakdown else None
         item = RubricBreakdownItem(
             criterion_id="accuracy",
             criterion="Accuracy",
             max_marks=Decimal(breakdown_max or max_score),
             awarded_marks=Decimal(score),
             reason="forced by the PC-4 probe",
-            evidence=None,
+            evidence=quoted,
             confidence=Decimal("0.95"),
         )
         return output.model_copy(

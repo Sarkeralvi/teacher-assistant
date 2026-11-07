@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import Settings
+from packages.brain.anthropic_provider import AnthropicApiProvider
 from packages.brain.antigravity_gemini_vision_provider import (
     AntigravityGeminiVisionProvider,
 )
@@ -17,8 +18,10 @@ from packages.brain.capabilities import (
     BrainProviderRuntime,
     BrainTransport,
 )
+from packages.brain.claude_cli_provider import ClaudeCliProvider
 from packages.brain.codex_cli_provider import CodexCliProvider
 from packages.brain.gemini_provider import GeminiBrainProvider
+from packages.brain.grade_contract import enforce_grade_contract
 from packages.brain.image_input import build_image_data_url
 from packages.brain.llama_cpp_qwen38_vision_provider import (
     LlamaCppQwen38VisionProvider,
@@ -54,7 +57,9 @@ _PROFILE_DEFINITIONS: dict[str, BrainProviderProfileDefinition] = {}
 _LEGACY_PROVIDER_CONSTRUCTOR_NAMES = frozenset(
     constructor.__name__
     for constructor in (
+        AnthropicApiProvider,
         AntigravityGeminiVisionProvider,
+        ClaudeCliProvider,
         CodexCliProvider,
         GeminiBrainProvider,
         LlamaCppQwen38VisionProvider,
@@ -204,6 +209,8 @@ def _configured_secret_values(settings: Settings) -> tuple[str, ...]:
         value
         for value in (
             settings.brain_api_key,
+            settings.anthropic_api_key,
+            settings.anthropic_eval_api_key,
             settings.openai_api_key,
             settings.gemini_api_key,
             settings.local_qwen_api_key,
@@ -379,6 +386,16 @@ class BrainAdapter:
             raise RuntimeError(sanitized) from exc
         latency_ms = int((time.perf_counter() - start) * 1000)
         validated = GradeSuggestionOutput.model_validate(output.model_dump())
+        if self.runtime.is_real:
+            # Every real provider passes the same rubric contract. It can only
+            # remove unsupported credit or flag a changed rubric, never add marks.
+            validated = enforce_grade_contract(
+                validated,
+                question_total_marks=question_total_marks,
+                rubric_json=rubric_json,
+                student_answer_text=student_answer_text,
+                evidence_text_required=not should_send_image,
+            )
         # Marking policy is authorization metadata, not model-authored prose.
         # Persist it deterministically even when a provider abbreviates or
         # omits the requested review flag.

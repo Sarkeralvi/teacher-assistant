@@ -37,6 +37,8 @@ def test_brain_profiles_route_lists_all_registered_profiles_without_secrets() ->
         GEMINI_API_KEY="gemini-secret-value",
         LOCAL_QWEN_API_KEY="qwen-secret-value",
         LOCAL_QWEN38_API_KEY="qwen38-secret-value",
+        ANTHROPIC_API_KEY="anthropic-secret-value",
+        ANTHROPIC_EVAL_API_KEY="anthropic-eval-secret-value",
     )
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
     app.dependency_overrides[get_settings] = lambda: settings
@@ -50,6 +52,7 @@ def test_brain_profiles_route_lists_all_registered_profiles_without_secrets() ->
     profiles = response.json()
     assert {profile["id"] for profile in profiles} == {
         "mock",
+        "anthropic",
         "openai",
         "openai_compatible",
         "gemini",
@@ -67,7 +70,12 @@ def test_brain_profiles_route_lists_all_registered_profiles_without_secrets() ->
     assert by_id["codex_cli"]["data_destination"] == "cloud"
     assert "visual_mapping" in by_id["antigravity_gemini"]["capabilities"]
     assert "grading" in by_id["claude_cli"]["capabilities"]
+    assert by_id["anthropic"]["ready"] is False
+    assert by_id["anthropic"]["data_destination"] == "cloud"
+    assert "visual_page_read" in by_id["anthropic"]["capabilities"]
     serialized = json.dumps(profiles)
+    assert "anthropic-secret-value" not in serialized
+    assert "anthropic-eval-secret-value" not in serialized
     assert "catalog-secret-value" not in serialized
     assert "openai-secret-value" not in serialized
     assert "gemini-secret-value" not in serialized

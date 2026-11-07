@@ -2,6 +2,22 @@
 
 This document defines the minimum privacy and data-safety baseline for founder/internal testing of the Teacher Assistant project. It is not external production compliance.
 
+## 2026-11-07: cloud processing by Anthropic
+
+Founder decision (`docs/decisions/2026-11-07-claude-api.md`): the founder's own
+exams may use real student scripts, and full scanned pages are sent to the
+Anthropic API for reading and draft grading. Local copies stay under the
+configured storage root as before.
+
+- Anthropic's terms, verified 2026-11-07: no training on API data without express
+  permission; standard API inputs and outputs deleted within 30 days; zero data
+  retention only by arrangement; flagged content kept up to 2 years.
+- The API key stays in the gitignored local environment file and the server
+  process. It is never shown in the UI, sent to the browser, logged or committed.
+- Call logs record tokens, cost, latency, request id and the serving model, never
+  prompt or response text.
+- Raw provider responses remain sensitive data under the rules below.
+
 ## Scope and status
 
 - Current intended use: founder/internal local testing and controlled demonstrations only.

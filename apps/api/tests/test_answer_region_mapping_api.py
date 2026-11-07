@@ -629,6 +629,8 @@ def test_thinking_repair_route_is_owned_explicit_and_enqueued_without_retry(
     db_session.add(source_run)
     db_session.commit()
 
+    # Named explicitly: a configured provider is never substituted silently.
+    monkeypatch.setenv("BRAIN_PROVIDER", "llama_cpp_qwen38")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("LOCAL_QWEN38_ENABLED", "true")
     monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "key-local-test")

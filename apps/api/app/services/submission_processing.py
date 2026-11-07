@@ -4,6 +4,7 @@ import fitz
 from fastapi import HTTPException, UploadFile, status
 from PIL import Image, UnidentifiedImageError
 
+from app.core.config import get_settings
 from app.services.storage import LocalStorage
 
 _ALLOWED_SUFFIXES = {
@@ -81,11 +82,14 @@ def _store_pdf_pages(storage: LocalStorage, submission_id: int, uploaded_path: P
                 detail="Uploaded PDF has no pages",
             )
         paths: list[str] = []
+        # 144 DPI (zoom 2) was sized for the local model's memory. It is now a
+        # setting so higher-resolution renders can be measured against teacher marks.
+        zoom = get_settings().script_page_render_dpi / 72.0
         for index in range(len(doc)):
             page_no = index + 1
             page = doc.load_page(index)
             output = storage.page_image_path(submission_id, page_no)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
             pixmap.save(output.absolute_path)
             paths.append(output.relative_path)
         return paths

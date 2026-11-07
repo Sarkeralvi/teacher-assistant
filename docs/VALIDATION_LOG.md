@@ -3162,3 +3162,58 @@ Four behaviour changes need a founder acknowledgement (section 10 of the readine
 | Heavy scale (`TA_BULK150_SCALE=1`) | 27 passed, 2 xfailed in 471.35 s; headline 150 x 4 x 6 intake 2.08 s, approve_clean 900 drafts 7.04 s |
 | `release_reviewed_to_grading` at 150 students x 6 questions (temporary probe, removed) | 900 released, 0 skipped, 5.25 s in one call (the 900 per-item resumes it replaces took 33.6 s of server time plus 900 clicks) |
 | Effective Qwen3.8 stale-claim wait for B4 (live settings) | max(900 s, job timeout 2,400 s) = 2,400 s |
+
+
+# TA-V2-001 - Claude (Anthropic API) provider and smoke eval (2026-11-07, v2 Phase 0 and 1)
+
+- Paid model calls: 0. One unbilled request did reach the API: before the key check was stubbed, `tests/test_anthropic_bulk_pipeline.py` sent `models.retrieve` with the fake key `test-key-not-real` and received 401. No tokens, no prompt, no student data. The test is now fully offline.
+- Second-model review: OpenAI Codex read copies of the reviewed source files in an isolated scratch folder (no environment files, no student data). An independent Claude reviewer read the same change.
+- Pilot stack, pilot database and `data/` untouched; tests ran on a disposable PostgreSQL 17.10 on 127.0.0.1:55432.
+
+## Phase 0
+
+- Commit `8df1b13` on `rescue/paddle-qwen36-hybrid`: unreviewed preservation snapshot of the 35 bulk-150 files (the locally modified environment example file was left out because the privacy hook prevents the agent from inspecting it).
+- Annotated tag `v1-local-qwen-final`; branch and tag pushed to `origin`; work continues on `v2/claude`.
+- Anthropic data-handling terms verified from the live documentation and recorded in `docs/decisions/2026-11-07-claude-api.md`.
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| Baseline suite before any change (disposable DB, mock provider) | 1221 passed, 13 skipped, 29 xfailed, 0 failed (505 s); ruff clean; head `0040` |
+| Final suite | 1293 passed, 13 skipped, 29 xfailed, 0 failed (419 s); ruff clean |
+| New tests | provider contract, grade contract, eval runner helpers, Claude profile through the real bulk pipeline with only the wire call scripted |
+| Eval runner end to end, offline (`extract` and `run` exactly as the founder runs them, test database, scripted wire) | pass: blueprint draft written; 4 parts compared, 2 exact, 1 over, 1 under; `summary.json`, `per_part.csv`, `calls.jsonl` written; no student text in the summary |
+| Mid-stream refusal fallback (declined partial text, `fallback` block, continuation) | parsed as one answer and flagged |
+| Teacher UI with the Claude profile (static check, not run) | profiles come from `/brain/profiles`; grading and mapping payloads accept any profile id; nothing pins Qwen. Not exercised in a running app |
+| `Ready-TeacherAssistant.ps1` PowerShell parser | 0 errors |
+| Seeded reverts (fallback scope, snapshot match, deadline, chained text, spend guard, not_met zeroing, fallback observation, empty-text credit, trivial quotes, changed maximum, silent provider remap) | 11 of 11 caught by a named test; files restored byte-identical |
+| Eval runner scratch PostgreSQL lifecycle (start, query, stop, delete) | pass, 7.4 s |
+
+## Review findings and dispositions
+
+- Fixed:
+  - error chains that could carry student text into tracebacks (now metadata-only, `from None`);
+  - empty answer text bypassing the evidence check on text-only grading;
+  - no wall-clock deadline on streamed calls, and settings whose worst case exceeded the worker job (now refused at construction);
+  - snapshot match accepting any suffix (now dated suffix only);
+  - fallback observations recorded before the flag was set;
+  - one- or two-character evidence quotes;
+  - eval runner: relative paths after `chdir`, scratch database files left on disk, no dollar cap (now a pre-call spend guard), call budget too small, database name checked after approval, docstring skipping the estimate.
+- Changed during the work: the grade contract first rejected a changed maximum, which would have paused a whole bulk run. It now stores the draft as returned, flags it and caps confidence at 0.5, so the existing per-item quarantine catches it.
+- Kept as is: the minimum evidence length is 3 characters, not the reviewer's suggested 6, because short numeric final answers ("x=2") are legitimate evidence.
+- Added after the final advisor check: the eval runner ran end to end offline for the first time (it had only had helper tests); the grade checks now record `model_score_before_checks:<score>` and the eval summary counts marks removed by the checks separately from Claude's own grading; responses are read as the concatenation of all text blocks so a mid-stream fallback continuation parses.
+
+## Deviations from the approved plan
+
+- Settings are named `ANTHROPIC_*` (the plan said `CLAUDE_MODEL`, `CLAUDE_MAX_CONCURRENCY`).
+- Concurrency and the per-exam dollar cap move to Phase 3 with the job layer; the eval has its own hard cap now.
+- SDK retries stay at 2 until Phase 3 moves retries into the job layer.
+- The Qwen-named page-read profile and prompt-version labels are kept: they are type labels stamped by the services for every provider, not gates on the provider. Renaming is deferred to Phase 3, when that table is retired.
+- The eval blueprint is confirmed by editing a JSON draft, not in the UI, so the eval stays on a disposable database.
+
+## Not verified yet
+
+- Real Claude calls: cost, latency and agreement with the founder's marks wait on the founder running `docs/CLAUDE_SMOKE_EVAL.md`.
+- GitHub CI on this change: not run (nothing committed yet).
+- Frontend: unchanged in this phase.

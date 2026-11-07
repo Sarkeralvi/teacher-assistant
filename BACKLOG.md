@@ -1,4 +1,36 @@
-﻿# TA-LOCAL-011 — Same-page duplicate-label mapping no longer hard-fails script preparation
+﻿# TA-V2-001 — Claude (Anthropic API) provider and smoke eval (v2 Phase 0 and 1)
+
+- Recorded at: 2026-11-07
+- Baseline: tag `v1-local-qwen-final` (commit `8df1b13`, pushed), branch `v2/claude`
+- Decision: `docs/decisions/2026-11-07-claude-api.md` (Anthropic API is the production
+  model; full pages sent; Windows PC only; combined review; trust from calibration marking)
+- Implemented:
+  - `packages/brain/anthropic_provider.py`: Claude transport over the provider-neutral
+    vision mixin (page read, reference bundle, transcript assignment, text-only grading).
+    Structured outputs from the app's own Pydantic contracts (sanitized schema, client-side
+    validation), per-task effort, no sampling parameters, streaming under a wall-clock
+    deadline, images fitted to 2576 px / 3.75 MP. Refusal, truncation, unexpected stop
+    reason and substituted serving model fail closed; the refusal fallback is grading-only
+    and flagged. Errors carry metadata only; nothing that echoes student text is chained.
+    Per-call observer records (tokens, cost, latency, request id, serving model) and
+    pre-call spend guards. Key-and-model check cached for 10 minutes.
+  - `packages/brain/grade_contract.py`, applied by the adapter to every real provider:
+    unsupported or trivial evidence and unmet dependencies remove credit; a changed maximum
+    or rubric shape is stored as returned, flagged and capped at 0.5 confidence so the bulk
+    quarantine catches it; text-only grading with no answer text keeps no credit.
+  - Profile `anthropic` (aliases `claude`, `claude_api`), legacy `for_provider` path fixed
+    (also for `claude_cli`), Claude features default on once enabled, ANTHROPIC_* settings,
+    `SCRIPT_PAGE_RENDER_DPI` (default 144), silent mock-to-Qwen3.8 substitution removed,
+    launcher shows Claude settings (key shown only as set/unset).
+  - `apps/api/scripts/eval_against_teacher_marks.py` and `docs/CLAUDE_SMOKE_EVAL.md`.
+- Safety: draft-only unchanged; no `FinalGrade` path touched; no paid call made; the API key
+  never leaves the server process.
+- Verification completed: see `docs/VALIDATION_LOG.md` TA-V2-001.
+- Verification remaining: founder runs the paid smoke eval (Step 1 blueprint, Step 2 run) on
+  the two marked scripts; real per-page cost and latency are unmeasured until then.
+- Pilot status: v2 Phase 1 code complete; trust policy waits on calibration marking.
+
+# TA-LOCAL-011 — Same-page duplicate-label mapping no longer hard-fails script preparation
 
 - Recorded at: 2026-09-12
 - Baseline commit: `b1ad4dd`

@@ -284,6 +284,8 @@ def seed_run(db: Session, storage_root: Path) -> GradingRun:
 
 def enabled_settings(storage_root: Path) -> Settings:
     return Settings(
+        # Named explicitly: a configured provider is never substituted silently.
+        BRAIN_PROVIDER="llama_cpp_qwen38",
         BRAIN_ALLOW_REAL_PROVIDERS=True,
         LOCAL_QWEN38_ENABLED=True,
         LOCAL_QWEN38_API_KEY="key-local-test",

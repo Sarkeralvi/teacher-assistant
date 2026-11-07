@@ -144,19 +144,23 @@ def brain_policy_from_settings(
     provider = adapter.runtime.provider
     is_qwen38 = provider == "llama_cpp_qwen38"
     is_antigravity_gemini = provider == "antigravity_gemini"
+    # Claude is the v2 production provider: once its profile is enabled (kill
+    # switch, ANTHROPIC_ENABLED and a key), its features default on. Explicit
+    # BRAIN_* switches still override each one.
+    is_anthropic = provider == "anthropic"
     vision_transport_enabled = bool(getattr(adapter.provider, "vision_enabled", True))
 
     reference_enabled = _coalesce(
         settings.brain_reference_extraction_enabled,
-        settings.local_reference_extraction_enabled,
+        True if is_anthropic else settings.local_reference_extraction_enabled,
     )
     script_enabled = _coalesce(
         settings.brain_script_preparation_enabled,
-        settings.local_script_preparation_enabled,
+        True if is_anthropic else settings.local_script_preparation_enabled,
     )
     single_grade_enabled = _coalesce(
         settings.brain_single_answer_grading_enabled,
-        settings.local_single_answer_grading_enabled,
+        True if is_anthropic else settings.local_single_answer_grading_enabled,
     )
     if is_qwen38:
         visual_preparation_fallback = settings.local_qwen38_visual_preparation_enabled
@@ -262,16 +266,14 @@ def brain_policy_for_profile(
 
 
 def configured_visual_provider(settings: Settings) -> str:
-    """Preserve the pre-universal Qwen visual profile when no brain was selected."""
+    """The configured brain provider for visual work.
 
-    provider = settings.brain_provider.strip().lower() or "mock"
-    if (
-        provider == "mock"
-        and not settings.brain_model
-        and settings.local_qwen38_enabled
-    ):
-        return "llama_cpp_qwen38"
-    return provider
+    v1 silently swapped ``mock`` for the local Qwen3.8 profile whenever that model
+    was enabled. A provider is never substituted silently now: visual work runs
+    on exactly the configured provider, or fails because it lacks the capability.
+    """
+
+    return settings.brain_provider.strip().lower() or "mock"
 
 
 def normalize_brain_adapter(

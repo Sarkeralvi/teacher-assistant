@@ -383,7 +383,8 @@ def test_full_harness_rehearsal_uses_only_fake_providers(
     )
 
     runtime_storage = run_dir / "runtime_storage"
-    monkeypatch.setenv("BRAIN_PROVIDER", "mock")
+    # Named explicitly: the visual stage no longer silently swaps mock for Qwen3.8.
+    monkeypatch.setenv("BRAIN_PROVIDER", "llama_cpp_qwen38")
     monkeypatch.setenv("BRAIN_ALLOW_REAL_PROVIDERS", "true")
     monkeypatch.setenv("LOCAL_QWEN_ENABLED", "true")
     monkeypatch.setenv("LOCAL_QWEN_API_KEY", "fake-qwen-key")

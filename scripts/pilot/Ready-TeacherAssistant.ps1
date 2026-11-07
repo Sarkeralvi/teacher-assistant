@@ -110,11 +110,21 @@ try {
         Write-Host ("  {0}{1,-34} {2}" -f $mark, $Label, $value) -ForegroundColor $colour
     }
 
-    Show-Setting -Key "BRAIN_PROVIDER" -Expected "llama_cpp_qwen38" -Label "Brain provider"
-    Show-Setting -Key "LOCAL_QWEN38_MODEL" -Expected "" -Label "Model"
-    Show-Setting -Key "LOCAL_QWEN38_PAGE_READ_ENABLED" -Expected "true" -Label "Page-read (one call per page)"
-    Show-Setting -Key "LOCAL_QWEN38_TRANSCRIPTION_ENABLED" -Expected "true" -Label "Transcription"
-    Show-Setting -Key "LOCAL_QWEN38_GRADING_ENABLED" -Expected "true" -Label "Grading"
+    # Never print a key: report only whether one is configured.
+    function Show-SecretPresence {
+        param([string]$Key, [string]$Label)
+        $present = [bool]$settings[$Key]
+        $colour = if ($present) { "Green" } else { "Yellow" }
+        $mark = if ($present) { "OK  " } else { "  ! " }
+        $state = if ($present) { "set" } else { "(unset)" }
+        Write-Host ("  {0}{1,-34} {2}" -f $mark, $Label, $state) -ForegroundColor $colour
+    }
+
+    Show-Setting -Key "BRAIN_PROVIDER" -Expected "anthropic" -Label "Brain provider"
+    Show-Setting -Key "BRAIN_ALLOW_REAL_PROVIDERS" -Expected "true" -Label "Real providers allowed"
+    Show-Setting -Key "ANTHROPIC_ENABLED" -Expected "true" -Label "Claude (Anthropic API)"
+    Show-Setting -Key "ANTHROPIC_MODEL" -Expected "" -Label "Claude model (default claude-opus-5-5)"
+    Show-SecretPresence -Key "ANTHROPIC_API_KEY" -Label "Claude API key"
     Show-Setting -Key "BULK_SUPERVISED_ENABLED" -Expected "true" -Label "Bulk supervised"
     Show-Setting -Key "BULK_MAX_SUBMISSIONS" -Expected "" -Label "Max scripts per run"
     Show-Setting -Key "BULK_MAX_PROVIDER_CALLS" -Expected "" -Label "Max model calls per run"
@@ -141,7 +151,7 @@ try {
     Write-Host "  Teacher Assistant : http://localhost:3000" -ForegroundColor White
     Write-Host "  API health        : http://localhost:8000/health" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "  The local model starts on demand when a run needs it." -ForegroundColor Gray
+    Write-Host "  Reading and draft grading run on Claude (Anthropic API) when you start them." -ForegroundColor Gray
     Write-Host "  Every score stays a draft until you approve it." -ForegroundColor Gray
     Write-Host ""
     Write-Host "  To shut down:  scripts\pilot\Stop-TeacherPilot.ps1" -ForegroundColor DarkGray
