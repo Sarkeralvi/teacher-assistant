@@ -169,7 +169,7 @@ function Test-LocalAiLoopbackAddress {
     if (-not [Net.IPAddress]::TryParse($Address, [ref]$parsedAddress)) {
         return $false
     }
-    return [Net.IPAddress]::IsLoopback($parsedAddress)
+    return [Net.IPAddress]::IsLoopback($parsedAddress) -or $parsedAddress.Equals([Net.IPAddress]::Any)
 }
 
 function Get-LocalAiListenerInfo {

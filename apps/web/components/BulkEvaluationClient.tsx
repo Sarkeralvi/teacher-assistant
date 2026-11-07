@@ -9,13 +9,18 @@ import {
   downloadBulkEvaluationResults,
   getBrainProfiles,
   getBrainStatus,
+  getBulkEvaluationApprovalPreview,
   listAssessmentGradingRuns,
   listBulkEvaluationExceptions,
   listBulkEvaluationRuns,
+  raiseBulkEvaluationCallLimit,
+  releaseReviewedBulkEvaluation,
   resumeBulkEvaluationItem,
   resumeBulkEvaluationRun,
   stopBulkEvaluationRun,
   type BrainProfile,
+  type BulkEvaluationApprovalPreview,
+  type BulkEvaluationApprovalPreviewRow,
   type BulkEvaluationException,
   type BulkEvaluationRun,
   type GradingRun,
@@ -69,6 +74,10 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
   const [markingPolicy, setMarkingPolicy] = useState<MarkingPolicy>("general");
   const [callLimit, setCallLimit] = useState(MAX_CALL_LIMIT);
   const [authorized, setAuthorized] = useState(false);
+  const [approvalPreview, setApprovalPreview] = useState<BulkEvaluationApprovalPreview | null>(null);
+  const [previewChecked, setPreviewChecked] = useState(false);
+  const [releaseNote, setReleaseNote] = useState<string | null>(null);
+  const [newCallLimit, setNewCallLimit] = useState<number>(0);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +208,27 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
         .map((item) => item.grade_suggestion_id as number) ?? [],
     [activeRun],
   );
+  // The preview is only valid for the exact clean set it was built from: any change to the run's
+  // live hash (a per-item decision, a superseded draft, another run) discards it.
+  const previewIsCurrent = Boolean(
+    approvalPreview &&
+      activeRun &&
+      approvalPreview.run_id === activeRun.id &&
+      approvalPreview.review_snapshot_sha256 === activeRun.review_snapshot_sha256,
+  );
+  useEffect(() => {
+    if (!previewIsCurrent) {
+      setApprovalPreview(null);
+      setPreviewChecked(false);
+    }
+  }, [previewIsCurrent]);
+  const previewByStudent = useMemo(() => {
+    const grouped = new Map<number, BulkEvaluationApprovalPreviewRow[]>();
+    for (const row of approvalPreview?.rows ?? []) {
+      grouped.set(row.submission_id, [...(grouped.get(row.submission_id) ?? []), row]);
+    }
+    return [...grouped.values()];
+  }, [approvalPreview]);
   const heartbeatStale = Boolean(
     activeRun &&
       activeStatuses.has(activeRun.status) &&
@@ -265,16 +295,74 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
     }
   }
 
+  async function releaseReviewed() {
+    if (!activeRun) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await releaseReviewedBulkEvaluation(activeRun.id);
+      const skipped = result.skipped.length
+        ? ` ${result.skipped.length} not released: ${result.skipped
+            .slice(0, 5)
+            .map((row) => `${row.student_identifier ?? row.item_id} ${row.question_label} (${row.reason})`)
+            .join("; ")}${result.skipped.length > 5 ? "; …" : ""}`
+        : "";
+      setReleaseNote(`${result.released_count} reviewed question(s) released to grading.${skipped}`);
+      await refresh();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function raiseCallLimit() {
+    if (!activeRun) return;
+    const requested = newCallLimit || activeRun.authorized_call_limit + 1;
+    if (requested <= activeRun.authorized_call_limit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await raiseBulkEvaluationCallLimit(activeRun.id, requested);
+      setRuns((current) => current.map((run) => (run.id === updated.id ? updated : run)));
+      await refresh();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadApprovalPreview() {
+    if (!activeRun) return;
+    setBusy(true);
+    setError(null);
+    setPreviewChecked(false);
+    try {
+      await refresh();
+      setApprovalPreview(await getBulkEvaluationApprovalPreview(activeRun.id));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function approveClean() {
-    if (!activeRun?.review_snapshot_sha256 || cleanSuggestionIds.length === 0) return;
+    // Exactly the drafts the teacher was shown and confirmed, under the hash of that view.
+    if (!approvalPreview || !previewIsCurrent || !previewChecked || approvalPreview.rows.length === 0) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await approveCleanBulkEvaluation(
-        activeRun.id,
-        cleanSuggestionIds,
-        activeRun.review_snapshot_sha256,
+        approvalPreview.run_id,
+        approvalPreview.rows.map((row) => row.suggestion_id),
+        approvalPreview.review_snapshot_sha256,
       );
+      setApprovalPreview(null);
+      setPreviewChecked(false);
       await refresh();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -412,10 +500,36 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
               {["paused", "stopped"].includes(activeRun.status) ? <button className={buttonClass} disabled={busy} type="button" onClick={() => void applyRunAction("resume")}>Resume never-started work</button> : null}
               {heartbeatStale ? <button className={buttonClass} disabled={busy} type="button" onClick={() => void applyRunAction("resume")}>Recover interrupted run</button> : null}
             </div>
+            {activeRun.status === "paused" && activeRun.calls_used >= activeRun.authorized_call_limit ? (
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-700/60 bg-amber-950/20 p-4 text-sm text-amber-100" data-testid="bulk-raise-call-limit">
+                <span>The authorised model calls are used up. Authorise more for this run, then press Resume.</span>
+                <input
+                  className={inputClass}
+                  type="number"
+                  min={activeRun.authorized_call_limit + 1}
+                  max={MAX_CALL_LIMIT}
+                  value={newCallLimit || activeRun.authorized_call_limit + 1}
+                  onChange={(event) => setNewCallLimit(clampCallLimit(Number(event.target.value)))}
+                  aria-label="New maximum model calls"
+                />
+                <button className={secondaryButtonClass} disabled={busy} type="button" onClick={() => void raiseCallLimit()}>
+                  I authorise this new call limit
+                </button>
+              </div>
+            ) : null}
           </section>
 
           <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
             <div><h2 className="text-xl font-semibold">3. Exceptions requiring attention</h2><p className="text-sm text-slate-400">Granular images and transcripts stay hidden until you inspect a manuscript.</p></div>
+            {transcriptExceptionGroups.some((group) => group[0].transcript_review_is_current && !group.some((item) => item.exception_codes.includes("unassigned_ink"))) ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <button className={buttonClass} disabled={busy} type="button" onClick={() => void releaseReviewed()} data-testid="bulk-release-reviewed">
+                  Release all reviewed scripts to grading
+                </button>
+                <span className="text-sm text-slate-400">Only scripts whose transcript review you confirmed are released; nothing else is sent.</span>
+              </div>
+            ) : null}
+            {releaseNote ? <p className="rounded-lg border border-slate-700 p-3 text-sm text-slate-200" role="status">{releaseNote}</p> : null}
             {exceptions.length === 0 ? <p className="rounded-lg border border-emerald-800 bg-emerald-950/20 p-4 text-sm text-emerald-200">No unresolved exceptions.</p> : (
               <div className="space-y-3">
                 {transcriptExceptionGroups.map((group) => {
@@ -466,7 +580,35 @@ export function BulkEvaluationClient({ assessmentId }: Readonly<{ assessmentId: 
 
           <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-6">
             <div><h2 className="text-xl font-semibold">4. Approve clean drafts and download</h2><p className="text-sm text-slate-400">Only unchanged, unflagged draft suggestions are selected. Students with unresolved questions remain INCOMPLETE.</p></div>
-            <div className="flex flex-wrap gap-3"><button className={buttonClass} disabled={busy || cleanSuggestionIds.length === 0 || !activeRun.review_snapshot_sha256} type="button" onClick={() => void approveClean()}>Approve {cleanSuggestionIds.length} clean draft{cleanSuggestionIds.length === 1 ? "" : "s"}</button><button className={secondaryButtonClass} disabled={busy || !["completed", "completed_with_exceptions"].includes(activeRun.status)} type="button" onClick={() => void downloadResults()}>Download results workbook</button><Link className={secondaryButtonClass} href={`/assessments/${assessmentId}/review`}>Open individual grade review</Link></div>
+            {approvalPreview && previewIsCurrent ? (
+              <div className="space-y-3" data-testid="bulk-approval-preview">
+                <p className="text-sm text-slate-300">
+                  {approvalPreview.draft_count} draft score{approvalPreview.draft_count === 1 ? "" : "s"} for {approvalPreview.student_count} student{approvalPreview.student_count === 1 ? "" : "s"}. Check every row; anything you would change belongs in individual grade review instead.
+                </p>
+                <div className="max-h-96 overflow-auto rounded-lg border border-slate-800">
+                  <table className="w-full text-left text-sm">
+                    <thead className="sticky top-0 bg-slate-950 text-xs uppercase tracking-wide text-slate-500">
+                      <tr><th className="p-2">Student</th><th className="p-2">Question</th><th className="p-2">Draft score</th><th className="p-2">Confidence</th></tr>
+                    </thead>
+                    <tbody>
+                      {previewByStudent.map((rows) => rows.map((row, index) => (
+                        <tr key={row.suggestion_id} className={index === 0 ? "border-t border-slate-700" : ""}>
+                          <td className="p-2 font-semibold">{index === 0 ? `${row.student_identifier ?? `Submission ${row.submission_id}`}${row.student_name ? ` · ${row.student_name}` : ""}` : ""}</td>
+                          <td className="p-2">{row.question_label}</td>
+                          <td className="p-2">{row.score ?? "—"} / {row.max_score}</td>
+                          <td className="p-2 text-slate-400">{row.confidence ?? "—"}</td>
+                        </tr>
+                      )))}
+                    </tbody>
+                  </table>
+                </div>
+                <label className="flex items-start gap-3 rounded-lg border border-amber-700/60 bg-amber-950/20 p-4 text-sm text-amber-100">
+                  <input className="mt-1" type="checkbox" checked={previewChecked} onChange={(event) => setPreviewChecked(event.target.checked)} />
+                  <span>I have checked these {approvalPreview.draft_count} draft scores for {approvalPreview.student_count} students and approve them as final grades.</span>
+                </label>
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-3">{approvalPreview && previewIsCurrent ? <button className={buttonClass} disabled={busy || !previewChecked || approvalPreview.rows.length === 0} type="button" onClick={() => void approveClean()}>Approve {approvalPreview.draft_count} checked draft{approvalPreview.draft_count === 1 ? "" : "s"}</button> : <button className={buttonClass} disabled={busy || cleanSuggestionIds.length === 0 || !activeRun.review_snapshot_sha256} type="button" onClick={() => void loadApprovalPreview()}>Review {cleanSuggestionIds.length} clean draft{cleanSuggestionIds.length === 1 ? "" : "s"} before approving</button>}<button className={secondaryButtonClass} disabled={busy || !["completed", "completed_with_exceptions"].includes(activeRun.status)} type="button" onClick={() => void downloadResults()}>Download results workbook</button><Link className={secondaryButtonClass} href={`/assessments/${assessmentId}/review`}>Open individual grade review</Link></div>
           </section>
         </>
       ) : null}

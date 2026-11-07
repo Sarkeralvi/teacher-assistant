@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import zipfile
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -13,9 +14,10 @@ from io import BytesIO
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-from fastapi import UploadFile
+import fitz
+from fastapi import HTTPException, UploadFile
 from openpyxl import Workbook
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -30,6 +32,7 @@ from app.models import (
     BulkEvaluationRun,
     FinalGrade,
     GradeSuggestion,
+    GradingJob,
     GradingRun,
     Question,
     Rubric,
@@ -39,10 +42,17 @@ from app.models import (
     SubmissionPage,
     User,
 )
+from app.schemas import BulkEvaluationApprovalPreview, BulkEvaluationApprovalPreviewRow
 from app.services.answer_evidence_assignment import AnswerEvidenceAssignmentService
 from app.services.brain_execution import hold_brain_execution
-from app.services.final_grade_service import FinalGradeService
+from app.services.evidence_invalidation import EvidenceChangedError, EvidenceInvalidationService
+from app.services.final_grade_service import (
+    TEACHER_FINAL_STATUSES,
+    FinalGradeService,
+    neutralize_formula_cells,
+)
 from app.services.grading_service import GradingService, rubric_snapshot_hash
+from app.services.local_model_lease_service import LocalModelLeaseService
 from app.services.local_script_page_read import (
     LocalScriptPageReadError,
     LocalScriptPageReadService,
@@ -74,11 +84,16 @@ BULK_POLICY_VERSION = "bulk-supervised-brain-v2"
 _UNCERTAIN_PROVIDER_WARNING = (
     "Provider work stopped without a safely persisted result; explicit item retry required"
 )
+_LIVE_JOB_WARNING = (
+    "An earlier grading call for this answer may still be running; nothing was sent again"
+)
 _SUPPORTED = {".pdf", ".png", ".jpg", ".jpeg"}
 _KNOWN_METADATA = {".ds_store", "thumbs.db"}
 _MAX_MEMBER_BYTES = 100 * 1024 * 1024
 _MAX_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_COMPRESSION_RATIO = 100
+# pg_try_advisory_xact_lock(class, assessment_id): serialises bulk intakes per assessment.
+_INTAKE_LOCK_CLASS = 0x42554C4B  # "BULK"
 _ACTIVE_RUN_STATUSES = {
     "preflighting",
     "queued",
@@ -122,7 +137,32 @@ def _safe_member(name: str) -> PurePosixPath:
 
 
 def _ignored_member(path: PurePosixPath) -> bool:
-    return "__MACOSX" in path.parts or path.name.casefold() in _KNOWN_METADATA
+    # "._name" is an AppleDouble resource fork; macOS also writes it outside __MACOSX.
+    return (
+        "__MACOSX" in path.parts
+        or path.name.casefold() in _KNOWN_METADATA
+        or path.name.startswith("._")
+    )
+
+
+def _raise_if_named_member_failure(source: str, exc: Exception) -> None:
+    """Raise a refusal naming ``source`` for a known one-unusable-file failure, else return."""
+
+    if isinstance(exc, zipfile.BadZipFile | zlib.error):
+        reason = "damaged ZIP member (CRC/compression)"
+    elif isinstance(exc, NotImplementedError) and "compression" in str(exc):
+        reason = "unsupported ZIP compression method"
+    elif isinstance(exc, Image.DecompressionBombError):
+        reason = "image too large to read safely"
+    elif isinstance(exc, HTTPException) and exc.status_code == 400:
+        reason = str(exc.detail)
+    elif isinstance(exc, ValueError) and "encrypted" in str(exc):
+        reason = "password-protected PDF"
+    else:
+        return
+    raise BulkEvaluationError(
+        f"Could not import {source[:200]}: {reason}. Nothing was imported."
+    ) from exc
 
 
 def _canonical_hash(payload: object) -> str:
@@ -131,6 +171,10 @@ def _canonical_hash(payload: object) -> str:
 
 
 class BulkEvaluationService:
+    # Set by create_from_zip when it hands back an already-active run (an idempotent re-upload):
+    # that run already has its own worker chain, so the caller must not enqueue another.
+    reused_existing_run = False
+
     def __init__(
         self,
         db: Session,
@@ -154,6 +198,7 @@ class BulkEvaluationService:
         maximum_provider_calls: int,
         provider: str | None = None,
     ) -> BulkEvaluationRun:
+        self.reused_existing_run = False
         policy = self._assert_enabled(
             expected_model,
             maximum_provider_calls,
@@ -165,6 +210,16 @@ class BulkEvaluationService:
         try:
             with zipfile.ZipFile(staged_path) as archive:
                 units, manifest_hash, manifest_payload = self._inspect_archive(archive)
+                # One intake per assessment at a time (RC-21): without it two overlapping uploads
+                # both pass the committed-identifier check and create every student twice. The
+                # lock is held until this transaction commits or rolls back.
+                if not self.db.scalar(
+                    select(func.pg_try_advisory_xact_lock(_INTAKE_LOCK_CLASS, assessment_id))
+                ):
+                    raise BulkEvaluationError(
+                        "Another upload for this assessment is still being imported; wait for "
+                        "it to finish, then refresh. Nothing was imported."
+                    )
                 existing_run = self.db.scalar(
                     select(BulkEvaluationRun).where(
                         BulkEvaluationRun.assessment_id == assessment_id,
@@ -174,9 +229,16 @@ class BulkEvaluationService:
                     )
                 )
                 if existing_run is not None:
+                    self.reused_existing_run = True
                     return self.get_run(existing_run.id)
 
                 self._reject_existing_identifiers(assessment_id, units)
+                self._preflight_pages(
+                    archive,
+                    units,
+                    questions=len(questions),
+                    maximum_provider_calls=maximum_provider_calls,
+                )
                 run = BulkEvaluationRun(
                     assessment_id=assessment_id,
                     grading_run_id=grading_run.id,
@@ -206,12 +268,16 @@ class BulkEvaluationService:
                 total_pages = 0
                 submissions: list[Submission] = []
                 for unit in units:
-                    submission = self._import_unit(
-                        archive=archive,
-                        assessment_id=assessment_id,
-                        unit=unit,
-                    )
-                    created_submission_ids.append(submission.id)
+                    try:
+                        submission = self._import_unit(
+                            archive=archive,
+                            assessment_id=assessment_id,
+                            unit=unit,
+                            created_ids=created_submission_ids,
+                        )
+                    except Exception as exc:
+                        _raise_if_named_member_failure(unit.source, exc)
+                        raise
                     submissions.append(submission)
                     total_pages += len(submission.pages)
                     if total_pages > self.settings.bulk_max_pages:
@@ -235,6 +301,16 @@ class BulkEvaluationService:
 
                 run.total_pages = total_pages
                 run.total_items = len(submissions) * len(questions)
+                minimum_calls = total_pages + run.total_items
+                if maximum_provider_calls < minimum_calls:
+                    # Every page is read once and every item graded once, and an exhausted run can
+                    # be neither resumed nor extended: refuse a limit that cannot finish.
+                    raise BulkEvaluationError(
+                        f"Authorized provider calls ({maximum_provider_calls}) are below the "
+                        f"minimum this cohort needs ({minimum_calls}: {total_pages} page reads "
+                        f"+ {run.total_items} gradings). Whole-transcript assignment calls (up "
+                        "to one per script) are extra, so allow some slack above the minimum."
+                    )
                 run.status = "queued"
                 run.stage = "reading"
                 run.import_manifest = {
@@ -268,6 +344,9 @@ class BulkEvaluationService:
                     )
                 )
                 self.db.commit()
+                # The run and its submissions are durable from here: whatever fails while the run
+                # is reloaded for the caller, no handler below may delete their student files.
+                created_submission_ids.clear()
                 return self.get_run(run.id)
         except BulkEvaluationError:
             self.db.rollback()
@@ -281,8 +360,22 @@ class BulkEvaluationService:
             self.db.rollback()
             self._cleanup_submissions(created_submission_ids)
             raise
+        except BaseException:
+            # A kill/interrupt must not orphan the student files already written, nor leave the
+            # flushed rows pending for a caller that reuses the session and commits next.
+            try:
+                self.db.rollback()
+            except Exception:  # a dead connection must not mask the interrupt or skip the cleanup
+                pass
+            self._cleanup_submissions(created_submission_ids)
+            raise
         finally:
-            staged_path.unlink(missing_ok=True)
+            try:
+                staged_path.unlink(missing_ok=True)
+            except OSError:
+                # A leftover staged file is swept by the operator; the run is already committed
+                # and a Windows file lock must not turn that success into an error.
+                pass
 
     def get_run(self, run_id: int) -> BulkEvaluationRun:
         run = self.db.scalar(
@@ -415,15 +508,20 @@ class BulkEvaluationService:
         target = target_dir / f"bulk-{uuid4().hex}.zip"
         digest = hashlib.sha256()
         total = 0
-        with target.open("wb") as output:
-            while chunk := upload.file.read(1024 * 1024):
-                total += len(chunk)
-                if total > self.settings.bulk_max_archive_bytes:
-                    output.close()
-                    target.unlink(missing_ok=True)
-                    raise BulkEvaluationError("ZIP exceeds the configured bulk archive limit")
-                digest.update(chunk)
-                output.write(chunk)
+        try:
+            with target.open("wb") as output:
+                while chunk := upload.file.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > self.settings.bulk_max_archive_bytes:
+                        output.close()
+                        target.unlink(missing_ok=True)
+                        raise BulkEvaluationError("ZIP exceeds the configured bulk archive limit")
+                    digest.update(chunk)
+                    output.write(chunk)
+        except BaseException:
+            # No partial cohort ZIP may stay in bulk_staging: nothing else ever sweeps it.
+            target.unlink(missing_ok=True)
+            raise
         if total == 0:
             target.unlink(missing_ok=True)
             raise BulkEvaluationError("Uploaded ZIP is empty")
@@ -433,11 +531,16 @@ class BulkEvaluationService:
         self, archive: zipfile.ZipFile
     ) -> tuple[list[ArchiveUnit], str | None, list[dict[str, object]]]:
         infos = [item for item in archive.infolist() if not item.is_dir()]
-        if len(infos) > 1000:
+        # Ignorable metadata (__MACOSX, ._ files, ...) is not a script, so it is not counted.
+        considered = sum(
+            not _ignored_member(PurePosixPath(item.filename.replace("\\", "/"))) for item in infos
+        )
+        if considered > 1000:
             raise BulkEvaluationError("ZIP contains more than 1,000 entries")
         usable: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
         total_uncompressed = 0
         manifest_info: zipfile.ZipInfo | None = None
+        seen_members: set[str] = set()
         for info in infos:
             path = _safe_member(info.filename)
             if _ignored_member(path):
@@ -452,7 +555,14 @@ class BulkEvaluationService:
             ratio = info.file_size / max(info.compress_size, 1)
             if ratio > _MAX_COMPRESSION_RATIO:
                 raise BulkEvaluationError("ZIP compression ratio is unsafe")
+            if path.as_posix() in seen_members:
+                # Two entries with one path: the later one would silently replace the earlier.
+                raise BulkEvaluationError(f"ZIP contains the member {path.as_posix()[:200]} twice")
+            seen_members.add(path.as_posix())
             if len(path.parts) == 1 and path.name.casefold() == "manifest.csv":
+                if manifest_info is not None:
+                    # 'manifest.csv' + 'Manifest.csv' pass the exact-name check above.
+                    raise BulkEvaluationError("ZIP contains more than one manifest.csv")
                 manifest_info = info
                 continue
             if path.suffix.casefold() not in _SUPPORTED:
@@ -480,6 +590,11 @@ class BulkEvaluationService:
         for path, info in root_pdfs:
             sources[path.as_posix()] = ("pdf", (info,))
         for folder, members in grouped.items():
+            if folder in sources:
+                raise BulkEvaluationError(
+                    f"ZIP contains both the file {folder[:200]!r} and the folder "
+                    f"{folder[:200] + '/'!r}; rename one so each script is a single student"
+                )
             pdfs = [info for path, info in members if path.suffix.casefold() == ".pdf"]
             images = [info for path, info in members if path.suffix.casefold() != ".pdf"]
             if pdfs and images:
@@ -510,24 +625,33 @@ class BulkEvaluationService:
             raise BulkEvaluationError(
                 f"ZIP exceeds the {self.settings.bulk_max_submissions}-submission limit"
             )
-        unknown_manifest_sources = set(manifest) - set(sources)
+        unknown_manifest_sources = sorted(set(manifest) - set(sources))
         if unknown_manifest_sources:
-            raise BulkEvaluationError("manifest.csv refers to a source that is not in the ZIP")
+            shown = ", ".join(repr(name[:200]) for name in unknown_manifest_sources[:5])
+            if len(unknown_manifest_sources) > 5:
+                shown = f"{shown}, and {len(unknown_manifest_sources) - 5} more"
+            raise BulkEvaluationError(
+                f"manifest.csv refers to a source that is not in the ZIP: {shown}"
+            )
 
         units: list[ArchiveUnit] = []
         payload: list[dict[str, object]] = []
-        seen_identifiers: set[str] = set()
+        seen_identifiers: dict[str, str] = {}
         for source in sorted(sources, key=_natural_key):
             kind, members = sources[source]
             metadata = manifest.get(source, {})
-            default_name = PurePosixPath(source).stem if kind == "pdf" else source
+            # Only a root-level PDF loses its extension; a student folder keeps its name as-is.
+            default_name = source if source in grouped else PurePosixPath(source).stem
             identifier = str(metadata.get("student_identifier") or default_name).strip()[:128]
             if not identifier:
                 raise BulkEvaluationError("Every script needs a student identifier")
             folded = identifier.casefold()
             if folded in seen_identifiers:
-                raise BulkEvaluationError("ZIP contains duplicate student identifiers")
-            seen_identifiers.add(folded)
+                raise BulkEvaluationError(
+                    f"ZIP contains duplicate student identifiers: {identifier!r} is used by "
+                    f"both {seen_identifiers[folded]!r} and {source!r}"
+                )
+            seen_identifiers[folded] = source
             student_name = str(metadata.get("student_name") or "").strip()[:255] or None
             units.append(ArchiveUnit(source, identifier, student_name, members, kind))
             payload.append(
@@ -546,7 +670,11 @@ class BulkEvaluationService:
     ) -> tuple[dict[str, dict[str, str]], str | None]:
         if info is None:
             return {}, None
-        raw = archive.read(info)
+        try:
+            raw = archive.read(info)
+        except Exception as exc:
+            _raise_if_named_member_failure(info.filename, exc)
+            raise
         digest = hashlib.sha256(raw).hexdigest()
         try:
             text = raw.decode("utf-8-sig")
@@ -560,6 +688,15 @@ class BulkEvaluationService:
             )
         result: dict[str, dict[str, str]] = {}
         for row in reader:
+            # csv.DictReader files surplus cells under the None key. A non-empty one (an
+            # unquoted comma in a name) would silently truncate a name or shift an identifier;
+            # a harmless trailing empty cell is still accepted.
+            if any(cell.strip() for cell in row.get(None) or ()):
+                raise BulkEvaluationError(
+                    f"manifest.csv line {reader.line_num} ({(row.get('source') or '')[:200]!r}) "
+                    "has more columns than the header, for example an unquoted comma in a name; "
+                    "put quotes around any cell that contains a comma"
+                )
             source = (row.get("source") or "").replace("\\", "/").strip().rstrip("/")
             if not source or source in result:
                 raise BulkEvaluationError("manifest.csv contains a blank or duplicate source")
@@ -568,6 +705,80 @@ class BulkEvaluationService:
                 "student_name": (row.get("student_name") or "").strip(),
             }
         return result, digest
+
+    def _preflight_pages(
+        self,
+        archive: zipfile.ZipFile,
+        units: list[ArchiveUnit],
+        *,
+        questions: int,
+        maximum_provider_calls: int,
+    ) -> int:
+        """Count every page and open every PDF before anything is rendered (RC-17, RC-31).
+
+        A cohort over the page cap or under the minimum call authorisation is refused without
+        rasterising a single page, and a PDF that opens only after MuPDF repaired it (typically
+        a truncated download whose missing pages would render blank) is refused by name.
+        """
+
+        total_pages = 0
+        for unit in units:
+            if unit.kind != "pdf":
+                total_pages += len(unit.members)
+                continue
+            # The same exceptions the importer raises, so a refusal reads (and chains) exactly as it
+            # would after rendering, only before anything is rendered.
+            try:
+                raw = archive.read(unit.members[0])
+            except Exception as exc:
+                _raise_if_named_member_failure(unit.source, exc)
+                raise
+            try:
+                document = fitz.open(stream=raw, filetype="pdf")
+            except Exception as exc:
+                decode_error = HTTPException(
+                    status_code=400, detail="Uploaded PDF could not be decoded"
+                )
+                decode_error.__cause__ = exc
+                _raise_if_named_member_failure(unit.source, decode_error)
+                raise
+            try:
+                if document.needs_pass:
+                    _raise_if_named_member_failure(
+                        unit.source, ValueError("document closed or encrypted")
+                    )
+                if document.is_repaired:
+                    reason = (
+                        "the PDF is damaged or truncated (it opens only after repair, and "
+                        "missing pages would read as blank); export or download it again"
+                    )
+                elif len(document) == 0:
+                    reason = "the PDF has no pages"
+                else:
+                    reason = None
+                    total_pages += len(document)
+            finally:
+                document.close()
+            if reason is not None:
+                raise BulkEvaluationError(
+                    f"Could not import {unit.source[:200]}: {reason}. Nothing was imported."
+                )
+            if total_pages > self.settings.bulk_max_pages:
+                break
+        if total_pages > self.settings.bulk_max_pages:
+            raise BulkEvaluationError(
+                f"ZIP exceeds the {self.settings.bulk_max_pages}-page bulk limit (counted before "
+                "rendering). Nothing was imported; split the cohort into smaller archives."
+            )
+        minimum_calls = total_pages + len(units) * questions
+        if maximum_provider_calls < minimum_calls:
+            raise BulkEvaluationError(
+                f"Authorized provider calls ({maximum_provider_calls}) are below the "
+                f"minimum this cohort needs ({minimum_calls}: {total_pages} page reads "
+                f"+ {len(units) * questions} gradings). Whole-transcript assignment calls (up "
+                "to one per script) are extra, so allow some slack above the minimum."
+            )
+        return total_pages
 
     def _reject_existing_identifiers(self, assessment_id: int, units: list[ArchiveUnit]) -> None:
         incoming = {unit.identifier.casefold() for unit in units}
@@ -597,6 +808,7 @@ class BulkEvaluationService:
         archive: zipfile.ZipFile,
         assessment_id: int,
         unit: ArchiveUnit,
+        created_ids: list[int],
     ) -> Submission:
         submission = Submission(
             assessment_id=assessment_id,
@@ -606,6 +818,8 @@ class BulkEvaluationService:
         )
         self.db.add(submission)
         self.db.flush()
+        # Recorded before any file is written so a failure below still cleans this unit's files.
+        created_ids.append(submission.id)
         if unit.kind == "pdf":
             info = unit.members[0]
             target_dir = self.storage.uploads_dir / "submissions" / str(submission.id)
@@ -627,7 +841,11 @@ class BulkEvaluationService:
                     with archive.open(info) as source, Image.open(BytesIO(source.read())) as image:
                         image.verify()
                     with archive.open(info) as source, Image.open(BytesIO(source.read())) as image:
-                        image.convert("RGB").save(output.absolute_path, format="PNG")
+                        # Phone photos carry rotation only as an EXIF tag; bake it into the pixels
+                        # because the stored PNG drops the tag and the page would read sideways.
+                        ImageOps.exif_transpose(image).convert("RGB").save(
+                            output.absolute_path, format="PNG"
+                        )
                 except (UnidentifiedImageError, OSError) as exc:
                     raise BulkEvaluationError(
                         f"Image page in {unit.source} could not be decoded"
@@ -651,7 +869,9 @@ class BulkEvaluationService:
         """Advance one durable unit of work and report whether another is pending."""
 
         run = self.get_run(run_id)
-        if run.status in {"completed", "completed_with_exceptions", "failed", "stopped"}:
+        # A paused run leaves that state only through an explicit teacher action (resume() or
+        # resume_item()): a stray or duplicate worker unit must not carry on and un-pause it.
+        if run.status in {"completed", "completed_with_exceptions", "failed", "stopped", "paused"}:
             return False
         if run.stop_requested:
             run.status = "stopped"
@@ -659,8 +879,20 @@ class BulkEvaluationService:
             self.db.commit()
             return False
         if run.calls_used >= run.authorized_call_limit:
-            self._pause(run, "Authorized provider-call limit reached")
-            return False
+            # Only unfinished work is refused for want of budget. A run authorised for exactly the
+            # calls it needs has spent them all on its last item; with nothing left to read or
+            # grade it falls through to _finish_processing instead of stranding finished drafts.
+            unfinished = self.db.scalar(
+                select(BulkEvaluationItem.id)
+                .where(
+                    BulkEvaluationItem.run_id == run.id,
+                    BulkEvaluationItem.status.in_(("pending", "running")),
+                )
+                .limit(1)
+            )
+            if unfinished is not None:
+                self._pause(run, "Authorized provider-call limit reached")
+                return False
         run.heartbeat_at = datetime.now(UTC)
         try:
             if self._next_read_submission(run) is not None:
@@ -744,7 +976,7 @@ class BulkEvaluationService:
             raise BulkEvaluationError("Only a paused or stopped bulk run can resume")
         if run.calls_used >= run.authorized_call_limit:
             raise BulkEvaluationError(
-                "Increase authorization in a new run; call limit is exhausted"
+                "The authorised call limit is exhausted; raise this run's call limit, then resume"
             )
         if run.stage == "reading":
             self._resume_known_page_read_failure(run)
@@ -758,10 +990,63 @@ class BulkEvaluationService:
         return self.get_run(run.id)
 
     def resume_item(
-        self, run: BulkEvaluationRun, item: BulkEvaluationItem, *, teacher_id: int
+        self,
+        run: BulkEvaluationRun,
+        item: BulkEvaluationItem,
+        *,
+        teacher_id: int,
+        commit: bool = True,
     ) -> BulkEvaluationItem:
         if item.run_id != run.id or item.status not in {"exception", "uncertain"}:
             raise BulkEvaluationError("Only an exception or uncertain item can be resumed")
+        unfinished_read = (
+            self._uses_page_read(run)
+            and item.stage == "read"
+            and item.status == "uncertain"
+            and item.answer_evidence_assignment_id is None
+        )
+        if run.status == "paused" and run.stage == "reading":
+            # Un-pausing from here must not skip what run-level Resume checks: an unknown page
+            # read is refused, and a failed one is revived so reading cannot strand that script.
+            self._resume_known_page_read_failure(run)
+        # A pending teacher Stop must survive retrying one item (the worker honours it next unit),
+        # also one a failing provider call left behind a 'paused' status. Only a run that has
+        # already ended is re-opened by a retry, so only there is its spent request cleared.
+        stopping = run.status == "stopping" or (
+            run.stop_requested
+            and run.status
+            not in {"stopped", "completed", "completed_with_exceptions", "failed", "review_ready"}
+        )
+        if unfinished_read and run.status in {"stopped", "failed"}:
+            # A stopped or failed run is reopened only by the run-level Resume, never by a click
+            # on one of its items.
+            raise BulkEvaluationError(
+                "This run was stopped; resume the run before retrying one script's reading"
+            )
+        if unfinished_read:
+            # RC-38: the script's reading never finished (a failed assignment call, an unavailable
+            # model before the first page, a stopped worker). Re-reading reuses every page that
+            # was already read; an unknown page outcome still has to be reconciled first.
+            self._resume_known_page_read_failure(run, submission_id=item.submission_id)
+            if item.status != "pending":
+                raise BulkEvaluationError("This script's reading cannot be resumed yet")
+            run.status = "stopping" if stopping else "reading"
+            if not stopping:
+                run.stop_requested = False
+            run.stage = "reading"
+            run.error = None
+            run.completed_at = None
+            run.heartbeat_at = datetime.now(UTC)
+            self._audit_run(
+                run,
+                "bulk_evaluation_read_resumed",
+                teacher_id,
+                {"submission_id": item.submission_id, "item_id": item.id},
+            )
+            self._refresh_counts(run)
+            self.db.commit()
+            self.db.refresh(item)
+            return item
         mapping = self.db.get(AnswerRegionMapping, item.mapping_id) if item.mapping_id else None
         region = self.db.get(AnswerRegion, item.answer_region_id) if item.answer_region_id else None
         if self._uses_page_read(run) and item.answer_evidence_assignment_id is not None:
@@ -822,11 +1107,12 @@ class BulkEvaluationService:
                     sibling.completed_at = None
                 item.stage = "read"
                 item.status = "pending"
-                run.status = "reading"
+                run.status = "stopping" if stopping else "reading"
+                if not stopping:
+                    run.stop_requested = False
                 run.stage = "reading"
                 run.error = None
                 run.completed_at = None
-                run.stop_requested = False
                 self._audit_run(
                     run,
                     "bulk_evaluation_transcript_assignment_resumed",
@@ -911,7 +1197,8 @@ class BulkEvaluationService:
         item.exception_codes = []
         item.warnings = []
         item.completed_at = None
-        run.stop_requested = False
+        if not stopping:
+            run.stop_requested = False
         self._audit_run(
             run,
             "bulk_evaluation_item_resumed",
@@ -922,10 +1209,175 @@ class BulkEvaluationService:
             run.status = self._status_for_pending_stage(run)
             run.stage = "mapping" if item.stage == "read" else item.stage
             run.completed_at = None
+        elif run.status == "paused":
+            # run_next no longer un-pauses a run, so this explicit teacher action must (as Resume).
+            run.status = "stopping" if stopping else self._status_for_pending_stage(run)
+            run.error = None
+            run.heartbeat_at = datetime.now(UTC)
+        if not commit:
+            # A batch caller (release_reviewed_to_grading) refreshes the counts and commits once.
+            self.db.flush()
+            return item
         self._refresh_counts(run)
         self.db.commit()
         self.db.refresh(item)
         return item
+
+    def _release_blocker(
+        self, item: BulkEvaluationItem, review_current: dict[int, bool]
+    ) -> str | None:
+        """Why a gated item may not be released to grading, or None when it may.
+
+        Exactly the condition under which the per-item "Resume Qn grading" button is offered:
+        the script's transcript review is current and the question has answer evidence. A
+        question that still needs a whole-transcript analysis (a model call) is never released
+        in bulk.
+        """
+
+        assignment = self.db.scalar(
+            select(AnswerEvidenceAssignment)
+            .where(
+                AnswerEvidenceAssignment.submission_id == item.submission_id,
+                AnswerEvidenceAssignment.question_id == item.question_id,
+                AnswerEvidenceAssignment.is_current.is_(True),
+            )
+            .order_by(AnswerEvidenceAssignment.id.desc())
+            .limit(1)
+        )
+        if assignment is None:
+            return "no current answer evidence"
+        if assignment.state != "answer_present":
+            return f"answer evidence is {assignment.state}"
+        transcript = self.db.get(ScriptTranscript, assignment.script_transcript_id)
+        if transcript is None:
+            return "no transcript"
+        if transcript.id not in review_current:
+            review_current[transcript.id] = transcript_review_is_current(self.db, transcript)
+        if not review_current[transcript.id]:
+            return "the transcript review is not confirmed for the current transcript"
+        return None
+
+    def release_reviewed_to_grading(
+        self, run: BulkEvaluationRun, *, teacher_id: int
+    ) -> tuple[list[int], list[tuple[BulkEvaluationItem, str]]]:
+        """RC-68: release every reviewed script's waiting questions to grading in one action.
+
+        Each eligible item takes the same path as its own "Resume" (``resume_item``), inside a
+        savepoint; nothing is sent to a model here. Items that are not eligible are returned
+        with the reason and left exactly as they were.
+        """
+
+        if run.status in {"failed", "stopped"} or run.stop_requested:
+            raise BulkEvaluationError("A stopped or failed run cannot release work to grading")
+        if run.status == "completed":
+            raise BulkEvaluationError("This run is complete; nothing is waiting for grading")
+        if run.status == "paused" and run.stage == "reading":
+            # Settled once here: it may commit (expired page claims), which must not happen
+            # inside the per-item savepoints below.
+            self._resume_known_page_read_failure(run)
+        review_current: dict[int, bool] = {}
+        released: list[int] = []
+        skipped: list[tuple[BulkEvaluationItem, str]] = []
+        candidates = [
+            item
+            for item in sorted(run.items, key=lambda value: value.id)
+            if item.status in {"exception", "uncertain"}
+            and item.stage == "read"
+            and item.answer_evidence_assignment_id is not None
+        ]
+        for item in candidates:
+            reason = self._release_blocker(item, review_current)
+            if reason is not None:
+                skipped.append((item, reason))
+                continue
+            try:
+                with self.db.begin_nested():
+                    self.resume_item(run, item, teacher_id=teacher_id, commit=False)
+            except BulkEvaluationError as exc:
+                skipped.append((item, str(exc)))
+                continue
+            released.append(item.id)
+        if released:
+            self._refresh_counts(run)
+            self._audit_run(
+                run,
+                "bulk_evaluation_reviewed_released_to_grading",
+                teacher_id,
+                {"released_item_ids": released, "skipped_count": len(skipped)},
+            )
+        self.db.commit()
+        return released, skipped
+
+    def reconcile_interrupted_runs(self) -> list[int]:
+        """Pause active runs whose heartbeat is stale (RC-57); called when the worker starts.
+
+        Running items are quarantined as 'uncertain', exactly as Recover does; the teacher's
+        Resume then continues. Nothing is retried or re-read here.
+        """
+
+        stale_before = datetime.now(UTC) - timedelta(
+            seconds=self.settings.cohort_dispatch_heartbeat_timeout_seconds
+        )
+        runs = self.db.scalars(
+            select(BulkEvaluationRun).where(
+                BulkEvaluationRun.status.in_(tuple(_ACTIVE_RUN_STATUSES)),
+                or_(
+                    BulkEvaluationRun.heartbeat_at.is_(None),
+                    BulkEvaluationRun.heartbeat_at < stale_before,
+                ),
+            )
+        ).all()
+        paused: list[int] = []
+        for run in runs:
+            if run.status == "stopping" or run.stop_requested:
+                run.status = "stopped"
+                run.completed_at = datetime.now(UTC)
+                self._mark_running_uncertain(run, _UNCERTAIN_PROVIDER_WARNING)
+                self._audit_run(
+                    run, "bulk_evaluation_stopped_after_interruption", None, actor_type="worker"
+                )
+                self.db.commit()
+            else:
+                self._mark_running_uncertain(run, _UNCERTAIN_PROVIDER_WARNING)
+                self._pause(
+                    run,
+                    "Interrupted: the worker stopped (restart or reboot) while this run was "
+                    "active. Press Resume to continue; interrupted items are marked uncertain.",
+                )
+            paused.append(run.id)
+        return paused
+
+    def raise_call_limit(
+        self, run: BulkEvaluationRun, *, new_limit: int, teacher_id: int
+    ) -> BulkEvaluationRun:
+        """RC-48: an explicit teacher authorisation of more provider calls for a paused run.
+
+        The run stays paused; Resume continues it. The new limit must exceed the old one and
+        stay within the server ceiling (and the database CHECK of 2,000).
+        """
+
+        if run.status != "paused":
+            raise BulkEvaluationError("Only a paused run's call limit can be raised")
+        if new_limit <= run.authorized_call_limit:
+            raise BulkEvaluationError(
+                f"The new limit must be above the current one ({run.authorized_call_limit})"
+            )
+        ceiling = min(self.settings.bulk_max_provider_calls, 2000)
+        if new_limit > ceiling:
+            raise BulkEvaluationError(
+                f"The limit cannot exceed the server ceiling of {ceiling} provider calls; split "
+                "the remaining cohort into a new archive instead"
+            )
+        old_limit = run.authorized_call_limit
+        run.authorized_call_limit = new_limit
+        self._audit_run(
+            run,
+            "bulk_evaluation_call_limit_raised",
+            teacher_id,
+            {"old_limit": old_limit, "new_limit": new_limit},
+        )
+        self.db.commit()
+        return self.get_run(run.id)
 
     def pause_after_enqueue_failure(self, run_id: int) -> None:
         """Persist a visible manual-recovery state if the next worker unit cannot queue."""
@@ -985,10 +1437,13 @@ class BulkEvaluationService:
         items = list(
             db.scalars(
                 select(BulkEvaluationItem)
+                .join(GradeSuggestion, GradeSuggestion.id == BulkEvaluationItem.grade_suggestion_id)
                 .where(
                     BulkEvaluationItem.run_id == run.id,
                     BulkEvaluationItem.status == "graded",
-                    BulkEvaluationItem.grade_suggestion_id.is_not(None),
+                    # A draft the system superseded is never clean, whichever write site
+                    # forgot to quarantine its item.
+                    GradeSuggestion.superseded_at.is_(None),
                 )
                 .order_by(BulkEvaluationItem.id)
             ).all()
@@ -998,9 +1453,17 @@ class BulkEvaluationService:
 
     def review_snapshot_hash(self, run: BulkEvaluationRun) -> str:
         items = self._reviewable_items(self.db, run)
+        suggestions = {
+            suggestion.id: suggestion
+            for suggestion in self.db.scalars(
+                select(GradeSuggestion).where(
+                    GradeSuggestion.id.in_([item.grade_suggestion_id for item in items])
+                )
+            ).all()
+        }
         payload: list[dict[str, object]] = []
         for item in items:
-            suggestion = self.db.get(GradeSuggestion, item.grade_suggestion_id)
+            suggestion = suggestions.get(int(item.grade_suggestion_id))
             if suggestion is None:
                 continue
             payload.append(
@@ -1016,6 +1479,86 @@ class BulkEvaluationService:
                 }
             )
         return _canonical_hash(payload)
+
+    def approval_preview(self, run: BulkEvaluationRun) -> BulkEvaluationApprovalPreview:
+        """Per-student rows for exactly the drafts ``approve_clean`` would finalize now."""
+
+        if run.status not in {"review_ready", "completed_with_exceptions"}:
+            raise BulkEvaluationError("Bulk run is not ready for teacher approval")
+        snapshot = self.review_snapshot_hash(run)
+        item_ids = [item.id for item in self._reviewable_items(self.db, run)]
+        rows = self.db.execute(
+            select(BulkEvaluationItem, GradeSuggestion, Submission, Question)
+            .join(GradeSuggestion, GradeSuggestion.id == BulkEvaluationItem.grade_suggestion_id)
+            .join(Submission, Submission.id == BulkEvaluationItem.submission_id)
+            .join(Question, Question.id == BulkEvaluationItem.question_id)
+            .where(BulkEvaluationItem.id.in_(item_ids))
+            .order_by(Submission.student_identifier, Question.id)
+        ).all()
+        preview_rows = [
+            BulkEvaluationApprovalPreviewRow(
+                item_id=item.id,
+                suggestion_id=suggestion.id,
+                submission_id=submission.id,
+                student_identifier=submission.student_identifier,
+                student_name=submission.student_name,
+                question_id=question.id,
+                question_label=question.question_no,
+                score=suggestion.score,
+                max_score=suggestion.max_score,
+                confidence=suggestion.confidence,
+            )
+            for item, suggestion, submission, question in rows
+        ]
+        return BulkEvaluationApprovalPreview(
+            run_id=run.id,
+            review_snapshot_sha256=snapshot,
+            student_count=len({row.submission_id for row in preview_rows}),
+            draft_count=len(preview_rows),
+            rows=preview_rows,
+        )
+
+    def _answer_label(self, item: BulkEvaluationItem) -> str:
+        submission = self.db.get(Submission, item.submission_id)
+        question = self.db.get(Question, item.question_id)
+        student = (submission.student_identifier if submission else None) or (
+            f"submission {item.submission_id}"
+        )
+        question_label = question.question_no if question else f"question {item.question_id}"
+        return f"{student[:128]} / {question_label}"
+
+    def _draft_label(self, item: BulkEvaluationItem) -> str:
+        return f"{self._answer_label(item)} (draft {item.grade_suggestion_id})"
+
+    def _refuse_unapprovable_drafts(self, items: list[BulkEvaluationItem]) -> None:
+        """Refuse the whole batch, naming every draft that finalization would refuse."""
+
+        evidence = EvidenceInvalidationService(self.db)
+        problems: list[str] = []
+        for item in items:
+            suggestion = self.db.get(GradeSuggestion, item.grade_suggestion_id)
+            if suggestion is None:
+                reason = "the draft no longer exists"
+            elif suggestion.superseded_at is not None:
+                reason = "the draft was superseded because its evidence changed"
+            elif suggestion.score is None:
+                reason = "the draft has no score"
+            else:
+                try:
+                    evidence.assert_suggestion_matches_current_evidence(suggestion)
+                    continue
+                except EvidenceChangedError as exc:
+                    reason = str(exc)
+            problems.append(f"{self._draft_label(item)}: {reason}")
+        if not problems:
+            return
+        shown = "; ".join(problems[:5])
+        if len(problems) > 5:
+            shown = f"{shown}; and {len(problems) - 5} more"
+        raise BulkEvaluationError(
+            f"Bulk approval refused; nothing was approved. {len(problems)} draft(s) cannot be "
+            f"finalized: {shown}. Reject or resume them, then refresh."
+        )
 
     def approve_clean(
         self,
@@ -1036,44 +1579,58 @@ class BulkEvaluationService:
             raise BulkEvaluationError(
                 "Approval must match the exact clean draft snapshot; flagged items are excluded"
             )
+        items_by_suggestion = {int(item.grade_suggestion_id): item for item in eligible_items}
+        # All or nothing: every draft is checked before anything is written, and every final
+        # grade is written in one transaction, so a refusal never leaves part of the batch done.
+        self._refuse_unapprovable_drafts(
+            [items_by_suggestion[suggestion_id] for suggestion_id in sorted(eligible_ids)]
+        )
         approved_count = 0
         already_approved = 0
         final_service = FinalGradeService(self.db)
-        items_by_suggestion = {int(item.grade_suggestion_id): item for item in eligible_items}
-        for suggestion_id in sorted(eligible_ids):
-            item = items_by_suggestion[suggestion_id]
-            locked_region = self.db.scalar(
-                select(AnswerRegion)
-                .where(AnswerRegion.id == item.answer_region_id)
-                .with_for_update()
-            )
-            if locked_region is None:
-                raise BulkEvaluationError("Clean draft evidence is no longer available; refresh")
-            existing = self.db.scalar(
-                select(FinalGrade).where(FinalGrade.answer_region_id == item.answer_region_id)
-            )
-            if existing is not None:
-                item.final_grade_id = existing.id
-                self.db.commit()
-                raise BulkEvaluationError(
-                    "A clean draft was finalized separately; refresh before approving"
+        try:
+            for suggestion_id in sorted(eligible_ids):
+                item = items_by_suggestion[suggestion_id]
+                locked_region = self.db.scalar(
+                    select(AnswerRegion)
+                    .where(AnswerRegion.id == item.answer_region_id)
+                    .with_for_update()
                 )
-            final_grade, created = final_service.approve_suggestion(
-                suggestion_id,
-                teacher_id,
-                teacher_comment="Approved from clean bulk-supervised snapshot",
-            )
-            item = self.db.get(BulkEvaluationItem, item.id)
-            if item is not None:
+                if locked_region is None:
+                    raise BulkEvaluationError(
+                        f"{self._draft_label(item)}: the evidence is no longer available; "
+                        "refresh. Nothing was approved."
+                    )
+                existing = self.db.scalar(
+                    select(FinalGrade).where(FinalGrade.answer_region_id == item.answer_region_id)
+                )
+                if existing is not None:
+                    raise BulkEvaluationError(
+                        f"{self._draft_label(item)} was finalized separately; refresh before "
+                        "approving. Nothing was approved."
+                    )
+                try:
+                    final_grade, created = final_service.approve_suggestion(
+                        suggestion_id,
+                        teacher_id,
+                        teacher_comment="Approved from clean bulk-supervised snapshot",
+                        commit=False,
+                    )
+                except HTTPException as exc:
+                    raise BulkEvaluationError(
+                        f"{self._draft_label(item)}: {exc.detail} Nothing was approved."
+                    ) from exc
                 item.final_grade_id = final_grade.id
                 item.status = "approved"
                 item.stage = "complete"
                 item.completed_at = datetime.now(UTC)
-                self.db.commit()
-            if created and existing is None:
-                approved_count += 1
-            else:
-                already_approved += 1
+                if created:
+                    approved_count += 1
+                else:
+                    already_approved += 1
+        except BaseException:
+            self.db.rollback()
+            raise
         run = self.db.get(BulkEvaluationRun, run.id)
         assert run is not None
         self._refresh_counts(run)
@@ -1137,7 +1694,12 @@ class BulkEvaluationService:
             final_grade = (
                 self.db.get(FinalGrade, item.final_grade_id) if item.final_grade_id else None
             )
-            approved = bool(final_grade and final_grade.approval_status == "approved")
+            # Approved or teacher-edited grades are final; a rejected draft is not a grade.
+            approved = bool(final_grade and final_grade.approval_status in TEACHER_FINAL_STATUSES)
+            if final_grade is not None and final_grade.approval_status in {"edited", "rejected"}:
+                row_status = final_grade.approval_status.upper()
+            else:
+                row_status = "APPROVED" if approved else "INCOMPLETE"
             approved_sheet.append(
                 [
                     submission.student_identifier,
@@ -1145,7 +1707,7 @@ class BulkEvaluationService:
                     question.question_no,
                     question.total_marks,
                     final_grade.final_score if approved else None,
-                    "APPROVED" if approved else "INCOMPLETE",
+                    row_status,
                     item.grade_suggestion_id,
                     item.final_grade_id,
                 ]
@@ -1204,6 +1766,11 @@ class BulkEvaluationService:
         for item, submission, question in rows:
             if item.status not in {"exception", "uncertain"}:
                 continue
+            resolved = (
+                self.db.get(FinalGrade, item.final_grade_id) if item.final_grade_id else None
+            )
+            if resolved is not None and resolved.approval_status in TEACHER_FINAL_STATUSES:
+                continue  # the teacher graded it: no longer an open exception
             exception_sheet.append(
                 [
                     submission.student_identifier,
@@ -1233,6 +1800,7 @@ class BulkEvaluationService:
             ("archive_sha256", run.archive_sha256),
         ):
             summary_sheet.append([key, value])
+        neutralize_formula_cells(workbook)
         buffer = BytesIO()
         workbook.save(buffer)
         return buffer.getvalue()
@@ -1559,14 +2127,21 @@ class BulkEvaluationService:
         )
         run.calls_used = max(run.calls_used, read_calls)
 
-    def _resume_known_page_read_failure(self, run: BulkEvaluationRun) -> None:
-        read_items = [item for item in run.items if item.stage == "read"]
+    def _resume_known_page_read_failure(
+        self, run: BulkEvaluationRun, *, submission_id: int | None = None
+    ) -> None:
+        read_items = [
+            item
+            for item in run.items
+            if item.stage == "read"
+            and (submission_id is None or item.submission_id == submission_id)
+        ]
         if not read_items:
             return
         submission_ids = {item.submission_id for item in read_items}
-        states = set(
+        pages = list(
             self.db.scalars(
-                select(ScriptPageTranscript.state)
+                select(ScriptPageTranscript)
                 .join(
                     ScriptTranscript,
                     ScriptTranscript.id == ScriptPageTranscript.script_transcript_id,
@@ -1578,12 +2153,34 @@ class BulkEvaluationService:
                 )
             ).all()
         )
+        # RC-37: a worker killed between reserving a page and recording its result leaves it
+        # 'dispatched' for good. Once the claim is older than any live call could be, it becomes
+        # 'unknown_outcome' (as reserve_page would), committed before the refusal below, so the
+        # teacher's reconcile route can settle it. Nothing is re-read automatically.
+        stale_before = datetime.now(UTC) - timedelta(seconds=self._reservation_stale_seconds(run))
+        expired = False
+        for page in pages:
+            reserved_at = page.reserved_at
+            if reserved_at is not None and reserved_at.tzinfo is None:
+                reserved_at = reserved_at.replace(tzinfo=UTC)
+            if page.state == "dispatched" and (reserved_at is None or reserved_at < stale_before):
+                page.state = "unknown_outcome"
+                page.error = (
+                    f"a page read reserved by {page.reserved_by!r} never reported an outcome; "
+                    "the worker probably stopped. The provider may have produced a result"
+                )
+                expired = True
+        if expired:
+            self.db.commit()
+        states = {page.state for page in pages}
         if states & {"dispatched", "unknown_outcome"}:
             raise BulkEvaluationError(
                 "A page-read outcome is unknown and must be reconciled before resuming"
             )
-        if "failed" not in states:
-            return
+        # RC-38: every read-stage item left 'uncertain' (a failed page, a failed whole-transcript
+        # assignment call, a model that was unavailable or busy before the first page, a stopped
+        # worker) is revived on this explicit teacher action. Pages already read are reused from
+        # the transcript store, so only the missing or failed work is called again.
         for item in read_items:
             if item.status != "uncertain":
                 continue
@@ -1591,6 +2188,15 @@ class BulkEvaluationService:
             item.exception_codes = []
             item.warnings = []
             item.completed_at = None
+
+    def _reservation_stale_seconds(self, run: BulkEvaluationRun) -> int:
+        """How old a page claim must be before no live call can still hold it."""
+
+        try:
+            job_timeout = int(self._policy_for_run(run).job_timeout_seconds)
+        except Exception:  # an unbuildable policy must not make a dead claim look live forever
+            job_timeout = 0
+        return max(900, job_timeout)
 
     def _create_transcript_compatibility_region(
         self,
@@ -2188,9 +2794,72 @@ class BulkEvaluationService:
             normalized,
         )
 
+    def _reference_bundle_changed(self, run: BulkEvaluationRun, item: BulkEvaluationItem) -> bool:
+        """True when the questions, model answers, marks or active rubrics no longer match the
+        bundle this run was authorised with. An unreadable bundle counts as changed (fail closed).
+        """
+
+        has_rubric = self.db.scalar(
+            select(Rubric.id)
+            .where(Rubric.question_id == item.question_id, Rubric.is_active.is_(True))
+            .limit(1)
+        )
+        if has_rubric is None:
+            # No active rubric for this item's question: the grading step below already
+            # quarantines that single item (stale_evidence), which stays the behaviour.
+            return False
+        grading_run = self.db.get(GradingRun, run.grading_run_id)
+        try:
+            if grading_run is None:
+                return True
+            current = self.reference_bundle_hash(run.assessment_id, grading_run)
+        except BulkEvaluationError:
+            return True
+        return current != run.reference_bundle_sha256
+
+    def _grading_job_may_be_live(self, run: BulkEvaluationRun, job: GradingJob) -> bool:
+        """Whether a provider call may still be running under ``job`` (fails closed).
+
+        A managed-local provider holds the model lease as ``grading_job:<id>:<nonce>`` (see
+        GradingService) for the whole call: the job is live while an unexpired lease is held under
+        it. Other providers leave no such trace, so the job is live until the RQ job that created
+        it must have timed out (``max(3600, policy timeout)``, as ``bulk_evaluations._enqueue``).
+        """
+
+        return self._live_job_retry_after(run, job) is not None
+
+    def _live_job_retry_after(self, run: BulkEvaluationRun, job: GradingJob) -> datetime | None:
+        """When ``job`` can be treated as dead, or None when it already provably is.
+
+        A job still 'queued' never reached the provider: ``GradingService`` commits 'running'
+        before it takes the lease or calls out. Otherwise see ``_grading_job_may_be_live``.
+        """
+
+        if job.status == "queued":
+            return None
+        policy = self._policy_for_run(run)
+        if policy.adapter.runtime.managed_local_phase is not None:
+            lease = LocalModelLeaseService(self.db).read()
+            if lease.held and (lease.holder_id or "").startswith(f"grading_job:{job.id}:"):
+                expires_at = lease.expires_at or datetime.now(UTC)
+                return expires_at.replace(tzinfo=expires_at.tzinfo or UTC)
+            return None
+        created_at = job.created_at.replace(tzinfo=job.created_at.tzinfo or UTC)
+        dead_after = created_at + timedelta(seconds=max(3600, policy.job_timeout_seconds))
+        return dead_after if datetime.now(UTC) <= dead_after else None
+
     def _process_grading(self, run: BulkEvaluationRun) -> None:
         item = self._next_grading_item(run)
         if item is None:
+            return
+        if self._reference_bundle_changed(run, item):
+            # Grading the rest of the cohort under a different rubric than the first part would
+            # silently mix two references in one run: stop before any provider call is made.
+            self._pause(
+                run,
+                "Reference materials (questions, model answers or rubrics) changed after this "
+                "run was authorised; restore them or start a new run",
+            )
             return
         if item.answer_evidence_assignment_id is not None:
             assignment = self.db.get(
@@ -2222,6 +2891,47 @@ class BulkEvaluationService:
             self.db.commit()
             return
         self._require_calls(run, 1)
+        # An item that is 'pending' in the database yet whose OWN earlier job
+        # (item.grading_job_id, committed before the provider call) is 'queued'/'running' is
+        # normally an abandoned attempt (a worker killed mid-call, or a rejection before the
+        # provider call): that job would collide with the partial unique index on the new one, so
+        # close it visibly. But 'Recover' + 'Resume item' also make an item pending while its
+        # ORIGINAL call may still be running (a hung server), so the job is closed only when it
+        # is provably not live (_grading_job_may_be_live). Otherwise it is left open, the index
+        # refuses the new job and this unit fails visibly with no provider call. Only that job is
+        # ever closed: any other active job on the region (another unit's, a teacher's) is left
+        # alone too.
+        stored_status = self.db.scalar(
+            select(BulkEvaluationItem.status).where(BulkEvaluationItem.id == item.id)
+        )
+        if stored_status == "pending" and item.grading_job_id is not None:
+            abandoned = self.db.scalar(
+                select(GradingJob).where(
+                    GradingJob.id == item.grading_job_id,
+                    GradingJob.status.in_(("queued", "running")),
+                )
+            )
+            retry_after = (
+                self._live_job_retry_after(run, abandoned) if abandoned is not None else None
+            )
+            if retry_after is not None:
+                # The earlier call may still be running: no new job, no provider call. Say so
+                # plainly instead of letting the unique index fail the unit with raw SQL text.
+                self._quarantine(item, "provider_contract_failure", _LIVE_JOB_WARNING)
+                item.status = "uncertain"
+                self._refresh_counts(run)
+                when = retry_after.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+                self._pause(
+                    run,
+                    f"{self._answer_label(item)}: an earlier grading call "
+                    "may still be running (a worker stopped mid-call), so it was not sent again. "
+                    f"Resume this item after {when}.",
+                )
+                return
+            if abandoned is not None:
+                abandoned.status = "failed"
+                abandoned.error = "Superseded: the earlier attempt did not complete"
+                abandoned.completed_at = datetime.now(UTC)
         run.status = "grading"
         run.stage = "grading"
         item.status = "running"
@@ -2270,21 +2980,62 @@ class BulkEvaluationService:
             "provider_location": policy.location.value,
             "teacher_review_required": True,
         }
+        # A draft scored on a scale other than the question's own total marks can
+        # never be a clean draft: the final grade is bounded by the draft's maximum.
+        expected_max = Decimal(str(region.question.total_marks))
+        wrong_scale = Decimal(str(suggestion.max_score)) != expected_max
+        if wrong_scale:
+            self._quarantine(
+                item,
+                "provider_contract_failure",
+                f"Draft grade maximum mismatch: expected {expected_max}, "
+                f"got {suggestion.max_score}",
+            )
         if (
             suggestion.confidence is None
             or suggestion.confidence < self.settings.bulk_grading_clean_min_confidence
         ):
             self._quarantine(item, "verification_disagreement", "Draft grade confidence is low")
             item.stage = "review"
+        elif wrong_scale:
+            item.stage = "review"
         else:
             item.status = "graded"
             item.stage = "review"
             item.completed_at = datetime.now(UTC)
+            # A Recover pressed while this healthy call was in flight marked the item uncertain
+            # (provider_contract_failure). The grade landed and passed the checks above, so
+            # the stale code and warning must not keep a clean draft out of the approval set.
+            # Only that stamp is dropped: any other code on the item stays visible.
+            item.exception_codes = [
+                code for code in item.exception_codes or [] if code != "provider_contract_failure"
+            ]
+            item.warnings = [
+                w
+                for w in item.warnings or []
+                if w not in {_UNCERTAIN_PROVIDER_WARNING, _LIVE_JOB_WARNING}
+            ]
         run.heartbeat_at = datetime.now(UTC)
         self._refresh_counts(run)
         self.db.commit()
 
     def _finish_processing(self, run: BulkEvaluationRun) -> None:
+        in_flight = self.db.scalar(
+            select(BulkEvaluationItem.id)
+            .where(BulkEvaluationItem.run_id == run.id, BulkEvaluationItem.status == "running")
+            .limit(1)
+        )
+        if in_flight is not None:
+            # A worker killed mid-call leaves its item 'running', which no count includes:
+            # finishing would mark the run done with that answer silently stranded. Quarantine
+            # it as a visible 'uncertain' exception and pause; the teacher resumes it
+            # explicitly. Nothing is retried automatically.
+            self._mark_running_uncertain(run, _UNCERTAIN_PROVIDER_WARNING)
+            self._pause(
+                run,
+                "An in-flight item from an interrupted worker was found; use Recover / Resume item",
+            )
+            return
         self._refresh_counts(run)
         run.stage = "review"
         run.status = "review_ready" if run.clean_item_count else "completed_with_exceptions"

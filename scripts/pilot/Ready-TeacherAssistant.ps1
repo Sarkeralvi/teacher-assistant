@@ -68,6 +68,23 @@ try {
     Write-Section "Service health"
     & (Join-Path $PSScriptRoot "Get-TeacherPilotStatus.ps1")
 
+    # Fail loudly instead of printing "Ready" over a dead service: PostgreSQL, Redis, the API,
+    # the worker and the frontend must all answer. The local model is on demand, so it is not
+    # required here (-RequireAll would demand a loaded model).
+    $coreReady = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while (-not $coreReady -and [DateTime]::UtcNow -lt $deadline) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $PSScriptRoot "Get-TeacherPilotStatus.ps1") -RequireCore | Out-Null
+        $coreReady = ($LASTEXITCODE -eq 0)
+        if (-not $coreReady) { Start-Sleep -Seconds 3 }
+    }
+    if (-not $coreReady) {
+        throw ("A core service (database, queue, API, worker or frontend) is not answering. " +
+            "See .local-ai\logs\ for the failing service's log.")
+    }
+    Write-Host "  All core services answer." -ForegroundColor Green
+
     Write-Section "Active configuration"
     $envFile = Join-Path $repositoryRoot ".env"
     $localAiFile = Join-Path $repositoryRoot ".env.local-ai"
@@ -128,6 +145,13 @@ try {
     Write-Host "  Every score stays a draft until you approve it." -ForegroundColor Gray
     Write-Host ""
     Write-Host "  To shut down:  scripts\pilot\Stop-TeacherPilot.ps1" -ForegroundColor DarkGray
+
+    # One click should end in the app, not in a URL to type.
+    try {
+        Start-Process "http://localhost:3000"
+    } catch {
+        Write-Host "  Open http://localhost:3000 in your browser." -ForegroundColor Yellow
+    }
 }
 catch {
     Write-Host ""

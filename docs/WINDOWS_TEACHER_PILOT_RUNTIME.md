@@ -52,6 +52,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\pilot\Get-Teac
 ```
 
 The status output contains availability only. It does not print API keys, model paths, or student text.
+Use `-RequireCore` to check that the host is up (PostgreSQL, Redis, API, worker, frontend); `-RequireAll`
+also requires a loaded local model, which is on demand and normally off.
+
+The desktop icon **Start Teacher Assistant** runs `scripts\pilot\Ready-TeacherAssistant.ps1`: it starts
+everything through `Start-TeacherPilot.ps1`, fails visibly unless every core service answers
+(`-RequireCore`), prints the safety configuration and opens http://localhost:3000. A second click while
+the host is up only re-checks it; during an active bulk run the worker and model are left alone.
 
 ## Stop
 

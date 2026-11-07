@@ -21,10 +21,14 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    BulkEvaluationApprovalPreview,
     BulkEvaluationApprovalRequest,
     BulkEvaluationApprovalResponse,
+    BulkEvaluationCallLimitRequest,
     BulkEvaluationExceptionRead,
     BulkEvaluationItemRead,
+    BulkEvaluationReleaseResponse,
+    BulkEvaluationReleaseSkipped,
     BulkEvaluationRunRead,
 )
 from app.services.bulk_evaluation_service import BulkEvaluationError, BulkEvaluationService
@@ -55,6 +59,29 @@ def _owned_run(run_id: int, db: Session, teacher: User) -> BulkEvaluationRun:
     return run
 
 
+_REVIEWABLE_RUN_STATUSES = frozenset({"review_ready", "completed_with_exceptions"})
+
+
+def _run_read(db: Session, run: BulkEvaluationRun) -> BulkEvaluationRunRead:
+    """The run as the teacher sees it, with the clean-draft hash computed now.
+
+    The stored hash dates from the end of processing; any per-item decision since then moved the
+    clean set, so posting it back would be refused. The value shown is the one approve-clean
+    recomputes, for exactly the items in this response.
+    """
+
+    live = (
+        BulkEvaluationService(db).review_snapshot_hash(run)
+        if run.status in _REVIEWABLE_RUN_STATUSES
+        else None
+    )
+    # Validated after the hash: computing it also links items to any final grade made since.
+    read = BulkEvaluationRunRead.model_validate(run)
+    if live is not None:
+        read = read.model_copy(update={"review_snapshot_sha256": live})
+    return read
+
+
 def _enqueue(run_id: int, provider: str) -> None:
     settings = get_settings()
     timeout = brain_policy_for_profile(settings, provider).job_timeout_seconds
@@ -64,6 +91,28 @@ def _enqueue(run_id: int, provider: str) -> None:
         retry=None,
         job_timeout=max(3600, timeout),
     )
+
+
+_ACTIVE_RUN_STATUSES = frozenset(
+    {"preflighting", "queued", "reading", "mapping", "transcribing", "grading", "stopping"}
+)
+
+
+def _enqueue_or_pause(db: Session, run: BulkEvaluationRun, *, pause: bool = True) -> None:
+    """Queue the next unit for a resumed run, or fail visibly instead of stranding it.
+
+    If the queue is down, the run the route just made active has no job anywhere, so it is
+    paused (the same state the create route and the worker chain use) and the caller gets a 503.
+    ``pause=False`` is for a run that was already active before the route touched it: its own
+    worker chain may still be alive, so the failed extra enqueue must not stop it.
+    """
+
+    try:
+        _enqueue(run.id, run.provider)
+    except Exception as exc:
+        if pause:
+            BulkEvaluationService(db).pause_after_enqueue_failure(run.id)
+        raise HTTPException(status_code=503, detail="Bulk evaluation could not be resumed") from exc
 
 
 @router.post(
@@ -117,8 +166,9 @@ def create_bulk_evaluation_run(
     ):
         raise HTTPException(status_code=404, detail="Grading run not found")
     created_run: BulkEvaluationRun | None = None
+    service = BulkEvaluationService(db)
     try:
-        created_run = BulkEvaluationService(db).create_from_zip(
+        created_run = service.create_from_zip(
             assessment_id=assessment_id,
             grading_run=grading_run,
             teacher=current_user,
@@ -128,6 +178,9 @@ def create_bulk_evaluation_run(
             maximum_provider_calls=maximum_provider_calls,
             provider=provider,
         )
+        if service.reused_existing_run:
+            # An idempotent re-upload: that run already has (or has paused) its own worker chain.
+            return created_run
         _enqueue(created_run.id, created_run.provider)
         return created_run
     except BulkEvaluationError as exc:
@@ -143,8 +196,8 @@ def create_bulk_evaluation_run(
 @router.get("/bulk-evaluation-runs/{run_id}", response_model=BulkEvaluationRunRead)
 def read_bulk_evaluation_run(
     run_id: int, db: DbSession, current_user: CurrentUser
-) -> BulkEvaluationRun:
-    return _owned_run(run_id, db, current_user)
+) -> BulkEvaluationRunRead:
+    return _run_read(db, _owned_run(run_id, db, current_user))
 
 
 @router.get(
@@ -153,19 +206,18 @@ def read_bulk_evaluation_run(
 )
 def list_bulk_evaluation_runs(
     assessment_id: int, db: DbSession, current_user: CurrentUser
-) -> list[BulkEvaluationRun]:
+) -> list[BulkEvaluationRunRead]:
     get_owned_assessment_or_404(assessment_id, db, current_user)
-    return list(
-        db.scalars(
-            select(BulkEvaluationRun)
-            .options(selectinload(BulkEvaluationRun.items))
-            .where(
-                BulkEvaluationRun.assessment_id == assessment_id,
-                BulkEvaluationRun.created_by_teacher_id == current_user.id,
-            )
-            .order_by(BulkEvaluationRun.id.desc())
+    runs = db.scalars(
+        select(BulkEvaluationRun)
+        .options(selectinload(BulkEvaluationRun.items))
+        .where(
+            BulkEvaluationRun.assessment_id == assessment_id,
+            BulkEvaluationRun.created_by_teacher_id == current_user.id,
         )
-    )
+        .order_by(BulkEvaluationRun.id.desc())
+    ).all()
+    return [_run_read(db, run) for run in runs]
 
 
 @router.post("/bulk-evaluation-runs/{run_id}/stop", response_model=BulkEvaluationRunRead)
@@ -183,7 +235,7 @@ def resume_bulk_evaluation_run(
     run = _owned_run(run_id, db, current_user)
     try:
         resumed = BulkEvaluationService(db).resume(run, teacher_id=current_user.id)
-        _enqueue(run.id, run.provider)
+        _enqueue_or_pause(db, run)
         return resumed
     except BulkEvaluationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -269,12 +321,91 @@ def resume_bulk_evaluation_item(
     item = db.get(BulkEvaluationItem, item_id)
     if item is None or item.run_id != run.id:
         raise HTTPException(status_code=404, detail="Bulk evaluation item not found")
+    was_active = run.status in _ACTIVE_RUN_STATUSES
     try:
         resumed = BulkEvaluationService(db).resume_item(
             run, item, teacher_id=current_user.id
         )
-        _enqueue(run.id, run.provider)
+        _enqueue_or_pause(db, run, pause=not was_active)
         return resumed
+    except BulkEvaluationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/bulk-evaluation-runs/{run_id}/release-reviewed",
+    response_model=BulkEvaluationReleaseResponse,
+)
+def release_reviewed_to_grading(
+    run_id: int, db: DbSession, current_user: CurrentUser
+) -> BulkEvaluationReleaseResponse:
+    """Release every script whose transcript review is confirmed to grading (one action)."""
+
+    run = _owned_run(run_id, db, current_user)
+    was_active = run.status in _ACTIVE_RUN_STATUSES
+    service = BulkEvaluationService(db)
+    try:
+        released, skipped = service.release_reviewed_to_grading(run, teacher_id=current_user.id)
+        if released:
+            _enqueue_or_pause(db, run, pause=not was_active)
+    except BulkEvaluationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    rows = db.execute(
+        select(BulkEvaluationItem.id, Submission.student_identifier, Question.question_no)
+        .join(Submission, Submission.id == BulkEvaluationItem.submission_id)
+        .join(Question, Question.id == BulkEvaluationItem.question_id)
+        .where(BulkEvaluationItem.id.in_([item.id for item, _ in skipped]))
+    ).all()
+    labels = {item_id: (student, question) for item_id, student, question in rows}
+    return BulkEvaluationReleaseResponse(
+        run_id=run_id,
+        released_count=len(released),
+        skipped=[
+            BulkEvaluationReleaseSkipped(
+                item_id=item.id,
+                student_identifier=labels.get(item.id, (None, ""))[0],
+                question_label=labels.get(item.id, (None, ""))[1],
+                reason=reason,
+            )
+            for item, reason in skipped
+        ],
+    )
+
+
+@router.post(
+    "/bulk-evaluation-runs/{run_id}/call-limit",
+    response_model=BulkEvaluationRunRead,
+)
+def raise_bulk_call_limit(
+    run_id: int,
+    payload: BulkEvaluationCallLimitRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> BulkEvaluationRunRead:
+    """Explicitly authorise more provider calls for a paused run; Resume continues it."""
+
+    run = _owned_run(run_id, db, current_user)
+    try:
+        raised = BulkEvaluationService(db).raise_call_limit(
+            run, new_limit=payload.authorized_call_limit, teacher_id=current_user.id
+        )
+    except BulkEvaluationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _run_read(db, raised)
+
+
+@router.get(
+    "/bulk-evaluation-runs/{run_id}/approval-preview",
+    response_model=BulkEvaluationApprovalPreview,
+)
+def preview_bulk_approval(
+    run_id: int, db: DbSession, current_user: CurrentUser
+) -> BulkEvaluationApprovalPreview:
+    """Per-student scores the teacher checks before a bulk approval; read only."""
+
+    run = _owned_run(run_id, db, current_user)
+    try:
+        return BulkEvaluationService(db).approval_preview(run)
     except BulkEvaluationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

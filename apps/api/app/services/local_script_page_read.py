@@ -58,6 +58,7 @@ from app.services.script_transcript_store import (
     UNKNOWN_OUTCOME,
     ScriptTranscriptError,
     ScriptTranscriptStore,
+    _ordered_blocks,
     classify_dispatch_failure,
 )
 from app.services.storage import LocalStorage
@@ -845,12 +846,16 @@ class LocalScriptPageReadService:
                         canonical_labels=canonical_labels,
                         previous=open_continuations,
                     )
+                # Number the blocks in the store's own order. The assignment is
+                # resolved against persisted block_index (bbox order), so a provider
+                # that returned blocks out of order must not shift the numbering the
+                # model sees away from what is saved.
                 transcript_pages = [
                     {
                         "page_no": int(page.page_no),
                         "blocks": [
                             {"order": index + 1, "text": block.text}
-                            for index, block in enumerate(output.blocks)
+                            for index, block in enumerate(_ordered_blocks(output))
                             if block.text.strip()
                         ],
                     }

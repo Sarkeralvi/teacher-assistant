@@ -115,3 +115,34 @@ def test_generic_brain_overrides_still_apply_to_openai_and_gemini() -> None:
     )
     assert gemini_settings.gemini_model == "gemini-test"
     assert gemini_settings.gemini_api_key == "gemini-test-key"
+
+
+def test_generic_brain_timeout_does_not_replace_the_local_qwen38_timeout() -> None:
+    """RC-54: LOCAL_QWEN38_TIMEOUT_SECONDS is the effective per-call timeout of the profile."""
+
+    settings = Settings(
+        BRAIN_PROVIDER="llama_cpp_qwen38",
+        BRAIN_MODEL="Qwen/Qwen3.8-27B",
+        BRAIN_TIMEOUT_SECONDS=600,
+        LOCAL_QWEN38_TIMEOUT_SECONDS=900,
+    )
+
+    effective = legacy_profile_settings(settings, "llama_cpp_qwen38")
+
+    assert effective.local_qwen38_timeout_seconds == 900
+
+
+def test_the_managed_local_call_timeout_stays_below_the_model_lease() -> None:
+    """A call may never outlive the model lease it holds (refreshed only around the call)."""
+
+    from app.services.local_model_lease_service import DEFAULT_LEASE_SECONDS
+    from packages.brain.profiles import (
+        MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS,
+        _qwen38_configuration,
+    )
+
+    assert MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS <= DEFAULT_LEASE_SECONDS - 300
+    long = _qwen38_configuration(Settings(LOCAL_QWEN38_TIMEOUT_SECONDS=1800))
+    short = _qwen38_configuration(Settings(LOCAL_QWEN38_TIMEOUT_SECONDS=600))
+    assert long.timeout_seconds == MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS
+    assert short.timeout_seconds == 600

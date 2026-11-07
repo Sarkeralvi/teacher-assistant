@@ -7,7 +7,10 @@ param(
     [switch]$RebuildFrontend,
     [ValidateSet("Qwen", "Qwen38")]
     [string]$LocalAiMode = "Qwen38",
-    [int]$HealthTimeoutSeconds = 600
+    [int]$HealthTimeoutSeconds = 600,
+    # By default a re-run during an active bulk run leaves the worker and the loaded model
+    # alone: stopping either kills the call in flight (RC-56). Pass this to restart anyway.
+    [switch]$AllowRestartDuringBulkRun
 )
 
 . (Join-Path $PSScriptRoot "Common.ps1")
@@ -121,9 +124,32 @@ try {
     Pop-Location
 }
 
+# An active bulk run owns the worker chain and the loaded model. Restarting the worker or
+# stopping the model mid-call strands the run (RC-56), so both are deferred unless the
+# operator explicitly allows it.
+$activeBulkRuns = ""
+Push-Location $paths.ApiDirectory
+try {
+    $activeBulkRuns = (& $paths.ApiPython -c `
+        "from app.services.bulk_run_guard import active_bulk_run_ids; print(','.join(map(str, active_bulk_run_ids())))" |
+        Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not check for active bulk runs; refusing to restart anything blindly."
+    }
+} finally {
+    Pop-Location
+}
+$protectBulkRun = (-not $AllowRestartDuringBulkRun) -and [bool]$activeBulkRuns
+if ($protectBulkRun) {
+    Write-Warning ("Bulk run(s) $activeBulkRuns are active: the worker and the loaded local " +
+        "model are left running. Re-run with -AllowRestartDuringBulkRun to restart them anyway.")
+}
+
 # Local models stay off during ordinary pilot startup; an operator may
 # explicitly select one managed phase with -StartLocalAi.
-if ($StartLocalAi) {
+if ($protectBulkRun) {
+    Write-Host "Local AI phases left as they are (active bulk run)."
+} elseif ($StartLocalAi) {
     . (Join-Path $paths.RepositoryRoot "scripts\local-ai\Common.ps1")
     # Always use the phase switch, even when the requested server is already
     # healthy: it first stops the other repository-owned phase, which is the
@@ -168,13 +194,18 @@ $backendRuntimeStale = (
     $backendSourceTimestamp -gt $existingWorker.StartTime.ToUniversalTime()
 )
 if ($backendRuntimeStale) {
-    if ($null -ne $existingWorker) {
+    if ($null -ne $existingWorker -and -not $protectBulkRun) {
         Stop-PilotProcess -Paths $paths -Name "worker" -ExpectedExecutable $paths.ApiPython
     }
     if ($null -ne $existingApi) {
         Stop-PilotProcess -Paths $paths -Name "api" -ExpectedExecutable $paths.ApiPython
     }
-    Write-Host "Backend source or local configuration changed; API and worker will restart."
+    if ($protectBulkRun -and $null -ne $existingWorker) {
+        Write-Warning ("Backend source or configuration changed; the API restarts, but the " +
+            "worker keeps running old code until the bulk run ends.")
+    } else {
+        Write-Host "Backend source or local configuration changed; API and worker will restart."
+    }
 }
 
 $apiProcess = Start-PilotProcess -Paths $paths -Name "api" `

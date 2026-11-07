@@ -448,8 +448,12 @@ def test_bulk_approval_never_overwrites_a_separately_finalized_draft(
     assert created is True
     db_session.refresh(item)
     assert item.final_grade_id == final_grade.id
+    # Every draft is now decided, so the run completed (RC-02) and a stale bulk approval is
+    # refused before it can touch the teacher's edit.
+    db_session.refresh(run)
+    assert run.status == "completed"
 
-    with pytest.raises(BulkEvaluationError, match="Clean draft set changed"):
+    with pytest.raises(BulkEvaluationError, match="not ready for teacher approval"):
         service.approve_clean(
             run,
             suggestion_ids=[suggestion.id],

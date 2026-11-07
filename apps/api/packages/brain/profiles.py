@@ -115,6 +115,13 @@ def _generic_profile_selected(settings: Settings) -> bool:
     return any((settings.brain_model, settings.brain_api_key, settings.brain_base_url))
 
 
+# The managed local model lease (app/services/local_model_lease_service.py,
+# DEFAULT_LEASE_SECONDS = 1800) is refreshed only before and after a call. A call allowed to run
+# as long as the lease would outlive it, and the bulk live-job guard would then treat the live
+# call as dead. So a managed-local call times out at least 300 s before the lease expires.
+MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS = 1500.0
+
+
 def legacy_profile_settings(settings: Settings, profile_id: str) -> Settings:
     """Translate process-wide BRAIN_* overrides for the legacy provider path only."""
 
@@ -141,7 +148,10 @@ def legacy_profile_settings(settings: Settings, profile_id: str) -> Settings:
     updates: dict[str, object] = {}
     if settings.brain_model and normalized not in {"llama_cpp_qwen", "llama_cpp_qwen38"}:
         updates[f"{field_prefix}_model"] = settings.brain_model
-    updates[f"{field_prefix}_timeout_seconds"] = settings.brain_timeout_seconds
+    # A local Qwen profile keeps its own timeout (LOCAL_QWEN*_TIMEOUT_SECONDS), as it keeps its
+    # own model and endpoint: the generic BRAIN_TIMEOUT_SECONDS silently replaced it (RC-54).
+    if normalized not in {"llama_cpp_qwen", "llama_cpp_qwen38"}:
+        updates[f"{field_prefix}_timeout_seconds"] = settings.brain_timeout_seconds
     if settings.brain_api_key and normalized in {
         "openai",
         "gemini",
@@ -505,7 +515,9 @@ def _qwen38_configuration(settings: Settings) -> BrainProviderProfileConfigurati
         endpoint=settings.local_qwen38_base_url,
         capabilities=LlamaCppQwen38VisionProvider.capabilities,
         destination=BrainExecutionLocation.LOCAL,
-        timeout_seconds=settings.local_qwen38_timeout_seconds,
+        timeout_seconds=min(
+            settings.local_qwen38_timeout_seconds, MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS
+        ),
         structured_output_mode="json_schema",
         secret_reference="BRAIN_API_KEY or LOCAL_QWEN38_API_KEY",
         enabled=(

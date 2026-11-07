@@ -223,6 +223,27 @@ export type BulkEvaluationException = {
   transcript_review_is_current: boolean;
 };
 
+export type BulkEvaluationApprovalPreviewRow = {
+  item_id: number;
+  suggestion_id: number;
+  submission_id: number;
+  student_identifier: string | null;
+  student_name: string | null;
+  question_id: number;
+  question_label: string;
+  score: string | null;
+  max_score: string;
+  confidence: string | null;
+};
+
+export type BulkEvaluationApprovalPreview = {
+  run_id: number;
+  review_snapshot_sha256: string;
+  student_count: number;
+  draft_count: number;
+  rows: BulkEvaluationApprovalPreviewRow[];
+};
+
 export type BulkEvaluationApprovalResponse = {
   run_id: number;
   approved_count: number;
@@ -1964,6 +1985,37 @@ export function resumeBulkEvaluationItem(runId: number, itemId: number) {
   return apiRequest<BulkEvaluationItem>(
     `/bulk-evaluation-runs/${runId}/items/${itemId}/resume`,
     { method: "POST" },
+  );
+}
+
+export type BulkEvaluationReleaseResponse = {
+  run_id: number;
+  released_count: number;
+  skipped: {
+    item_id: number;
+    student_identifier: string | null;
+    question_label: string;
+    reason: string;
+  }[];
+};
+
+export function releaseReviewedBulkEvaluation(runId: number) {
+  return apiRequest<BulkEvaluationReleaseResponse>(
+    `/bulk-evaluation-runs/${runId}/release-reviewed`,
+    { method: "POST" },
+  );
+}
+
+export function raiseBulkEvaluationCallLimit(runId: number, authorizedCallLimit: number) {
+  return apiRequest<BulkEvaluationRun>(`/bulk-evaluation-runs/${runId}/call-limit`, {
+    method: "POST",
+    body: { authorized_call_limit: authorizedCallLimit, teacher_confirmed: true },
+  });
+}
+
+export function getBulkEvaluationApprovalPreview(runId: number) {
+  return apiRequest<BulkEvaluationApprovalPreview>(
+    `/bulk-evaluation-runs/${runId}/approval-preview`,
   );
 }
 

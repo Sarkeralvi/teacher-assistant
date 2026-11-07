@@ -413,6 +413,47 @@ class BulkEvaluationApprovalRequest(BaseModel):
     teacher_confirmed: Literal[True]
 
 
+class BulkEvaluationApprovalPreviewRow(BaseModel):
+    item_id: int
+    suggestion_id: int
+    submission_id: int
+    student_identifier: str | None
+    student_name: str | None
+    question_id: int
+    question_label: str
+    score: Decimal | None
+    max_score: Decimal
+    confidence: Decimal | None
+
+
+class BulkEvaluationApprovalPreview(BaseModel):
+    """Exactly what a bulk approval would finalize: one row per clean draft."""
+
+    run_id: int
+    review_snapshot_sha256: str
+    student_count: int
+    draft_count: int
+    rows: list[BulkEvaluationApprovalPreviewRow] = Field(default_factory=list)
+
+
+class BulkEvaluationReleaseSkipped(BaseModel):
+    item_id: int
+    student_identifier: str | None
+    question_label: str
+    reason: str
+
+
+class BulkEvaluationReleaseResponse(BaseModel):
+    run_id: int
+    released_count: int
+    skipped: list[BulkEvaluationReleaseSkipped] = Field(default_factory=list)
+
+
+class BulkEvaluationCallLimitRequest(BaseModel):
+    authorized_call_limit: int = Field(ge=1, le=2000)
+    teacher_confirmed: Literal[True]
+
+
 class BulkEvaluationApprovalResponse(BaseModel):
     run_id: int
     approved_count: int

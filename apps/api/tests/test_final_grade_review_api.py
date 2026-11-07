@@ -665,17 +665,20 @@ def test_assessment_summary_returns_review_counts(client: TestClient, tmp_path: 
     assert payload["pending_review_count"] == 1
     assert payload["average_final_score"] == "1.00"
     assert payload["max_possible_score"] == "20.00"
+    # Approved and teacher-edited grades are both final (founder decision 2026-10-12, RC-70).
+    # Here both sit on the same question, so the later one (the 3.00 edit) counts and the
+    # duplicate keeps the student incomplete; the rejected draft counts for nothing.
     assert payload["submission_totals"] == [
         {
             "submission_id": data["submission"]["id"],
             "student_identifier": "S-001",
             "student_name": "Student One",
-            "approved_score": "0.00",
+            "approved_score": "3.00",
             "approved_max_score": "5.00",
             "assessment_max_score": "5.00",
             "approved_question_count": 1,
             "expected_question_count": 1,
-            "is_complete": True,
+            "is_complete": False,
         }
     ]
     assert "generated_at" in payload
@@ -741,13 +744,15 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "reviewed_at",
         "feedback_to_student",
     ]
-    assert len(rows) == 2
+    # Approved and teacher-edited grades are exported as final with their status (RC-70);
+    # a rejected draft is not a grade and is not exported.
+    assert len(rows) == 3
     exported_text = " ".join(str(cell) for row in rows for cell in row if cell is not None)
     first_row = dict(zip(headers, rows[1], strict=True))
     assert first_row["grading_unit_label"] == "1(a)(i)"
     assert first_row["grading_unit_max_marks"] == 5
-    assert first_row["approval_status"] == "approved"
-    assert "edited" not in exported_text
+    statuses = sorted(dict(zip(headers, row, strict=True))["approval_status"] for row in rows[1:])
+    assert statuses == ["approved", "edited"]
     assert "rejected" not in exported_text
     assert "raw_response_json" not in exported_text
     assert "password_hash" not in exported_text
@@ -766,7 +771,7 @@ def test_export_xlsx_contains_headers_rows_and_safe_fields(
         "is_complete",
     )
     assert totals_rows[1][2] == data["submission"]["id"]
-    assert totals_rows[1][5:11] == (0, 5, 5, 1, 1, True)
+    assert totals_rows[1][5:11] == (3, 5, 5, 1, 1, False)
 
 
 def test_assessment_summary_keeps_new_ungraded_submission_separate(

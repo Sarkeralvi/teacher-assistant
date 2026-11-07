@@ -464,6 +464,9 @@ def _qwen38_vision_adapter(*, budget: ProviderCallBudget) -> EngineAdapter:
         from packages.brain.llama_cpp_qwen38_vision_provider import (  # noqa: PLC0415
             LlamaCppQwen38VisionProvider,
         )
+        from packages.brain.profiles import (  # noqa: PLC0415
+            MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS,
+        )
 
         settings = get_settings()
         budget.ensure_allowed()
@@ -483,7 +486,11 @@ def _qwen38_vision_adapter(*, budget: ProviderCallBudget) -> EngineAdapter:
                     api_key=settings.local_qwen38_api_key,
                     model_name=settings.local_qwen38_model,
                     base_url=settings.local_qwen38_base_url,
-                    timeout_seconds=settings.local_qwen38_timeout_seconds,
+                    # Same cap as the product profile: a call never outlives the model lease.
+                    timeout_seconds=min(
+                        settings.local_qwen38_timeout_seconds,
+                        MANAGED_LOCAL_CALL_TIMEOUT_CEILING_SECONDS,
+                    ),
                     context_tokens=settings.local_qwen38_context_tokens,
                 )
                 provider.verify_available_model()

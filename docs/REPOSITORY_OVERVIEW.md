@@ -247,7 +247,7 @@ ambiguous, incomplete, unreadable, or interrupted items, then approves the exact
 clean-draft snapshot. A student with any unresolved item exports as `INCOMPLETE`
 rather than receiving a misleading total.
 
-Limits: 50 submissions, 500 pages, 1 GiB archive, 1,000 entries. Root images,
+Limits: 180 submissions, 720 pages, 1 GiB archive, 1,000 entries. Root images,
 nested student folders, mixed PDF/image folders, duplicate identifiers,
 encrypted entries, unsafe paths, and unsafe compression ratios are rejected
 before any submission is created.

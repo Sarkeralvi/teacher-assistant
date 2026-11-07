@@ -3026,3 +3026,139 @@ them) or silently picks one — both keep everything and force a stronger, expli
   introducing a new one there.
 - Both pilot gates remain open; this changes nothing about them.
 
+
+# TA-BULK150-READINESS - Validation record for the 150-student ZIP readiness analysis
+
+- Recorded at: 2026-10-11 (analysis); updated 2026-10-12 (three-wave fix effort and final run)
+- Baseline commit: `8a25268` (nothing is committed; the fixes and tests exist only in the working tree)
+- Workflow type: manual controlled readiness analysis; seven read-only code readers, one harness builder, five probe agents, independent reviewers; then a three-wave fix effort (wave 1 F01-F16, wave 2 W01-W10, wave 3 W11-W12), each wave followed by independent review
+- VSCode/Codex used: no
+- Real Codex calls: 0
+- Provider/model calls: 0 (an in-process fake provider replaced the model; the local Qwen MCP bridge was down for the whole session)
+- Real Codex grading/mapping: not run
+- Batch grading: not run (fake-provider pipeline runs only)
+- Autonomous loop: not enabled
+- GradeSuggestion / FinalGrade in any real database: 0 (tests ran against a disposable PostgreSQL 17.10 on 127.0.0.1:55432, scratch storage; the pilot database and `data/` were never opened)
+- Pilot stack: not started
+- Production code changed: yes, by the fix wave, in four files only (`apps/api/app/services/bulk_evaluation_service.py`, `apps/api/app/api/routes/bulk_evaluations.py`, `apps/api/app/services/final_grade_service.py`, `apps/api/app/services/local_script_page_read.py`; 348 insertions and 39 deletions by `git diff --stat`, about 400 changed lines). No migration, no change to a configuration value, default or limit, no dependency, no change to approval semantics, thresholds or `COHORT_MODEL_GRADING_ENABLED`. Uncommitted.
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| Baseline backend suite (`python -m pytest -q`, `apps/api`) | 841 passed, 6 skipped in 93.78 s |
+| Baseline `python -m ruff check .` | All checks passed |
+| Baseline frontend `npm run lint` (`tsc --noEmit`) and `node tests/workflow-ui.test.mjs` | pass; `npm run build` not run (rewrites `.next`, no web code touched) |
+| Harness mutation checks M1-M9 (leak detector) | all detected after fixes |
+| Neutralised-fault experiment (strict-xfail tests must not xfail for the wrong reason) | 10 of 12 fault-dependent GAP tests turned FAILED; the other 2 use no fault |
+| 150 x 4 x 6 headline run, fake provider, `TA_BULK150_SCALE=1`, before the fixes | 1 passed in 240.97 s; 900 items graded; 3,600 evidence texts, no leakage; peak RSS 199.7 MiB; 143,696 SQL statements. The post-fix run is in the FINAL RUN rows |
+| Kill between units (4 plans, 30 students), before the fixes | converges to the uninterrupted result |
+| Effective configuration under the launcher's env layering | bulk limits 180/720/1 GiB/2,000; `COHORT_MODEL_GRADING_ENABLED=false`; Qwen3.8 call timeout effective 600 s (configured 1,800 s) |
+| **Fix wave: scope** | Production diff limited to the four files named in the header (348 insertions, 39 deletions). Every changed line is tied to a strict-xfail test that flipped or to a new regression test. No migration, no config, default or limit change, no dependency, no change to approval semantics, thresholds or `COHORT_MODEL_GRADING_ENABLED`. Per-fix table (root causes, tests, behaviour changes, residuals): `docs/BULK_150_READINESS.md` section 9a |
+| **Fix wave: strict xfails flipped** | 48 strict-xfail cases left the xfail list, from about 95 (70 test functions) to 47. Wave 1 flipped 27 (F01 1, F02 4, F03b 5, F06 1, F07 4, F08 3, F10 1, F11 1, F12 2, F13 1, F14 2, F15 2). Wave 2 flipped or converted 21 (W01 5, W02 3, W03 8, W04 4, W09 1 converted to a passing test of the current behaviour). Wave 3 flipped none (W11 and W12 added tests only; W05 to W08 and W10 likewise). Under `--runxfail` the 47 that remain all fail with `AssertionError`; none is a FIXED root cause |
+| **Fix wave: tests collected** | The seven bulk150 files collected 327 cases at first delivery, 348 after wave 1, 390 after wave 2 and 401 after wave 3 (net +74 after one deleted test): 347 passed, 7 skipped by the scale guard, 47 xfail |
+| **Fix wave: authorised pin updates** | Existing characterisation tests that had recorded a defect as behaviour were changed on purpose, each listed in `docs/BULK_150_READINESS.md` section 6: five route-status rows, one precondition and one deleted raw-exception test (W01); the `duplicate_member` row (W02); the two-dotted-folders control (W03); two enqueue-count pins, 3 to 1 and 2 to 1 (W04); the shipped-limits runbook-text pin and its docstring (lead, after the documentation correction); the minimum-authorisation policy pin and the exhausted-run fixtures re-wired through DB lowering (W10); four one-line aging calls and a helper (W11); one inner-`pytest` environment edit (W12). No assertion loosened, nothing skipped; the only test deleted is the one whose own docstring said to delete it |
+| **Fix wave: non-bulk150 baseline** | 841 passed, 6 skipped, identical to the baseline at the wave-1 review, the wave-2 review and the final run: no regression in a pre-existing test |
+| **Wave 1 review (three lenses)** | Scope and test integrity: no scope violation, 12 fixes FIXED, 5 deferred (F03a, F04, F05, F09, F16, done in wave 2 as W01 to W04 and W10), no test loosened; it found a stale PB-2 marker (later W09), a runbook-versus-test pin that failed (the lead's pin update) and the need for a founder sign-off on F07. Fail-open and safety: F14 closed a live grading job when two units overlap (latent, needs Recover plus a second unit; narrowed by W05 and corrected by W11), a Stop lost after an item retry (F10, W06), committed students' files deleted after the commit (F03b, W07). Correctness and regression: no logic defect and no regression; flagged that F08 does not cover the three curated-evaluation workbooks. Result at the end of wave 1: full suite 1,113 passed, 13 skipped, 68 xfailed, 1 failed (the runbook pin) |
+| **Wave 2 review (two lenses)** | Fail-open: W05 closed a live job when Recover and Resume item were pressed during the original call (a second provider call; corrected by W11), an orphan job after a kill, the W10 formula wrong in both directions (documented, not changed), Recover still cancels a pending Stop. Regression and test integrity: no regression; the 47 xfails fail under `--runxfail` with an identical set; W02 was incomplete for a case-variant `manifest.csv` (closed by W12 a). Result: full suite 1,177 passed, 13 skipped, 47 xfailed, 0 failed |
+| **Wave 3 review (one lens)** | W11 and W12 read-only: no regression and no harmful W12 behaviour. W11 is not free of fail-open paths: two throwaway probes each produced a second provider call on one answer (a lease that expired while the call was live; an interleaving between lease release and the job commit). Both need a second concurrent worker, which the preflight forbids, and both are narrower than before W11. Documented as residuals (section 11.1 of the readiness doc), not fixed. Result: full suite 1,188 passed, 13 skipped, 47 xfailed, 0 failed (244.99 s) |
+| **FINAL RUN (2026-10-12)** | The lead's own independent verification, on the same disposable PostgreSQL 17.10 on `127.0.0.1:55432` with scratch storage. The tree is the baseline `8a25268` plus the wave 1-3 production diff plus the untracked tests and docs; nothing committed. No provider, model or network call. Rows below |
+| FINAL RUN: full backend suite (`python -m pytest -q tests`, `apps/api`) | **1188 passed, 13 skipped, 47 xfailed, 0 failed, 2 warnings in 246.88 s.** The pre-existing tests are exactly 841 passed and 6 skipped; the bulk150 files add 347 passed, 7 skipped (the heavy scale tests, guarded) and 47 xfailed |
+| FINAL RUN: the same bulk150 files with `--runxfail` | 47 failed, 347 passed, 7 skipped in 166.67 s. The 47 failures are exactly the 47 strict-xfail cases, all `AssertionError`; 0 `PRECONDITION BROKEN`, 0 XPASS |
+| FINAL RUN: heavy scale (`TA_BULK150_SCALE=1`, `tests/test_bulk150_scale.py`) | 25 passed, 3 xfailed in 443.24 s. Includes the 150 x 4 x 6 headline, the scaling curve N = 10 to 80, the PDF layout with 30 students and the kill-between-units runs (30 students, 4 plans): digest `5cf7e4ca699b4ab9`, identical to the uninterrupted run |
+| FINAL RUN: CI-like run of the seven bulk150 files (`CI=true`, database `bulk150_ci` not named `*_test`, `import psutil` forced to fail) | 347 passed, 7 skipped, 47 xfailed in 178.35 s, identical to the normal run. Found and fixed test-side before this run: the harness DB guard ignored `CI=true` (GitHub Actions uses a service database named `teacher_assistant`), and `import psutil` at module level in `test_bulk150_scale.py` (not a declared dependency) would have been a collection error. The real GitHub Actions workflow (Ubuntu, PostgreSQL 16) was not run |
+| FINAL RUN: full backend suite re-run on the final tree (after the two CI fixes above and the documentation edits) | 1188 passed, 13 skipped, 47 xfailed, 0 failed, 2 warnings in 265.79 s; `ruff check --no-cache .` All checks passed; `ruff format --check` on the nine bulk150 test files: already formatted |
+| FINAL RUN: `python -m ruff check --no-cache .` (`apps/api`, whole project) | All checks passed |
+| FINAL RUN: frontend `npm run lint` (`tsc --noEmit`) and `node tests/workflow-ui.test.mjs` | Exit 0 and "frontend workflow static checks passed". No `apps/web` file was touched; `npm run build` not run |
+| FINAL RUN: headline 150 x 4 x 6, fake provider (pipeline overhead only), after the fixes | Intake 2.151 s (464 statements); read drain 23.147 s (151 units); teacher gate 3.324 s (150 units); 900 x `resume_item` 33.605 s; grading drain 112.324 s (901 units, mean 124.6 ms, 77 statements and 5,486 rows read per unit; 71 statements before the fixes, the extra 6 are the new reference-bundle check); `approve_clean` 7.909 s (900 approved); export 0.385 s (34.9 KiB). Sum of the product phases 182.8 s. 149,998 SQL statements in total (143,696 before the fixes). Peak RSS 199.1 MiB. All 900 items graded; calls 600 reads + 900 grades = 1,500; item-state digest `c0fd46dc3799d8df` (identical to the pre-fix runs); 3,600 evidence texts inspected, no cross-student leakage; no `FinalGrade` before the teacher's `approve_clean` |
+
+## Not run, and why
+
+- Real model wall-clock, false-blank and omission rates, cross-student KV-cache isolation: no model call was authorised. The fix wave changed nothing here; every timing in the FINAL RUN is pipeline overhead with a fake provider.
+- A real `kill -9`, RQ job timeout on Windows, queue persistence across a reboot, launcher restarts: the stack was not started. The harness's `ProcessKilled` is graceful; the retry wait after a hard kill (W11) is exercised by leaving the abandoned job and its lease behind and by ageing them, not by killing a process.
+- A second concurrent worker: the supported runtime is one sequential worker and the harness cannot start a real second one. The latent fail-opens of the live-job guard (W11) and the two-worker strict xfails (RC-44) were reached only by deterministic interleavings.
+- `npm run build` and any browser run: no web code touched; UI read from source.
+- The live `.env.local-ai` was not read; effective limits were computed from the launcher's layering and must be confirmed by the operator.
+- No pytest, model, network or service call was made while writing the documentation of the fix wave; its numbers are the ones recorded by the lead's final run above.
+
+## Result
+
+NO-GO. Seventy-nine root causes registered (23 high). After the fix wave (counts in `docs/BULK_150_READINESS.md` section 4.2): 17 FIXED, 7 PARTIAL, 11 FOUNDER-DECISION and 44 OPEN. Of the 23 rated high, 8 are FIXED and 15 are not closed (10 OPEN, 2 PARTIAL, 3 FOUNDER-DECISION), so gate G2 still fails; a PARTIAL row is a mitigation, not a closure. The approval wave (RC-01 to RC-05) was deliberately not fixed: it changes approval-path behaviour and needs a founder review first.
+
+The fix wave did not change the verdict. Five gates still cannot pass without a founder decision or an authorised model call: real-model wall-clock is unmeasured; the ink-coverage control is absent on the bulk path (RC-11); mid-call kill recovery (RC-37, a dispatched page, and the wait for the GradingJob after a hard kill); the call-budget dead end (RC-48, which W10 only makes fail early at intake); and the about 150 transcript reviews plus about 900 per-item resume clicks (RC-68). The 47 strict-xfail tests that remain pin proven defects that are still open; a green suite means defects pinned, not defects absent.
+
+Four behaviour changes need a founder acknowledgement (section 10 of the readiness doc, rows 15 to 18): the reference-bundle gate (F07), the minimum authorisation at intake (W10), a re-upload that is no longer a recovery action (W04), and the retry wait after a hard kill (W11). See `docs/BULK_150_READINESS.md` sections 4, 8, 9 and 10.
+# TA-BULK150-WAVE-B - Approval wave, founder decisions and W11 follow-up (2026-10-12)
+
+- Baseline: `8a25268` plus the uncommitted fix waves 1-3 (independently re-verified first: 1188 passed, 13 skipped, 47 xfailed; ruff clean; 7 of 7 seeded reverts caught)
+- Founder decisions applied (recorded in `docs/BULK_150_READINESS.md` section 10.1): accept F07, W10, W04 and W11, plus a W11 follow-up; split archives rather than raise ceilings; bulk approve needs a per-student summary; teacher-edited grades are exported as final
+- Provider/model calls: 0. Pilot stack: not started. Pilot database and `data/`: not opened (disposable PostgreSQL 17.10 on 127.0.0.1:55432, scratch storage). `COHORT_MODEL_GRADING_ENABLED`: unchanged (false)
+- Production changes: RC-01 (run read routes return the live clean-draft hash); RC-02 (a review-ready run completes once every draft is decided per item); RC-03 (`approve_clean` checks every draft first, then writes in one transaction with rollback on any failure; `FinalGradeService.approve_suggestion(commit=False)`); RC-04 in part (a superseded draft's bulk item becomes a `stale_evidence` exception; `_reviewable_items` excludes superseded drafts; a draft made stale by a reference edit is not superseded, so it is still offered, and approval refuses it by name with nothing written); RC-05 (the refusal names every failing draft as student / question / draft id); a new `GET /bulk-evaluation-runs/{id}/approval-preview` route and a per-student table with a confirmation checkbox in `BulkEvaluationClient.tsx`; `TEACHER_FINAL_STATUSES = {approved, edited}` in both exports and in the submission totals (`APPROVED` / `EDITED` / `REJECTED` row status; an edited answer leaves the Exceptions sheet); W11 follow-up (a possibly-live job pauses the run naming the answer and a retry-after time, with no raw SQL text; a job still `queued` is closed at once for every provider); `.env.example` now 180 / 720 / 2000 (RC-53 partial)
+- Pin updates (each one encoded behaviour the founder has now changed): the PA-1, PA-1b and PA-2 GAP tests (8 strict xfails) are now regression tests; `test_pa2_characterisation_*` no longer pins "a stale item cannot be resumed" (it is now a `stale_evidence` exception that Resume re-grades, see `test_pa2_a_stale_exception_can_be_resumed_and_is_regraded_on_the_current_evidence`); `test_pa4c_*` and `test_final_grade_review_api.py` (summary and export) now encode the edited-is-final policy; `test_bulk_approval_never_overwrites_a_separately_finalized_draft` expects the run to be completed; the `.env.example` policy pin expects 180 / 720 / 2000; the approve statement budget pin rose from 25 to 30 per item (the all-drafts evidence pre-check); `test_bulk150_evidence.py::_approve_or_refusal` accepts the service-level `BulkEvaluationError`
+- New tests: approval preview, a failure inside the write loop rolls back everything, every stale draft is named at once, a superseded but unquarantined draft is never approvable, a stale exception is re-graded on Resume, the W11 named pause (managed and unmanaged), the queued-job exemption (unmanaged)
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| Full backend suite (`apps/api`, disposable DB) | 1202 passed, 13 skipped, 39 xfailed, 0 failed in 269.89 s |
+| `ruff check --no-cache .` | All checks passed |
+| Frontend `npm run lint` (`tsc --noEmit`), `node tests/workflow-ui.test.mjs` | pass / "frontend workflow static checks passed" (`npm run build` and Playwright not run) |
+| Seeded reverts of this wave (RC-01 hash, RC-02 completion, RC-03 commit-in-loop, RC-03 pre-check, RC-04 quarantine, RC-04 reviewable filter, W11 queued exemption, A5 edited-final) | 8 of 8 caught by a named test, each file restored byte-identical (2 needed new tests first) |
+
+| CI-like run: fresh database `teacher_assistant_ci_test`, `alembic upgrade head` (to 0040), `CI=true` | 1202 passed, 13 skipped, 39 xfailed in 266.03 s |
+| bulk150 files with `--runxfail` | 39 failed, 361 passed, 7 skipped: exactly the 39 strict-xfail cases, all `AssertionError`, 0 `PRECONDITION BROKEN`, 0 XPASS |
+| Heavy scale (`TA_BULK150_SCALE=1`, `tests/test_bulk150_scale.py`) | 25 passed, 3 xfailed in 485.27 s; headline 150 x 4 x 6 `approve_clean` 900 drafts in 6.67 s (24,310 statements), `GET` run at `review_ready` 0.063 s / 5 statements with the live hash, peak RSS 199.1 MiB |
+
+## Not done
+
+- Real GitHub Actions CI not run; no Codex or second-model review yet
+- The UI change was type-checked and statically checked only, never driven in a browser
+- The per-student summary (RC-69) is enforced by the UI only: `POST approve-clean` still accepts any exact clean set with `teacher_confirmed: true`
+- Nothing committed
+
+# TA-BULK150-A3 - Bounded real-model rehearsal (2026-10-13, founder-authorised)
+
+- Scope authorised: one synthetic 5-page script and one grading call. Spent: 7 provider calls (5 page reads, 1 whole-transcript assignment call, 1 grading call); authorised limit 7.
+- Provider/model: `llama_cpp_qwen38`, `qwen3.8-27b-q4km`, local; effective per-call timeout 600 s (`legacy_profile_settings`).
+- Harness: the real bulk pipeline in-process (`create_from_zip`, `run_next` as the worker does, the real transcript-review route functions, `resume_item`) against a disposable database (`teacher_assistant_a3_test`, PostgreSQL 17.10 on 127.0.0.1:55432) and scratch storage. Pilot database, `data/` and the pilot stack were not touched. The Qwen3.8 server was started by the managed phase switch and stopped afterwards (`Stop-LocalAi.ps1 -Mode Qwen38`; VRAM back to 548 MiB).
+- Input: synthetic text only (one calculus answer, 25 lines over 5 ruled A4 pages at 150 DPI, rendered in a handwriting-style font, about 130 characters per page). No student data. The transcript classification, ownership confirmation and review confirmation were operator actions on synthetic data so that the grading call could run; they are not a teacher sign-off.
+- Machine: `stability-watch.ps1` reported no bugchecks in the last 14 days before the run.
+
+| Measure | Result |
+| --- | --- |
+| Page reads | 5 of 5 `succeeded`, 0 `unknown_outcome`, 0 repair passes; dispatch-to-dispatch 28, 53, 46, 55 s (page 5 plus the assignment call 73 s) |
+| Read stage (5 reads + 1 assignment call, one worker unit) | 256.9 s |
+| Whole-transcript assignment | `complete`; one question label inferred, so the item needed ownership confirmation (`inferred_question_label`) |
+| Transcript accuracy against the known synthetic text | 25 of 25 lines verbatim (whitespace only differs); 0 omissions |
+| Grading call | 78.0 s; draft 10.00 / 10.00, confidence 0.95 (correct for the synthetic answer); run `review_ready` |
+| Timeout headroom | longest call 78 s against the 600 s effective timeout |
+
+- Extrapolation (synthetic, sparse pages; real handwriting is denser and slower): 150 x 4 pages x 6 questions = 600 reads x ~46 s (7.7 h) + 150 assignment calls x ~20 s (0.8 h) + 900 gradings x ~78 s (19.5 h): about 28 h of model time, before human review. Not a measurement of a real cohort.
+- Consequences: B7 needs no change for this shape (600 s is about 7x the longest call and stays under the 1,800 s lease TTL); re-measure on one real anonymised script before changing it. The B11 ink threshold cannot be set from this run (clean synthetic pages, nothing omitted): it still needs real scans.
+
+# TA-BULK150-WAVE-C - Operational fixes B3-B10 (2026-10-13, uncommitted)
+
+- Provider/model calls in this wave: 0 (the A3 rehearsal above is the only model work). Pilot stack, pilot database and `data/` untouched; tests on the disposable PostgreSQL 17.10 on 127.0.0.1:55432.
+- B3 (RC-68): `POST /bulk-evaluation-runs/{id}/release-reviewed` and a "Release all reviewed scripts to grading" button. It releases every gated item whose transcript review is current and whose assignment is `answer_present` (the per-item button's own condition) through `resume_item` in a savepoint each, one commit, one audit row; ineligible items are listed with the reason; nothing is sent to a model.
+- B4 (RC-37): Resume (and the reading-stage part of Resume item / release) turns a `dispatched` page claim older than max(900 s, the policy job timeout) into `unknown_outcome`, committed before the existing refusal, so the existing reconcile route can settle it.
+- B5 (RC-38, partial): Resume revives every read-stage `uncertain` item (a failed page, a failed whole-transcript assignment call, a model unavailable or busy before the first page, a stopped worker); Resume item does the same for its own script whatever the run status. Pages already read are reused. Still open: a hallucinated question label and timeouts recorded as failures instead of `unknown_outcome` (strict xfails).
+- B6 (RC-48): `POST /bulk-evaluation-runs/{id}/call-limit` (teacher-confirmed) raises a paused run's limit, above the old value and at most the server ceiling (and 2,000); audited `bulk_evaluation_call_limit_raised`; Resume then continues. The exhausted-resume message now says so.
+- B7 (RC-54): `legacy_profile_settings` no longer replaces a local Qwen profile's timeout with `BRAIN_TIMEOUT_SECONDS`; the Qwen3.8 call timeout is `min(LOCAL_QWEN38_TIMEOUT_SECONDS, 1500)` so a call cannot outlive the 1,800 s model lease. With today's `.env` (1800) the effective timeout changes from 600 s to 1,500 s; recommended `.env` value after A3: 600.
+- B8 (RC-56, RC-57 partial): `Start-TeacherPilot.ps1` checks for an active bulk run (`app.services.bulk_run_guard.active_bulk_run_ids`) and then leaves the worker and the local model phases alone (the API still restarts) unless `-AllowRestartDuringBulkRun`; the worker, when it starts, pauses every active run whose heartbeat is stale ("Interrupted: the worker stopped ...", running items `uncertain`; a pending Stop becomes `stopped`). No periodic watchdog.
+- B9 (RC-17, RC-31): before any rendering, every PDF is opened (not rendered) and counted; a password-protected, undecodable, empty or repaired (truncated) PDF is refused by name with the importer's own messages; the page cap and the minimum call authorisation are checked on the counted total.
+- B10 (RC-21): `pg_try_advisory_xact_lock` per assessment in `create_from_zip`; an overlapping upload gets 409 "Another upload for this assessment is still being imported".
+- Pin updates: 8 strict xfails flipped to regression tests (B4, B5 model-unavailable, B9 x4, B10 x2); the PB-7 dead-end probe became `test_pb7_a_run_that_runs_out_of_calls_continues_after_the_teacher_raises_the_limit`; the failed-assignment GAP became a regression test of the run-level retry; the "bad last member" characterisation now asserts nothing is rendered; two scale pins take the new exhausted-resume message; the read-budget pin accepts "no transcript" for a never-reached script.
+- New tests: release action (eligible and skipped), call-limit validation, worker-start reconcile (stale vs live run), worker start order and failure tolerance, launcher guard (static), B7 timeout (two).
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| Full backend suite (before the final run below) | 1217 passed, 13 skipped, 29 xfailed, 1 failed (an assertion of the new failed-assignment test, corrected: 3 assignment calls for 2 scripts) |
+| `ruff check`, `tsc --noEmit`, static UI checks, PowerShell parser on `Start-TeacherPilot.ps1` | clean / pass / 0 parse errors |
+| Seeded reverts (B3 blocker, B4 expiry, B5 revive, B6 ceiling, B7 override, B7 cap, B8 worker call, B8 pause, B9 pre-pass, B9 repaired, B10 lock) | 11 of 11 caught by a named test; files restored byte-identical |
+| Fresh database, `alembic upgrade head`, `CI=true`, full suite | 1220 passed, 13 skipped, 29 xfailed, 0 failed in 275.70 s |
+| Heavy scale (`TA_BULK150_SCALE=1`) | 27 passed, 2 xfailed in 471.35 s; headline 150 x 4 x 6 intake 2.08 s, approve_clean 900 drafts 7.04 s |
+| `release_reviewed_to_grading` at 150 students x 6 questions (temporary probe, removed) | 900 released, 0 skipped, 5.25 s in one call (the 900 per-item resumes it replaces took 33.6 s of server time plus 900 clicks) |
+| Effective Qwen3.8 stale-claim wait for B4 (live settings) | max(900 s, job timeout 2,400 s) = 2,400 s |

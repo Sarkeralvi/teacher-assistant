@@ -12,6 +12,7 @@ from app.models import (
     Assessment,
     AuditLog,
     BulkEvaluationItem,
+    BulkEvaluationRun,
     FinalGrade,
     GradeSuggestion,
     Question,
@@ -32,6 +33,26 @@ from app.services.evidence_invalidation import (
     EvidenceInvalidationService,
 )
 
+# A grade the teacher approved as drafted or edited to their own score is the teacher's final
+# decision (founder decision 2026-10-12, RC-70). A rejected draft is not a grade: it stays
+# incomplete until the teacher records a score.
+TEACHER_FINAL_STATUSES = frozenset({"approved", "edited"})
+
+
+def neutralize_formula_cells(workbook: Workbook) -> None:
+    """Keep student names, identifiers and model feedback inert text in an exported workbook.
+
+    openpyxl turns any str that starts with "=" into a live formula cell. Neither export writes a
+    legitimate formula, so every such cell is user-controlled text: force it back to a string
+    (the visible text is unchanged). Prefixes + - @ are already stored as plain strings.
+    """
+
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == "f" and isinstance(cell.value, str):
+                    cell.data_type = "s"
+
 
 class FinalGradeService:
     def __init__(self, db: Session) -> None:
@@ -49,8 +70,19 @@ class FinalGradeService:
         )
 
     def approve_suggestion(
-        self, suggestion_id: int, teacher_id: int, teacher_comment: str | None = None
+        self,
+        suggestion_id: int,
+        teacher_id: int,
+        teacher_comment: str | None = None,
+        *,
+        commit: bool = True,
     ) -> tuple[FinalGrade, bool]:
+        """Approve a draft as the final grade.
+
+        ``commit=False`` only flushes: the caller owns the transaction (and, for a bulk run,
+        the run's state), so a batch can be all-or-nothing.
+        """
+
         suggestion = self._get_suggestion(suggestion_id)
         if suggestion.score is None:
             raise HTTPException(
@@ -64,6 +96,7 @@ class FinalGradeService:
             approval_status="approved",
             teacher_comment=teacher_comment,
             suggestion=suggestion,
+            commit=commit,
         )
 
     def edit_suggestion(
@@ -171,6 +204,7 @@ class FinalGradeService:
         approval_status: str,
         teacher_comment: str | None,
         suggestion: GradeSuggestion | None = None,
+        commit: bool = True,
     ) -> tuple[FinalGrade, bool]:
         suggestion = suggestion or self._get_suggestion(suggestion_id)
         region = self.db.scalar(
@@ -226,6 +260,8 @@ class FinalGradeService:
             answer_region_id=region.id,
             suggestion_id=suggestion.id,
             final_grade_id=final_grade.id,
+            teacher_id=teacher_id,
+            complete_runs=commit,
         )
         self.db.add(
             AuditLog(
@@ -243,14 +279,28 @@ class FinalGradeService:
                 },
             )
         )
-        self.db.commit()
-        self.db.refresh(final_grade)
+        if commit:
+            self.db.commit()
+            self.db.refresh(final_grade)
+        else:
+            self.db.flush()
         return final_grade, created
 
     def _link_related_bulk_items(
-        self, *, answer_region_id: int, suggestion_id: int, final_grade_id: int
+        self,
+        *,
+        answer_region_id: int,
+        suggestion_id: int,
+        final_grade_id: int,
+        teacher_id: int,
+        complete_runs: bool = True,
     ) -> None:
-        """Keep bulk-review rows aligned with an explicit teacher decision."""
+        """Keep bulk-review rows aligned with an explicit teacher decision.
+
+        A bulk run waiting for review completes once the teacher has decided every draft one by
+        one: nothing would be left for its bulk approval, and its export is gated on completion.
+        ``complete_runs=False`` is for a caller that settles the run itself (bulk approval).
+        """
 
         items = self.db.scalars(
             select(BulkEvaluationItem).where(
@@ -262,6 +312,49 @@ class FinalGradeService:
         ).all()
         for item in items:
             item.final_grade_id = final_grade_id
+        if not complete_runs or not items:
+            return
+        self.db.flush()
+        for run_id in sorted({item.run_id for item in items}):
+            self._complete_bulk_run_if_decided(run_id, teacher_id)
+
+    def _complete_bulk_run_if_decided(self, run_id: int, teacher_id: int) -> None:
+        run = self.db.get(BulkEvaluationRun, run_id)
+        if run is None or run.status != "review_ready":
+            return
+        undecided = self.db.scalar(
+            select(BulkEvaluationItem.id)
+            .where(
+                BulkEvaluationItem.run_id == run.id,
+                BulkEvaluationItem.final_grade_id.is_(None),
+                BulkEvaluationItem.status.not_in(("approved", "exception", "uncertain")),
+            )
+            .limit(1)
+        )
+        if undecided is not None:
+            return
+        open_exception = self.db.scalar(
+            select(BulkEvaluationItem.id)
+            .where(
+                BulkEvaluationItem.run_id == run.id,
+                BulkEvaluationItem.final_grade_id.is_(None),
+                BulkEvaluationItem.status.in_(("exception", "uncertain")),
+            )
+            .limit(1)
+        )
+        run.status = "completed" if open_exception is None else "completed_with_exceptions"
+        run.stage = "complete"
+        run.completed_at = datetime.now(UTC)
+        self.db.add(
+            AuditLog(
+                actor_type="teacher",
+                actor_id=teacher_id,
+                event_type="bulk_evaluation_completed_by_individual_review",
+                entity_type="bulk_evaluation_run",
+                entity_id=run.id,
+                payload_json={"status": run.status, "stage": run.stage},
+            )
+        )
 
     def get_final_grade_for_region(self, answer_region_id: int) -> FinalGrade:
         region = self.db.get(AnswerRegion, answer_region_id)
@@ -428,7 +521,7 @@ class FinalGradeService:
         for item in items:
             suggestion = item.latest_grade_suggestion
             final_grade = item.final_grade
-            if final_grade is None or final_grade.approval_status != "approved":
+            if final_grade is None or final_grade.approval_status not in TEACHER_FINAL_STATUSES:
                 continue
             sheet.append(
                 [
@@ -489,6 +582,7 @@ class FinalGradeService:
                     total.is_complete,
                 ]
             )
+        neutralize_formula_cells(workbook)
         buffer = BytesIO()
         workbook.save(buffer)
         return buffer.getvalue()
@@ -511,7 +605,7 @@ class FinalGradeService:
             duplicate_approved_question = False
             for item in items_by_submission.get(submission.id, []):
                 final_grade = item.final_grade
-                if final_grade is None or final_grade.approval_status != "approved":
+                if final_grade is None or final_grade.approval_status not in TEACHER_FINAL_STATUSES:
                     continue
                 previous = approved_by_question.get(item.question.id)
                 if previous is not None:

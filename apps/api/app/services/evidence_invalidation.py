@@ -31,6 +31,8 @@ from sqlalchemy.orm import Session
 from app.models import (
     AnswerEvidenceAssignment,
     AnswerRegion,
+    BulkEvaluationItem,
+    BulkEvaluationRun,
     GradeSuggestion,
     Question,
     Rubric,
@@ -193,8 +195,38 @@ class EvidenceInvalidationService:
             suggestion.superseded_reason = reason
             changed.append(suggestion)
         if changed:
+            self._quarantine_superseded_bulk_drafts(changed, reason)
             self.db.commit()
         return changed
+
+    def _quarantine_superseded_bulk_drafts(
+        self, suggestions: list[GradeSuggestion], reason: str
+    ) -> None:
+        """Take a superseded draft out of its bulk run's clean set, visibly.
+
+        A bulk item still 'graded' would keep offering the draft for bulk approval although
+        finalization refuses it. It becomes a 'stale_evidence' exception instead; the teacher
+        resumes it (re-grade on the current evidence) or rejects the draft.
+        """
+
+        items = self.db.scalars(
+            select(BulkEvaluationItem).where(
+                BulkEvaluationItem.grade_suggestion_id.in_([s.id for s in suggestions]),
+                BulkEvaluationItem.status == "graded",
+                BulkEvaluationItem.final_grade_id.is_(None),
+            )
+        ).all()
+        warning = f"Draft superseded after grading: {reason}"[:500]
+        for item in items:
+            item.status = "exception"
+            item.exception_codes = list(
+                dict.fromkeys([*(item.exception_codes or []), "stale_evidence"])
+            )
+            item.warnings = list(dict.fromkeys([*(item.warnings or []), warning]))
+            run = self.db.get(BulkEvaluationRun, item.run_id)
+            if run is not None:
+                run.clean_item_count = max(0, run.clean_item_count - 1)
+                run.exception_count += 1
 
     def suggestion_evidence_status(self, suggestion: GradeSuggestion) -> str:
         """``current``, ``stale``, ``unverified`` or ``evidence_missing``."""
