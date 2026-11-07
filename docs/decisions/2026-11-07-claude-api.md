@@ -1,5 +1,13 @@
 # Decision: Claude (Anthropic API) is the production model; v2 refactor
 
+> **Update, later on 2026-11-07 (founder):** v2 is built as a completely new, separate
+> system in `E:\teacher-assistant-v2` (private repo `Sarkeralvi/teacher-assistant-v2`),
+> copying only v1's proven parts with their tests. This repository (v1) is frozen and
+> **nothing in it is deleted**. Where this record speaks of refactoring v1 in place
+> (deleting local-model code, restructuring the pipeline here), that is superseded. The
+> Claude decisions below (model, full pages, retries, fallback, unchanged invariants,
+> data handling) carry over to v2 unchanged.
+
 - **Date:** 2026-11-07
 - **Status:** Accepted by the founder (plan approved in session on 2026-11-07)
 - **Plan:** "Teacher Assistant v2: Claude API, one-click local app, calibrated trust"

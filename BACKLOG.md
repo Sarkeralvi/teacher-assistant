@@ -1,4 +1,15 @@
-﻿# TA-V2-001 — Claude (Anthropic API) provider and smoke eval (v2 Phase 0 and 1)
+﻿# TA-V2-002 — v2 becomes a new, separate system; v1 frozen
+
+- Recorded at: 2026-11-07
+- Decision (founder): build v2 as a new system in `E:\teacher-assistant-v2` (own repo, database,
+  ports, desktop icon) instead of refactoring this repository. Nothing in v1 is deleted; the
+  earlier "Phase 2: delete local-model machinery" plan is cancelled.
+- This repository: frozen except for fixes. Branch `v2/claude` = v1 with Claude added
+  (TA-V2-001). Real work runs here with Claude until v2 can grade a real exam.
+- Docs updated: `CLAUDE.md`, `AGENTS.md`, `docs/decisions/2026-11-07-claude-api.md`.
+- No code, behaviour or test changed.
+
+# TA-V2-001 — Claude (Anthropic API) provider and smoke eval (v2 Phase 0 and 1)
 
 - Recorded at: 2026-11-07
 - Baseline: tag `v1-local-qwen-final` (commit `8df1b13`, pushed), branch `v2/claude`

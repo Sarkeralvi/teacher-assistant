@@ -14,8 +14,10 @@ the rules below conflict with these points, these points win:
   approved phase gates: tests first, full checks, independent review, founder demo,
   founder-approved commit. Dependency installs named in the approved plan are
   allowed.
-- Development happens on branch `v2/claude`; `v1-local-qwen-final` is the rollback
-  tag.
+- Later the same day the founder chose a completely new, separate system for v2 in
+  `E:\teacher-assistant-v2`. This repository is v1 and is frozen: fixes only, nothing
+  deleted. Branch `v2/claude` is v1 with Claude added, not the new system;
+  `v1-local-qwen-final` is the rollback tag.
 - Every product safety principle below is unchanged.
 
 ## Core product principles

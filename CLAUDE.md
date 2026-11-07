@@ -22,18 +22,13 @@ Before taking action, read these files in order:
 - Use the supported pilot scripts; do not launch an ad-hoc Uvicorn process because it can use a different storage root and make uploaded references unavailable.
 - Do not start, stop, or rebuild the stack unless the user has requested that operational action.
 
-## Current objective (v2, from 2026-11-07)
+## Current objective: v1 is frozen (from 2026-11-07)
 
-Turn the system into a one-click local app that uses Claude (Anthropic API) as the production model, in the phases of the approved v2 plan, on branch `v2/claude`:
+The founder decided that **nothing in v1 is deleted**. v2 is a completely new, separate system in `E:\teacher-assistant-v2` (its own repository, database, ports and desktop icon). This repository stays as v1, runnable as it is:
 
-1. Claude provider plus a smoke eval against the founder's two marked scripts.
-2. Delete the local-model machinery (Qwen, GPU lease and phases, OCR stacks, unused orchestrators and settings).
-3. One pipeline for any number of scripts, one combined teacher review, and parallel durable jobs.
-4. A new review-centric teacher UI with calibration (blind marking) mode.
-5. Local production hardening: launcher, backups, crash recovery, cost caps.
-6. The first real exam run in calibration mode, which sets the trust policy.
-
-Agent-initiated paid API calls need a cost estimate and the founder's OK. Trust in AI marks comes only from measured agreement with the teacher's own marks.
+- Branch `v2/claude` is **v1 with Claude added** (provider, grade checks, smoke-eval runner), not the new system. Until v2 can grade a real exam, real work runs here with Claude.
+- Allowed here: fixes, and running `docs/CLAUDE_SMOKE_EVAL.md`. Not allowed: deleting the local-model code or restructuring v1 (the earlier "Phase 2 delete" plan is cancelled).
+- Agent-initiated paid API calls need a cost estimate and the founder's OK. Trust in AI marks comes only from measured agreement with the teacher's own marks.
 
 v1 objective (historical): a founder-supervised synthetic rehearsal with one local Qwen draft grade, gated by a teacher-signed 20-case curated `PASS`.
 
